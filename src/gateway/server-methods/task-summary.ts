@@ -1,6 +1,7 @@
 // Public task summaries keep task-registry internals and unbounded status text
 // out of gateway responses and events.
 import type { TaskSummary } from "../../../packages/gateway-protocol/src/index.js";
+import { getTaskActivitySnapshot } from "../../tasks/task-registry-activity.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -45,6 +46,8 @@ function sanitizeOptionalTaskText(
 }
 
 export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolean }): TaskSummary {
+  const activity = getTaskActivitySnapshot(task.taskId);
+  const lastActivity = sanitizeOptionalTaskText(activity?.lastActivity);
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
@@ -80,6 +83,8 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
     ...(toolUseCount !== undefined ? { toolUseCount } : {}),
     ...(lastToolName ? { lastToolName } : {}),
+    ...(lastActivity ? { lastActivity } : {}),
+    ...(activity?.diffStat ? { diffStat: activity.diffStat } : {}),
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),

@@ -9,12 +9,22 @@ import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-r
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
+import {
+  isUsablePersistedExternalCliProfileCredential,
+  listConfiguredExternalCliProfileMetadataIds,
+  listExternalCliProfileMetadataIds,
+} from "./external-cli-profile-metadata.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import {
   areOAuthCredentialsEquivalent,
   overlayRuntimeExternalOAuthProfiles,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
+import {
+  getRuntimeExternalCliProfileIds,
+  removeRuntimeExternalProfileReferences,
+  setRuntimeExternalCliProfileIds,
+} from "./runtime-external-profile-references.js";
 import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
@@ -81,12 +91,16 @@ function isExternalAuthProfileAllowed(
   });
 }
 
-function resolveExternalAuthProfileMap(params: {
+function resolveExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
   externalCli?: ExternalCliOverlayOptions;
-}): ExternalAuthProfileMap {
+}): {
+  profiles: ExternalAuthProfileMap;
+  pluginProfileIds: ReadonlySet<string>;
+  runtimeExternalCliProfileIds: ReadonlySet<string>;
+} {
   const env = params.env ?? process.env;
   const resolveProfiles =
     resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
@@ -101,33 +115,48 @@ function resolveExternalAuthProfileMap(params: {
       store: params.store,
     },
   });
-
-  const resolved: ExternalAuthProfileMap = new Map();
-  const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
-  const cliProfiles =
-    externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
-      allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
-      providerIds: params.externalCli?.externalCliProviderIds,
-      profileIds: explicitProfileIds,
-    }) ?? [];
-  for (const profile of cliProfiles) {
+  const configuredProfileIds = listConfiguredExternalCliProfileMetadataIds(
+    params.externalCli?.config?.auth?.profiles,
+  );
+  const externalCli = configuredProfileIds.length
+    ? {
+        ...params.externalCli,
+        externalCliProfileIds: [
+          ...(params.externalCli?.externalCliProfileIds ?? []),
+          ...configuredProfileIds,
+        ],
+      }
+    : params.externalCli;
+  const resolved = resolveExternalCliAuthProfileMap({ ...params, externalCli });
+  const runtimeExternalCliProfileIds = new Set(
+    [...resolved.values()]
+      .filter((profile) => profile.persistence !== "persisted")
+      .map((profile) => profile.profileId),
+  );
+  // A persisted Claude CLI profile may be usable and identity-complete, in which
+  // case its resolver intentionally avoids rereading the CLI and emits no overlay.
+  // Its canonical profile slot still establishes refresh ownership
+  // after a process restart, when runtime-only provenance is no longer available.
+  for (const profileId of listExternalCliProfileMetadataIds()) {
+    const credential = params.store.profiles[profileId];
+    const hasUsablePersistedCliCredential = isUsablePersistedExternalCliProfileCredential(
+      profileId,
+      credential,
+    );
     if (
-      !isExternalAuthProfileAllowed(
-        profile,
-        params.store,
-        params.externalCli?.config,
-        explicitProfileIds,
-        env,
-      )
+      (resolved.has(profileId) || hasUsablePersistedCliCredential) &&
+      externalCliSync.isExternalCliAuthProfileInScope({
+        store: params.store,
+        profileId,
+        providerIds: externalCli?.externalCliProviderIds,
+        profileIds: externalCli?.externalCliProfileIds,
+      })
     ) {
-      continue;
+      runtimeExternalCliProfileIds.add(profileId);
     }
-    resolved.set(profile.profileId, {
-      profileId: profile.profileId,
-      credential: profile.credential,
-      persistence: profile.persistence ?? "runtime-only",
-    });
   }
+  const pluginProfileIds = new Set<string>();
+  const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
   for (const rawProfile of profiles) {
     const profile = normalizeExternalAuthProfile(rawProfile);
     if (!profile) {
@@ -145,8 +174,52 @@ function resolveExternalAuthProfileMap(params: {
       continue;
     }
     resolved.set(profile.profileId, profile);
+    pluginProfileIds.add(profile.profileId);
+    runtimeExternalCliProfileIds.delete(profile.profileId);
   }
-  return resolved;
+  return { profiles: resolved, pluginProfileIds, runtimeExternalCliProfileIds };
+}
+
+function resolveAllowedExternalCliAuthProfiles(params: {
+  store: AuthProfileStore;
+  env?: NodeJS.ProcessEnv;
+  externalCli?: ExternalCliOverlayOptions;
+}): ProviderExternalAuthProfile[] {
+  const env = params.env ?? process.env;
+  const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
+  const cliProfiles =
+    externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
+      allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
+      providerIds: params.externalCli?.externalCliProviderIds,
+      profileIds: explicitProfileIds,
+    }) ?? [];
+  return cliProfiles.flatMap((profile) =>
+    isExternalAuthProfileAllowed(
+      profile,
+      params.store,
+      params.externalCli?.config,
+      explicitProfileIds,
+      env,
+    )
+      ? [
+          {
+            profileId: profile.profileId,
+            credential: profile.credential,
+            persistence: profile.persistence ?? "runtime-only",
+          },
+        ]
+      : [],
+  );
+}
+
+function resolveExternalCliAuthProfileMap(params: {
+  store: AuthProfileStore;
+  env?: NodeJS.ProcessEnv;
+  externalCli?: ExternalCliOverlayOptions;
+}): ExternalAuthProfileMap {
+  return new Map(
+    resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
+  );
 }
 
 /** List runtime-only and persisted external auth profiles for this store. */
@@ -157,12 +230,12 @@ export function listRuntimeExternalAuthProfiles(params: {
   externalCli?: ExternalCliOverlayOptions;
 }): RuntimeExternalOAuthProfile[] {
   return Array.from(
-    resolveExternalAuthProfileMap({
+    resolveExternalAuthProfiles({
       store: params.store,
       agentDir: params.agentDir,
       env: params.env,
       externalCli: params.externalCli,
-    }).values(),
+    }).profiles.values(),
   );
 }
 
@@ -173,9 +246,16 @@ function hasPersistableExternalCliSyncCandidate(
   if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
     return true;
   }
+  // Keep the existing Claude and MiniMax steady-state sync trigger independent
+  // from the narrower legacy Claude metadata migration/recovery registry.
   for (const profileId of [CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID]) {
     const credential = store.profiles[profileId];
-    if (credential?.type === "oauth") {
+    if (
+      credential?.type === "oauth" ||
+      listConfiguredExternalCliProfileMetadataIds(params?.config?.auth?.profiles).includes(
+        profileId,
+      )
+    ) {
       return true;
     }
   }
@@ -191,15 +271,46 @@ export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
   params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
 ): AuthProfileStore {
-  const profiles = listRuntimeExternalAuthProfiles({
-    store,
+  const scoped = hasScopedExternalCliOverlay(params);
+  const runtimeExternalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
+  // Provider hooks are authoritative on every combined refresh. Remove their previous
+  // generation-owned rows before reevaluating them, while limiting CLI removal to its scope.
+  const refreshedProfileIds = new Set(
+    (store.runtimeExternalProfileIds ?? []).filter(
+      (profileId) => !runtimeExternalCliProfileIds.has(profileId),
+    ),
+  );
+  for (const profileId of runtimeExternalCliProfileIds) {
+    if (
+      scoped &&
+      externalCliSync.isExternalCliAuthProfileInScope({
+        store,
+        profileId,
+        providerIds: params?.externalCliProviderIds,
+        profileIds: params?.externalCliProfileIds,
+      })
+    ) {
+      refreshedProfileIds.add(profileId);
+    }
+  }
+  const base = removeRuntimeExternalProfileReferences({ store, profileIds: refreshedProfileIds });
+  const resolved = resolveExternalAuthProfiles({
+    store: base,
     agentDir: params?.agentDir,
     env: params?.env,
     externalCli: params,
   });
-  return overlayRuntimeExternalOAuthProfiles(store, profiles, {
-    runtimeExternalProfileIdsAuthoritative: !hasScopedExternalCliOverlay(params),
+  const next = overlayRuntimeExternalOAuthProfiles(base, resolved.profiles.values(), {
+    runtimeExternalProfileIdsAuthoritative: !scoped,
   });
+  const retainedCliProfileIds = getRuntimeExternalCliProfileIds(base).filter(
+    (profileId) => !resolved.pluginProfileIds.has(profileId),
+  );
+  setRuntimeExternalCliProfileIds(next, [
+    ...retainedCliProfileIds,
+    ...resolved.runtimeExternalCliProfileIds,
+  ]);
+  return next;
 }
 
 /** Persist safe external CLI OAuth profiles that own their local profile slot. */
@@ -210,19 +321,22 @@ export function syncPersistedExternalCliAuthProfiles(
   if (!hasPersistableExternalCliSyncCandidate(store, params)) {
     return store;
   }
-  const env = params?.env ?? process.env;
-  const explicitProfileIds = resolveExplicitProfileIds(params?.externalCliProfileIds);
-  const cliProfiles =
-    externalCliSync.resolveExternalCliAuthProfiles?.(store, {
-      allowKeychainPrompt: params?.allowKeychainPrompt,
-      providerIds: params?.externalCliProviderIds,
-      profileIds: explicitProfileIds,
-    }) ?? [];
-  const persistedProfiles = cliProfiles.filter(
-    (profile) =>
-      profile.persistence === "persisted" &&
-      isExternalAuthProfileAllowed(profile, store, params?.config, explicitProfileIds, env),
+  const configuredProfileIds = listConfiguredExternalCliProfileMetadataIds(
+    params?.config?.auth?.profiles,
   );
+  const persistedProfiles = resolveAllowedExternalCliAuthProfiles({
+    store,
+    env: params?.env,
+    externalCli: configuredProfileIds.length
+      ? {
+          ...params,
+          externalCliProfileIds: [
+            ...(params?.externalCliProfileIds ?? []),
+            ...configuredProfileIds,
+          ],
+        }
+      : params,
+  }).filter((profile) => profile.persistence === "persisted");
   if (persistedProfiles.length === 0) {
     return store;
   }

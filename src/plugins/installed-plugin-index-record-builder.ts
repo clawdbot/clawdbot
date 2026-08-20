@@ -1,7 +1,13 @@
 /** Builds installed-index records from normalized plugin manifest registry entries. */
 import path from "node:path";
+import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -10,6 +16,7 @@ import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artif
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
 import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
+import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
   InstalledPluginContributionInfo,
@@ -18,6 +25,7 @@ import type {
   InstalledPluginPackageChannelInfo,
   InstalledPluginStartupInfo,
 } from "./installed-plugin-index-types.js";
+import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
@@ -169,14 +177,6 @@ function describePackageInstallSource(
   });
 }
 
-function normalizeStringField(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
-}
-
 function normalizePackageChannel(
   channel: PluginPackageChannel | undefined,
 ): InstalledPluginPackageChannelInfo | undefined {
@@ -227,11 +227,11 @@ function resolveManifestHash(params: {
 function buildCandidateLookup(
   candidates: readonly PluginCandidate[],
 ): Map<string, PluginCandidate> {
-  const byRootDir = new Map<string, PluginCandidate>();
+  const bySource = new Map<string, PluginCandidate>();
   for (const candidate of candidates) {
-    byRootDir.set(candidate.rootDir, candidate);
+    bySource.set(candidate.source, candidate);
   }
-  return byRootDir;
+  return bySource;
 }
 
 export function buildInstalledPluginIndexRecords(params: {
@@ -241,13 +241,20 @@ export function buildInstalledPluginIndexRecords(params: {
   diagnostics: PluginDiagnostic[];
   installRecords: Record<string, InstalledPluginInstallRecordInfo>;
 }): InstalledPluginIndexRecord[] {
-  const candidateByRootDir = buildCandidateLookup(params.candidates);
+  const candidateBySource = buildCandidateLookup(params.candidates);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const realpathCache = new Map<string, string>();
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
-    const candidate = candidateByRootDir.get(record.rootDir);
+    const candidate = candidateBySource.get(record.source);
     const packageJsonPath = resolvePackageJsonPath(candidate, realpathCache);
-    const installRecord = params.installRecords[record.id];
+    const installOwner =
+      candidate && isPluginCandidateInstallOwnerAmbiguous(candidate)
+        ? undefined
+        : (resolvePluginManifestInstallOwner(record) ??
+          (candidate ? resolvePluginCandidateInstallOwner(candidate) : undefined));
+    const installRecord = installOwner
+      ? getPluginInstallRecordMapEntry(params.installRecords, installOwner)
+      : undefined;
     const packageInstall = describePackageInstallSource(candidate);
     const packageChannel = normalizePackageChannel(
       record.packageChannel ?? candidate?.packageManifest?.channel,
@@ -336,6 +343,10 @@ export function buildInstalledPluginIndexRecords(params: {
     if (packageJson) {
       indexRecord.packageJson = packageJson;
     }
-    return indexRecord;
+    return recordInstalledPluginIndexInstallOwner(
+      indexRecord,
+      installOwner,
+      candidate ? isPluginCandidateInstallOwnerAmbiguous(candidate) : false,
+    );
   });
 }

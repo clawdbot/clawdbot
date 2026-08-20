@@ -1,12 +1,34 @@
 {
   "id": "codex",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "providerIds": ["codex", "codex-cli", "openai-codex"],
+      "runtimeIds": ["codex", "codex-cli"],
+      "cliSessionKeys": ["codex-cli"],
+      "authProfilePrefixes": ["codex:", "codex-cli:", "openai-codex:"]
+    }
+  ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
+  "cliCommands": [
+    {
+      "name": "codex",
+      "description": "Inspect and branch from Codex sessions through the Gateway",
+      "hasSubcommands": true
+    }
+  ],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
     "tools": [
       "codex_threads",
+      "codex_plugins",
       "codex_endpoint_probe",
       "codex_sessions_list",
       "codex_session_read",
@@ -30,6 +52,7 @@
     "onConfigPaths": [
       "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
+      "plugins.entries.codex.config.sessionCatalog.homes",
       "plugins.entries.codex.config.supervision.enabled"
     ]
   },
@@ -58,7 +81,24 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": true }
+          "enabled": { "type": "boolean", "default": true },
+          "homes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                { "type": "string", "minLength": 1, "pattern": "\\S" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1, "pattern": "\\S" },
+                    "label": { "type": "string", "minLength": 1, "pattern": "\\S" }
+                  }
+                }
+              ]
+            }
+          }
         }
       },
       "discovery": {
@@ -168,7 +208,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated", "workspace-directory"]
+                  "pattern": "^[A-Za-z0-9_-]+$"
                 },
                 "pluginName": {
                   "type": "string"
@@ -376,6 +416,11 @@
     "sessionCatalog.enabled": {
       "label": "Discover Codex Sessions",
       "help": "List native Codex sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "sessionCatalog.homes": {
+      "label": "Additional Codex Homes",
+      "help": "Existing local Codex home directories to include in native session discovery. String paths use the canonical directory basename as their label; object entries can override it with label. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
+      "advanced": true
     },
     "codexDynamicToolsLoading": {
       "label": "Dynamic Tools Loading",

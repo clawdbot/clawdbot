@@ -13,7 +13,7 @@ This page covers **model provider** authentication (API keys, OAuth, Claude CLI 
 OpenClaw supports OAuth and API keys for model providers. For an always-on gateway host, an API key is the most predictable option; subscription/OAuth flows work too when they match your provider account model.
 
 - Full OAuth flow and storage layout: [/concepts/oauth](/concepts/oauth)
-- SecretRef-based auth (`env`/`file`/`exec` providers): [Secrets Management](/gateway/secrets)
+- SecretRef-based auth (`env`/`file`/`exec`/`store` providers): [Secrets Management](/gateway/secrets)
 - Credential eligibility/reason codes used by `models status --probe`: [Auth Credential Semantics](/auth-credential-semantics)
 
 ## Recommended setup: API key (any provider)

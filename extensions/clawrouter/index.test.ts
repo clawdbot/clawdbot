@@ -57,6 +57,7 @@ describe("ClawRouter plugin", () => {
       prepareDynamicModel: expect.any(Function),
       preferRuntimeResolvedModel: expect.any(Function),
       resolveDynamicModel: expect.any(Function),
+      resolveThinkingProfile: expect.any(Function),
       resolveUsageAuth: expect.any(Function),
       sanitizeReplayHistory: expect.any(Function),
       wrapSimpleCompletionStreamFn: expect.any(Function),
@@ -68,6 +69,73 @@ describe("ClawRouter plugin", () => {
       kind: "api_key",
     });
     expect(provider?.wrapSimpleCompletionStreamFn).toBe(provider?.wrapStreamFn);
+  });
+
+  it("resolves authoritative catalog thinking profiles without inventing minimal", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const compat = {
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    };
+    const resolveLevels = (agentRuntime: string | undefined) =>
+      provider
+        ?.resolveThinkingProfile?.({
+          provider: "clawrouter",
+          modelId: "opaque-route-id",
+          agentRuntime,
+          compat,
+        } as never)
+        ?.levels.map((level) => level.id);
+
+    expect(resolveLevels("openclaw")).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(resolveLevels("auto")).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(resolveLevels("codex")).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(resolveLevels(undefined)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(
+      provider?.resolveThinkingProfile?.({
+        provider: "clawrouter",
+        modelId: "opaque-route-id",
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("bounds configured thinking metadata at the provider hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider
+        ?.resolveThinkingProfile?.({
+          provider: "clawrouter",
+          modelId: "opaque-route-id",
+          agentRuntime: "openclaw",
+          compat: {
+            supportedReasoningEfforts: ["ultra", "custom", "none", "none", "max"],
+          },
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(["off", "max", "ultra"]);
+    expect(
+      provider?.resolveThinkingProfile?.({
+        provider: "clawrouter",
+        modelId: "opaque-route-id",
+        compat: { supportedReasoningEfforts: ["ultra", "custom"] },
+      } as never),
+    ).toBeUndefined();
   });
 
   it("attaches the proxy key and native upstream id only at request dispatch", async () => {

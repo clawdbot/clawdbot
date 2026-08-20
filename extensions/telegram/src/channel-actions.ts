@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
@@ -88,10 +88,7 @@ function prepareTelegramSendPayload({
     return payload;
   }
   const rawTelegramData = payload.channelData?.telegram;
-  const telegramData =
-    rawTelegramData && typeof rawTelegramData === "object" && !Array.isArray(rawTelegramData)
-      ? (rawTelegramData as Record<string, unknown>)
-      : {};
+  const telegramData = asNonArrayRecord(rawTelegramData);
   return {
     ...payload,
     channelData: {
@@ -248,6 +245,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   handleAction: async ({
     action,
     params,
+    reply,
     cfg,
     accountId,
     mediaAccess,
@@ -268,6 +266,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       conversationReadOrigin: _modelConversationReadOrigin,
       mediaAccess: _modelMediaAccess,
       requesterAccountId: _modelRequesterAccountId,
+      reply: _modelReply,
       toolContext: _modelToolContext,
       ...runtimeParams
     } = params;
@@ -294,6 +293,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         gatewayClientScopes,
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
+        ...(reply ? { reply } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

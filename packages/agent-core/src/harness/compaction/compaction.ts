@@ -10,14 +10,17 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import { convertToLlm, type HarnessMessage } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
+import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
   type CompactionEntry,
   CompactionError,
@@ -72,13 +75,6 @@ function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage
   return projectSessionEntryMessage(entry);
 }
 
-function isResetReplayableEntry(entry: SessionTreeEntry): boolean {
-  return (
-    entry.type === "message" &&
-    (entry.message.role === "user" || entry.message.role === "assistant")
-  );
-}
-
 /** Generated compaction data ready to be persisted as a compaction entry. */
 export interface CompactionResult<T = unknown> {
   /** Summary text that replaces compacted history in future context. */
@@ -89,6 +85,22 @@ export interface CompactionResult<T = unknown> {
   tokensBefore: number;
   /** Optional implementation-specific details stored with the compaction entry. */
   details?: T;
+}
+
+// Persisted summaries replay on every later request, so their owner enforces
+// this provider-independent 16K hard bound.
+export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
+export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+
+export function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS) {
+  if (maxChars <= 0 || summary.length <= maxChars) {
+    return summary;
+  }
+  if (maxChars < SUMMARY_TRUNCATED_MARKER.length) {
+    return truncateUtf16Safe(summary, maxChars);
+  }
+  const budget = maxChars - SUMMARY_TRUNCATED_MARKER.length;
+  return `${truncateUtf16Safe(summary, budget)}${SUMMARY_TRUNCATED_MARKER}`;
 }
 
 /** Compaction thresholds and retention settings. */
@@ -130,10 +142,30 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   return undefined;
 }
 
+function isUnavailableContextBarrier(message: AgentMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const usage = "usage" in message ? message.usage : undefined;
+  if (!usage) {
+    return false;
+  }
+  if (message.api === "cli" && usage.contextUsage === undefined) {
+    return true;
+  }
+  if (usage.contextUsage?.state !== "unavailable") {
+    return false;
+  }
+  return calculateContextTokens(usage) === 0;
+}
+
 /** Return usage from the last valid assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
+      if (isUnavailableContextBarrier(entry.message)) {
+        return undefined;
+      }
       const usage = getAssistantUsage(entry.message);
       if (usage) {
         return usage;
@@ -162,6 +194,11 @@ function getLastAssistantUsageInfo(
     const message = messages.at(i);
     if (!message) {
       continue;
+    }
+    if (isUnavailableContextBarrier(message)) {
+      // Synthetic CLI markers invalidate older usage without contributing a
+      // replacement. Estimate the whole transcript instead of scanning past it.
+      return undefined;
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {
@@ -208,13 +245,14 @@ export function shouldCompact(
   contextWindow: number,
   settings: CompactionSettings,
 ): boolean {
-  if (!settings.enabled) {
+  if (!settings.enabled || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return false;
   }
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
+export const IMAGE_BLOCK_TOKENS = 2_000;
+const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
 function countContentBlockChars(
   content: Array<{ type: string; content?: unknown; text?: string }>,
@@ -272,6 +310,9 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
+      if (harnessMessage.excludeFromContext === true) {
+        return 0;
+      }
       chars =
         estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -422,7 +463,8 @@ export function findCutPoint(
     if (prevEntry.type === "compaction" || prevEntry.type === "reset") {
       break;
     }
-    if (getMessageFromEntryForCompaction(prevEntry)) {
+    // Metadata can follow the cut, but private persisted messages cannot become its boundary.
+    if (prevEntry.type === "message" || getMessageFromEntryForCompaction(prevEntry)) {
       break;
     }
     cutIndex--;
@@ -567,7 +609,7 @@ async function runSummarizationCompletion(params: {
     params.thinkingLevel,
   );
   const response = params.streamFn
-    ? await (await params.streamFn(params.model, context, options)).result()
+    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   if (response.stopReason === "aborted") {
     return err(
@@ -693,7 +735,7 @@ export function prepareCompaction(
     if (prevBoundary?.type === "reset") {
       const keptEntries =
         firstKeptEntryIndex >= 0
-          ? pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex).filter(isResetReplayableEntry)
+          ? selectResetKeptEntries(pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex))
           : [];
       resetPreludeMessages = keptEntries.flatMap((entry) => {
         const message = getMessageFromEntryForCompaction(entry);

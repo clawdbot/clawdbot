@@ -14,6 +14,7 @@ import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
 } from "../plugins/runtime-state.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   allowsPluginModelNormalization,
   hasExactConfiguredProviderModel,
@@ -32,6 +33,7 @@ import {
 } from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
+  resolveConfiguredModelFallbacks,
   resolveConfiguredModelRef,
   resolveModelAliasFromPair,
   resolveModelRefFromString,
@@ -142,6 +144,7 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
 export function resolveModelCandidateChain(
   params: {
     cfg: OpenClawConfig | undefined;
+    agentId?: string;
     provider: string;
     model: string;
     /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -176,6 +179,7 @@ function cloneModelCandidate(candidate: ModelFallbackCandidate): ModelFallbackCa
 function resolveFallbackCandidateCacheKey(
   params: {
     cfg: OpenClawConfig | undefined;
+    agentId?: string;
     provider: string;
     model: string;
     fallbacksOverride?: string[];
@@ -205,13 +209,17 @@ function resolveFallbackCandidateCacheKey(
       env,
       ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
       activate: false,
-      bundledProviderVitestCompat: true,
     })
   ) {
     return null;
   }
   const registryState = getPluginRegistryState();
+  const agentConfig =
+    params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
   return JSON.stringify({
+    agentId: params.agentId,
+    agentModel: agentConfig?.model,
+    agentModels: agentConfig?.models,
     provider: params.provider,
     model: params.model,
     requestedRouteResolution: params.requestedRouteResolution,
@@ -250,6 +258,7 @@ function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | u
 function resolveFallbackCandidatesUncached(
   params: {
     cfg: OpenClawConfig | undefined;
+    agentId?: string;
     provider: string;
     model: string;
     fallbacksOverride?: string[];
@@ -259,6 +268,7 @@ function resolveFallbackCandidatesUncached(
   const primary = params.cfg
     ? resolveConfiguredModelRef({
         cfg: params.cfg,
+        agentId: params.agentId,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: false,
@@ -284,6 +294,7 @@ function resolveFallbackCandidatesUncached(
   const normalizedPrimary = normalizeCandidateRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
+    agentId: params.agentId,
     defaultProvider,
     allowPluginNormalization: allowPluginModelAliases,
     manifestPlugins: params.manifestPlugins,
@@ -303,6 +314,7 @@ function resolveFallbackCandidatesUncached(
     requestedCandidate =
       resolveModelAliasFromPair({
         cfg: params.cfg,
+        agentId: params.agentId,
         provider: providerRaw,
         model: modelRaw,
         defaultProvider,
@@ -324,10 +336,13 @@ function resolveFallbackCandidatesUncached(
   const modelFallbacks =
     params.fallbacksOverride !== undefined
       ? params.fallbacksOverride
-      : resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
+      : params.cfg
+        ? resolveConfiguredModelFallbacks({ cfg: params.cfg, agentId: params.agentId })
+        : [];
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
+      agentId: params.agentId,
       raw,
       defaultProvider,
       aliasIndex,

@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import {
+  asPositiveSafeInteger as parsePositiveInteger,
+  asSafeIntegerInRange,
+} from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -38,10 +43,6 @@ type MediaProbeBatchOptions = {
 
 type FfprobeSource = { kind: "fileDescriptor"; fd: number } | { kind: "buffer"; buffer: Buffer };
 
-function parsePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 function parseDurationMs(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") {
     return undefined;
@@ -53,12 +54,6 @@ function parseDurationMs(value: unknown): number | undefined {
   return parsePositiveInteger(Math.round(seconds * 1000));
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeCodecName(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -68,7 +63,7 @@ function normalizeCodecName(value: unknown): string | undefined {
 }
 
 function parseStreamIndex(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function selectPlaybackStream(

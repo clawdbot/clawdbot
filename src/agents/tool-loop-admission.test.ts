@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
@@ -63,17 +63,19 @@ describe("whole-batch tool-loop admission", () => {
     const unrelatedSiblings = Array.from({ length: 20 }, (_, index) =>
       call(`safe-sibling-${index}`, "write", {}),
     );
-    const intervention = await admitToolCallBatch(
+    const admission = await admitToolCallBatch(
       [...unrelatedSiblings, call("repeated", "process", pollArgs)],
       ctx,
     );
 
-    expect(intervention).toMatchObject({
-      kind: "critical-tool-loop",
-      toolCallId: "repeated",
-      toolName: "process",
-      detector: "known_poll_no_progress",
-      count: 20,
+    expect(admission).toMatchObject({
+      intervention: {
+        kind: "critical-tool-loop",
+        toolCallId: "repeated",
+        toolName: "process",
+        detector: "known_poll_no_progress",
+        count: 20,
+      },
     });
     expect(state.toolCallHistory).toHaveLength(21);
     expect(state.toolCallHistory?.at(-1)).toMatchObject({
@@ -81,9 +83,12 @@ describe("whole-batch tool-loop admission", () => {
       outcomeKind: "tool-loop-veto",
     });
     expect(consumeBatchAdmittedToolCall("safe-sibling-0", ctx.runId)).toBe(false);
-    await expect(
-      admitToolCallBatch([call("recovery-write", "write", {})], ctx),
-    ).resolves.toBeUndefined();
+    await expect(admitToolCallBatch([call("recovery-write", "write", {})], ctx)).resolves.toEqual(
+      expect.objectContaining({
+        commitReadyCalls: expect.any(Function),
+        releaseSkippedCalls: expect.any(Function),
+      }),
+    );
   });
 
   it("blocks a batch that crosses the critical threshold within its own candidates", async () => {
@@ -110,32 +115,37 @@ describe("whole-batch tool-loop admission", () => {
       });
     }
 
-    const intervention = await admitToolCallBatch(
+    const admission = await admitToolCallBatch(
       [call("candidate-20", "process", pollArgs), call("candidate-21", "process", pollArgs)],
       ctx,
     );
 
-    expect(intervention).toMatchObject({
-      kind: "critical-tool-loop",
-      toolCallId: "candidate-21",
-      detector: "known_poll_no_progress",
-      count: 20,
+    expect(admission).toMatchObject({
+      intervention: {
+        kind: "critical-tool-loop",
+        toolCallId: "candidate-21",
+        detector: "known_poll_no_progress",
+        count: 20,
+      },
     });
     expect(state.toolCallHistory).toHaveLength(21);
     expect(consumeBatchAdmittedToolCall("candidate-20", ctx.runId)).toBe(false);
     await expect(
       admitToolCallBatch([call("recovery-repeat", "process", pollArgs)], ctx),
     ).resolves.toMatchObject({
-      kind: "critical-tool-loop",
-      toolCallId: "recovery-repeat",
-      detector: "known_poll_no_progress",
+      intervention: {
+        kind: "critical-tool-loop",
+        toolCallId: "recovery-repeat",
+        detector: "known_poll_no_progress",
+      },
     });
   });
 
   it("records an admitted call once and skips only its duplicate single-call loop policy", async () => {
     const admitted = call("admitted", "read", { path: "/tmp/a" });
 
-    await expect(admitToolCallBatch([admitted], ctx)).resolves.toBeUndefined();
+    const admission = await admitToolCallBatch([admitted], ctx);
+    admission.commitReadyCalls?.([{ toolCallId: admitted.toolCall.id, args: admitted.args }]);
     await expect(
       runBeforeToolCallHook({
         toolName: admitted.toolCall.name,
@@ -160,5 +170,76 @@ describe("whole-batch tool-loop admission", () => {
     clearBatchAdmittedToolCallsForRun(ctx.runId);
 
     expect(consumeBatchAdmittedToolCall(admitted.toolCall.id, ctx.runId)).toBe(false);
+  });
+
+  it("releases repeated skipped admissions without mutating bounded history", async () => {
+    const state = getDiagnosticSessionState({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+    });
+    for (let index = 0; index < 30; index += 1) {
+      recordToolCall(state, "read", { path: `/tmp/prior-${index}` }, `prior-${index}`);
+    }
+    const originalHistory = [...(state.toolCallHistory ?? [])];
+    const diagnosticEvents: unknown[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+    try {
+      for (let index = 0; index < 25; index += 1) {
+        const skipped = call(`skipped-${index}`, "write", { path: "/tmp/skipped" });
+        const admission = await admitToolCallBatch([skipped], ctx);
+        admission.releaseSkippedCalls?.([skipped.toolCall.id]);
+        expect(consumeBatchAdmittedToolCall(skipped.toolCall.id, ctx.runId)).toBe(false);
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(state.toolCallHistory).toEqual(originalHistory);
+    expect(diagnosticEvents).toEqual([]);
+    const executed = call("executed", "write", { path: "/tmp/skipped" });
+    const admission = await admitToolCallBatch([executed], ctx);
+    admission.commitReadyCalls?.([{ toolCallId: executed.toolCall.id, args: executed.args }]);
+    admission.releaseSkippedCalls?.([]);
+
+    expect(state.toolCallHistory).toHaveLength(30);
+    expect(state.toolCallHistory?.at(-1)).toMatchObject({
+      runId: ctx.runId,
+      toolCallId: executed.toolCall.id,
+      toolName: executed.toolCall.name,
+    });
+    expect(consumeBatchAdmittedToolCall(executed.toolCall.id, ctx.runId)).toBe(true);
+    expect(consumeBatchAdmittedToolCall(executed.toolCall.id, ctx.runId)).toBe(false);
+  });
+
+  it("commits ready siblings in assistant order and releases exact run markers", async () => {
+    const otherRun = { ...ctx, runId: "run-2" };
+    const sharedId = "shared-call";
+    const first = call("first", "read", { path: "/tmp/first" });
+    const skipped = call(sharedId, "write", { path: "/tmp/skipped" });
+    const last = call("last", "read", { path: "/tmp/last" });
+    const otherAdmission = await admitToolCallBatch(
+      [call(sharedId, "read", { path: "/tmp/other" })],
+      otherRun,
+    );
+    const admission = await admitToolCallBatch([first, skipped, last], ctx);
+
+    admission.commitReadyCalls?.([
+      { toolCallId: last.toolCall.id, args: last.args },
+      { toolCallId: first.toolCall.id, args: first.args },
+    ]);
+    admission.releaseSkippedCalls?.([skipped.toolCall.id]);
+
+    const state = getDiagnosticSessionState({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+    });
+    expect(state.toolCallHistory?.slice(-2).map((record) => record.toolCallId)).toEqual([
+      first.toolCall.id,
+      last.toolCall.id,
+    ]);
+    expect(consumeBatchAdmittedToolCall(skipped.toolCall.id, ctx.runId)).toBe(false);
+    expect(consumeBatchAdmittedToolCall(sharedId, otherRun.runId)).toBe(true);
+    otherAdmission.releaseSkippedCalls?.([sharedId]);
   });
 });

@@ -4,20 +4,27 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createDeferred } from "../test-utils/deferred.js";
+import { defaultRuntime } from "../runtime.js";
 import { NodeRegistry } from "./node-registry.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
@@ -40,6 +47,7 @@ const buildSessionLookup = (
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  agentId: "main",
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
@@ -87,26 +95,25 @@ const runtimeMocks = vi.hoisted(() => ({
       this.name = "ApnsRegistrationPairingChangedError";
     }
   },
-  buildOutboundSessionContext: vi.fn(({ sessionKey }: { sessionKey: string }) => ({
-    key: sessionKey,
-    agentId: "main",
-  })),
-  createOutboundSendDeps: vi.fn((deps: unknown) => deps),
-  defaultRuntime: {},
   deleteMediaBuffer: vi.fn(async () => {}),
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER:
+    "[image attachment omitted: durable managed media claim unavailable]",
   loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  upsertSessionEntry: vi.fn(),
+  upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
-  normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeat: vi.fn(),
+  resolveSystemMainSessionTarget: vi.fn(() => ({
+    agentId: "ops",
+    sessionKey: "agent:ops:main",
+  })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
@@ -130,8 +137,13 @@ const runtimeMocks = vi.hoisted(() => ({
       return modelEntry ? (modelEntry.input?.includes("image") ?? false) : true;
     },
   ),
-  resolveOutboundTarget: vi.fn(({ to }: { to: string }) => ({ ok: true, to })),
-  sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
+  sendDurableMessageBatch: vi.fn(
+    async (): Promise<DurableMessageBatchSendResult> => ({
+      status: "sent",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+    }),
+  ),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(
     (_cfg: OpenClawConfig, entry?: { model?: string; modelProvider?: string }) => ({
@@ -148,14 +160,41 @@ const runtimeMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
-vi.mock("../infra/device-pairing.js", () => ({
-  updatePairedDevicePresence: updatePairedDevicePresenceMock,
-}));
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "./health/types.js";
-import type { NodeEventContext } from "./server-node-events-types.js";
-import { handleNodeEvent } from "./server-node-events.js";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
+import { handleNodeEvent as handleNodeEventWithDependencies } from "./server-node-events.js";
+
+type ServerNodeEventDependencies = NonNullable<
+  Parameters<typeof handleNodeEventWithDependencies>[4]
+>;
+
+const serverNodeEventDependencies: ServerNodeEventDependencies = {
+  ...runtimeMocks,
+  buildOutboundSessionContext,
+  createOutboundSendDeps,
+  defaultRuntime,
+  normalizeRpcAttachmentsToChatAttachments,
+  resolveOutboundTarget,
+  withSystemEventOwner,
+  sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
+  updatePairedDevicePresence: updatePairedDevicePresenceMock,
+};
+
+const sentDurableMessageBatchResult: Extract<DurableMessageBatchSendResult, { status: "sent" }> = {
+  status: "sent",
+  results: [],
+  receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+};
+
+function handleNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  event: NodeEvent,
+  options?: Parameters<typeof handleNodeEventWithDependencies>[3],
+) {
+  return handleNodeEventWithDependencies(ctx, nodeId, event, options, serverNodeEventDependencies);
+}
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -168,7 +207,7 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const upsertSessionEntryMock = runtimeMocks.upsertSessionEntry;
+const upsertSessionEntryMock = runtimeMocks.upsertSessionEntryCore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
@@ -342,7 +381,7 @@ describe("node exec events", () => {
     loadOrCreateProcessDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
     persistInboundImagesForTranscriptMock.mockReset();
-    persistInboundImagesForTranscriptMock.mockResolvedValue([]);
+    persistInboundImagesForTranscriptMock.mockResolvedValue({ entries: [], omission: "none" });
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     updatePairedDevicePresenceMock.mockClear();
     updatePairedDevicePresenceMock.mockResolvedValue(true);
@@ -923,6 +962,7 @@ describe("voice transcript events", () => {
     upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    runtimeMocks.resolveSystemMainSessionTarget.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     upsertSessionEntryMock.mockImplementation(async (_scope, patch) => patch);
   });
@@ -1324,8 +1364,7 @@ describe("voice transcript events", () => {
     const [runId, runMetadata] = mockCall(addChatRun) ?? [];
     expect(runId).toBe(optsRecord.runId);
     const clientRunId = (runMetadata as { clientRunId?: unknown } | undefined)?.clientRunId;
-    expect(typeof clientRunId).toBe("string");
-    expect(clientRunId).toMatch(/^voice-/);
+    expect(clientRunId).toBe(runId);
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
@@ -1451,16 +1490,17 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
-      {
-        sessionKey: "node-node-n1",
+      expect.objectContaining({
+        sessionKey: "agent:ops:main",
         contextKey: "notification:notif-1",
-      },
+      }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
-      sessionKey: "node-node-n1",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
   });
 
@@ -1477,17 +1517,36 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
-      {
-        sessionKey: "node-node-n2",
+      expect.objectContaining({
+        sessionKey: "agent:ops:main",
         contextKey: "notification:notif-2",
-      },
+      }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "event",
       reason: "notifications-event",
-      sessionKey: "node-node-n2",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
     });
+  });
+
+  it("records non-delivery when a targetless notification has no system owner", async () => {
+    const warn = vi.fn();
+    runtimeMocks.resolveSystemMainSessionTarget.mockImplementationOnce(() => {
+      throw new Error("Set agents.defaults.systemAgent.agentId");
+    });
+
+    await handleNodeEvent({ ...buildCtx(), logGateway: { warn } }, "node-unowned", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif-unowned" }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "notification event not delivered node=node-unowned: Set agents.defaults.systemAgent.agentId",
+    );
   });
 
   it("wakes heartbeat on payload sessionKey when provided", async () => {
@@ -1520,6 +1579,7 @@ describe("notifications changed events", () => {
       payloadJSON: JSON.stringify({
         change: "posted",
         key: "notif-5",
+        sessionKey: "node-node-n5",
       }),
     });
 
@@ -1637,14 +1697,14 @@ describe("agent request events", () => {
     runtimeMocks.resolveSessionModelRef.mockClear();
     runtimeMocks.resolveGatewayModelSupportsImages.mockClear();
     persistInboundImagesForTranscriptMock.mockReset();
-    persistInboundImagesForTranscriptMock.mockResolvedValue([]);
+    persistInboundImagesForTranscriptMock.mockResolvedValue({ entries: [], omission: "none" });
     runtimeMocks.deleteMediaBuffer.mockClear();
     upsertSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sendDurableMessageBatchMock.mockReset();
-    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent" });
+    sendDurableMessageBatchMock.mockResolvedValue(sentDurableMessageBatchResult);
     parseMessageWithAttachmentsMock.mockResolvedValue({
       message: "parsed message",
       images: [],
@@ -1711,7 +1771,7 @@ describe("agent request events", () => {
   });
 
   it("keeps an accepted detached receipt delivery visible to suspension", async () => {
-    const receipt = createDeferred<{ status: "sent" }>();
+    const receipt = createDeferred<DurableMessageBatchSendResult>();
     sendDurableMessageBatchMock.mockImplementationOnce(() => receipt.promise);
 
     await runAdmittedNodeEvent(buildCtx(), "node-receipt-suspend", {
@@ -1728,7 +1788,7 @@ describe("agent request events", () => {
 
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
     expectSuspendBusyWithRootWork("receipt-delivery-busy");
-    receipt.resolve({ status: "sent" });
+    receipt.resolve(sentDurableMessageBatchResult);
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expectSuspendReady("receipt-delivery-ready");
   });
@@ -1777,14 +1837,18 @@ describe("agent request events", () => {
   });
 
   it("cleans persisted transcript media when detached agent admission is revoked", async () => {
-    persistInboundImagesForTranscriptMock.mockResolvedValueOnce([
-      {
-        id: "saved-after-admission",
-        path: "/media/inbound/saved-after-admission.png",
-        size: 5,
-        contentType: "image/png",
-      },
-    ]);
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
+      entries: [
+        {
+          id: "saved-after-admission",
+          path: "/media/inbound/saved-after-admission.png",
+          sourceIndex: 0,
+          imageKind: "inline",
+          fact: { url: "media://inbound/saved-after-admission.png", contentType: "image/png" },
+        },
+      ],
+      omission: "none",
+    });
     let currentnessChecks = 0;
     const isConnectionCurrent = vi.fn(async () => {
       currentnessChecks += 1;
@@ -1961,7 +2025,7 @@ describe("agent request events", () => {
   it("passes ordered durable media metadata to the agent transcript recorder", async () => {
     parseMessageWithAttachmentsMock.mockResolvedValueOnce({
       message: "describe\n[media attached: media://inbound/offloaded]",
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 1 }],
       imageOrder: ["offloaded", "inline"],
       offloadedRefs: [
         {
@@ -1972,23 +2036,29 @@ describe("agent request events", () => {
           mimeType: "image/png",
           label: "offloaded.png",
           sizeBytes: 2_100_000,
+          sourceIndex: 0,
         },
       ],
     });
-    persistInboundImagesForTranscriptMock.mockResolvedValueOnce([
-      {
-        id: "offloaded",
-        path: "/media/inbound/offloaded.png",
-        size: 2_100_000,
-        contentType: "image/png",
-      },
-      {
-        id: "saved-inline",
-        path: "/media/inbound/saved-inline.jpg",
-        size: 5,
-        contentType: "image/jpeg",
-      },
-    ]);
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
+      entries: [
+        {
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          sourceIndex: 0,
+          imageKind: "offloaded",
+          fact: { url: "media://inbound/offloaded", contentType: "image/png" },
+        },
+        {
+          id: "saved-inline",
+          path: "/media/inbound/saved-inline.jpg",
+          sourceIndex: 1,
+          imageKind: "inline",
+          fact: { url: "media://inbound/saved-inline", contentType: "image/jpeg" },
+        },
+      ],
+      omission: "none",
+    });
 
     await handleNodeEvent(buildCtx(), "node-media", {
       event: "agent.request",
@@ -1999,17 +2069,43 @@ describe("agent request events", () => {
       }),
     });
 
-    expect(persistInboundImagesForTranscriptMock).toHaveBeenCalledWith(
-      expect.objectContaining({ imageOrder: ["offloaded", "inline"] }),
-    );
+    expect(persistInboundImagesForTranscriptMock).toHaveBeenCalledOnce();
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expectFields(mockCallArg(agentCommandMock), {
       message: "describe\n[media attached: media://inbound/offloaded]",
       transcriptMessage: "describe",
       transcriptMedia: [
-        { path: "/media/inbound/offloaded.png", contentType: "image/png" },
-        { path: "/media/inbound/saved-inline.jpg", contentType: "image/jpeg" },
+        { url: "media://inbound/offloaded", contentType: "image/png" },
+        { url: "media://inbound/saved-inline", contentType: "image/jpeg" },
       ],
+    });
+  });
+
+  it("records a visible durable omission when inline image persistence fails", async () => {
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "describe",
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg", sourceIndex: 0 }],
+      imageOrder: ["inline"],
+      offloadedRefs: [],
+    });
+    persistInboundImagesForTranscriptMock.mockResolvedValueOnce({
+      entries: [],
+      omission: "inline-image-save-failed",
+    });
+
+    await handleNodeEvent(buildCtx(), "node-media-omission", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "describe",
+        sessionKey: "agent:main:main",
+        attachments: [{ type: "image", mimeType: "image/jpeg", content: "AAAA" }],
+      }),
+    });
+
+    expectFields(mockCallArg(agentCommandMock), {
+      message: "describe",
+      transcriptMessage:
+        "describe\n[image attachment omitted: durable managed media claim unavailable]",
     });
   });
 

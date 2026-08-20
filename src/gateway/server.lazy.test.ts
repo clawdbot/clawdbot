@@ -21,16 +21,18 @@ describe("gateway server boundary", () => {
     }
   });
 
-  it("lazy-loads server.impl on demand", async () => {
+  it("lazy-loads server-start on demand", async () => {
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     const mod = await import("./server.js");
     expect(stderrWrite).not.toHaveBeenCalledWith(
-      expect.stringContaining("gateway.server-impl-import"),
+      expect.stringContaining("gateway.server-start-import"),
     );
 
     await mod.resetPreparedModelCatalogForTest();
 
-    expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("gateway.server-impl-import"));
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("gateway.server-start-import"),
+    );
   });
 });

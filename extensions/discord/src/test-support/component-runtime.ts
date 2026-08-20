@@ -161,7 +161,11 @@ vi.mock("../interactive-dispatch.js", () => {
 
 vi.mock("../monitor/agent-components.deps.runtime.js", () => {
   return {
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
     readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
     resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };

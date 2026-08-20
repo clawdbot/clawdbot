@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { resolveMeetingAudioRuntimeForFormat, type MeetingAudioRuntime } from "./audio-backend.js";
 import { resolveMeetingBrowserNodeInfo } from "./browser-node.js";
 import { isMeetingTalkBackMode } from "./meeting-modes.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
@@ -14,7 +15,11 @@ type MeetingSetupNodeAdapter = {
 };
 
 type MeetingRuntimeSetupOptions<Config extends MeetingPluginConfig, Mode extends string> = {
-  assertAudioDeviceAvailable(params: { runtime: PluginRuntime; timeoutMs: number }): Promise<void>;
+  assertAudioDeviceAvailable(params: {
+    config: Config;
+    runtime: PluginRuntime;
+    timeoutMs: number;
+  }): Promise<void>;
   captionsMessage(mode: Mode): string;
   connectedNodeMessage(nodeLabel: string | undefined): string;
   guestJoinCheck(config: Config): { message: string; ok: boolean };
@@ -77,8 +82,15 @@ export function createMeetingRuntimeSetup<Config extends MeetingPluginConfig, Mo
             command: options.nodeAdapter.nodeCommandName,
             params: {
               action: "setup",
-              audioInputCommand: params.config.chrome.audioInputCommand,
-              audioOutputCommand: params.config.chrome.audioOutputCommand,
+              audioBackend: params.config.chrome.audioBackend,
+              audioFormat: params.config.chrome.audioFormat,
+              audioBufferBytes: params.config.chrome.audioBufferBytes,
+              ...(params.config.chrome.audioInputCommandOverride
+                ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+                : {}),
+              ...(params.config.chrome.audioOutputCommandOverride
+                ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+                : {}),
               ...(params.config.chrome.bargeInInputCommand
                 ? { bargeInInputCommand: params.config.chrome.bargeInInputCommand }
                 : {}),
@@ -88,7 +100,7 @@ export function createMeetingRuntimeSetup<Config extends MeetingPluginConfig, Mo
           status = addMeetingSetupCheck(status, {
             id: "chrome-node-audio-prerequisites",
             ok: true,
-            message: "Remote macOS, BlackHole 2ch, and SoX prerequisites are ready",
+            message: "Remote virtual audio backend and command-pair prerequisites are ready",
           });
         }
       } catch (error) {
@@ -108,23 +120,30 @@ export function createMeetingRuntimeSetup<Config extends MeetingPluginConfig, Mo
     }
     status = addMeetingSetupCheck(status, {
       id: "audio-bridge",
-      ok:
-        params.config.chrome.audioInputCommand.length > 0 &&
-        params.config.chrome.audioOutputCommand.length > 0,
-      message: `SoX command-pair audio bridge configured (${params.config.chrome.audioFormat})`,
+      ok: true,
+      message: `Command-pair audio bridge configured (${params.config.chrome.audioFormat})`,
     });
     if (transport === "chrome-node") {
       return status;
     }
+    let audio: MeetingAudioRuntime | undefined;
     try {
+      audio = resolveMeetingAudioRuntimeForFormat({
+        backend: params.config.chrome.audioBackend,
+        bufferBytes: params.config.chrome.audioBufferBytes,
+        format: params.config.chrome.audioFormat,
+        inputCommand: params.config.chrome.audioInputCommandOverride,
+        outputCommand: params.config.chrome.audioOutputCommandOverride,
+      });
       await options.assertAudioDeviceAvailable({
+        config: params.config,
         runtime: params.runtime,
         timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
       });
       status = addMeetingSetupCheck(status, {
         id: "chrome-local-audio-device",
         ok: true,
-        message: "BlackHole 2ch audio device found",
+        message: "Virtual meeting audio backend is ready",
       });
     } catch (error) {
       status = addMeetingSetupCheck(status, {
@@ -132,11 +151,14 @@ export function createMeetingRuntimeSetup<Config extends MeetingPluginConfig, Mo
         ok: false,
         message: formatErrorMessage(error),
       });
+      if (!audio) {
+        return status;
+      }
     }
     const commands = uniqueStrings(
       [
-        params.config.chrome.audioInputCommand[0],
-        params.config.chrome.audioOutputCommand[0],
+        audio.inputCommand[0],
+        audio.outputCommand[0],
         params.config.chrome.bargeInInputCommand?.[0],
       ].filter((value): value is string => Boolean(value?.trim())),
     );

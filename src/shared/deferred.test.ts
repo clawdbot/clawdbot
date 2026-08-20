@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "./deferred.js";
+import { createDeferredCore } from "./deferred.js";
 
-describe("createDeferred", () => {
+describe("createDeferredCore", () => {
   it("adopts promise-like resolution values", async () => {
-    const deferred = createDeferred<number>();
+    const deferred = createDeferredCore<number>();
 
     deferred.resolve(Promise.resolve(42));
 
@@ -11,7 +11,7 @@ describe("createDeferred", () => {
   });
 
   it("keeps the first settlement", async () => {
-    const deferred = createDeferred<string>();
+    const deferred = createDeferredCore<string>();
 
     deferred.resolve("first");
     deferred.reject(new Error("late rejection"));

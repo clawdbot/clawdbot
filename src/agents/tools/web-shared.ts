@@ -204,7 +204,7 @@ export async function readResponseText(
       ? Math.floor(maxBytesRaw)
       : undefined;
 
-  const body = (res as unknown as { body?: unknown }).body;
+  const body = res.body;
   if (
     maxBytes &&
     body &&

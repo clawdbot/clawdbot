@@ -15,11 +15,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -317,7 +314,7 @@ export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: stri
   return next;
 }
 
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getCliBackendPortBlock(): Promise<number> {
   return await getFreePortBlockWithPermissionFallback({
     offsets: [0, 1, 2, 4],
     fallbackBase: 40_000,
@@ -402,6 +399,7 @@ export async function connectTestGatewayClient(params: {
   timeoutMs?: number;
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
+  caps?: string[];
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
   waitForEventLoopReady?: boolean;
@@ -444,6 +442,7 @@ async function connectClientOnce(params: {
   timeoutMs: number;
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
+  caps?: string[];
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
   waitForEventLoopReady?: boolean;
@@ -478,6 +477,7 @@ async function connectClientOnce(params: {
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
+      ...(params.caps ? { caps: params.caps } : {}),
       connectChallengeTimeoutMs: params.timeoutMs,
       deviceIdentity: params.deviceIdentity,
       onHelloOk: () => finish({ client }),

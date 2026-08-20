@@ -94,6 +94,9 @@ describe("modelsAuthListCommand", () => {
 
     await modelsAuthListCommand({ provider: "OpenAI", agent: "coder", json: true }, runtime);
 
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), "coder", {
+      kind: "read",
+    });
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
       provider: "openai",
@@ -157,6 +160,43 @@ describe("modelsAuthListCommand", () => {
           cooldownReason: "session_expired",
           recoveryHint:
             "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+        }),
+      ],
+    });
+  });
+
+  it("shows exact WHAM classification without hiding the canonical reason in JSON", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "secret",
+          refresh: "secret",
+          expires: 1_900_000_000_000,
+        },
+      },
+      usageStats: {
+        "openai:expired": {
+          cooldownUntil: 1_900_000_100_000,
+          cooldownReason: "auth",
+          cooldownClassification: "wham_token_expired",
+        },
+      },
+    } satisfies AuthProfileStore);
+
+    const textRuntime = createRuntime();
+    await modelsAuthListCommand({}, textRuntime);
+    expect(textRuntime.logs.at(-1)).toContain("cooldown:wham_token_expired");
+
+    const jsonRuntime = createRuntime();
+    await modelsAuthListCommand({ json: true }, jsonRuntime);
+    expect(jsonRuntime.jsonPayloads[0]).toMatchObject({
+      profiles: [
+        expect.objectContaining({
+          cooldownReason: "auth",
+          cooldownClassification: "wham_token_expired",
         }),
       ],
     });

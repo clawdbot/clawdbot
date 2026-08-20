@@ -13,7 +13,7 @@ export {
 export {
   formatPluginCompatibilityNotice,
   summarizePluginCompatibility,
-} from "../plugins/status.js";
+} from "../plugins/status-compatibility.js";
 export { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 export { theme } from "../../packages/terminal-core/src/theme.js";
 export { formatHealthChannelLines } from "./health-format.js";

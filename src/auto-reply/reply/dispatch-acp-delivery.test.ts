@@ -6,7 +6,10 @@ import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import {
+  createAcpTestConfig,
+  createAcpTestReplyDispatcher as createDispatcher,
+} from "./test-fixtures/acp-runtime.js";
 
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
@@ -77,7 +80,7 @@ const channelPluginMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
@@ -93,18 +96,6 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => deliveryMocks.runMessageAction(params),
 }));
-
-function createDispatcher(): ReplyDispatcher {
-  return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-}
 
 function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>) {
   return createAcpDispatchDeliveryCoordinator({

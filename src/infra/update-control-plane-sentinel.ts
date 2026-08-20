@@ -1,6 +1,7 @@
 // Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   markUpdateRestartSentinelFailure,
   writeRestartSentinel,
@@ -57,23 +58,22 @@ export function isPendingControlPlaneUpdateRestartSentinel(
   );
 }
 
-function normalizeText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
   if (!isRecord(value)) {
     return null;
   }
-  const sessionKey = normalizeText(value.sessionKey);
-  const threadId = normalizeText(value.threadId);
-  const handoffId = normalizeText(value.handoffId);
+  const sessionKey = readNonBlankString(value.sessionKey);
+  const threadId = readNonBlankString(value.threadId);
+  const handoffId = readNonBlankString(value.handoffId);
+  const root = readNonBlankString(value.root);
   const channel = isRecord(value.deliveryContext)
-    ? normalizeText(value.deliveryContext.channel)
+    ? readNonBlankString(value.deliveryContext.channel)
     : undefined;
-  const to = isRecord(value.deliveryContext) ? normalizeText(value.deliveryContext.to) : undefined;
+  const to = isRecord(value.deliveryContext)
+    ? readNonBlankString(value.deliveryContext.to)
+    : undefined;
   const accountId = isRecord(value.deliveryContext)
-    ? normalizeText(value.deliveryContext.accountId)
+    ? readNonBlankString(value.deliveryContext.accountId)
     : undefined;
   const deliveryContext =
     channel || to || accountId
@@ -84,6 +84,7 @@ function normalizeMeta(value: unknown): UpdateRestartSentinelMeta | null {
         }
       : undefined;
   return {
+    ...(root ? { root } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
     ...(threadId ? { threadId } : {}),

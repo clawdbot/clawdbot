@@ -27,8 +27,8 @@ export type StreamFn = LlmStreamFn;
 /**
  * Configuration for how tool calls from a single assistant message are executed.
  *
- * - "sequential": each tool call is prepared, executed, and finalized before the next one starts.
- * - "parallel": tool calls are prepared sequentially, then allowed tools execute concurrently.
+ * - "sequential": each tool call is prepared, checked for steering, executed, and finalized before the next one starts.
+ * - "parallel": tool calls are prepared sequentially, checked for steering once, then allowed tools execute concurrently.
  *   `tool_execution_end` is emitted in tool completion order after each tool is finalized,
  *   while tool-result message artifacts are emitted later in assistant source order.
  */
@@ -271,7 +271,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * Called after each turn fully completes and `turn_end` has been emitted.
    *
    * If it returns true, the loop emits `agent_end` and exits before polling steering or follow-up queues,
-   * without starting another LLM call. The current assistant response and any tool executions finish normally.
+   * without starting another LLM call. Steering already drained at a tool checkpoint takes precedence,
+   * so this hook is deferred until that steering turn completes.
    *
    * Use this to request a graceful stop after the current turn, e.g. before context gets too full.
    *
@@ -291,13 +292,18 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   /**
    * Returns steering messages to inject into the conversation mid-run.
    *
-   * Called after the current assistant turn finishes executing its tool calls, unless `shouldStopAfterTurn` exits first.
-   * If messages are returned, they are added to the context before the next LLM call.
-   * Tool calls from the current assistant message are not skipped.
+   * Sequential execution checks before each tool starts, including again after
+   * asynchronous preparation. Parallel execution checks once after preparation
+   * and immediately before launching the prepared calls. A non-empty result
+   * skips calls that have not started and is added to context before the next
+   * LLM call; already-running calls continue.
+   *
+   * Once a check returns messages, the loop carries that exact result to the
+   * next turn without polling again. This preserves queue drain ordering.
    *
    * Use this for "steering" the agent while it's working.
    *
-   * Contract: must not throw or reject. Return [] when no steering messages are available.
+   * Contract: must not throw or reject. Resolve to [] when no steering messages are available.
    */
   getSteeringMessages?: () => Promise<AgentMessage[]>;
 
@@ -316,8 +322,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 
   /**
    * Tool execution mode.
-   * - "sequential": execute tool calls one by one
+   * - "sequential": execute tool calls one by one, checking for steering before each starts
    * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
+   *   steering is checked once immediately before prepared calls launch;
    *   emit `tool_execution_end` in tool completion order after each tool is finalized,
    *   then emit tool-result message artifacts later in assistant source order
    *
@@ -624,7 +631,7 @@ export type AgentEvent =
       toolName: string;
       result: unknown;
       isError: boolean;
-      /** False when resolution, argument preparation, validation, or policy blocked execution. */
+      /** False when resolution, preparation, validation, policy, or queued steering prevented execution. */
       executionStarted?: boolean;
       /** Typed pre-execution failure provenance for safe downstream diagnostics. */
       errorKind?: "argument-validation";

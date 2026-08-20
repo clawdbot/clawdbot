@@ -120,7 +120,10 @@ export function runRespawnChildWithSignalBridge(params: {
     runtime.exit(code ?? 1);
   });
 
-  child.once("error", (error) => {
+  child.on("error", (error) => {
+    if (child.pid !== undefined) {
+      return;
+    }
     clearSignalTimers();
     onError(error);
     runtime.exit(1);

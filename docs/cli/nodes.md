@@ -1,7 +1,7 @@
 ---
-summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/canvas/screen/location/notify)"
+summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/screen/location/notify and the macOS widget panel)"
 read_when:
-  - You're managing paired nodes (cameras, screen, canvas)
+  - You're managing paired nodes (cameras, screen, or the macOS widget panel)
   - You need to approve requests or invoke node commands
 title: "Nodes"
 ---
@@ -46,6 +46,7 @@ These commands drive the gateway-owned `node.pair.*` store, separate from device
   - commandless request: `operator.pairing`
   - ordinary node commands: `operator.pairing` + `operator.write`
   - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
+- These requirements classify node commands relayed through `node.invoke`. The top-level Gateway `fs.listDir` RPC needs `operator.write` for workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 - `remove` scope: `operator.pairing` can remove non-operator node rows; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
 ## Invoke
@@ -56,7 +57,7 @@ openclaw nodes invoke --node <id> --command system.which --params '{"bins":["una
 
 Flags:
 
-- `--command <command>` (required): e.g. `canvas.eval`.
+- `--command <command>` (required): e.g. `device.info`.
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
 - `--idempotency-key <key>`: optional idempotency key.
@@ -78,7 +79,7 @@ openclaw nodes screen record --node <id> --duration 10s --fps 10 --out ./clip.mp
 - `screen record` captures a short clip and prints the saved path (or writes JSON with `--json`). Options: `--screen <index>` (default `0`), `--duration <ms|10s>` (default `10000`), `--fps <fps>` (default `10`), `--no-audio`, `--out <path>`, `--invoke-timeout <ms>` (default `120000`).
 - Explicit screen output paths are staged beside the destination and replace it only after a complete write; a failed write leaves an existing file unchanged.
 
-Camera and Canvas commands have their own docs: [Camera nodes](/nodes/camera), [Canvas](/platforms/mac/canvas). Canvas is implemented by the bundled experimental Canvas plugin; core keeps `openclaw nodes canvas` as a compatibility mount point.
+Camera and macOS widget-panel commands have their own docs: [Camera nodes](/nodes/camera), [Widget panel](/platforms/mac/canvas). The bundled experimental Canvas plugin registers `openclaw nodes canvas` with the surviving `present`, `hide`, and `navigate` subcommands.
 
 ## Related
 

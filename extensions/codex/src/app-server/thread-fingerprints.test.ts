@@ -101,13 +101,10 @@ describe("fingerprintCodexThreadConfig", () => {
   });
 
   it.each<{ setting: string; patch: JsonObject }>([
-    { setting: "model", patch: { model: "gpt-5.6-terra" } },
     { setting: "model provider", patch: { modelProvider: "custom" } },
     { setting: "requested model provider", patch: { requestedModelProvider: "custom" } },
-    { setting: "approval policy", patch: { approvalPolicy: "on-request" } },
-    { setting: "approval reviewer", patch: { approvalsReviewer: "guardian" } },
-    { setting: "sandbox", patch: { sandbox: "read-only" } },
-    { setting: "service tier", patch: { serviceTier: "flex" } },
+    { setting: "native multi-agent generation", patch: { model: "gpt-5.6-luna" } },
+    { setting: "named permissions profile", patch: { permissions: "read-only" } },
     { setting: "base instructions", patch: { baseInstructions: "Different base policy." } },
     { setting: "developer instructions", patch: { developerInstructions: "Different policy." } },
     { setting: "effective config", patch: { config: { features: { hooks: false } } } },
@@ -129,18 +126,19 @@ describe("fingerprintCodexThreadConfig", () => {
     );
   });
 
-  it("distinguishes an omitted service tier from an explicit clear", () => {
-    const { serviceTier: _serviceTier, ...withoutServiceTier } = request;
-
-    expect(fingerprintCodexThreadConfig(withoutServiceTier, "openai:personal")).not.toBe(
-      fingerprintCodexThreadConfig({ ...withoutServiceTier, serviceTier: null }, "openai:personal"),
+  it.each<{ setting: string; patch: JsonObject }>([
+    { setting: "model", patch: { model: "gpt-5.6-terra" } },
+    { setting: "requested model", patch: { requestedModel: null } },
+    { setting: "approval policy", patch: { approvalPolicy: "on-request" } },
+    { setting: "approval reviewer", patch: { approvalsReviewer: "guardian" } },
+    { setting: "sandbox", patch: { sandbox: "read-only" } },
+    { setting: "service tier", patch: { serviceTier: "flex" } },
+    { setting: "personality", patch: { personality: "friendly" } },
+    { setting: "working directory", patch: { cwd: "/other/workspace" } },
+  ])("preserves the native session when turn/start changes $setting", ({ patch }) => {
+    expect(fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal")).toBe(
+      fingerprintCodexThreadConfig(request, "openai:personal"),
     );
-  });
-
-  it("preserves an explicitly omitted native model selection", () => {
-    expect(
-      fingerprintCodexThreadConfig({ ...request, requestedModel: null }, "openai:personal"),
-    ).not.toBe(fingerprintCodexThreadConfig(request, "openai:personal"));
   });
 });
 

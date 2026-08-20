@@ -238,10 +238,10 @@ describe("createCronExitWatchers", () => {
       expect.objectContaining({ consecutiveErrors: 1 }),
     );
     expect(w.activeJobIds()).toEqual(["job-a"]);
-    // The backoff timer re-arms without an external reconcile.
-    await delay(5);
-    await flush();
-    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    // The backoff timer re-arms without an external reconcile. The 0ms retry
+    // timer is armed only after async state persistence, so a fixed sleep races
+    // it on loaded CI workers — wait for the re-arm instead.
+    await vi.waitFor(() => expect(supervisor.spawn).toHaveBeenCalledTimes(2));
     expect(w.activeJobIds()).toEqual(["job-a"]);
   });
 
@@ -264,10 +264,9 @@ describe("createCronExitWatchers", () => {
       expect.objectContaining({ id: "job-a" }),
       expect.objectContaining({ consecutiveErrors: 1 }),
     );
-    // Backoff re-arm succeeds on the second spawn.
-    await delay(5);
-    await flush();
-    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    // Backoff re-arm succeeds on the second spawn. Same async-persist race as
+    // the wait-rejection case above: wait for the re-arm, not a fixed sleep.
+    await vi.waitFor(() => expect(supervisor.spawn).toHaveBeenCalledTimes(2));
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
     // Cancelling clears any pending retry timer; once the cancelled child

@@ -6,7 +6,6 @@ extension GatewayNodeSession {
         request: BridgeInvokeRequest,
         timeoutMs: Int?,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
-        onOperationStarted: (@Sendable () async -> Void)? = nil,
         onOperationSettled: (@Sendable () async -> Void)? = nil) async -> BridgeInvokeResponse
     {
         let timeoutLogger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
@@ -16,7 +15,6 @@ extension GatewayNodeSession {
             }
             return Self.defaultInvokeTimeoutMs
         }()
-        await onOperationStarted?()
         guard timeout > 0 else {
             let response = await onInvoke(request)
             await onOperationSettled?()
@@ -73,20 +71,16 @@ extension GatewayNodeSession {
                 }
                 guard !Task.isCancelled else { return }
                 timeoutLogger.info("node invoke timeout fired id=\(request.id, privacy: .public)")
-                latch.resume(Self.invokeTimeoutResponse(requestId: request.id))
+                latch.resume(BridgeInvokeResponse(
+                    id: request.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .unavailable,
+                        message: "node invoke timed out")))
             }
         }
         timeoutLogger
             .info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         return response
-    }
-
-    static func invokeTimeoutResponse(requestId: String) -> BridgeInvokeResponse {
-        BridgeInvokeResponse(
-            id: requestId,
-            ok: false,
-            error: OpenClawNodeError(
-                code: .unavailable,
-                message: "node invoke timed out"))
     }
 }

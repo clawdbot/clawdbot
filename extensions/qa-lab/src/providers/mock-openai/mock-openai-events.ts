@@ -1,14 +1,54 @@
 // QA Lab mock provider output event builders.
 
 import type { StreamEvent } from "./mock-openai-contracts.js";
-import {
-  readTargetFromPrompt,
-  buildMockFunctionCall,
-  buildToolCallEventsWithArgs,
-} from "./mock-openai-tooling.js";
-export function buildToolCallEvents(prompt: string): StreamEvent[] {
-  const targetPath = readTargetFromPrompt(prompt);
-  return buildToolCallEventsWithArgs("read", { path: targetPath });
+import { buildMockFunctionCall } from "./mock-openai-tooling.js";
+
+export function buildFailedResponseEvents(): StreamEvent[] {
+  const responseId = `resp_qa_failed_${Date.now()}`;
+  return [
+    { type: "response.created", response: { id: responseId } },
+    {
+      type: "response.failed",
+      response: {
+        id: responseId,
+        status: "failed",
+      },
+    },
+  ];
+}
+
+export function buildPartialFailureEvents(partialText: string): StreamEvent[] {
+  const responseId = "resp_qa_partial_failed_1";
+  const itemId = "msg_qa_partial_failed_1";
+  return [
+    { type: "response.created", response: { id: responseId } },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: itemId,
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: partialText,
+    },
+    {
+      type: "response.failed",
+      response: {
+        id: responseId,
+        status: "failed",
+      },
+    },
+  ];
 }
 
 export function buildReleaseAuditJson() {

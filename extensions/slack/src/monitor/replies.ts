@@ -173,8 +173,7 @@ export async function deliverReplies(params: {
       ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
       ...(params.eventScope
         ? {
-            client: params.eventScope.client,
-            enterpriseEventScope: params.eventScope,
+            eventScope: params.eventScope,
             textLimit: params.textLimit,
             ...(params.mediaMaxBytes !== undefined ? { mediaMaxBytes: params.mediaMaxBytes } : {}),
           }

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
-import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -364,7 +363,6 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
 
@@ -384,14 +382,17 @@ export function buildNodeServiceEnvironment(params: {
   );
   const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
   const gatewayPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
+  const cloudflareAccessClientId = normalizeOptionalString(env.CF_ACCESS_CLIENT_ID);
+  const cloudflareAccessClientSecret = normalizeOptionalString(env.CF_ACCESS_CLIENT_SECRET);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
+    CF_ACCESS_CLIENT_ID: cloudflareAccessClientId,
+    CF_ACCESS_CLIENT_SECRET: cloudflareAccessClientSecret,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
     ...resolveNodeServiceIdentityEnvironment(),
-    OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
 

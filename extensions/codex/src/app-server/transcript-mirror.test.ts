@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -24,6 +24,7 @@ import {
   buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
   importCodexThreadHistoryToTranscript,
+  mirrorPromptAtTurnStartBestEffort,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -75,6 +76,23 @@ async function makeRoot(prefix: string): Promise<string> {
 }
 
 describe("buildCodexUserPromptMessage", () => {
+  it("uses transcriptPrompt when an embedded caller does not provide a recorder", () => {
+    const message = buildCodexUserPromptMessage({
+      prompt:
+        "[Audible call-opening context]\nAssistant: Welcome.\n[End audible call-opening context]\n\nCurrent caller message:\nHello",
+      transcriptPrompt: "Hello",
+      messageProvider: "voice",
+      inputProvenance: { kind: "external_user", sourceChannel: "voice" },
+    } as unknown as Parameters<typeof buildCodexUserPromptMessage>[0]);
+
+    expect(message).toMatchObject({
+      role: "user",
+      content: "Hello",
+      sourceChannel: "voice",
+      provenance: { kind: "external_user", sourceChannel: "voice" },
+    });
+  });
+
   it("uses the prepared user transcript message for app-server prompt mirrors", () => {
     const message = buildCodexUserPromptMessage({
       prompt: "[Mon 2026-05-25 19:14 GMT+1] What is in this image?",
@@ -934,6 +952,45 @@ describe("mirrorCodexAppServerTranscript", () => {
     ).toHaveLength(1);
   });
 
+  it("preserves mirror identity across redaction from prompt append through final snapshot", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-redacted-identity-");
+    const config = { logging: { redactPatterns: [String.raw`^codex-app-server:.*$`] } };
+    const userMessage = attachCodexMirrorIdentity(
+      makeAgentUserMessage({
+        content: [{ type: "text", text: "client prompt" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:prompt",
+    );
+    const assistantMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "final answer" }],
+        timestamp: Date.now() + 1,
+      }),
+      "turn-1:assistant",
+    );
+    const mirrorParams = {
+      ...target,
+      idempotencyScope: "codex-app-server:thread-1",
+      config,
+    };
+
+    await mirrorCodexAppServerTranscript({ ...mirrorParams, messages: [userMessage] });
+    const finalMirror = await mirrorCodexAppServerTranscript({
+      ...mirrorParams,
+      messages: [userMessage, assistantMessage],
+    });
+
+    expect(finalMirror.assistantMirrorIdentitiesOwned).toEqual(["turn-1:assistant"]);
+    expect(await readMirrorMessages(target)).toEqual([
+      { role: "user", text: "client prompt" },
+      { role: "assistant", text: "final answer" },
+    ]);
+    const raw = await readMirrorRaw(target);
+    expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"');
+    expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:assistant"');
+  });
+
   it("emits message-bearing updates for newly appended mirrored messages only", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-live-updates-");
     const userMessage = attachCodexMirrorIdentity(
@@ -1275,8 +1332,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(await readMirrorMessages(target)).toEqual([]);
   });
 
-  it("leaves the assistant unowned when transcript persistence fails", async () => {
+  it("skips transcript mirrors for sessionless embedded runs", async () => {
     const root = await makeRoot("openclaw-codex-transcript-failure-");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const markRuntimePersistencePending = vi.fn();
     const assistantMessage = attachCodexMirrorIdentity(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "needs fallback persistence" }],
@@ -1285,14 +1344,31 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:assistant",
     );
 
+    const params = {
+      prompt: "sessionless prompt",
+      runId: "probe-setup-inference-sessionless",
+      sessionId: "session-1",
+      userTurnTranscriptRecorder: {
+        markRuntimePersistencePending,
+        resolveMessage: async () => undefined,
+      },
+    } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"];
+
+    await mirrorPromptAtTurnStartBestEffort({
+      params,
+      sessionKey: "agent:main:setup-inference:incognito-session-1",
+      notifyUserMessagePersisted: () => undefined,
+      cwd: root,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      upstreamUserText: "sessionless prompt",
+    });
     const mirrorOutcome = await mirrorTranscriptBestEffort({
-      params: {
-        sessionId: "session-1",
-        suppressNextUserMessagePersistence: true,
-      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      params,
       result: {
         messagesSnapshot: [assistantMessage],
       } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+      sessionKey: "agent:main:setup-inference:incognito-session-1",
       notifyUserMessagePersisted: () => undefined,
       cwd: root,
       threadId: "thread-1",
@@ -1300,6 +1376,66 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     expect(mirrorOutcome).toEqual({ assistantTranscriptOwned: false, mirroredMessages: [] });
+    expect(markRuntimePersistencePending).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("renders normal-session mirror failures in structured warnings", async () => {
+    const root = await makeRoot("openclaw-codex-transcript-failure-");
+    const blockedParent = path.join(root, "not-a-directory");
+    await fs.writeFile(blockedParent, "blocked");
+    const storePath = path.join(blockedParent, "openclaw-agent.sqlite");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    warn.mockClear();
+    const runId = "run-1";
+    const sessionId = "session-1";
+    const params = {
+      prompt: "persist me",
+      runId,
+      sessionId,
+      sessionTarget: { storePath },
+    } as unknown as Parameters<typeof mirrorPromptAtTurnStartBestEffort>[0]["params"];
+
+    await mirrorPromptAtTurnStartBestEffort({
+      params,
+      sessionKey: "agent:main:session-1",
+      notifyUserMessagePersisted: () => undefined,
+      cwd: storePath,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      upstreamUserText: "persist me",
+    });
+
+    expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server prompt at turn start", {
+      error: expect.any(String),
+      runId,
+      sessionId,
+    });
+    const warning = warn.mock.calls.at(-1)?.[1] as { error?: string } | undefined;
+    expect(warning?.error).not.toBe("");
+
+    warn.mockClear();
+    await mirrorTranscriptBestEffort({
+      params,
+      result: {
+        messagesSnapshot: [
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "persist me too" }],
+            timestamp: Date.now(),
+          }),
+        ],
+      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+      sessionKey: "agent:main:session-1",
+      notifyUserMessagePersisted: () => undefined,
+      cwd: root,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server transcript", {
+      error: expect.any(String),
+      runId,
+      sessionId,
+    });
   });
 
   it("does not attest a stale idempotency hit with the same mirror identity", async () => {

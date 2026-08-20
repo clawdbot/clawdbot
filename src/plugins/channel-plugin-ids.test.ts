@@ -31,10 +31,11 @@ const hasMeaningfulChannelConfig = vi.hoisted(() =>
     );
   }),
 );
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const resolveConfigWidePluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
@@ -66,6 +67,10 @@ vi.mock("./plugin-registry-contributions.js", async (importOriginal) => {
     loadPluginManifestRegistryForPluginRegistry,
   };
 });
+
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry,
+}));
 
 import {
   hasConfiguredChannelsForReadOnlyScope,
@@ -136,14 +141,14 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         realtimeVoiceProviders: ["openai"],
         imageGenerationProviders: ["openai"],
         videoGenerationProviders: ["openai"],
-        memoryEmbeddingProviders: ["openai"],
+        embeddingProviders: ["openai"],
       },
     },
     {
       id: "ollama",
       enabledByDefault: true,
       providers: ["ollama"],
-      contracts: { memoryEmbeddingProviders: ["ollama"] },
+      contracts: { embeddingProviders: ["ollama"] },
     },
     {
       id: "generic-embedding",
@@ -349,7 +354,7 @@ function createInstalledPluginRecordFixture(
 }
 
 function createInstalledPluginIndexFixture(
-  registry: PluginManifestRegistry = loadPluginManifestRegistry(),
+  registry: PluginManifestRegistry = loadPluginManifestRegistryCore(),
 ): InstalledPluginIndex {
   return {
     version: 1,
@@ -368,7 +373,7 @@ function filterManifestRegistryForInstalledIndex(params: {
   pluginIds?: readonly string[];
   includeDisabled?: boolean;
 }): PluginManifestRegistry {
-  const registry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const registry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
   return {
     ...registry,
@@ -388,11 +393,12 @@ function useManifestRegistryFixture(
   registry: PluginManifestRegistry = createManifestRegistryFixture(),
 ) {
   const index = createInstalledPluginIndexFixture(registry);
-  loadPluginManifestRegistry.mockReset().mockReturnValue(registry);
+  loadPluginManifestRegistryCore.mockReset().mockReturnValue(registry);
   loadPluginManifestRegistryForPluginRegistry
     .mockReset()
-    .mockImplementation(() => loadPluginManifestRegistry());
+    .mockImplementation(() => loadPluginManifestRegistryCore());
   loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
+  resolveConfigWidePluginManifestRegistry.mockReset().mockReturnValue(registry);
   return { registry, index };
 }
 
@@ -403,7 +409,7 @@ function expectStartupPluginIds(params: {
   workerProviderIds?: readonly string[];
   expected: readonly string[];
 }) {
-  const manifestRegistry = loadPluginManifestRegistry() as PluginManifestRegistry;
+  const manifestRegistry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   expect(
     resolveGatewayStartupPluginIdsFromRegistry({
       config: params.config,
@@ -511,7 +517,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       .mockImplementation((config: OpenClawConfig) => {
         return listPotentialConfiguredChannelIds(config).map((channelId: string) => ({
           channelId,
-          source: "config",
+          source: "env",
         }));
       });
     useManifestRegistryFixture();
@@ -520,7 +526,7 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
       .mockImplementation(filterManifestRegistryForInstalledIndex);
     loadPluginManifestRegistryForPluginRegistry
       .mockReset()
-      .mockImplementation(() => loadPluginManifestRegistry());
+      .mockImplementation(() => loadPluginManifestRegistryCore());
   });
 
   it.each([
@@ -1192,6 +1198,47 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
     });
   });
 
+  it("starts a renamed external channel after its bundled owner is removed", () => {
+    const registry = createManifestRegistryFixture();
+    registry.plugins.push(
+      withManifestLoadPaths({
+        id: "openclaw-qqbot",
+        channels: ["qqbot"],
+        channelConfigs: {
+          qqbot: {
+            schema: { type: "object" },
+            preferOver: ["qqbot"],
+          },
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      }),
+    );
+    const index = createInstalledPluginIndexFixture(registry);
+    const sourceConfig = {
+      channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+      plugins: { entries: { "openclaw-qqbot": { enabled: true } } },
+    } as OpenClawConfig;
+    const runtimeConfig = applyPluginAutoEnable({
+      config: sourceConfig,
+      env: createPluginPlanningTestEnv(),
+      manifestRegistry: registry,
+    }).config;
+
+    expect(runtimeConfig.plugins?.entries?.qqbot).toBeUndefined();
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({
+        config: runtimeConfig,
+        activationSourceConfig: sourceConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+        manifestRegistry: registry,
+      }).pluginIds,
+    ).toContain("openclaw-qqbot");
+  });
+
   it("loads configured worker-provider owners from the activation source", () => {
     const activationSourceConfig = {
       channels: {},
@@ -1432,6 +1479,45 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads enabled plugin tool owners before turns can enter the Gateway", () => {
+    useManifestRegistryFixture({
+      diagnostics: [],
+      plugins: [
+        withManifestLoadPaths({
+          id: "bundled-tool-owner",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["bundled_tool"] },
+        }),
+        withManifestLoadPaths({
+          id: "external-tool-owner",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["external_tool"] },
+        }),
+      ],
+    });
+
+    expectStartupPluginIds({
+      config: createStartupConfig({ noConfiguredChannels: true, memorySlot: "none" }),
+      expected: ["bundled-tool-owner"],
+    });
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-tool-owner"],
+        allowPluginIds: ["external-tool-owner"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-tool-owner"],
     });
   });
 
@@ -2443,6 +2529,16 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
     );
+    listPotentialConfiguredChannelPresenceSignals.mockImplementation(
+      (
+        _configForTest: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { includePersistedAuthState?: boolean },
+      ) =>
+        options?.includePersistedAuthState === false
+          ? []
+          : [{ channelId: "demo-channel", source: "persisted-auth" }],
+    );
 
     expectStartupPluginIds({
       config: {} as OpenClawConfig,
@@ -3423,15 +3519,22 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
           defaults: {
             model: "sonnet-4.6",
           },
+          modelByChannel: {
+            "demo-channel": { default: "openai/gpt-5.6-luna" },
+          },
+          " ": { token: "dummy" },
           "demo-channel": {
-            token: "configured",
+            token: "test-token",
+          },
+          " trimmed-channel ": {
+            token: "test-token",
           },
           "demo-other-channel": {
             enabled: false,
           },
         },
       } as OpenClawConfig),
-    ).toEqual(["demo-channel"]);
+    ).toEqual(["demo-channel", "trimmed-channel"]);
   });
 
   it("does not let disabled mixed-case channel config announce ambient matches", () => {

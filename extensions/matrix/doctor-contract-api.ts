@@ -6,7 +6,7 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   requiresExplicitMatrixDefaultAccount,
@@ -34,7 +34,7 @@ import {
   normalizeMatrixStoredCredentials,
   type MatrixCredentialStateRecord,
   type MatrixStoredCredentialRecord,
-} from "./src/matrix/credentials-read.js";
+} from "./src/matrix/credentials-state.js";
 import { migrateLegacyMatrixIdbSnapshot } from "./src/matrix/crypto-snapshot-doctor.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
@@ -346,9 +346,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         try {
           await recordMatrixInboundDedupeMigrationCompletion(params.context, params.env);
-          changes.push(
-            `Recorded Matrix inbound dedupe migration completion (${sources.sqliteRoots.length} SQLite roots, ${sources.jsonRoots.length} JSON roots scanned)`,
-          );
+          // Fresh installs scan zero roots; keep the durable receipt silent
+          // there so onboarding doesn't report a migration that touched nothing.
+          if (sources.sqliteRoots.length + sources.jsonRoots.length > 0) {
+            changes.push(
+              `Recorded Matrix inbound dedupe migration completion (${sources.sqliteRoots.length} SQLite roots, ${sources.jsonRoots.length} JSON roots scanned)`,
+            );
+          }
         } catch (err) {
           warnings.push(
             `Failed recording Matrix inbound dedupe migration completion: ${String(err)}`,

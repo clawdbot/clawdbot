@@ -8,6 +8,7 @@ import {
   createSessionProjection,
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -56,16 +57,6 @@ async function flushAsyncSelect() {
   });
 }
 
-function createDeferred<T>() {
-  let resolve: (value: T) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
 function expectSendChatFields(
   sendChat: ReturnType<typeof vi.fn>,
   expected: { message: string; agentId?: string; sessionId?: string; sessionKey?: string },
@@ -112,6 +103,7 @@ function createHarness(params?: {
   createSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runGoalCommand?: ReturnType<typeof vi.fn>;
+  runUsageCostCommand?: ReturnType<typeof vi.fn> | null;
   runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
@@ -153,6 +145,10 @@ function createHarness(params?: {
     }));
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const runGoalCommand = params?.runGoalCommand ?? vi.fn().mockResolvedValue({ text: "Goal" });
+  const runUsageCostCommand =
+    params?.runUsageCostCommand === null
+      ? undefined
+      : (params?.runUsageCostCommand ?? vi.fn().mockResolvedValue({ text: "💸 Usage cost" }));
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addPendingUser = vi.fn();
@@ -218,6 +214,7 @@ function createHarness(params?: {
       createSession,
       resetSession,
       runGoalCommand,
+      runUsageCostCommand,
     } as never,
     chatLog: {
       addUser,
@@ -272,6 +269,7 @@ function createHarness(params?: {
     createSession,
     resetSession,
     runGoalCommand,
+    runUsageCostCommand,
     setSession,
     addUser,
     addPendingUser,
@@ -342,7 +340,7 @@ describe("tui command handlers", () => {
     ]);
   });
 
-  it("bounds session picker hydration to recent TUI sessions", async () => {
+  it("bounds Ctrl+P hydration to recent non-global TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       sessions: [
         {
@@ -748,6 +746,28 @@ describe("tui command handlers", () => {
     });
     expect(closeOverlay).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
+  });
+
+  it("closes the overlay and reports the cause when a selection handler rejects", async () => {
+    const setSession = vi
+      .fn()
+      .mockRejectedValue(new Error("gateway unavailable")) as SetSessionMock;
+    const { handleCommand, openOverlay, closeOverlay, overlayHandle, addSystem } = createHarness({
+      setSession,
+      agents: [{ id: "work" }],
+    });
+
+    await handleCommand("/agent");
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
+    selector?.onSelect?.({ value: "work", label: "work" });
+    await flushAsyncSelect();
+
+    // The selector must not stay stranded open on a rejected selection, and
+    // the failure must reach the chat log instead of an unhandled rejection.
+    expect(closeOverlay).toHaveBeenCalledWith(overlayHandle);
+    expect(
+      addSystem.mock.calls.some(([line]) => String(line).includes("gateway unavailable")),
+    ).toBe(true);
   });
 
   it("forwards /context list directly", async () => {
@@ -2123,9 +2143,11 @@ describe("tui command handlers", () => {
   it("sanitizes control sequences in /new and /reset failures", async () => {
     const createSession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
     const resetSession = vi.fn().mockRejectedValue(new Error("\u001b[31mboom\u001b[0m"));
-    const { handleCommand, addSystem } = createHarness({
+    const expectedSessionInfo = { inputTokens: 120, outputTokens: 30, totalTokens: 150 };
+    const { handleCommand, addSystem, state } = createHarness({
       createSession,
       resetSession,
+      sessionInfo: { ...expectedSessionInfo },
     });
 
     await handleCommand("/new");
@@ -2133,6 +2155,7 @@ describe("tui command handlers", () => {
 
     expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: boom");
     expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: boom");
+    expect(state.sessionInfo).toEqual(expectedSessionInfo);
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {
@@ -2501,6 +2524,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/model");
 
+    expect(listModels).toHaveBeenCalledWith({ agentId: "main" });
     const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     expect(selector?.items?.[0]?.value).toBe("openrouter/auto");
     expect(selector?.items?.[0]?.label).toBe("openrouter/auto");
@@ -2736,6 +2760,96 @@ describe("tui command handlers", () => {
     // until refreshSessionInfo() repopulates the inherited default.
     expect(sessionInfo.responseUsage).toBeUndefined();
     expect(sessionInfo.effectiveResponseUsage).toBeUndefined();
+  });
+
+  it("forwards /usage cost to the Gateway without patching the usage footer", async () => {
+    const { handleCommand, sendChat, patchSession, addSystem, runUsageCostCommand } =
+      createHarness();
+
+    await handleCommand("/usage cost");
+
+    expect({
+      systemMessages: addSystem.mock.calls.map(([message]) => message),
+      sessionPatches: patchSession.mock.calls.length,
+      gatewaySends: sendChat.mock.calls.length,
+    }).toEqual({ systemMessages: [], sessionPatches: 0, gatewaySends: 1 });
+    expectSendChatFields(sendChat, { message: "/usage cost" });
+    expect(runUsageCostCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { sessionKey: "agent:main:main", agentId: "main" },
+    { sessionKey: "global", agentId: "work" },
+  ])(
+    "runs /usage cost locally for $sessionKey without submitting a model turn",
+    async (selection) => {
+      const harness = createHarness({
+        opts: { local: true },
+        currentSessionKey: selection.sessionKey,
+        currentAgentId: selection.agentId,
+      });
+
+      await harness.handleCommand("/usage cost");
+
+      expect(harness.runUsageCostCommand).toHaveBeenCalledWith(selection);
+      expect(harness.addSystem).toHaveBeenCalledWith("💸 Usage cost");
+      expect(harness.sendChat).not.toHaveBeenCalled();
+      expect(harness.patchSession).not.toHaveBeenCalled();
+      expect(harness.addPendingUser).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an unavailable local usage-cost operation out of model prompts", async () => {
+    const harness = createHarness({ opts: { local: true }, runUsageCostCommand: null });
+
+    await harness.handleCommand("/usage cost");
+
+    expect(harness.addSystem).toHaveBeenCalledWith(
+      "/usage cost is not available in local embedded mode; message not sent",
+    );
+    expect(harness.sendChat).not.toHaveBeenCalled();
+    expect(harness.patchSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "session result", sessionKey: "agent:main:first", agentId: "main", fails: false },
+    { name: "global-agent result", sessionKey: "global", agentId: "main", fails: false },
+    { name: "session failure", sessionKey: "agent:main:first", agentId: "main", fails: true },
+  ])("suppresses a stale usage-cost $name", async ({ sessionKey, agentId, fails }) => {
+    const deferred = createDeferred<{ text: string }>();
+    const runUsageCostCommand = vi.fn(() => deferred.promise);
+    const harness = createHarness({
+      opts: { local: true },
+      currentSessionKey: sessionKey,
+      currentAgentId: agentId,
+      runUsageCostCommand,
+    });
+
+    const pending = harness.handleCommand("/usage cost");
+    if (sessionKey === "global") {
+      harness.state.currentAgentId = "work";
+    } else {
+      harness.state.currentSessionKey = "agent:main:second";
+    }
+    if (fails) {
+      deferred.reject(new Error("stale cost failure"));
+    } else {
+      deferred.resolve({ text: "stale usage cost" });
+    }
+    await pending;
+
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.sendChat).not.toHaveBeenCalled();
+  });
+
+  it("shows current-session usage-cost failures without invoking the model", async () => {
+    const runUsageCostCommand = vi.fn().mockRejectedValue(new Error("session costs unavailable"));
+    const harness = createHarness({ opts: { local: true }, runUsageCostCommand });
+
+    await harness.handleCommand("/usage cost");
+
+    expect(harness.addSystem).toHaveBeenCalledWith("usage cost failed: session costs unavailable");
+    expect(harness.sendChat).not.toHaveBeenCalled();
   });
 
   it("/usage no-arg toggle cycles from effectiveResponseUsage when the session override is unset", async () => {

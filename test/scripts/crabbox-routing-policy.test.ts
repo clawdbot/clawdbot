@@ -3,7 +3,7 @@ import {
   crabboxProviderChain,
   normalizeCrabboxWorkload,
   selectReadyCrabboxProvider,
-} from "../../scripts/crabbox-routing-policy.mjs";
+} from "../../scripts/crabbox-routing-policy.mts";
 
 const advertisedProviders = ["aws", "azure", "blacksmith-testbox", "daytona"];
 

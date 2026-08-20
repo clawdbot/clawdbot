@@ -1,6 +1,5 @@
 // Codex tests cover provider plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -8,6 +7,11 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import { codexAppInventoryResponse } from "../app-server/app-inventory.test-helpers.js";
@@ -25,7 +29,7 @@ vi.mock("../app-server/request.js", () => ({
   withCodexAppServerJsonClient: sourceAppServerClientScope,
 }));
 
-const tempRoots = new Set<string>();
+const tempWorkspaces: TempWorkspace[] = [];
 
 const logger = {
   info() {},
@@ -33,12 +37,6 @@ const logger = {
   error() {},
   debug() {},
 };
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-codex-"));
-  tempRoots.add(root);
-  return root;
-}
 
 async function writeFile(filePath: string, content = ""): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -139,7 +137,12 @@ async function createCodexFixture(): Promise<{
   stateDir: string;
   workspaceDir: string;
 }> {
-  const root = await makeTempRoot();
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-migrate-codex-",
+  });
+  tempWorkspaces.push(workspace);
+  const root = workspace.dir;
   const homeDir = path.join(root, "home");
   const codexHome = path.join(root, ".codex");
   const stateDir = path.join(root, "state");
@@ -194,10 +197,7 @@ afterEach(async () => {
   appServerRequest.mockReset();
   sourceAppServerClientScope.mockReset();
   defaultCodexAppInventoryCache.clear();
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
+  await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
 
 describe("buildCodexMigrationProvider", () => {
@@ -214,7 +214,12 @@ describe("buildCodexMigrationProvider", () => {
   });
 
   it("preserves whitespace in nonempty CODEX_HOME values", async () => {
-    const root = await makeTempRoot();
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-codex-",
+    });
+    tempWorkspaces.push(workspace);
+    const root = workspace.dir;
     const codexHome = path.join(root, " spaced ");
     await writeFile(path.join(codexHome, "memories", "MEMORY.md"), "# Memory\n");
     vi.stubEnv("CODEX_HOME", codexHome);

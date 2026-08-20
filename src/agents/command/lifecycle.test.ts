@@ -2,14 +2,51 @@ import { describe, expect, it, vi } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
-const emitAgentEvent = vi.hoisted(() => vi.fn());
+const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+  lifecycleLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createSubsystemLogger: () => lifecycleLog,
 }));
 
 describe("createAgentCommandLifecycle", () => {
+  it.each([
+    { name: "successful stops", status: "ok", stopReason: "stop", level: "info" },
+    { name: "tool-use stops", status: "ok", stopReason: "toolUse", level: "info" },
+    { name: "ordinary end turns", status: "ok", stopReason: "end_turn", level: undefined },
+    { name: "timeouts", status: "timeout", stopReason: "timeout", level: "warn" },
+    { name: "cancelled runs", status: "error", stopReason: "stop", level: "error" },
+    { name: "failed runs", status: "error", stopReason: "error", level: "error" },
+  ] as const)("logs $name at the expected severity", ({ status, stopReason, level }) => {
+    vi.clearAllMocks();
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "logged-terminal-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status, stopReason }),
+    });
+
+    for (const candidate of ["info", "warn", "error"] as const) {
+      if (candidate === level) {
+        expect(lifecycleLog[candidate]).toHaveBeenCalledOnce();
+      } else {
+        expect(lifecycleLog[candidate]).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it.each(["finishing", "end", "error"] as const)(
     "preserves only canonical terminal facts on %s events",
     (phase) => {
@@ -131,6 +168,38 @@ describe("createAgentCommandLifecycle", () => {
       expect(JSON.stringify(event)).not.toContain(secret);
     },
   );
+
+  it("does not let generic abort metadata erase a superseded outcome", () => {
+    emitAgentEvent.mockClear();
+    const controller = new AbortController();
+    controller.abort();
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "superseded-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      abortSignal: controller.signal,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: { aborted: true },
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
+    });
+
+    expect(emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          aborted: true,
+          phase: "end",
+          stopReason: "superseded",
+        }),
+      }),
+    );
+  });
 
   it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
     emitAgentEvent.mockClear();

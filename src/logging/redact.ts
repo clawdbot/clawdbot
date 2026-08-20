@@ -1,8 +1,11 @@
-import { findStructuredAuthParamRanges, redactStructuredAuthHeaders } from "@openclaw/acp-core";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  findStructuredAuthParamRanges,
+  redactStructuredAuthHeaders,
+} from "../../packages/acp-core/src/structured-auth-redaction.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
@@ -25,8 +28,8 @@ import {
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
-export type RedactSensitiveMode = "off" | "tools";
-export type RedactPattern = string | RegExp;
+type RedactSensitiveMode = "off" | "tools";
+type RedactPattern = string | RegExp;
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
@@ -127,12 +130,12 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   "iu",
 );
 
-export type RedactOptions = {
+type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
 };
 
-export type ResolvedRedactOptions = {
+type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: RegExp[];
   redactFormBodies: boolean;
@@ -941,10 +944,17 @@ function redactSensitiveFieldValueWithOptions(
   if (resolved.mode === "off") {
     return exactRedacted;
   }
-  const redacted = redactText(exactRedacted, resolved.patterns, {
-    redactFormBodies: resolved.redactFormBodies,
-    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-  });
+  // Structured payloads can contain thousands of short, benign strings. Avoid
+  // walking the full default pattern table for each one; the prefilter is kept
+  // in sync with every built-in pattern and sensitive form/URL key. Explicit
+  // user patterns still require the full scan because they have no prefilter.
+  const redacted =
+    options.patterns?.length || couldMatchDefaultRedactPatterns(exactRedacted)
+      ? redactText(exactRedacted, resolved.patterns, {
+          redactFormBodies: resolved.redactFormBodies,
+          redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
+        })
+      : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
     const appRedacted = redactAppSpecificPasswords(redacted);
@@ -1101,12 +1111,16 @@ export function getDefaultRedactPatterns(): string[] {
 // line boundaries, then split back. Use this instead of mapping redactSensitiveText when
 // options are resolved once per request.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
-  if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
+  if (lines.length === 0 || resolved.mode === "off") {
     return lines;
   }
+  const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
+  if (!resolved.patterns.length) {
+    return exactRedactedLines;
+  }
   const redactedLines = resolved.redactFormBodies
-    ? lines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
-    : lines;
+    ? exactRedactedLines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
+    : exactRedactedLines;
   let redacted = redactedLines.join("\n");
   if (resolved.redactStructuredAuthHeaders) {
     redacted = redactStructuredAuthHeaders(redacted, "***");

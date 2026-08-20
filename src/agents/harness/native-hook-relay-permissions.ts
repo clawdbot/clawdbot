@@ -7,6 +7,11 @@ import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import {
+  prepareSystemRunMutableFileBinding,
+  revalidateSystemRunMutableFileBinding,
+  type SystemRunMutableFileBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
@@ -36,7 +41,7 @@ import type {
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
-import { readOptionalString, truncateText } from "./native-hook-relay-utils.js";
+import { readOptionalNonEmptyString, truncateRelayText } from "./native-hook-relay-utils.js";
 
 export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
@@ -50,7 +55,16 @@ const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
 const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
+const MCP_APPROVAL_UNAVAILABLE_REASON =
+  'MCP tool approval timed out (no operator connected). Approve in the Control UI, or set mcp.servers.<id>.codex.defaultToolsApprovalMode:"approve" for trusted servers.';
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
+const NATIVE_SHELL_APPROVAL_TOOLS = new Set([
+  "bash",
+  "exec",
+  "exec_command",
+  "shell",
+  "shell_command",
+]);
 
 const {
   pendingPermissionApprovals,
@@ -186,15 +200,32 @@ export async function runNativeHookRelayPermissionRequest(params: {
     toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
     ...(params.registration.signal ? { signal: params.registration.signal } : {}),
   };
+  const mutableFileBinding = await prepareNativeHookMutableFileBinding(request);
+  if (!mutableFileBinding.ok) {
+    return params.adapter.renderPermissionDecisionResponse("deny", mutableFileBinding.message);
+  }
   const approvalKey = nativeHookRelayPermissionApprovalKey({
     registration: params.registration,
     request,
+    binding: mutableFileBinding.binding,
   });
   const allowAlwaysKey = nativeHookRelayPermissionAllowAlwaysKey({
     registration: params.registration,
     request,
+    binding: mutableFileBinding.binding,
   });
   if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey)) {
+    params.registration.assertActive?.();
+    if (mutableFileBinding.binding) {
+      const current = await revalidateSystemRunMutableFileBinding({
+        binding: mutableFileBinding.binding,
+        cwd: request.cwd,
+      });
+      params.registration.assertActive?.();
+      if (!current.ok) {
+        return params.adapter.renderPermissionDecisionResponse("deny", current.message);
+      }
+    }
     return params.adapter.renderPermissionDecisionResponse("allow");
   }
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
@@ -205,6 +236,19 @@ export async function runNativeHookRelayPermissionRequest(params: {
         approvalKey,
         request,
       }));
+    params.registration.assertActive?.();
+    if ((decision === "allow" || decision === "allow-always") && mutableFileBinding.binding) {
+      // PermissionRequest is OpenClaw's last boundary before the native runtime
+      // owns spawn; recheck after the wait before returning its allow response.
+      const current = await revalidateSystemRunMutableFileBinding({
+        binding: mutableFileBinding.binding,
+        cwd: request.cwd,
+      });
+      params.registration.assertActive?.();
+      if (!current.ok) {
+        return params.adapter.renderPermissionDecisionResponse("deny", current.message);
+      }
+    }
     if (decision === "allow") {
       return params.adapter.renderPermissionDecisionResponse("allow");
     }
@@ -214,6 +258,12 @@ export async function runNativeHookRelayPermissionRequest(params: {
     }
     if (decision === "deny") {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
+    }
+    if (decision === "timed-out" && request.toolName.startsWith("mcp__")) {
+      return params.adapter.renderPermissionDecisionResponse(
+        "deny",
+        MCP_APPROVAL_UNAVAILABLE_REASON,
+      );
     }
   } catch (error) {
     log.warn(
@@ -249,6 +299,7 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
 function nativeHookRelayPermissionApprovalKey(params: {
   registration: NativeHookRelayRegistration;
   request: NativeHookRelayPermissionApprovalRequest;
+  binding?: SystemRunMutableFileBinding;
 }): string {
   return [
     params.registration.relayId,
@@ -257,12 +308,42 @@ function nativeHookRelayPermissionApprovalKey(params: {
       ? `call:${params.request.toolCallId}`
       : permissionRequestFallbackKey(params.request),
     permissionRequestContentFingerprint(params.request),
+    params.binding ? permissionRequestBindingFingerprint(params.binding) : "no-file-binding",
   ].join(":");
+}
+
+async function prepareNativeHookMutableFileBinding(
+  request: NativeHookRelayPermissionApprovalRequest,
+): Promise<{ ok: true; binding?: SystemRunMutableFileBinding } | { ok: false; message: string }> {
+  if (!NATIVE_SHELL_APPROVAL_TOOLS.has(request.toolName.trim().toLowerCase())) {
+    return { ok: true };
+  }
+  const command = readOptionalNonEmptyString(request.toolInput.command);
+  const prepared = await prepareSystemRunMutableFileBinding({
+    command: { kind: "shell", text: command ?? "" },
+    cwd: request.cwd,
+  });
+  if (!prepared.ok) {
+    return { ok: false, message: prepared.message };
+  }
+  return prepared.binding.operands.length > 0
+    ? { ok: true, binding: prepared.binding }
+    : { ok: true };
+}
+
+function permissionRequestBindingFingerprint(binding: SystemRunMutableFileBinding): string {
+  const hash = createHash("sha256");
+  for (const { argv, snapshot } of binding.operands) {
+    hash.update(JSON.stringify([argv, snapshot.argvIndex, snapshot.path, snapshot.sha256]));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
 }
 
 function nativeHookRelayPermissionAllowAlwaysKey(params: {
   registration: NativeHookRelayRegistration;
   request: NativeHookRelayPermissionApprovalRequest;
+  binding?: SystemRunMutableFileBinding;
 }): string {
   const hash = createHash("sha256");
   hash.update("openclaw:native-hook-relay:permission-allow-always:v2");
@@ -276,13 +357,17 @@ function nativeHookRelayPermissionAllowAlwaysKey(params: {
   hash.update(params.request.sessionKey ?? params.request.sessionId);
   hash.update("\0");
   hash.update(permissionRequestContentFingerprint(params.request));
+  hash.update("\0");
+  hash.update(
+    params.binding ? permissionRequestBindingFingerprint(params.binding) : "no-file-binding",
+  );
   return hash.digest("hex");
 }
 
 function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
-  const command = readOptionalString(request.toolInput.command);
+  const command = readOptionalNonEmptyString(request.toolInput.command);
   if (command) {
-    return `${request.toolName}:command:${truncateText(command, 240)}`;
+    return `${request.toolName}:command:${truncateRelayText(command, 240)}`;
   }
   return `${request.toolName}:keys:${permissionRequestToolInputKeyFingerprint(request.toolInput)}`;
 }
@@ -482,11 +567,11 @@ async function requestNativeHookRelayPermissionApproval(
     { timeoutMs: timeoutMs + 10_000 },
     {
       pluginId: `openclaw-native-hook-relay-${request.provider}`,
-      title: truncateText(
+      title: truncateRelayText(
         `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
         MAX_APPROVAL_TITLE_LENGTH,
       ),
-      description: truncateText(
+      description: truncateRelayText(
         formatPermissionApprovalDescription(request),
         MAX_APPROVAL_DESCRIPTION_LENGTH,
       ),
@@ -520,7 +605,10 @@ async function requestNativeHookRelayPermissionApproval(
     });
     // Bind the verdict to the request that parked this call. A stale or
     // misrouted reply must never release a different tool gate.
-    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
+    if (!waitResult || waitResult.id !== approvalId) {
+      return "defer";
+    }
+    decision = waitResult.decision;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
@@ -531,7 +619,7 @@ async function requestNativeHookRelayPermissionApproval(
   if (decision === PluginApprovalResolutions.DENY) {
     return "deny";
   }
-  return "defer";
+  return decision == null ? "timed-out" : "defer";
 }
 
 async function waitForNativeHookRelayApprovalDecision(params: {
@@ -590,9 +678,9 @@ function formatPermissionApprovalDescription(
 }
 
 function formatToolInputPreview(toolInput: Record<string, unknown>): string | undefined {
-  const command = readOptionalString(toolInput.command);
+  const command = readOptionalNonEmptyString(toolInput.command);
   if (command) {
-    return `Command: ${truncateText(sanitizeApprovalText(command), 240)}`;
+    return `Command: ${truncateRelayText(sanitizeApprovalText(command), 240)}`;
   }
   const keys = Object.keys(toolInput).map(sanitizeApprovalText).filter(Boolean).toSorted();
   if (!keys.length) {

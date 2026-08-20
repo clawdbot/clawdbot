@@ -15,6 +15,7 @@ import {
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
+  toSingleLineErrorMessage,
   toSingleLineLogValue,
 } from "./recall-state.js";
 import {
@@ -107,6 +108,9 @@ type ActiveRecallParams = {
   conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
   runId?: string;
+  authorityFingerprint: string;
+  memorySlot?: string;
+  activeProjectKeys?: string[];
 };
 
 async function resolveActiveRecall(
@@ -116,6 +120,10 @@ async function resolveActiveRecall(
 ): Promise<ActiveRecallResult> {
   params.abortSignal?.throwIfAborted();
   const startedAt = Date.now();
+  const resolvedModelRef = getModelRef(params.runtimeConfig, params.agentId, params.config, {
+    modelProviderId: params.currentModelProviderId,
+    modelId: params.currentModelId,
+  });
   // Memory Core re-authorizes every conversation-recall request against live
   // session state. Never replay a cached private summary after eligibility changes.
   const cacheKey = params.conversationRecall
@@ -125,12 +133,14 @@ async function resolveActiveRecall(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         query: params.query,
+        authorityFingerprint: params.authorityFingerprint,
+        memorySlot: params.memorySlot,
+        activeProjectKeys: params.activeProjectKeys,
+        modelProviderId: resolvedModelRef?.provider,
+        modelId: resolvedModelRef?.model,
+        recallToolNames: params.config.toolsAllow,
       });
   const cached = cacheKey ? getCachedResult(cacheKey) : undefined;
-  const resolvedModelRef = getModelRef(params.runtimeConfig, params.agentId, params.config, {
-    modelProviderId: params.currentModelProviderId,
-    modelId: params.currentModelId,
-  });
   const buildLogPrefix = (fastMode: ActiveMemoryFastMode | undefined) =>
     [
       `active-memory: agent=${toSingleLineLogValue(params.agentId)}`,
@@ -441,7 +451,7 @@ async function resolveActiveRecall(
       params.abortSignal?.throwIfAborted();
       return result;
     }
-    const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+    const message = toSingleLineErrorMessage(error);
     if (params.config.logging) {
       params.api.logger.warn?.(`${logPrefix} failed error=${message}; skipping recall`);
     }
@@ -471,7 +481,24 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
   if (!runId) {
     return await resolveActiveRecall(recallParams);
   }
-  return await resolveActiveRecallForRun(runId, (onTimeoutCleanup) =>
+  const model = getModelRef(params.runtimeConfig, params.agentId, params.config, {
+    modelProviderId: params.currentModelProviderId,
+    modelId: params.currentModelId,
+  });
+  const scopeFingerprint = buildCacheKey({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    query: params.query,
+    authorityFingerprint: params.authorityFingerprint,
+    memorySlot: params.memorySlot,
+    activeProjectKeys: params.activeProjectKeys,
+    modelProviderId: model?.provider,
+    modelId: model?.model,
+    recallToolNames: params.config.toolsAllow,
+    resourceScope: JSON.stringify(params.conversationRecall ?? null),
+  });
+  return await resolveActiveRecallForRun(`${runId}:${scopeFingerprint}`, (onTimeoutCleanup) =>
     resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
   );
 }

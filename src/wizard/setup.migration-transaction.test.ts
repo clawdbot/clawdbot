@@ -1,8 +1,8 @@
 // Transactional onboarding migration tests exercise the classic full-import caller.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type {
   MigrationApplyResult,
@@ -12,7 +12,16 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "../plugins/types.js";
-import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
+import {
+  WizardCancelledError,
+  WizardNavigationError,
+  type WizardPrompter,
+  type WizardSelectParams,
+} from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   canonicalMutateConfigFile: vi.fn(),
@@ -37,14 +46,8 @@ vi.mock("../config/mutate.js", () => ({
 
 import { runSetupMigrationImport } from "./setup.migration-import.js";
 
-const tempRoots = new Set<string>();
+const tempRoots = createTempDirTracker();
 let previousStateDir: string | undefined;
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-transaction-"));
-  tempRoots.add(root);
-  return root;
-}
 
 function runtime() {
   return {
@@ -186,6 +189,7 @@ async function runImport(params: {
   root: string;
   source: string;
   currentConfig: { value: Record<string, unknown> };
+  interactivePrompter?: WizardPrompter;
   commit?: (
     config: Record<string, unknown>,
     expectedConfig: Record<string, unknown>,
@@ -196,15 +200,15 @@ async function runImport(params: {
   process.env.OPENCLAW_STATE_DIR = path.join(params.root, "openclaw-state");
   return await runSetupMigrationImport({
     opts: {
-      importFrom: "claude",
       importSource: params.source,
-      nonInteractive: true,
       workspace,
+      ...(params.interactivePrompter ? {} : { importFrom: "claude", nonInteractive: true }),
     },
     baseConfig: {},
     detections: [],
-    prompter: prompter(),
+    prompter: params.interactivePrompter ?? prompter(),
     runtime: runtime(),
+    allowProviderBack: params.interactivePrompter !== undefined,
     readConfigFile: async () => structuredClone(params.currentConfig.value),
     commitConfigFile: async (config, expectedConfig) => {
       const committed = params.commit
@@ -269,15 +273,35 @@ afterEach(async () => {
   } else {
     process.env.OPENCLAW_STATE_DIR = previousStateDir;
   }
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
+  tempRoots.cleanup();
 });
 
 describe("transactional setup migration import", () => {
+  it("returns before migration side effects when the source picker goes back", async () => {
+    const root = tempRoots.make("openclaw-migration-back-");
+    const source = path.join(root, "source-memory.md");
+    await fs.writeFile(source, "remember this\n", "utf8");
+    mocks.provider = provider({ source });
+    const currentConfig = { value: {} };
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      expect(params.navigation).toMatchObject({ canGoBack: true });
+      throw new WizardNavigationError("back");
+    }) as WizardPrompter["select"];
+
+    await expect(
+      runImport({
+        root,
+        source,
+        currentConfig,
+        interactivePrompter: { ...prompter(), select },
+      }),
+    ).resolves.toEqual({ kind: "back" });
+    expect(currentConfig.value).toEqual({});
+    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+  });
+
   it("promotes a Claude import with no model and returns no imported inference", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source });
@@ -294,7 +318,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("rejects deferred activation from providers without a retry-safe contract", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source, deferred: true, retrySafeDeferred: false });
@@ -308,7 +332,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("accepts an already-satisfied retry-safe deferred effect as complete", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({
@@ -338,7 +362,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("leaves the live target untouched when imported inference verification fails", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source, importModel: true });
@@ -352,7 +376,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("leaves the live target untouched when imported inference repair is cancelled", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source, importModel: true });
@@ -367,7 +391,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("aborts promotion when the source changes after staged apply", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "before\n", "utf8");
     mocks.provider = provider({
@@ -386,7 +410,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("aborts promotion when config changes during staged apply", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     const currentConfig = { value: {} };
@@ -403,8 +427,63 @@ describe("transactional setup migration import", () => {
     await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
   });
 
+  it("promotes while the live runtime state database changes during staged apply", async () => {
+    const root = tempRoots.make("openclaw-migration-transaction-");
+    const source = path.join(root, "source-memory.md");
+    const stateDir = path.join(root, "openclaw-state");
+    const liveEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const runtimeDatabasePath = path.join(root, "runtime-agent.sqlite");
+    await fs.writeFile(source, "remember this\n", "utf8");
+    mocks.provider = provider({
+      source,
+      mutateDuringApply: async () => {
+        registerOpenClawAgentDatabase({
+          agentId: "runtime",
+          path: runtimeDatabasePath,
+          env: liveEnv,
+        });
+      },
+    });
+    const currentConfig = { value: {} };
+
+    await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
+      kind: "no-imported-inference",
+    });
+
+    expect(await fs.readFile(path.join(root, "workspace", "MEMORY.md"), "utf8")).toBe(
+      "remember this\n",
+    );
+    expect(listOpenClawRegisteredAgentDatabases({ env: liveEnv })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ agentId: "main" }),
+        expect.objectContaining({ agentId: "runtime", path: runtimeDatabasePath }),
+      ]),
+    );
+  });
+
+  it("still aborts promotion when another writer changes the workspace", async () => {
+    const root = tempRoots.make("openclaw-migration-transaction-");
+    const source = path.join(root, "source-memory.md");
+    const externalFile = path.join(root, "workspace", "external.txt");
+    await fs.writeFile(source, "remember this\n", "utf8");
+    mocks.provider = provider({
+      source,
+      mutateDuringApply: async () => {
+        await fs.mkdir(path.dirname(externalFile), { recursive: true });
+        await fs.writeFile(externalFile, "concurrent write\n", "utf8");
+      },
+    });
+    const currentConfig = { value: {} };
+
+    await expect(runImport({ root, source, currentConfig })).rejects.toThrow(
+      "Migration target changed before promotion",
+    );
+    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+    expect(await fs.readFile(externalFile, "utf8")).toBe("concurrent write\n");
+  });
+
   it("runs deferred activation only after promotion and keeps failures as warnings", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     const liveMemory = path.join(root, "workspace", "MEMORY.md");
@@ -439,7 +518,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("routes deferred config writes through the canonical runtime", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({
@@ -465,7 +544,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("resumes only deferred activation after promotion without rerunning the import", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     let planCalls = 0;
@@ -511,7 +590,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("retries only deferred items that did not already activate", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     const activationCalls: string[] = [];

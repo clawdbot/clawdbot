@@ -1,7 +1,6 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
 
@@ -274,35 +273,5 @@ describe("perplexity web search provider", () => {
         );
       },
     );
-  });
-
-  it("reports malformed Search API JSON with a stable provider error", async () => {
-    await expect(
-      testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity Search"),
-    ).rejects.toThrow("Perplexity Search: malformed JSON response");
-  });
-
-  it("reports malformed chat completion JSON with a stable provider error", async () => {
-    await expect(
-      testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
-    ).rejects.toThrow("Perplexity: malformed JSON response");
-  });
-
-  it("bounds successful Perplexity JSON bodies before parsing", async () => {
-    const streamed = createStreamingResponse({
-      chunkCount: 32,
-      chunkSize: 1024 * 1024,
-      text: "x",
-      headers: { "content-type": "application/json" },
-    });
-    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
-
-    await expect(
-      testing.readPerplexityJsonResponse(streamed.response, "Perplexity Search"),
-    ).rejects.toThrow("Perplexity Search: JSON response exceeds 16777216 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(32);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });

@@ -359,6 +359,21 @@ describe("diffs tool", () => {
     ).rejects.toThrow("Invalid baseUrl");
   });
 
+  it("returns a tool input error for malformed raw arguments", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    await expect(tool.execute?.("tool-malformed-null", null)).rejects.toThrow(
+      "Provide patch or both before and after text.",
+    );
+    await expect(tool.execute?.("tool-malformed-undefined", undefined)).rejects.toThrow(
+      "Provide patch or both before and after text.",
+    );
+  });
+
   it("rejects oversized patch payloads", async () => {
     const tool = createDiffsTool({
       api: createApi(),
@@ -651,13 +666,13 @@ function createPdfScreenshotter(
   return { screenshotHtml };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectValue(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function readDetails(result: unknown): Record<string, unknown> {
   const details = (result as { details?: unknown } | null | undefined)?.details;
-  if (!isRecord(details)) {
+  if (!isObjectValue(details)) {
     throw new Error("expected diffs tool result details");
   }
   return details;
@@ -688,7 +703,7 @@ function extractViewerArtifactToken(viewerPath: string): string {
 }
 
 function readParametersProperties(parameters: unknown): Record<string, unknown> {
-  if (isRecord(parameters) && isRecord(parameters.properties)) {
+  if (isObjectValue(parameters) && isObjectValue(parameters.properties)) {
     return parameters.properties;
   }
   throw new Error("expected diffs tool parameter properties");

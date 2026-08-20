@@ -5,7 +5,7 @@ import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "../../src/tasks/task-runtime.test-helpers.js";
-import { withTempDir } from "../../src/test-helpers/temp-dir.js";
+import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../src/test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-registry-runtime.js";
 
@@ -21,7 +21,7 @@ export function resetAcpManagerTaskStateForTests(): void {
 export async function withAcpManagerTaskStateDir(
   run: (root: string) => Promise<void>,
 ): Promise<void> {
-  await withTempDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-acp-manager-task-" }, async (root) => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", root);
     resetAcpManagerTaskStateForTests();

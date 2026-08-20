@@ -92,6 +92,7 @@ describe("scripts/check-file-utils listRepoFilesSync", () => {
       expect.objectContaining({
         timeout: 30_000,
         killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
       }),
     );
   });

@@ -1,14 +1,15 @@
 import type {
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   NativeHookRelayEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 
 export type CodexRunAttemptOptions = {
-  agentHarnessCodingToolsFactory?: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarness"];
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
+  /** Private app-server request identity; public attempt identity remains params.modelId. */
+  runtimeModelId?: string;
   startupTimeoutFloorMs?: number;
   nativeHookRelay?: {
     enabled?: boolean;

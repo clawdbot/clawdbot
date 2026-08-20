@@ -9,8 +9,7 @@ import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-} from "../../scripts/lib/tsdown-config-groups.mjs";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+} from "../../scripts/lib/tsdown-config-groups.mts";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
@@ -24,8 +23,7 @@ import {
   resolveTsdownBuildInvocations,
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
-  signalTsdownBuildProcessTree,
-} from "../../scripts/tsdown-build.mjs";
+} from "../../scripts/tsdown-build.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -33,10 +31,6 @@ const NO_MEMORY_LIMIT = {
   cgroupMemoryLimitPaths: [],
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 async function expectPathMissing(targetPath: string) {
   let statError: unknown;
@@ -131,14 +125,18 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("prints wrapper help without invoking pnpm or tsdown", () => {
-    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/tsdown-build.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/tsdown-build.mts");
     expect(result.stdout).not.toContain("Scope:");
     expect(result.stdout).not.toContain("pnpm");
   });
@@ -1049,59 +1047,6 @@ describe("runTsdownBuildInvocation", () => {
     expect(output.chunks.join("")).toContain("timeout after 50ms");
   });
 
-  it("signals Windows tsdown process trees with taskkill", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-
-    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows tsdown process trees when graceful taskkill fails", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
   it.skipIf(process.platform === "win32")(
     "kills timed-out tsdown process groups when the wrapper exits first",
     async () => {
@@ -1229,7 +1174,7 @@ describe("runTsdownBuildInvocation", () => {
       const rootDir = createTempDir("openclaw-tsdown-parent-signal-");
       const childPidPath = path.join(rootDir, "child.pid");
       const readyPath = path.join(rootDir, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mjs")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 

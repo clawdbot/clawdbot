@@ -6,6 +6,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { AgentBinding } from "../../config/types.agents.js";
+import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
@@ -15,21 +16,14 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
+import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
-export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
-export type {
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelOutboundPayloadContext,
-  ChannelOutboundPayloadHint,
-  ChannelOutboundTargetRef,
-  ChannelDeliveryCapabilities,
-} from "./outbound.types.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -42,6 +36,15 @@ import type {
   ChannelSecurityDmPolicy,
   ChannelStatusIssue,
 } from "./types.core.js";
+export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
+export type {
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelOutboundPayloadContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
+  ChannelDeliveryCapabilities,
+} from "./outbound.types.js";
 export type { ChannelPairingAdapter } from "./pairing.types.js";
 
 type ConfiguredBindingRule = AgentBinding;
@@ -532,6 +535,10 @@ export type ChannelLifecycleAdapter = {
     trigger?: string;
     logPrefix?: string;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the lifecycle adapter after the 2027.1 external-plugin migration window.
+   */
   detectLegacyStateMigrations?: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -608,7 +615,7 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     accountId?: string | null;
     senderId?: string | null;
     action: "approve";
-    approvalKind: "exec" | "plugin";
+    approvalKind: ChannelApprovalKind;
   }) => {
     authorized: boolean;
     reason?: string;
@@ -806,6 +813,11 @@ export type ChannelConversationBindingSupport = {
       }>;
 };
 
+type ChannelSecurityDmRouteContext<ResolvedAccount> = ChannelSecurityContext<ResolvedAccount> & {
+  accountId: string;
+  principalId?: string;
+};
+
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   applyConfigFixes?: (params: {
     cfg: OpenClawConfig;
@@ -814,8 +826,16 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: ChannelAdapterCallback<
     (ctx: ChannelSecurityContext<ResolvedAccount>) => ChannelSecurityDmPolicy | null
   >;
+  dmRouting?: {
+    resolveDmScope?: (ctx: ChannelSecurityDmRouteContext<ResolvedAccount>) => DmScope | undefined;
+    resolveDmRoute?: (
+      ctx: ChannelSecurityDmRouteContext<ResolvedAccount> & { route: ResolvedAgentRoute },
+    ) => { kind: "core" | "isolated" } | { sessionKey: string } | undefined;
+  };
   collectWarnings?: ChannelAdapterCallback<
-    (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[]
+    (
+      ctx: ChannelSecurityContext<ResolvedAccount>,
+    ) => Promise<Array<string | SecurityAuditFinding>> | Array<string | SecurityAuditFinding>
   >;
   collectAuditFindings?: ChannelAdapterCallback<
     (
@@ -824,23 +844,7 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
         orderedAccountIds: string[];
         hasExplicitAccountPath: boolean;
       },
-    ) =>
-      | Promise<
-          Array<{
-            checkId: string;
-            severity: "info" | "warn" | "critical";
-            title: string;
-            detail: string;
-            remediation?: string;
-          }>
-        >
-      | Array<{
-          checkId: string;
-          severity: "info" | "warn" | "critical";
-          title: string;
-          detail: string;
-          remediation?: string;
-        }>
+    ) => Promise<SecurityAuditFinding[]> | SecurityAuditFinding[]
   >;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

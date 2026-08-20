@@ -1,11 +1,13 @@
 // Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { parseAudioTag } from "../../media/audio-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
+import { normalizeReplyPayload, normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
@@ -184,6 +186,83 @@ describe("normalizeReplyPayload", () => {
       expect(normalized, testCase.name).toBeNull();
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
+  });
+
+  it("returns a typed channel-transform suppression outcome", () => {
+    const outcome = normalizeReplyPayloadOutcome(
+      { text: "private reply" },
+      { transformReplyPayload: () => null },
+    );
+
+    expect(outcome).toEqual({ kind: "suppress", reason: "channel_transform" });
+  });
+
+  it("scopes transform ownership to the exact channel adapter and account", () => {
+    const firstMessaging = {
+      transformReplyPayload: vi.fn(({ payload }) => ({ ...payload, text: `${payload.text}!` })),
+    } satisfies ChannelMessagingAdapter;
+    const secondMessaging = {
+      transformReplyPayload: vi.fn(() => null),
+    } satisfies ChannelMessagingAdapter;
+    const firstTransform = createChannelReplyTransform({
+      messaging: firstMessaging,
+      cfg: {},
+      accountId: "primary",
+    });
+    const first = normalizeReplyPayloadOutcome(
+      { text: "reply" },
+      { transformReplyPayload: firstTransform },
+    );
+    if (first.kind !== "deliver") {
+      throw new Error("expected first channel transform to accept the payload");
+    }
+
+    const sameOwner = normalizeReplyPayloadOutcome(first.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "primary",
+      }),
+    });
+    const differentAccount = normalizeReplyPayloadOutcome(first.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "secondary",
+      }),
+    });
+    const differentChannel = normalizeReplyPayloadOutcome(first.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: secondMessaging,
+        cfg: {},
+        accountId: "primary",
+      }),
+    });
+    if (differentAccount.kind !== "deliver") {
+      throw new Error("expected the second account transform to accept the payload");
+    }
+    const sameSecondOwner = normalizeReplyPayloadOutcome(differentAccount.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "secondary",
+      }),
+    });
+    const originalOwnerAgain = normalizeReplyPayloadOutcome(differentAccount.payload, {
+      transformReplyPayload: createChannelReplyTransform({
+        messaging: firstMessaging,
+        cfg: {},
+        accountId: "primary",
+      }),
+    });
+
+    expect(sameOwner).toEqual({ kind: "deliver", payload: { text: "reply!" } });
+    expect(differentAccount).toEqual({ kind: "deliver", payload: { text: "reply!!" } });
+    expect(differentChannel).toEqual({ kind: "suppress", reason: "channel_transform" });
+    expect(sameSecondOwner).toEqual({ kind: "deliver", payload: { text: "reply!!" } });
+    expect(originalOwnerAgain).toEqual({ kind: "deliver", payload: { text: "reply!!!" } });
+    expect(firstMessaging.transformReplyPayload).toHaveBeenCalledTimes(3);
+    expect(secondMessaging.transformReplyPayload).toHaveBeenCalledTimes(1);
   });
 
   it("strips NO_REPLY from mixed emoji message (#30916)", () => {

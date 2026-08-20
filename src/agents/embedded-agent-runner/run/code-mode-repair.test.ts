@@ -92,6 +92,30 @@ describe("installCodeModeRepairHook", () => {
     });
   });
 
+  it("leaves steering skips unchanged without spending repair", async () => {
+    const agent = createAgent();
+    const skipped = {
+      content: [{ type: "text" as const, text: "Skipped due to queued user message." }],
+      details: { status: "skipped", deniedReason: "steering" },
+    };
+
+    await expect(
+      agent.afterToolOutcome?.(
+        outcome({
+          result: skipped,
+          isError: true,
+          executionStarted: false,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      agent.afterToolOutcome?.(outcome({ result: failedResult() })),
+    ).resolves.toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
+    });
+  });
+
   it("does not spend the repair token on successful pure computation", async () => {
     const agent = createAgent();
 

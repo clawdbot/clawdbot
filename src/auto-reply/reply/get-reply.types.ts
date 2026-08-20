@@ -1,11 +1,15 @@
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import type { FollowupQueueDisposition, QueueMode } from "./queue/types.js";
+import type { FollowupQueueDisposition } from "./queue/types.js";
+import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -16,6 +20,8 @@ export type ReplySessionBinding = {
 };
 
 type InternalReplySessionOptions = {
+  /** Host-stamped exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   expectedExistingSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
   onPendingContinuation?: () => void;
@@ -25,8 +31,6 @@ type InternalReplySessionOptions = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
-  /** Marks when this reply is waiting to own its session's reply lane. */
-  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Receives terminal queue-cap outcomes without widening the public reply API. */
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Overrides persisted queue mode for this reply only. */
@@ -34,12 +38,15 @@ type InternalReplySessionOptions = {
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
   skillOverrides?: SessionToolOverrides["skills"];
+  /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &
+  PluginCommandReplyOptions &
   InternalReplySessionOptions &
-  ReplyOptionsWithHeartbeatRunScope &
-  ReplyOptionsWithOperationRunState;
+  ReplyOptionsWithOperationRunState &
+  ReplyOptionsWithAdmissionTicket;
 
 export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;

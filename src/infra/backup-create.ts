@@ -8,6 +8,7 @@ import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
   buildBackupArchiveRoot,
+  canonicalizePathForContainment,
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
@@ -22,22 +23,27 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
-import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
-import { removePreparedBackupArchive, writeArchiveStreamToFile } from "./backup-create-stream.js";
+import {
+  observeBackupTarEntryProgress,
+  removePreparedBackupArchive,
+  writeArchiveStreamToFile,
+} from "./backup-create-stream.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
 import {
   createBackupLinkCache,
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, isErrno } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -159,16 +165,75 @@ async function resolveOutputPath(params: {
   return resolved;
 }
 
+type BackupOutputFailurePhase = "parent" | "publication" | "write";
+
+function formatBackupOutputFailure(
+  error: unknown,
+  outputPath: string,
+  phase: BackupOutputFailurePhase,
+  ownedRoot?: string,
+): unknown {
+  const cause = phase === "write" && error instanceof Error ? error.cause : undefined;
+  const filesystemError = isErrno(error) ? error : isErrno(cause) ? cause : null;
+  if (!filesystemError) {
+    return error;
+  }
+  if (ownedRoot) {
+    const failedPath = filesystemError.path;
+    if (typeof failedPath !== "string" || !isPathWithin(path.resolve(failedPath), ownedRoot)) {
+      return error;
+    }
+  }
+
+  const outputParent = path.dirname(outputPath);
+  const retry = "run `openclaw backup create --output <archive>` again.";
+  let detail: string;
+  switch (filesystemError.code) {
+    case "ENOENT":
+      detail = `Backup output directory could not be created: ${outputParent}. Check the path and ${retry}`;
+      break;
+    case "EACCES":
+    case "EPERM":
+    case "EROFS":
+      detail = `Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then ${retry}`;
+      break;
+    case "EEXIST":
+    case "ENOTDIR":
+      if (phase !== "parent") {
+        return error;
+      }
+      detail = `Backup output parent is not a directory: ${outputParent}. Choose a directory path and ${retry}`;
+      break;
+    case "ENOSPC":
+      detail = `The destination does not have enough free space: ${outputParent}. Free up disk space and ${retry}`;
+      break;
+    case "EDQUOT":
+      detail = `The destination storage quota is exhausted: ${outputParent}. Free up space or choose another path, then ${retry}`;
+      break;
+    default:
+      detail = `The output path could not be prepared: ${outputParent}. Check the path and filesystem, then ${retry}`;
+  }
+  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`, { cause: error });
+}
+
 async function assertOutputPathReady(outputPath: string): Promise<void> {
   try {
     await fs.access(outputPath);
     throw new Error(`Refusing to overwrite existing backup archive: ${outputPath}`);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT") {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return;
     }
-    throw err;
+    throw formatBackupOutputFailure(error, outputPath, "parent");
+  }
+}
+
+async function prepareBackupOutputParent(outputPath: string): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  } catch (error) {
+    throw formatBackupOutputFailure(error, outputPath, "parent");
   }
 }
 
@@ -207,26 +272,6 @@ async function chooseBackupTempRoot(params: {
     );
   }
   return fallback;
-}
-
-async function canonicalizePathForContainment(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const suffix: string[] = [];
-  let probe = resolved;
-
-  while (true) {
-    try {
-      const realProbe = await fs.realpath(probe);
-      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(probe);
-      if (parent === probe) {
-        return resolved;
-      }
-      suffix.push(path.basename(probe));
-      probe = parent;
-    }
-  }
 }
 
 function buildManifest(params: {
@@ -327,7 +372,7 @@ function normalizeBackupFilterPath(value: string): string {
   return value.replaceAll("\\", "/").replace(/\/+$/u, "");
 }
 
-const REINSTALLABLE_STATE_ROOTS = new Set(["dev", "git", "npm", "npm-runtime", "tools"]);
+const NON_AUTHORITATIVE_STATE_ROOTS = new Set(["dev", "git", "npm", "npm-runtime", "tmp", "tools"]);
 
 function buildStateBackupFilter(
   stateDir: string,
@@ -344,7 +389,7 @@ function buildStateBackupFilter(
     }
 
     const segments = normalizedFilePath.slice(statePrefix.length).split("/");
-    if (REINSTALLABLE_STATE_ROOTS.has(segments[0] ?? "")) {
+    if (NON_AUTHORITATIVE_STATE_ROOTS.has(segments[0] ?? "")) {
       const resolvedFilePath = path.resolve(filePath);
       // Configured workspaces nested under a managed root remain authoritative
       // user state. Keep their ancestors traversable without admitting siblings.
@@ -763,6 +808,10 @@ export async function createBackupArchive(
   }
 
   const createdAt = new Date(nowMs).toISOString();
+  const stateAsset = plan.included.find((asset) => asset.kind === "state");
+  const pluginSkillsPath = stateAsset
+    ? path.join(stateAsset.sourcePath, "plugin-skills")
+    : undefined;
   const result: BackupCreateResult = {
     createdAt,
     archiveRoot,
@@ -780,7 +829,7 @@ export async function createBackupArchive(
     return result;
   }
 
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await prepareBackupOutputParent(outputPath);
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
@@ -790,10 +839,9 @@ export async function createBackupArchive(
     publication = await createBackupArchivePublication(outputPath);
   } catch (error) {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    throw formatBackupOutputFailure(error, outputPath, "publication");
   }
   const tempArchivePath = publication.tempArchivePath;
-  const stateAsset = result.assets.find((asset) => asset.kind === "state");
   const preservedStatePaths = [
     plan.configPath,
     plan.oauthDir,
@@ -866,9 +914,11 @@ export async function createBackupArchive(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
-    // node-tar invokes filters from async stat callbacks, so throwing inside
-    // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
+    let skippedPluginSkills = false;
+    // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
+    // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
+    let archiveSymlinkViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
@@ -878,6 +928,12 @@ export async function createBackupArchive(
       const resolvedEntryPath = path.resolve(entryPath);
       if (resolvedEntryPath === manifestPath) {
         return true;
+      }
+      // This OpenClaw-owned symlink index is rebuilt from plugin metadata.
+      // Archiving it would preserve host-specific absolute targets.
+      if (pluginSkillsPath && isPathWithin(resolvedEntryPath, pluginSkillsPath)) {
+        skippedPluginSkills = true;
+        return false;
       }
       if (stateFilter && !stateFilter(entryPath)) {
         return false;
@@ -924,50 +980,89 @@ export async function createBackupArchive(
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
+        skippedPluginSkills = false;
         unexpectedSqliteSourcePaths.length = 0;
+        archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
-          archiveStream: tar.c(
-            {
-              gzip: true,
-              portable: true,
-              preservePaths: true,
-              linkCache: createBackupLinkCache(),
-              statCache: createBackupVolatileStatCache(volatilePlan),
-              filter: tarFilter,
-              onWriteEntry: (entry) => {
-                entry.path = remapArchiveEntryPath({
-                  entryPath: entry.path,
-                  manifestPath,
-                  archiveRoot,
-                  sourcePathRemaps,
-                });
+          createArchiveStream: (reportProgress) =>
+            tar.c(
+              {
+                gzip: true,
+                portable: true,
+                preservePaths: true,
+                linkCache: createBackupLinkCache(),
+                statCache: createBackupVolatileStatCache(volatilePlan),
+                filter: (entryPath, entryStat) => {
+                  reportProgress({ phase: "traversal", entryPath });
+                  return tarFilter(entryPath, entryStat);
+                },
+                onWriteEntry: (entry) => {
+                  const sourceEntryPath = entry.path;
+                  reportProgress({ phase: "entry", entryPath: sourceEntryPath });
+                  if (entry.type === "File" && (entry.stat?.size ?? 0) > 0) {
+                    observeBackupTarEntryProgress(entry, (bytes) => {
+                      reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
+                    });
+                  }
+                  const archiveEntryPath = remapArchiveEntryPath({
+                    entryPath: entry.path,
+                    manifestPath,
+                    archiveRoot,
+                    sourcePathRemaps,
+                  });
+                  if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
+                    try {
+                      assertArchiveSymbolicLinkTarget({
+                        archiveRoot,
+                        entryPath: archiveEntryPath,
+                        linkpath: entry.linkpath,
+                      });
+                    } catch (error) {
+                      archiveSymlinkViolation =
+                        error instanceof Error ? error : new Error(String(error));
+                    }
+                  }
+                  entry.path = archiveEntryPath;
+                },
               },
-            },
-            [
-              manifestPath,
-              ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
-              ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
-              ...result.assets.map((asset) => asset.sourcePath),
-            ],
-          ),
+              [
+                manifestPath,
+                ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+                ...legacyAuditSnapshots.map((snapshot) => snapshot.sourcePath),
+                ...result.assets.map((asset) => asset.sourcePath),
+              ],
+            ),
           onPartialArchive: (partialArchive) => {
             publication.pendingCleanupArchives.push(partialArchive);
           },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
-        if (unexpectedSqliteSourcePath) {
+        const archiveValidationError = unexpectedSqliteSourcePath
+          ? new Error(
+              `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
+            )
+          : archiveSymlinkViolation;
+        if (archiveValidationError) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);
           }
-          throw new Error(
-            `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
-          );
+          throw archiveValidationError;
         }
         return prepared;
       },
+    }).catch((error: unknown) => {
+      throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
     result.skippedVolatileCount = skippedVolatileCount;
+    if (pluginSkillsPath && skippedPluginSkills) {
+      result.skipped.push({
+        kind: "plugin skills",
+        sourcePath: pluginSkillsPath,
+        displayPath: shortenHomePath(pluginSkillsPath),
+        reason: "regenerable",
+      });
+    }
     if (skippedVolatileCount > 0) {
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${
@@ -975,11 +1070,15 @@ export async function createBackupArchive(
         } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
-    await publishPreparedBackupArchive({
-      plan: publication,
-      prepared: completedArchive,
-      log: opts.log,
-    });
+    try {
+      await publishPreparedBackupArchive({
+        plan: publication,
+        prepared: completedArchive,
+        log: opts.log,
+      });
+    } catch (error) {
+      throw formatBackupOutputFailure(error, outputPath, "publication");
+    }
   } finally {
     await cleanupBackupArchivePublication(publication, opts.log);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);

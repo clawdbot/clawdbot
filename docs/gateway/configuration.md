@@ -201,14 +201,14 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         },
       },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
+            default: true,
             groupChat: {
               mentionPatterns: ["@openclaw", "openclaw"],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: {
@@ -235,11 +235,11 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           skills: ["github", "weather"],
         },
-        list: [
-          { id: "writer" }, // inherits github, weather
-          { id: "docs", skills: ["docs-search"] }, // replaces defaults
-          { id: "locked-down", skills: [] }, // no skills
-        ],
+        entries: {
+          writer: { default: true }, // inherits github, weather
+          docs: { skills: ["docs-search"] }, // replaces defaults
+          "locked-down": { skills: [] }, // no skills
+        },
       },
     }
     ```
@@ -390,7 +390,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           heartbeat: {
             every: "30m",
-            target: "last",
+            target: "owner",
           },
         },
       },
@@ -398,7 +398,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable. Default: `30m`.
-    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
+    - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
@@ -414,7 +414,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` to disable).
+    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` or a zero duration such as `"0h"` to disable).
     - Run history automatically keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
@@ -466,10 +466,10 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```json5
     {
       agents: {
-        list: [
-          { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-          { id: "work", workspace: "~/.openclaw/workspace-work" },
-        ],
+        entries: {
+          home: { default: true, workspace: "~/.openclaw/workspace-home" },
+          work: { workspace: "~/.openclaw/workspace-work" },
+        },
       },
       bindings: [
         { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -643,8 +643,10 @@ Neither file overrides existing env vars. You can also set inline env vars in co
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
-    vars: { GROQ_API_KEY: "gsk-..." },
+    vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
+      GROQ_API_KEY: "gsk-...",
+    },
   },
 }
 ```
@@ -676,14 +678,14 @@ Env var equivalent: `OPENCLAW_LOAD_SHELL_ENV=1`. Default `timeoutMs`: `15000`.
 Rules:
 
 - Only uppercase names matched: `[A-Z_][A-Z0-9_]*`
-- Missing/empty vars throw an error at load time
-- Escape with `$${VAR}` for literal output
+- Missing/empty vars stay visibly unresolved, emit a warning, and are unavailable to consumers that require the value
+- Escape with `$${VAR}` to produce a literal `${VAR}` value
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
 
 </Accordion>
 
-<Accordion title="Secret refs (env, file, exec)">
+<Accordion title="Secret refs (env, file, exec, store)">
   For fields that support SecretRef objects, you can use:
 
 ```json5
@@ -716,7 +718,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets).
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 

@@ -33,7 +33,7 @@ export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
  * Enables provider plugins for provider contract setup without applying channel
  * normalization from the core plugin enable path.
  */
-export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
+function enableProviderPluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
   /** Provider setup config object to update without channel normalization. */
   cfg: TConfig,
   /** Provider plugin id to enable and allowlist. */
@@ -68,3 +68,5 @@ export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier
   next = ensurePluginAllowlisted(next, pluginId);
   return { config: next, enabled: true };
 }
+
+export { enableProviderPluginInConfig as enablePluginInConfig };

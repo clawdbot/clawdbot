@@ -90,7 +90,7 @@ describe("sessions lifecycle commands", () => {
         expectedSessionId: "session-1",
         archived: true,
       },
-      { defaultTimeoutMs: 30_000 },
+      { defaultTimeoutMs: 10 * 60_000 },
     );
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
@@ -137,6 +137,43 @@ describe("sessions lifecycle commands", () => {
     );
   });
 
+  it.each([
+    ["archive", sessionsArchiveCommand, {}],
+    ["delete", sessionsDeleteCommand, { yes: true }],
+  ] as const)(
+    "rejects a key-only listed session before %s mutation",
+    async (_operation, command, options) => {
+      mocks.callGateway.mockResolvedValueOnce(listResult([{ key: "agent:main:key-only" }]));
+      const runtime = createRuntime();
+
+      await command({ keys: ["agent:main:key-only"], ...options, json: true }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.callGateway.mock.calls[0]?.[0]).toBe("sessions.list");
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: `Session ${_operation} did not complete for every requested key.`,
+          },
+          operation: _operation,
+          dryRun: false,
+          results: [
+            {
+              key: "agent:main:key-only",
+              ok: false,
+              status: "failed",
+              error: "Session has no durable identity; lifecycle mutation was not attempted.",
+            },
+          ],
+        },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it("deletes archived sessions with the same gated artifact contract as Control UI", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(
@@ -147,7 +184,12 @@ describe("sessions lifecycle commands", () => {
         key: "agent:main:archived",
         deleted: true,
         archived: ["/state/session-1.jsonl.deleted.123"],
-        worktreePreserved: { id: "wt-1", branch: "scratch", path: "/worktree" },
+        worktreePreserved: {
+          id: "wt-1",
+          branch: "scratch",
+          path: "/worktree",
+          reason: "owner-mismatch",
+        },
       });
     const runtime = createRuntime();
 
@@ -176,12 +218,42 @@ describe("sessions lifecycle commands", () => {
             ok: true,
             status: "deleted",
             archived: ["/state/session-1.jsonl.deleted.123"],
-            worktreePreserved: { id: "wt-1", branch: "scratch", path: "/worktree" },
+            worktreePreserved: {
+              id: "wt-1",
+              branch: "scratch",
+              path: "/worktree",
+              reason: "owner-mismatch",
+            },
           },
         ],
       },
       2,
     );
+  });
+
+  it("prints the preserved worktree cleanup reason without claiming source changes", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(listResult([{ key: "agent:main:active", sessionId: "session-1" }]))
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:main:active",
+        deleted: true,
+        archived: [],
+        worktreePreserved: {
+          id: "wt-1",
+          branch: "openclaw/active",
+          path: "/worktree",
+          reason: "cleanup-failed",
+        },
+      });
+    const runtime = createRuntime();
+
+    await sessionsDeleteCommand({ keys: ["agent:main:active"], yes: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("cleanup did not finish normally"),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringMatching(/uncommitted|unpushed/i));
   });
 
   it("deletes active sessions without the archive-only scope restriction", async () => {
@@ -282,6 +354,10 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: false,
+        error: {
+          type: "cli_error",
+          message: "Session delete did not complete for every requested key.",
+        },
         operation: "delete",
         dryRun: false,
         results: [
@@ -321,6 +397,10 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ok: false,
+        error: {
+          type: "cli_error",
+          message: "Session delete did not complete for every requested key.",
+        },
         operation: "delete",
         dryRun: false,
         results: [

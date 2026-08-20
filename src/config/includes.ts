@@ -17,6 +17,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -353,7 +354,7 @@ class IncludeProcessor {
       if (err instanceof ConfigIncludeError) {
         throw err;
       }
-      if (isNotFoundError(err)) {
+      if (isMissingPathError(err)) {
         // File doesn't exist yet - lexical containment check above is sufficient.
         return { resolvedPath: normalized, root: lexicalMatch };
       }
@@ -474,15 +475,6 @@ function createConfigIncludeBoundary(
         return { rootDir, rootRealDir: path.normalize(safeRealpath(rootDir)) };
       }),
   };
-}
-
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT",
-  );
 }
 
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {

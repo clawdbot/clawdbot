@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
-import { createDeferred, setupCronServiceSuite } from "./service.test-harness.js";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
+import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -12,6 +13,7 @@ import type { CronJobCreate } from "./types.js";
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
 
 type Evaluator = NonNullable<CronServiceDeps["evaluateCronTrigger"]>;
+type CronEventContext = Parameters<NonNullable<CronServiceDeps["onEvent"]>>[1];
 type IsolatedRunner = CronServiceDeps["runIsolatedAgentJob"];
 type ScriptRunner = NonNullable<CronServiceDeps["runScriptJob"]>;
 
@@ -36,6 +38,7 @@ async function createHarness(params: {
 }) {
   const { storePath } = await makeStorePath();
   const events: CronEvent[] = [];
+  const eventContexts: Array<CronEventContext | undefined> = [];
   const enqueueSystemEvent = vi.fn();
   const runIsolatedAgentJob =
     params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const }));
@@ -50,10 +53,13 @@ async function createHarness(params: {
     ...(params.evaluateCronTrigger ? { evaluateCronTrigger: params.evaluateCronTrigger } : {}),
     ...(params.runScriptJob ? { runScriptJob: params.runScriptJob } : {}),
     ...(params.sendCronWebhook ? { sendCronWebhook: params.sendCronWebhook } : {}),
-    onEvent: (event) => events.push(structuredClone(event)),
+    onEvent: (event, context) => {
+      events.push(structuredClone(event));
+      eventContexts.push(context ? structuredClone(context) : undefined);
+    },
   });
   await cron.start();
-  return { cron, enqueueSystemEvent, events, runIsolatedAgentJob, storePath };
+  return { cron, enqueueSystemEvent, eventContexts, events, runIsolatedAgentJob, storePath };
 }
 
 async function runWhenDue(cron: CronService, jobId: string) {
@@ -189,6 +195,7 @@ describe("cron trigger evaluation", () => {
       const job = await harness.cron.add(watcher());
       const dueAt = job.state.nextRunAtMs ?? 0;
       harness.events.length = 0;
+      harness.eventContexts.length = 0;
       await runWhenDue(harness.cron, job.id);
 
       const stored = harness.cron.getJob(job.id);
@@ -205,6 +212,14 @@ describe("cron trigger evaluation", () => {
         status: "error",
         error: expect.stringContaining("deadline exceeded"),
       });
+      expect(harness.eventContexts[1]).toEqual({
+        failureNotificationDetail: {
+          kind: "script-failure",
+          source: "trigger",
+          code: "timeout",
+        },
+      });
+      expect(harness.events[1]).not.toHaveProperty("failureNotificationDetail");
       expect(harness.events.map((event) => event.action)).toEqual([
         "started",
         "finished",
@@ -317,7 +332,7 @@ describe("cron trigger evaluation", () => {
     ["replaced", false],
     ["restored after replacement", true],
   ] as const)("preserves a %s trigger edited during a manual fired run", async (_, restore) => {
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const completion = createDeferred<{ status: "ok"; summary: string }>();
     const evaluateCronTrigger = vi.fn(async () => ({
       kind: "evaluated" as const,
@@ -365,7 +380,7 @@ describe("cron trigger evaluation", () => {
     ["edited", false],
     ["restored after an edit", true],
   ] as const)("preserves trigger state %s during a manual fired run", async (_, restore) => {
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const completion = createDeferred<{ status: "ok"; summary: string }>();
     const harness = await createHarness({
       evaluateCronTrigger: vi.fn(async () => ({
@@ -415,7 +430,7 @@ describe("cron trigger evaluation", () => {
   ] as const)(
     "does not let a %s active payload script overwrite shared state",
     async (_, restore) => {
-      const started = createDeferred<void>();
+      const started = createDeferred();
       const completion = createDeferred<{
         status: "ok";
         stateChanged: true;
@@ -468,7 +483,7 @@ describe("cron trigger evaluation", () => {
     ["trigger definition", true],
     ["trigger state only", false],
   ] as const)("preserves %s edited during its suspended quiet evaluation", async (_, replace) => {
-    const started = createDeferred<void>();
+    const started = createDeferred();
     const evaluation = createDeferred<{
       kind: "evaluated";
       fire: false;

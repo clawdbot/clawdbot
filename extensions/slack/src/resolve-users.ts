@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackLookupClient } from "./client.js";
 import { collectSlackCursorPages } from "./cursor-pages.js";
+import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -29,6 +30,25 @@ export type SlackUserResolution = {
   isBot?: boolean;
   note?: string;
 };
+
+function resolveWorkspaceQualifiedUser(input: string): SlackUserResolution | undefined {
+  if (!/^team:/i.test(input)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(input);
+    if (target?.kind !== "user" || !target.teamId) {
+      return undefined;
+    }
+    return {
+      input,
+      resolved: true,
+      id: formatSlackTarget({ teamId: target.teamId, kind: "user", id: target.id }),
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
@@ -138,14 +158,19 @@ export async function resolveSlackUserAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackUserResolution[]> {
+  const workspaceResolved = params.entries.map(resolveWorkspaceQualifiedUser);
+  const lookupEntries = params.entries.filter((_, index) => !workspaceResolved[index]);
+  if (lookupEntries.length === 0) {
+    return workspaceResolved.filter((entry): entry is SlackUserResolution => entry !== undefined);
+  }
   const client = params.client ?? createSlackLookupClient(params.token);
   const users = await listSlackUsers(client);
-  return resolveDirectoryAllowlistEntries<
+  const resolved = resolveDirectoryAllowlistEntries<
     { id?: string; name?: string; email?: string },
     SlackUserLookup,
     SlackUserResolution
   >({
-    entries: params.entries,
+    entries: lookupEntries,
     lookup: users,
     parseInput: parseSlackUserInput,
     findById: (lookup, id) => lookup.find((user) => user.id === id),
@@ -181,4 +206,6 @@ export async function resolveSlackUserAllowlist(params: {
     },
     buildUnresolved: (input) => ({ input, resolved: false }),
   });
+  let resolvedIndex = 0;
+  return workspaceResolved.map((entry) => entry ?? resolved[resolvedIndex++]!);
 }

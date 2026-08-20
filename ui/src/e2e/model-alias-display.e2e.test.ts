@@ -66,7 +66,6 @@ suite.define(() => {
       const picker = main.locator('[data-chat-model-select="true"]').first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
-      await main.locator('[data-chat-model-provider="anthropic"]').click();
 
       const opus = main.locator(
         '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
@@ -84,7 +83,6 @@ suite.define(() => {
         });
       }
 
-      await main.locator('[data-chat-model-provider="nvidia"]').click();
       const nvidia = main.locator(
         '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );
@@ -148,16 +146,16 @@ suite.define(() => {
       expect(modelRequest.params).toEqual({ agentId: "main" });
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
-      const select = page.locator("select.settings-select").first();
+      const select = page.locator("wa-select.model-picker__select").first();
       await select.waitFor({ state: "visible", timeout: 10_000 });
       await expect
-        .poll(() => select.locator('option[value="anthropic/claude-opus-4-8"]').textContent())
+        .poll(() => select.locator('wa-option[value="anthropic/claude-opus-4-8"]').textContent())
         .toContain("Opus 4.8 · opus");
       await expect
-        .poll(() => select.locator('option[value="anthropic/claude-sonnet-5"]').textContent())
+        .poll(() => select.locator('wa-option[value="anthropic/claude-sonnet-5"]').textContent())
         .toContain("Sonnet 5 · sonnet");
       await expect
-        .poll(() => select.locator('option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
+        .poll(() => select.locator('wa-option[value="nvidia/moonshotai/kimi-k2.5"]').textContent())
         .toContain("Kimi K2.5 (NVIDIA)");
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 

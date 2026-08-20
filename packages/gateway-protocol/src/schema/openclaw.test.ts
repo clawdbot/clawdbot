@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
+  validateSystemAgentSetupActivateParams,
+  validateSystemAgentSetupAuthStartParams,
+  validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
@@ -34,6 +37,21 @@ describe("OpenClaw chat params protocol", () => {
       validateSystemAgentChatParams({
         sessionId: "session-1",
         wizardAnswer: { stepId: "channel", value: "twitch", display: "Twitch" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a typed wizard cancel and rejects unknown cancel fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel", reason: "user" },
       }),
     ).toBe(false);
   });
@@ -100,6 +118,27 @@ describe("OpenClaw chat history protocol", () => {
 });
 
 describe("OpenClaw setup detection protocol", () => {
+  it("accepts an explicit owner across the structured setup family", () => {
+    expect(validateSystemAgentSetupDetectParams({ agentId: "research" })).toBe(true);
+    expect(validateSystemAgentSetupVerifyParams({ agentId: "research" })).toBe(true);
+    expect(
+      validateSystemAgentSetupActivateParams({
+        agentId: "research",
+        kind: "existing-model",
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentSetupAuthStartParams({
+        sessionId: "setup-1",
+        agentId: "research",
+        authChoice: "openai-api-key",
+      }),
+    ).toBe(true);
+    expect(validateSystemAgentSetupDetectParams({ agentId: "research", unknown: true })).toBe(
+      false,
+    );
+  });
+
   it("accepts additive presentation metadata and older results without installs", () => {
     const result = {
       candidates: [

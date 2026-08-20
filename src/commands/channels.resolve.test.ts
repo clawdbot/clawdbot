@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
-  getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
@@ -51,10 +50,6 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
-}));
-
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
@@ -88,6 +83,7 @@ describe("channelsResolveCommand", () => {
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "telegram",
+      plugin: { id: "telegram" },
       configured: ["telegram"],
       source: "explicit",
     });
@@ -115,6 +111,7 @@ describe("channelsResolveCommand", () => {
 
     await channelsResolveCommand(
       {
+        agent: "ops",
         channel: "whatsapp",
         entries: ["friends"],
       },
@@ -126,6 +123,12 @@ describe("channelsResolveCommand", () => {
       mocks.resolveInstallableChannelPlugin,
       "installable channel resolution",
     );
+    const commandSecretRequest = requireFirstMockArg(
+      mocks.resolveCommandSecretRefsViaGateway,
+      "command secret resolution",
+    );
+    expect(commandSecretRequest.agentId).toBe("ops");
+    expect(pluginResolutionRequest.agentId).toBe("ops");
     expect(pluginResolutionRequest.rawChannel).toBe("whatsapp");
     expect(pluginResolutionRequest.allowInstall).toBe(false);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -180,12 +183,12 @@ describe("channelsResolveCommand", () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
+      plugin: {
+        id: "whatsapp",
+        resolver: { resolveTargets },
+      },
       configured: ["whatsapp"],
       source: "single-configured",
-    });
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
-      resolver: { resolveTargets },
     });
 
     await channelsResolveCommand(

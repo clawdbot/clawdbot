@@ -11,14 +11,69 @@ import {
 
 export type SlackTargetKind = MessagingTargetKind;
 
-export type SlackTarget = MessagingTarget;
+export type SlackTarget = MessagingTarget & {
+  teamId?: string;
+};
 
 export type SlackTargetParseOptions = MessagingTargetParseOptions;
 
 // Letter-leading folded IDs are indistinguishable from supported channel names.
 // Doctor reports that ambiguity; runtime repairs only the digit-leading form.
 const SLACK_CHANNEL_API_ID_RE = /^[CDG][0-9][A-Z0-9]{7,}$/i;
-const SLACK_USER_API_ID_RE = /^[UW][A-Z0-9]{8,}$/i;
+const SLACK_USER_API_ID_RE = /^[BUW][A-Z0-9]{8,}$/i;
+const SLACK_QUALIFIED_TARGET_RE = /^team:([^:]+):(user|channel):([^:]+)$/i;
+
+function decodeSlackTargetPart(raw: string): string | undefined {
+  try {
+    return decodeURIComponent(raw).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseQualifiedSlackTarget(raw: string): SlackTarget | undefined {
+  const match = SLACK_QUALIFIED_TARGET_RE.exec(raw);
+  if (!match) {
+    if (/^team:/i.test(raw)) {
+      throw new Error(
+        "Slack workspace targets require team:<team-id>:channel:<channel-id> or team:<team-id>:user:<user-id>",
+      );
+    }
+    return undefined;
+  }
+  const teamId = decodeSlackTargetPart(match[1] ?? "");
+  const kind = match[2]?.toLowerCase() as SlackTargetKind | undefined;
+  const id = decodeSlackTargetPart(match[3] ?? "");
+  const idPattern = kind === "user" ? /^[BUW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
+  if (!teamId || !/^T[A-Z0-9]+$/i.test(teamId) || !kind || !id || !idPattern.test(id)) {
+    throw new Error("Invalid Slack workspace-qualified target");
+  }
+  return {
+    kind,
+    id,
+    teamId,
+    raw,
+    normalized: `team:${teamId.toLowerCase()}:${kind}:${id.toLowerCase()}`,
+  };
+}
+
+export function formatSlackTarget(params: {
+  teamId?: string;
+  kind: SlackTargetKind;
+  id: string;
+  explicitKind?: boolean;
+}): string {
+  const teamId = params.teamId?.trim();
+  const id = params.id.trim();
+  if (!teamId) {
+    return params.explicitKind ? `${params.kind}:${id}` : id;
+  }
+  const idPattern = params.kind === "user" ? /^[BUW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
+  if (!/^T[A-Z0-9]+$/i.test(teamId) || !idPattern.test(id)) {
+    throw new Error("Invalid Slack workspace-qualified target");
+  }
+  return `team:${encodeURIComponent(teamId)}:${params.kind}:${encodeURIComponent(id)}`;
+}
 
 function isUnambiguousSlackUserId(rawId: string): boolean {
   const id = rawId.trim();
@@ -46,6 +101,10 @@ export function parseSlackTarget(
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
+  }
+  const qualifiedTarget = parseQualifiedSlackTarget(trimmed);
+  if (qualifiedTarget) {
+    return qualifiedTarget;
   }
   const userTarget = parseMentionPrefixOrAtUserTarget({
     raw: trimmed,
@@ -107,6 +166,9 @@ export function looksLikeSlackTargetId(raw: string): boolean {
     return true;
   }
   if (/^slack:/i.test(trimmed)) {
+    return true;
+  }
+  if (/^team:/i.test(trimmed)) {
     return true;
   }
   if (/^[@#]/.test(trimmed)) {

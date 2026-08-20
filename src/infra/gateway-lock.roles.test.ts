@@ -4,7 +4,12 @@ import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { acquireGatewayLock, GatewayLockError, readActiveGatewayLockPort } from "./gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  readActiveGatewayLockIdentity,
+  readActiveGatewayLockPort,
+} from "./gateway-lock.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-gateway-lock-workshop-",
@@ -114,6 +119,63 @@ describe("Gateway lock roles", () => {
           readProcessStartTime: () => null,
         }),
       ).resolves.toBe(28789);
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it("keeps agent-embedded ownership distinct from a running Gateway", async () => {
+    const stateDir = await fixtureRootTracker.make("agent-embedded-role");
+    const lockDir = path.join(fixtureRoot, "__locks");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}", "utf8");
+    const env = {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const readProcessCmdline = () => ["openclaw", "agent", "--local", "--message", "hello"];
+    const lock = await acquireGatewayLock({
+      allowInTests: true,
+      env,
+      lockDir,
+      platform: "darwin",
+      port: 28789,
+      readProcessCmdline,
+      readProcessStartTime: () => null,
+      role: "agent-embedded",
+      timeoutMs: 30,
+    });
+    expect(lock).not.toBeNull();
+    if (!lock) {
+      throw new Error("Expected embedded agent Gateway lock");
+    }
+
+    try {
+      await expect(
+        readActiveGatewayLockIdentity({
+          env,
+          lockDir,
+          platform: "darwin",
+          readProcessCmdline,
+          readProcessStartTime: () => null,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        acquireGatewayLock({
+          allowInTests: true,
+          env,
+          lockDir,
+          platform: "darwin",
+          pollIntervalMs: 2,
+          readProcessCmdline,
+          readProcessStartTime: () => null,
+          sleep: nativeSleep,
+          timeoutMs: 15,
+        }),
+      ).rejects.toThrow(
+        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
+      );
     } finally {
       await lock.release();
     }

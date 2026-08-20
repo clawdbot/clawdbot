@@ -1,12 +1,18 @@
 import Foundation
+import OSLog
 
 enum LaunchAgentManager {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app.login-agent")
     private static var plistURL: URL {
         FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/ai.openclaw.mac.plist")
     }
 
-    static func status() async -> Bool {
+    static func status(profile: AppProfile = .current) async -> Bool {
+        if profile.isActive {
+            self.logger.info("login-agent status skipped (unavailable under app profile)")
+            return false
+        }
         guard FileManager().fileExists(atPath: self.plistURL.path) else { return false }
         return await self.isLoaded()
     }
@@ -20,9 +26,14 @@ enum LaunchAgentManager {
     static func set(
         enabled: Bool,
         bundlePath: String,
+        profile: AppProfile = .current,
         loaded: Bool? = nil,
         writePlist: ((String) -> Void)? = nil) async -> Bool
     {
+        if profile.isActive {
+            self.logger.info("login-agent change skipped (unavailable under app profile)")
+            return false
+        }
         if enabled {
             let persist = writePlist ?? { self.writePlist(bundlePath: $0) }
             persist(bundlePath)
@@ -107,6 +118,9 @@ enum LaunchAgentManager {
 
     @discardableResult
     private static func runLaunchctl(_ args: [String]) async -> Int32 {
+        #if DEBUG
+        self.testingLaunchctlCalls.append(args)
+        #endif
         do {
             return try await BoundedProcess.run(
                 path: "/bin/launchctl",
@@ -117,3 +131,17 @@ enum LaunchAgentManager {
         }
     }
 }
+
+#if DEBUG
+extension LaunchAgentManager {
+    private nonisolated(unsafe) static var testingLaunchctlCalls: [[String]] = []
+
+    static func _testResetLaunchctlCalls() {
+        self.testingLaunchctlCalls = []
+    }
+
+    static func _testLaunchctlCallSnapshot() -> [[String]] {
+        self.testingLaunchctlCalls
+    }
+}
+#endif

@@ -27,6 +27,7 @@ function createDefaultSessionStoreEntry() {
     cacheWrite: 1_000,
     totalTokens: 5_000,
     totalTokensFresh: true as boolean,
+    totalTokensVersion: 1 as const,
     contextTokens: 10_000,
     model: "test:opus",
     sessionId: "abc123",
@@ -230,6 +231,8 @@ function createSessionStatusRows() {
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const total = typeof entry.totalTokens === "number" ? entry.totalTokens : null;
+      const freshTotal =
+        total !== null && entry.totalTokensFresh && entry.totalTokensVersion === 1 ? total : null;
       return {
         agentId: agent.id,
         key,
@@ -242,13 +245,17 @@ function createSessionStatusRows() {
         inputTokens: entry.inputTokens,
         outputTokens: entry.outputTokens,
         totalTokens: total,
-        totalTokensFresh: typeof entry.totalTokens === "number" ? entry.totalTokensFresh : false,
+        totalTokensFresh: freshTotal !== null,
         cacheRead: entry.cacheRead,
         cacheWrite: entry.cacheWrite,
         remainingTokens:
-          total !== null && contextTokens !== null ? Math.max(0, contextTokens - total) : null,
+          freshTotal !== null && contextTokens !== null
+            ? Math.max(0, contextTokens - freshTotal)
+            : null,
         percentUsed:
-          total !== null && contextTokens ? Math.round((total / contextTokens) * 100) : null,
+          freshTotal !== null && contextTokens
+            ? Math.round((freshTotal / contextTokens) * 100)
+            : null,
         model: typeof entry.model === "string" ? entry.model : null,
         contextTokens,
         flags: [
@@ -526,7 +533,7 @@ vi.mock("../channels/config-presence.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+  getActiveMemorySearchManagerCore: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
@@ -559,22 +566,21 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (opts?: { storePath?: string }) =>
+  listSessionEntriesCore: (opts?: { storePath?: string }) =>
     Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
     })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
-  resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
-    typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
-  ),
   resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+    (entry?: { totalTokens?: number; totalTokensFresh?: boolean; totalTokensVersion?: number }) =>
+      typeof entry?.totalTokens === "number" &&
+      entry?.totalTokensFresh === true &&
+      entry.totalTokensVersion === 1
         ? entry.totalTokens
         : undefined,
   ),
@@ -747,6 +753,7 @@ vi.mock("../daemon/node-service.js", () => ({
 }));
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfig,
 }));
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
@@ -1139,8 +1146,8 @@ describe("statusCommand", () => {
     const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
-    expect(payload.sessions.recent[0].percentUsed).toBe(50);
-    expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
+    expect(payload.sessions.recent[0].percentUsed).toBeNull();
+    expect(payload.sessions.recent[0].remainingTokens).toBeNull();
   });
 
   it("prints formatted lines with verbose cache details", async () => {

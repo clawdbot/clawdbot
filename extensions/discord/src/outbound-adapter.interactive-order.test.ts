@@ -77,7 +77,7 @@ describe("discordOutbound shared interactive ordering", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
-      channelId: "123456",
+      target: { kind: "channel", id: "123456" },
     });
   });
 });

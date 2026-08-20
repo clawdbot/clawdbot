@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
 import "./model-setup-page.ts";
@@ -69,6 +69,10 @@ function createFixture() {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
     gateway,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     basePath: "",
     navigate: vi.fn(),
     runtimeConfig,
@@ -95,7 +99,7 @@ async function mountPage(
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
   page.routeData = {
     state: { phase: "ready", result: detection },
-    connection: { client, hello },
+    connection: { client, hello, agentId: context.agentSelection.state.selectedId },
     firstRun: false,
   };
   provider.append(page);
@@ -237,6 +241,58 @@ describe("ModelSetupPage Gateway reconnect ownership", () => {
     });
     expect(oldWizardSignal?.aborted).toBe(true);
     expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    runtimeConfig.dispose();
+  });
+
+  it("suppresses a late wizard completion but retains its reconnect refresh warning", async () => {
+    const { client, context, request, runtimeConfig, setGatewayPhase } = createFixture();
+    let releaseWizard: ((value: unknown) => void) | undefined;
+    request.mockImplementation(async (method) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          sourceConfig: {},
+          raw: "{}",
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "openclaw.setup.auth.start") {
+        return { sessionId: "wizard-before-reconnect", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return await new Promise((resolve) => {
+          // The server can finish a cancellation-locked commit after the local
+          // request was invalidated, so deliberately ignore the abort signal.
+          releaseWizard = resolve;
+        });
+      }
+      if (method === "openclaw.setup.detect") {
+        return {
+          ...detection,
+          configuredModel: "provider/current-model",
+          setupComplete: true,
+        };
+      }
+      return {};
+    });
+    await runtimeConfig.ensureLoaded();
+    const page = await mountPage(context, client);
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+    await vi.waitFor(() => expect(releaseWizard).toBeTypeOf("function"));
+
+    setGatewayPhase("reconnecting");
+    setGatewayPhase("connected");
+    releaseWizard?.({ done: true, status: "done" });
+
+    await vi.waitFor(() => {
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(page.textContent).toContain(
+        "Connection changed before the configuration update was refreshed.",
+      );
+      expect(selectedModelDetail(page)).toBe("current-model");
+    });
     runtimeConfig.dispose();
   });
 

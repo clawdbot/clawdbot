@@ -56,7 +56,7 @@ Route fields:
 | `controllerId` | no       | `webhooks/<routeId>`          | Used as the default `create_flow` controller. |
 | `description`  | no       | -                             | Operator note only.                           |
 
-`secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec", provider: "default", id: "..." }`.
+`secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }`.
 
 SecretRefs resolve into the Gateway's startup config snapshot. When one route's
 secret cannot resolve, the Gateway keeps running and that exact route stays

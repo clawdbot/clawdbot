@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
@@ -199,49 +200,6 @@ export function errorCategory(err: unknown): string {
   }
 }
 
-function collectNestedErrorCandidates(err: unknown): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (Array.isArray(current)) {
-      for (const item of current) {
-        if (item != null && !seen.has(item)) {
-          queue.push(item);
-        }
-      }
-      continue;
-    }
-    if (typeof current !== "object") {
-      continue;
-    }
-
-    const record = current as Record<string, unknown>;
-    for (const nested of [record.cause, record.reason, record.original, record.error]) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-    if (Array.isArray(record.errors)) {
-      for (const nested of record.errors) {
-        if (nested != null && !seen.has(nested)) {
-          queue.push(nested);
-        }
-      }
-    }
-  }
-
-  return candidates;
-}
-
 function readErrorName(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -259,7 +217,17 @@ export function readErrorCode(err: unknown): string | number | undefined {
 }
 
 export function findOtlpExporterError(reason: unknown): object | undefined {
-  for (const candidate of collectNestedErrorCandidates(reason)) {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) =>
+    Array.isArray(current)
+      ? current
+      : [
+          current.cause,
+          current.reason,
+          current.original,
+          current.error,
+          ...(Array.isArray(current.errors) ? current.errors : []),
+        ],
+  )) {
     if (
       readErrorName(candidate) === "OTLPExporterError" &&
       candidate &&

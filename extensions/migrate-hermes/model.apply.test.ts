@@ -1,19 +1,20 @@
 // Migrate Hermes tests cover model.apply plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
   HERMES_REASON_MODEL_PROVIDER_CONFLICT,
 } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import {
-  cleanupTempRoots,
-  makeConfigRuntime,
-  makeContext,
-  makeTempRoot,
-  writeFile,
-} from "./test/provider-helpers.js";
+import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function defaultModelItem(status: "migrated" | "conflict") {
   return {
@@ -28,12 +29,19 @@ function defaultModelItem(status: "migrated" | "conflict") {
 }
 
 describe("Hermes migration model apply", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("updates only the primary model when applying over object-form model config", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -81,7 +89,7 @@ describe("Hermes migration model apply", () => {
   });
 
   it("updates the default-agent model override when applying with overwrite", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -138,7 +146,7 @@ describe("Hermes migration model apply", () => {
   });
 
   it("reports late-created default models as conflicts without overwriting", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");
@@ -169,7 +177,7 @@ describe("Hermes migration model apply", () => {
   });
 
   it("does not apply a custom default after its provider develops a late conflict", async () => {
-    const root = await makeTempRoot();
+    const root = testWorkspace.dir;
     const source = path.join(root, "hermes");
     const workspaceDir = path.join(root, "workspace");
     const stateDir = path.join(root, "state");

@@ -102,7 +102,7 @@ async function allocateTempHomeBase(prefix: string): Promise<string> {
   return base;
 }
 
-export async function withTempHome<T>(
+export async function withTempHomeCore<T>(
   fn: (home: string) => Promise<T>,
   opts: {
     env?: Record<string, EnvValue>;
@@ -139,7 +139,9 @@ export async function withTempHome<T>(
     return await fn(base);
   } finally {
     if (!opts.skipSessionCleanup) {
-      await cleanupSessionStateForTest().catch(() => undefined);
+      await cleanupSessionStateForTest({ stateDir: path.join(base, ".openclaw") }).catch(
+        () => undefined,
+      );
     }
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);

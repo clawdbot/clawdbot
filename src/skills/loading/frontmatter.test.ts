@@ -1,8 +1,8 @@
 // Frontmatter tests cover skill metadata parsing and validation.
 import { describe, expect, it } from "vitest";
 import {
-  parseFrontmatter,
-  resolveOpenClawMetadata,
+  parseSkillFrontmatter,
+  resolveSkillManifestMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 
@@ -23,7 +23,7 @@ describe("resolveSkillInvocationPolicy", () => {
   });
 });
 
-describe("parseFrontmatter", () => {
+describe("parseSkillFrontmatter", () => {
   it.each([
     {
       title: "keeps recoverable colon-rich scalar values",
@@ -58,7 +58,7 @@ description: *Experimental
       expectedDescription: "*Experimental",
     },
   ])("$title", ({ frontmatter, expectedDescription }) => {
-    const parsed = parseFrontmatter(frontmatter);
+    const parsed = parseSkillFrontmatter(frontmatter);
 
     expect(parsed.description).toBe(expectedDescription);
   });
@@ -118,12 +118,12 @@ metadata: *missing
       expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
     },
   ])("$title", ({ frontmatter, expectedError }) => {
-    expect(() => parseFrontmatter(frontmatter)).toThrow(expectedError);
+    expect(() => parseSkillFrontmatter(frontmatter)).toThrow(expectedError);
   });
 
   it("rejects indentation errors following a description", () => {
     expect(() =>
-      parseFrontmatter(`---
+      parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 \tmetadata: {}
@@ -133,7 +133,7 @@ description: Working skill
 
   it("rejects unresolved aliases under explicit YAML keys", () => {
     expect(() =>
-      parseFrontmatter(`---
+      parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 ? metadata
@@ -144,7 +144,7 @@ description: Working skill
 
   it("does not recover nested description keys inside malformed metadata", () => {
     expect(() =>
-      parseFrontmatter(`---
+      parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 metadata: {
@@ -155,9 +155,9 @@ description: *missing
   });
 });
 
-describe("resolveOpenClawMetadata install validation", () => {
+describe("resolveSkillManifestMetadata install validation", () => {
   function resolveInstall(frontmatter: Record<string, string>) {
-    return resolveOpenClawMetadata(frontmatter)?.install;
+    return resolveSkillManifestMetadata(frontmatter)?.install;
   }
 
   it("accepts safe install specs", () => {
@@ -203,7 +203,7 @@ describe("resolveOpenClawMetadata install validation", () => {
   });
 
   it("parses Link-style YAML metadata with node install hints", () => {
-    const frontmatter = parseFrontmatter(`---
+    const frontmatter = parseSkillFrontmatter(`---
 name: create-payment-credential
 description: |
   Gets secure, one-time-use payment credentials from a Link wallet so agents can complete purchases.
@@ -228,7 +228,7 @@ user-invocable: true
 # Creating Payment Credentials
 `);
 
-    const metadata = resolveOpenClawMetadata(frontmatter);
+    const metadata = resolveSkillManifestMetadata(frontmatter);
 
     expect(frontmatter.name).toBe("create-payment-credential");
     expect(frontmatter.description).toContain("one-time-use payment credentials");

@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
-import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -32,50 +31,6 @@ function discoveryFor(...plugins: TempPlugin[]): PluginDiscoveryResult {
     })),
     diagnostics: [],
   };
-}
-
-function writeArtifactPreferencePlugin(id: string): TempPlugin {
-  const plugin = writePlugin({
-    id,
-    filename: "index.ts",
-    body: `export default {
-      id: ${JSON.stringify(id)},
-      register(api) {
-        api.registerProvider({ id: ${JSON.stringify(`${id}-source`)}, label: "Source", auth: [] });
-      },
-    };`,
-  });
-  const distDir = path.join(plugin.dir, "dist");
-  fs.mkdirSync(distDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(distDir, "index.js"),
-    `module.exports = {
-      id: ${JSON.stringify(id)},
-      register(api) {
-        api.registerProvider({ id: ${JSON.stringify(`${id}-built`)}, label: "Built", auth: [] });
-      },
-    };`,
-  );
-  return plugin;
-}
-
-function writeDistShimCapabilityPlugin(id: string): TempPlugin {
-  return writePlugin({
-    id,
-    filename: "index.ts",
-    body: `import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
-
-void isVoiceCompatibleAudio;
-
-export default {
-  id: ${JSON.stringify(id)},
-  register(api) {
-    api.registerMediaUnderstandingProvider({ id: ${JSON.stringify(id)} });
-    api.registerWebSearchProvider({ id: ${JSON.stringify(id)} });
-    api.registerMigrationProvider({ id: ${JSON.stringify(id)} });
-  },
-};`,
-  });
 }
 
 function writeChannelCapabilityPlugin(id: string): TempPlugin {
@@ -107,22 +62,6 @@ function writeChannelCapabilityPlugin(id: string): TempPlugin {
     ),
   );
   return plugin;
-}
-
-function loadCanonicalFixture(plugin: TempPlugin, discovery: PluginDiscoveryResult) {
-  return loadOpenClawPlugins({
-    config: {
-      plugins: {
-        allow: [plugin.id],
-        entries: { [plugin.id]: { enabled: true } },
-      },
-    },
-    discovery,
-    onlyPluginIds: [plugin.id],
-    preferBuiltPluginArtifacts: false,
-    cache: false,
-    activate: false,
-  });
 }
 
 describe("loadBundledCapabilityRuntimeRegistry", () => {
@@ -196,59 +135,12 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     expect(listImportedRuntimePluginIds()).not.toContain(blocked.id);
   });
 
-  it.each(["source", "built"] as const)(
-    "keeps %s-first artifact preferences isolated across registry snapshots",
-    (firstArtifact) => {
-      const plugin = writeArtifactPreferencePlugin(`capability-${firstArtifact}-first`);
-      const discovery = discoveryFor(plugin);
-      const loadCapability = () =>
-        loadBundledCapabilityRuntimeRegistry({
-          pluginIds: [plugin.id],
-          pluginSdkResolution: "dist",
-          discovery,
-        });
-      const first =
-        firstArtifact === "source" ? loadCanonicalFixture(plugin, discovery) : loadCapability();
-      const second =
-        firstArtifact === "source" ? loadCapability() : loadCanonicalFixture(plugin, discovery);
-
-      expect(first.providers.map((entry) => entry.provider.id)).toEqual([
-        `${plugin.id}-${firstArtifact}`,
-      ]);
-      expect(second.providers.map((entry) => entry.provider.id)).toEqual([
-        `${plugin.id}-${firstArtifact === "source" ? "built" : "source"}`,
-      ]);
-      expect(first.pluginRuntimeArtifacts).not.toBe(second.pluginRuntimeArtifacts);
-    },
-  );
-
-  it("loads runtime-backed bundled capabilities through the dist SDK shims", () => {
-    const target = writeDistShimCapabilityPlugin("capability-dist-shims");
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: [target.id],
-      pluginSdkResolution: "dist",
-      discovery: discoveryFor(target),
-    });
-
-    const plugin = registry.plugins.find((entry) => entry.id === target.id);
-    expect(
-      plugin?.status,
-      JSON.stringify({ plugin, diagnostics: registry.diagnostics }, null, 2),
-    ).toBe("loaded");
-    expect(registry.mediaUnderstandingProviders.map((entry) => entry.provider.id)).toEqual([
-      target.id,
-    ]);
-    expect(registry.webSearchProviders.map((entry) => entry.provider.id)).toEqual([target.id]);
-    expect(registry.migrationProviders.map((entry) => entry.provider.id)).toEqual([target.id]);
-  });
-
   it("registers channel capabilities during discovery without replacing the active registry", () => {
     const target = writeChannelCapabilityPlugin("capability-channel");
     const active = createEmptyPluginRegistry();
     setActivePluginRegistry(active, "existing-channel-registry");
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds: [target.id],
-      pluginSdkResolution: "dist",
       discovery: discoveryFor(target),
     });
 

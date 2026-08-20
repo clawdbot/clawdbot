@@ -1,5 +1,6 @@
 // Matrix plugin module implements shared behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { toStringifiedError as toRetirementError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CoreConfig } from "../../types.js";
@@ -274,10 +275,6 @@ async function retireMonitorLeases(
   }
 }
 
-function toRetirementError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function mergeReleaseMode(
   current: MatrixClientReleaseMode,
   requested: MatrixClientReleaseMode,
@@ -348,18 +345,21 @@ function beginGenerationRetirement(params: {
   }
   state.phase = "quiescing";
   state.retirementPromise = Promise.resolve().then(async () => {
+    let canReplacePoisonedGeneration = false;
     try {
       await state.client.quiesceSync();
       state.started = false;
       await state.client.drainPendingDecryptions("matrix monitor sync quiesce");
     } catch (error) {
       state.poisonError = toRetirementError(error);
+      canReplacePoisonedGeneration = true;
     }
 
     try {
       await retireMonitorLeases(state, params.monitorLeases ?? []);
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
+      canReplacePoisonedGeneration = false;
     }
 
     state.phase = "closing";
@@ -367,14 +367,23 @@ function beginGenerationRetirement(params: {
       await waitForLeaseDrain(state);
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
+      canReplacePoisonedGeneration = false;
       forceReleaseLeases(state);
     }
 
     if (state.poisonError) {
-      await state.client
+      const decryptionsDrained = await state.client
         .drainPendingDecryptions("matrix poisoned client shutdown")
-        .catch(() => undefined);
+        .then(
+          () => true,
+          () => false,
+        );
       state.client.stopWithoutPersist();
+      // Only sync/decryption poison is replaceable, after every other owner retired
+      // and the discarded client conclusively drained and stopped.
+      if (canReplacePoisonedGeneration && decryptionsDrained) {
+        deleteSharedClientState(state);
+      }
       throw state.poisonError;
     }
 

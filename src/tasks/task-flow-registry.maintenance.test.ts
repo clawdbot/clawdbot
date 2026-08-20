@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
+import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
@@ -17,7 +17,7 @@ import {
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { finalizeTaskRunByRunId } from "./task-registry.js";
+import { finalizeTaskRecordByRunId } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   createFlowRecord as createFlowRecordOrNull,
@@ -362,7 +362,7 @@ describe("task-flow-registry maintenance", () => {
         startedAt: 100,
         lastEventAt: 100,
       });
-      finalizeTaskRunByRunId({
+      finalizeTaskRecordByRunId({
         runId: child.runId!,
         runtime: "subagent",
         sessionKey: child.childSessionKey,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "../test-utils/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   cleanupStartedFixture,
   createChatTerminalObserver,
@@ -124,6 +124,7 @@ describe("local TUI PTY fixture support", () => {
     const run = {
       cols: 100,
       output: () => output,
+      pid: 123,
       rows: 30,
       visibleOutput: () => output.replace(/\s+/gu, " "),
       write: async (data: string) => {

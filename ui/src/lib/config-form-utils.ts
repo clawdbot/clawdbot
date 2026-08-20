@@ -9,17 +9,19 @@ export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
 }
 
-const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+
+/** True when a form subtree still carries server-redacted secret placeholders. */
+export function containsRedactedSentinel(value: unknown): boolean {
+  const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
+  return value === REDACTED_SENTINEL || children.some(containsRedactedSentinel);
+}
 type SanitizeResult = { omitted: true } | { omitted: false; value: unknown };
 
 const OMIT_VALUE: SanitizeResult = { omitted: true };
 
 function keepValue(value: unknown): SanitizeResult {
   return { omitted: false, value };
-}
-
-function hasOwnRecordValue(record: Record<string, unknown> | null, key: string): boolean {
-  return record != null && Object.hasOwn(record, key);
 }
 
 function sanitizeRedactedValue(params: {
@@ -70,7 +72,8 @@ function sanitizeRedactedValue(params: {
       originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
         ? originalFormRecord[key]
         : undefined;
-    const originalRawPathExists = hasOwnRecordValue(originalRawRecord, key);
+    const originalRawPathExists =
+      originalRawRecord != null && Object.hasOwn(originalRawRecord, key);
     const sanitized = sanitizeRedactedValue({
       value: item,
       originalFormValue,

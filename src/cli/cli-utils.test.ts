@@ -1,8 +1,13 @@
 // CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "./json-output-mode.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
 import {
@@ -35,7 +40,7 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it("surfaces cause chains and error codes through the default runtime", async () => {
+  it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
     const exits: number[] = [];
     const cause = Object.assign(new Error("invalid onRequestStart method"), {
@@ -43,21 +48,57 @@ describe("runCommandWithRuntime", () => {
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
 
-    await runCommandWithRuntime(
-      {
-        error: (message) => messages.push(message),
-        exit: (code) => exits.push(code),
-      },
-      async () => {
-        throw fetchError;
-      },
-    );
+    const run = async () =>
+      await runCommandWithRuntime(
+        {
+          error: (message) => messages.push(message),
+          exit: (code) => exits.push(code),
+        },
+        async () => {
+          throw fetchError;
+        },
+      );
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("TypeError: fetch failed");
-    expect(messages[0]).toContain("invalid onRequestStart method");
-    expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
-    expect(exits).toEqual([1]);
+    const originalDebug = process.env.OPENCLAW_DEBUG;
+    delete process.env.OPENCLAW_DEBUG;
+    try {
+      await run();
+      process.env.OPENCLAW_DEBUG = "1";
+      await run();
+    } finally {
+      if (originalDebug === undefined) {
+        delete process.env.OPENCLAW_DEBUG;
+      } else {
+        process.env.OPENCLAW_DEBUG = originalDebug;
+      }
+    }
+
+    expect(messages).toEqual([
+      "fetch failed",
+      "fetch failed | invalid onRequestStart method | UND_ERR_INVALID_ARG",
+    ]);
+    expect(exits).toEqual([1, 1]);
+  });
+
+  it("bubbles JSON-mode failures to the process-level owner", async () => {
+    const originalArgv = process.argv;
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
+        applyResolvedCommandOutputMode(true);
+        await expect(
+          runCommandWithRuntime(runtime, async () => {
+            throw new Error("archive missing");
+          }),
+        ).rejects.toThrow("archive missing");
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -129,6 +170,7 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
 describe("dns cli", () => {
   it("prints setup info (no apply)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     try {
       const program = new Command();
       registerDnsCli(program);
@@ -136,7 +178,12 @@ describe("dns cli", () => {
       const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
       expect(output).toContain("DNS setup");
       expect(output).toContain("openclaw.internal");
+      expect(writeJson).toHaveBeenCalledWith({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { domain: "openclaw.internal." } },
+      });
     } finally {
+      writeJson.mockRestore();
       log.mockRestore();
     }
   });

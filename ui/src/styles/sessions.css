@@ -169,7 +169,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -408,19 +408,6 @@
 /* --- Table --- */
 .sessions-table {
   min-width: 760px;
-}
-
-.sessions-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
 }
 
 .sessions-table tbody tr.session-data-row > td {
@@ -1062,7 +1049,7 @@
 }
 
 /* --- Narrow layouts --- */
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .sessions-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);

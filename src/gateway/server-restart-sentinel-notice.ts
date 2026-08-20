@@ -1,5 +1,5 @@
 // Durable outbound notice ownership for restart-sentinel recovery.
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,19 +18,19 @@ import {
   type StableDeliveryPreparationOwner,
 } from "../infra/outbound/delivery-queue-preparation.js";
 import {
+  drainPendingDeliveriesCore,
+  withActiveDeliveryClaim,
+} from "../infra/outbound/delivery-queue-recovery.js";
+import {
+  ackDelivery,
+  failDelivery,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
   failPendingDelivery,
   findDeliveryIntentOwner,
   loadPendingDelivery,
   reserveDeliveryAttempt,
 } from "../infra/outbound/delivery-queue-storage.js";
-import {
-  ackDelivery,
-  drainPendingDeliveries,
-  failDelivery,
-  failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
-  withActiveDeliveryClaim,
-} from "../infra/outbound/delivery-queue.js";
 import {
   createMessageSentEmitter,
   type MessageSentEvent,
@@ -188,7 +188,7 @@ async function drainFailedRestartSentinelNotice(params: {
     if (attemptCount < RESTART_NOTICE_MAX_ATTEMPTS) {
       await waitForRecoveryDrain();
     }
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: `restart-recovery:${params.queueId}`,
       logLabel: `${params.summary}: restart notice recovery`,
       cfg: params.cfg,
@@ -285,7 +285,7 @@ export async function deliverRestartSentinelNotice(
         cfg: params.cfg,
         sessionKey: params.sessionKey,
       });
-      const send = await sendDurableMessageBatch({
+      const send = await sendDurableMessageBatchCore({
         cfg: params.cfg,
         channel: params.channel,
         to: params.to,
@@ -340,8 +340,6 @@ export async function deliverRestartSentinelNotice(
           if (pending) {
             const settled = await failPendingDelivery({
               id: params.queueId,
-              expectedStatus: "pending",
-              lastError: error,
               entry: pending,
             });
             if (settled.status === "failed") {

@@ -99,7 +99,7 @@ export function runModelCallAndCaptureTraceparent(params: {
       suppressPluginHooks: true,
     },
   );
-  wrapped({} as never, {} as never);
+  void wrapped({} as never, {} as never);
   return outboundTraceparent;
 }
 

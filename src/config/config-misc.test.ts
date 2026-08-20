@@ -880,6 +880,53 @@ describe("gateway.remote.transport", () => {
   });
 });
 
+describe("gateway.remote.edgeAuth", () => {
+  it("accepts valid header names with literal and SecretRef values", () => {
+    const res = validateConfigObjectRaw({
+      gateway: {
+        remote: {
+          edgeAuth: {
+            "X-Edge-Literal": "test-secret",
+            "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "empty map",
+      edgeAuth: {},
+      expected: "header map must not be empty",
+    },
+    {
+      name: "transport-owned header",
+      edgeAuth: { Host: "test-secret" },
+      expected: 'transport-owned header "Host"',
+    },
+    {
+      name: "invalid header name",
+      edgeAuth: { "Bad Header": "test-secret" },
+      expected: 'invalid gateway.remote.edgeAuth header name: "Bad Header"',
+    },
+    {
+      name: "case-duplicate headers",
+      edgeAuth: { "X-Edge-Auth": "one", "x-edge-auth": "two" },
+      expected: 'header names "X-Edge-Auth" and "x-edge-auth" differ only by case',
+    },
+  ])("rejects $name", ({ edgeAuth, expected }) => {
+    const res = validateConfigObjectRaw({ gateway: { remote: { edgeAuth } } });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.message).join("\n")).toContain(expected);
+    }
+  });
+});
+
 describe("gateway.tools config", () => {
   it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({
@@ -1050,6 +1097,7 @@ describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
       agents: {
+        ownership: "explicit",
         entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {

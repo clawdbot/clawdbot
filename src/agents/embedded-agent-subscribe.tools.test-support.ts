@@ -1,4 +1,4 @@
-import "./embedded-agent-subscribe.tools.js";
+import "./embedded-agent-tool-media.js";
 
 type EmbeddedSubscribeToolsTestApi = {
   isToolResultMediaTrusted(

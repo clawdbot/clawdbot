@@ -1,6 +1,10 @@
 // Invalidates installed plugin index entries after activation metadata changes.
 import { hasConfigPathActivationMetadataMigration } from "./installed-plugin-index-config-path-scope.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import type {
   InstalledPluginIndex,
   InstalledPluginIndexRefreshReason,
@@ -41,6 +45,12 @@ export function diffInstalledPluginIndexInvalidationReasons(
     if (
       previousPlugin.rootDir !== currentPlugin.rootDir ||
       previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.source !== currentPlugin.source ||
+      previousPlugin.setupSource !== currentPlugin.setupSource ||
+      resolveInstalledPluginIndexInstallOwner(previousPlugin) !==
+        resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
+      isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==
+        isInstalledPluginIndexInstallOwnerAmbiguous(currentPlugin) ||
       previousPlugin.installRecordHash !== currentPlugin.installRecordHash
     ) {
       reasons.add("source-changed");

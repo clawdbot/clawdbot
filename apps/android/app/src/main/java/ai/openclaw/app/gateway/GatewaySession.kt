@@ -214,7 +214,7 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
-  val methods: Set<String> = emptySet(),
+  val methods: Set<String>? = null,
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -229,6 +229,7 @@ private data class SelectedConnectAuth(
   val authDeviceToken: String?,
   val authPassword: String?,
   val signatureToken: String?,
+  val storedToken: String?,
   val storedScopes: List<String>,
   val authSource: GatewayConnectAuthSource,
   val attemptedDeviceTokenRetry: Boolean,
@@ -284,8 +285,6 @@ class GatewaySession(
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
-    private const val NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE =
-      "node-invoke-session-key-envelope-v1"
   }
 
   /**
@@ -297,8 +296,6 @@ class GatewaySession(
     val command: String,
     val paramsJson: String?,
     val timeoutMs: Long?,
-    val sessionKey: String?,
-    val hasSessionKeyEnvelope: Boolean,
   )
 
   data class InvokeResult(
@@ -900,11 +897,6 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
-  private data class PendingRequest(
-    val deferred: CompletableDeferred<RpcResponse>,
-    val onResponse: ((RpcResponse) -> Unit)?,
-  )
-
   private data class TicketedMediaRequest(
     val url: String,
     val headers: Map<String, String>,
@@ -927,11 +919,6 @@ class GatewaySession(
     CLOSED,
   }
 
-  private enum class NodeInvokeSessionEnvelopeMode {
-    AUTHORITATIVE,
-    LEGACY,
-  }
-
   private inner class Connection(
     val endpoint: GatewayEndpoint,
     private val token: String?,
@@ -946,7 +933,6 @@ class GatewaySession(
     private val connectDeferred = CompletableDeferred<ConnectedGateway>()
     private val closedDeferred = CompletableDeferred<Unit>()
     private val connectChallengeDeferred = CompletableDeferred<ConnectChallenge>()
-    private val nodeInvokeSessionEnvelopeMode = CompletableDeferred<NodeInvokeSessionEnvelopeMode>()
     private val terminalCallbackClaimed = AtomicBoolean(false)
     private val connectResponseAccepted = AtomicBoolean(false)
 
@@ -966,7 +952,7 @@ class GatewaySession(
     private val incomingMessages = Channel<String>(Channel.UNLIMITED)
 
     // RPC waiters belong to this socket generation. Closing it must not touch a replacement connection.
-    private val pending = ConcurrentHashMap<String, PendingRequest>()
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
     private val pendingLock = Any()
     private val messagePumpJob =
@@ -1002,11 +988,10 @@ class GatewaySession(
       method: String,
       params: JsonElement?,
       timeoutMs: Long,
-      onResponse: ((RpcResponse) -> Unit)? = null,
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
       if (method == "connect") connectRequestId = id
-      val deferred = registerPending(id, onResponse).deferred
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
         return withTimeout(timeoutMs) { deferred.await() }
@@ -1130,7 +1115,7 @@ class GatewaySession(
       onError: (ErrorShape) -> Unit,
     ) {
       val id = UUID.randomUUID().toString()
-      val deferred = registerPending(id).deferred
+      val deferred = registerPending(id)
       try {
         sendJson(buildRequestFrame(id = id, method = method, params = params))
       } catch (err: Throwable) {
@@ -1165,20 +1150,16 @@ class GatewaySession(
       }
     }
 
-    private fun registerPending(
-      id: String,
-      onResponse: ((RpcResponse) -> Unit)? = null,
-    ): PendingRequest {
+    private fun registerPending(id: String): CompletableDeferred<RpcResponse> {
       val deferred = CompletableDeferred<RpcResponse>()
-      val request = PendingRequest(deferred = deferred, onResponse = onResponse)
       // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
       synchronized(pendingLock) {
         if (state.get() == ConnectionState.CLOSED) {
           throw GatewayRequestNotEnqueued("Gateway closed")
         }
-        pending[id] = request
+        pending[id] = deferred
       }
-      return request
+      return deferred
     }
 
     suspend fun sendJson(obj: JsonObject) {
@@ -1382,68 +1363,9 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth)
       connectDeferred.complete(connected)
-      startNodeInvokeSessionEnvelopeNegotiation()
     }
-
-    private fun startNodeInvokeSessionEnvelopeNegotiation() {
-      if (options.role != "node" || onInvoke == null) {
-        nodeInvokeSessionEnvelopeMode.complete(NodeInvokeSessionEnvelopeMode.LEGACY)
-        return
-      }
-      connectionScope.launch {
-        val mode =
-          try {
-            val response =
-              request(
-                GatewayMethod.NodeProtocolFeaturesUpdate.rawValue,
-                buildJsonObject {
-                  put(
-                    "features",
-                    JsonArray(
-                      listOf(JsonPrimitive(NODE_INVOKE_SESSION_KEY_ENVELOPE_PROTOCOL_FEATURE)),
-                    ),
-                  )
-                },
-                timeoutMs = 15_000,
-                onResponse = { response ->
-                  nodeInvokeSessionEnvelopeMode.complete(
-                    resolveNodeInvokeSessionEnvelopeMode(response),
-                  )
-                },
-              )
-            resolveNodeInvokeSessionEnvelopeMode(response)
-          } catch (err: TimeoutCancellationException) {
-            Log.w(loggerTag, "node protocol feature publish timed out")
-            NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
-          } catch (err: CancellationException) {
-            nodeInvokeSessionEnvelopeMode.cancel(err)
-            throw err
-          } catch (err: Throwable) {
-            Log.w(
-              loggerTag,
-              "node protocol feature publish failed: ${err.message ?: err::class.java.simpleName}",
-            )
-            NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
-          }
-        nodeInvokeSessionEnvelopeMode.complete(mode)
-      }
-    }
-
-    private fun isUnsupportedNodeProtocolFeaturesUpdate(response: RpcResponse): Boolean {
-      val error = response.error ?: return false
-      return !response.ok &&
-        error.code == "INVALID_REQUEST" &&
-        error.message == "unknown method: node.protocolFeatures.update"
-    }
-
-    private fun resolveNodeInvokeSessionEnvelopeMode(response: RpcResponse): NodeInvokeSessionEnvelopeMode =
-      if (isUnsupportedNodeProtocolFeaturesUpdate(response)) {
-        NodeInvokeSessionEnvelopeMode.LEGACY
-      } else {
-        NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
-      }
 
     private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
       if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
@@ -1502,7 +1424,7 @@ class GatewaySession(
     private fun parseConnectSuccess(
       res: RpcResponse,
       deviceId: String,
-      authSource: GatewayConnectAuthSource,
+      selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
@@ -1519,7 +1441,6 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { method -> method.isNotEmpty() } }
           ?.toSet()
-          .orEmpty()
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
@@ -1530,9 +1451,15 @@ class GatewaySession(
           ?.mapNotNull { it.asStringOrNull() }
           ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+        // Hello scopes describe this socket. Reissuing the same stored token must not narrow its
+        // reusable grant metadata, while a rotated token starts with the live approved scopes.
+        val sameStoredTokenRecord =
+          deviceToken.trim() == selectedAuth.storedToken &&
+            authRole.trim().equals(options.role.trim(), ignoreCase = true)
+        val persistedScopes = if (sameStoredTokenRecord) selectedAuth.storedScopes else authScopes
+        persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
       }
-      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+      if (shouldPersistBootstrapHandoffTokens(selectedAuth.authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
         authObj
           ?.get("deviceTokens")
@@ -1703,9 +1630,10 @@ class GatewaySession(
     private suspend fun handleMessage(text: String) {
       val frame = json.parseToJsonElement(text).asObjectOrNull() ?: return
       val frameType = frame["type"].asStringOrNull()
-      // The transport closes its input only after accepting preceding frames. Drain all
-      // connection-owned responses so a completed RPC wins over the following close.
-      if (state.get() == ConnectionState.CLOSED && frameType != "res") {
+      if (
+        state.get() == ConnectionState.CLOSED &&
+        (frameType != "res" || frame["id"].asStringOrNull() != connectRequestId)
+      ) {
         return
       }
       when (frameType) {
@@ -1753,12 +1681,7 @@ class GatewaySession(
             }
           ErrorShape(wireError.code, wireError.message, details)
         }
-      val rpcResponse = RpcResponse(id, response.ok, payloadJson, error)
-      pending.remove(id)?.let { request ->
-        // Response observers run in socket receive order before the next event is admitted.
-        request.onResponse?.invoke(rpcResponse)
-        request.deferred.complete(rpcResponse)
-      }
+      pending.remove(id)?.complete(RpcResponse(id, response.ok, payloadJson, error))
     }
 
     private fun handleEvent(frame: JsonObject) {
@@ -1808,31 +1731,18 @@ class GatewaySession(
     }
 
     private fun handleInvokeEvent(payloadJson: String) {
-      val receivedAtMs = SystemClock.elapsedRealtime()
-      val payloadObject =
-        runCatching { json.parseToJsonElement(payloadJson).asObjectOrNull() }.getOrNull() ?: return
       val payload =
         runCatching {
-          json.decodeFromJsonElement(GatewayNodeInvokeRequest.serializer(), payloadObject)
+          json.decodeFromString(GatewayNodeInvokeRequest.serializer(), payloadJson)
         }.getOrNull() ?: return
       // Older gateways sent structured `params`; keep accepting that shipped wire shape while
       // generated models follow the canonical `paramsJSON` schema.
       val paramsJson =
         payload.paramsJson
-          ?: payloadObject["params"]?.let { value -> if (value is JsonNull) null else value.toString() }
-      val hasWireSessionKey = payloadObject.containsKey("sessionKey")
-      // An omitted envelope is only authoritative after this socket has finished
-      // publishing the feature. Do not reinterpret already-received legacy frames.
-      val envelopeNegotiationCompleteAtReceipt = nodeInvokeSessionEnvelopeMode.isCompleted
+          ?: runCatching {
+            json.parseToJsonElement(payloadJson).asObjectOrNull()?.get("params")
+          }.getOrNull()?.let { value -> if (value is JsonNull) null else value.toString() }
       connectionScope.launch {
-        val envelopeMode =
-          when {
-            hasWireSessionKey -> NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
-            !envelopeNegotiationCompleteAtReceipt -> NodeInvokeSessionEnvelopeMode.LEGACY
-            else -> nodeInvokeSessionEnvelopeMode.await()
-          }
-        val hasSessionKeyEnvelope =
-          hasWireSessionKey || envelopeMode == NodeInvokeSessionEnvelopeMode.AUTHORITATIVE
         val request =
           InvokeRequest(
             id = payload.id,
@@ -1840,38 +1750,24 @@ class GatewaySession(
             command = payload.command,
             paramsJson = paramsJson,
             timeoutMs = payload.timeoutMs,
-            sessionKey =
-              payload.sessionKey
-                .asStringOrNull()
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() },
-            hasSessionKeyEnvelope = hasSessionKeyEnvelope,
           )
-        val result = executeInvokeRequest(request, receivedAtMs)
+        val result = executeInvokeRequest(request)
         sendInvokeResult(payload.id, payload.nodeId, result, payload.timeoutMs)
       }
     }
 
-    private suspend fun executeInvokeRequest(
-      request: InvokeRequest,
-      receivedAtMs: Long,
-    ): InvokeResult {
+    private suspend fun executeInvokeRequest(request: InvokeRequest): InvokeResult {
       val handler = onInvoke ?: return InvokeResult.error("UNAVAILABLE", "invoke handler missing")
       return try {
         val timeoutMs = resolveInvokeExecutionTimeoutMs(request.timeoutMs)
         if (timeoutMs == null) {
           handler(request)
         } else {
-          val elapsedMs = (SystemClock.elapsedRealtime() - receivedAtMs).coerceAtLeast(0L)
-          if (elapsedMs >= timeoutMs) {
-            return InvokeResult.error("TIMEOUT", "node invoke timed out")
-          }
-          val remainingTimeoutMs = timeoutMs - elapsedMs
           // Keep the deadline owner separate so a blocking handler cannot delay the timeout result.
           // Cancellation still reaches cooperative handlers; late results are never sent.
           val handlerTask = connectionScope.async { handler(request) }
           try {
-            withTimeoutOrNull(remainingTimeoutMs) { handlerTask.await() }
+            withTimeoutOrNull(timeoutMs) { handlerTask.await() }
               ?: run {
                 handlerTask.cancel(CancellationException("node invoke timed out"))
                 InvokeResult.error("TIMEOUT", "node invoke timed out")
@@ -1935,9 +1831,7 @@ class GatewaySession(
           pending.values.toList().also { pending.clear() }
         }
       for (waiter in waiters) {
-        waiter.deferred.completeExceptionally(
-          GatewayRequestOutcomeUnknown("Gateway disconnected before response"),
-        )
+        waiter.completeExceptionally(GatewayRequestOutcomeUnknown("Gateway disconnected before response"))
       }
     }
   }
@@ -2085,11 +1979,8 @@ class GatewaySession(
         ?: endpoint.host.trim()
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    // For TLS connections, use the connected endpoint's scheme/port instead of raw canvas metadata.
     val fallbackScheme = if (isTlsConnection) "https" else scheme
-    // For TLS, always use the connected endpoint port.
-    val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = endpoint.port, suffix = suffix)
   }
 
   private fun buildCanvasUrl(
@@ -2154,6 +2045,7 @@ class GatewaySession(
       authDeviceToken = authDeviceToken,
       authPassword = explicitPassword,
       signatureToken = authToken ?: authBootstrapToken,
+      storedToken = storedToken,
       storedScopes = storedScopes,
       authSource = authSource,
       attemptedDeviceTokenRetry = shouldUseDeviceRetryToken,
@@ -2279,9 +2171,11 @@ internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
   useTls: Boolean,
+  contextPath: String = "",
 ): String {
   val scheme = if (useTls) "wss" else "ws"
-  return "$scheme://${formatGatewayAuthority(host, port)}"
+  val path = normalizeGatewayContextPath(contextPath)
+  return "$scheme://${formatGatewayAuthority(host, port)}$path"
 }
 
 /** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
@@ -2290,7 +2184,15 @@ internal fun buildGatewayWebSocketUpgradeRequest(
   tls: GatewayTlsParams?,
   customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
 ): Request {
-  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  val request =
+    Request.Builder().url(
+      buildGatewayWebSocketUrl(
+        endpoint.host,
+        endpoint.port,
+        tls != null,
+        endpoint.contextPath,
+      ),
+    )
   if (tls == null) return request.build()
 
   // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens

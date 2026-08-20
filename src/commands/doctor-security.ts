@@ -1,10 +1,7 @@
 /** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveDefaultChannelAccountContext } from "../channels/account-context.js";
-import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
@@ -14,7 +11,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
-  loadExecApprovals,
+  loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
   type ExecAsk,
   type ExecMode,
@@ -23,10 +20,12 @@ import {
 import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
+import { collectChannelSecurityFindingsCore } from "../security/audit-channel.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 
-function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
-  const warnings: string[] = [];
+function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
 
   const maybeWarn = (params: {
     label: string;
@@ -40,10 +39,14 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
     if (heartbeat.directPolicy !== undefined) {
       return;
     }
-    warnings.push(
-      `- ${params.label}: heartbeat delivery is configured while ${params.pathHint} is unset.`,
-      '  Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
-    );
+    findings.push({
+      checkId: "doctor.heartbeat_direct_policy_unset",
+      severity: "warn",
+      title: params.label,
+      detail: `heartbeat delivery is configured while ${params.pathHint} is unset.`,
+      remediation:
+        'Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
+    });
   };
 
   maybeWarn({
@@ -61,7 +64,7 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
     });
   }
 
-  return warnings;
+  return findings;
 }
 
 function execSecurityRank(value: ExecSecurity): number {
@@ -88,9 +91,9 @@ function execAskRank(value: ExecAsk): number {
   throw new Error("Unsupported exec ask value");
 }
 
-function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
-  const warnings: string[] = [];
-  const approvals = loadExecApprovals();
+function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const approvals = loadExecApprovalsReadOnly();
   const defaultRequestedSecuritySource = "OpenClaw default (full)";
   const defaultRequestedAskSource = "OpenClaw default (off)";
 
@@ -157,16 +160,19 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
       hostParts.push(`${snapshot.ask.hostSource}="${snapshot.ask.host}"`);
     }
 
-    warnings.push(
-      [
-        `- ${params.scopeLabel} is broader than the host exec policy.`,
-        `  Config: ${configParts.join(", ")}`,
-        `  Host: ${hostParts.join(", ")}`,
-        `  Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
-        "  Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
-        `  Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+    findings.push({
+      checkId: "doctor.exec_policy_conflict",
+      severity: "warn",
+      title: `${params.scopeLabel} is broader than the host exec policy.`,
+      detail: "",
+      remediation: [
+        `Config: ${configParts.join(", ")}`,
+        `Host: ${hostParts.join(", ")}`,
+        `Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
+        "Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
+        `Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
       ].join("\n"),
-    );
+    });
   };
 
   maybeWarn({
@@ -184,27 +190,30 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
     });
   }
 
-  return warnings;
+  return findings;
 }
 
-function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
+function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   void cfg;
   return [];
 }
 
-function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
-  return collectExecFilesystemPolicyDriftHits(cfg).map((hit) =>
-    [
-      `- ${hit.scopeLabel}: filesystem write tools are disabled, but exec is still available.`,
-      `  Runtime tools: ${hit.runtimeTools.join(", ")}; disabled filesystem tools: ${hit.disabledFilesystemTools.join(", ")}.`,
-      `  Effective exec host is "${hit.execHost}" with sandbox.mode="${hit.sandboxMode}" and workspaceAccess="${hit.sandboxWorkspaceAccess}".`,
-      "  The exec shell can still write wherever that host or sandbox filesystem permits.",
-      '  For read-only agents, also deny exec/process; otherwise use sandbox mode "all" with workspaceAccess "ro" or "none".',
+function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  return collectExecFilesystemPolicyDriftHits(cfg).map((hit) => ({
+    checkId: "doctor.exec_filesystem_policy",
+    severity: "warn",
+    title: hit.scopeLabel,
+    detail: "filesystem write tools are disabled, but exec is still available.",
+    remediation: [
+      `Runtime tools: ${hit.runtimeTools.join(", ")}; disabled filesystem tools: ${hit.disabledFilesystemTools.join(", ")}.`,
+      `Effective exec host is "${hit.execHost}" with sandbox.mode="${hit.sandboxMode}" and workspaceAccess="${hit.sandboxWorkspaceAccess}".`,
+      "The exec shell can still write wherever that host or sandbox filesystem permits.",
+      'For read-only agents, also deny exec/process; otherwise use sandbox mode "all" with workspaceAccess "ro" or "none".',
     ].join("\n"),
-  );
+  }));
 }
 
-function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): string[] {
+function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const plaintextPaths: string[] = [];
   const defaults = cfg.secrets?.defaults;
 
@@ -242,33 +251,45 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): string[] {
     extraCount > 0 ? `${samplePaths.join(", ")} (+${extraCount} more)` : samplePaths.join(", ");
 
   return [
-    "- WARNING: openclaw.json contains plaintext secret-bearing config fields.",
-    `  Paths: ${pathLine}`,
-    "  Agents or workspace tools that can read config files may see these API keys/tokens.",
-    `  Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
+    {
+      checkId: "config.plaintext_secrets",
+      severity: "warn",
+      title: "WARNING",
+      detail: "openclaw.json contains plaintext secret-bearing config fields.",
+      remediation: [
+        `Paths: ${pathLine}`,
+        "Agents or workspace tools that can read config files may see these API keys/tokens.",
+        `Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
+      ].join("\n"),
+    },
   ];
 }
 
-/** Collects doctor security warnings without emitting terminal notes. */
+/** Collects doctor security findings without emitting terminal notes. */
 export async function collectSecurityWarnings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<string[]> {
-  const warnings: string[] = [];
+): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
 
   if (cfg.approvals?.exec?.enabled === false) {
-    warnings.push(
-      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
-      `  Host exec gating still comes from ${resolveExecApprovalsDisplayPath()}.`,
-      `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
-    );
+    findings.push({
+      checkId: "doctor.approval_forwarding_disabled",
+      severity: "warn",
+      title: "Note",
+      detail: "approvals.exec.enabled=false disables approval forwarding only.",
+      remediation: [
+        `Host exec gating still comes from ${resolveExecApprovalsDisplayPath()}.`,
+        `Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+      ].join("\n"),
+    });
   }
 
-  warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
-  warnings.push(...collectExecPolicyConflictWarnings(cfg));
-  warnings.push(...collectExecFilesystemPolicyWarnings(cfg));
-  warnings.push(...collectPlaintextConfigSecretWarnings(cfg));
-  warnings.push(...collectDurableExecApprovalWarnings(cfg));
+  findings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
+  findings.push(...collectExecPolicyConflictWarnings(cfg));
+  findings.push(...collectExecFilesystemPolicyWarnings(cfg));
+  findings.push(...collectPlaintextConfigSecretWarnings(cfg));
+  findings.push(...collectDurableExecApprovalWarnings(cfg));
 
   // Network exposure needs auth proof before doctor can treat non-loopback bind as intentional.
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
@@ -301,9 +322,9 @@ export async function collectSecurityWarnings(
     (resolvedAuth.mode === "password" && hasPassword);
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
   const saferRemoteAccessLines = [
-    "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
-    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
-    "  Docs: https://docs.openclaw.ai/gateway/remote",
+    "Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+    "Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+    "Docs: https://docs.openclaw.ai/gateway/remote",
   ];
 
   if (isExposed) {
@@ -311,148 +332,84 @@ export async function collectSecurityWarnings(
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
-              `  Fix: ${formatCliCommand("openclaw configure")} to set a password`,
-              `  Or switch to token: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
+              `Fix: ${formatCliCommand("openclaw configure")} to set a password`,
+              `Or switch to token: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
             ]
           : [
-              `  Fix: ${formatCliCommand("openclaw doctor --fix")} to generate a token`,
-              `  Or set token directly: ${formatCliCommand(
+              `Fix: ${formatCliCommand("openclaw doctor --fix")} to generate a token`,
+              `Or set token directly: ${formatCliCommand(
                 "openclaw config set gateway.auth.mode token",
               )}`,
             ];
-      warnings.push(
-        `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
-        `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
-        `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
-        ...saferRemoteAccessLines,
-        ...authFixLines,
-      );
+      findings.push({
+        checkId: "gateway.bind_no_auth",
+        severity: "critical",
+        title: "CRITICAL",
+        detail: [
+          `Gateway bound to ${bindDescriptor} without authentication.`,
+          "Anyone on your network (or internet if port-forwarded) can fully control your agent.",
+        ].join("\n"),
+        remediation: [
+          `Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+          ...saferRemoteAccessLines,
+          ...authFixLines,
+        ].join("\n"),
+      });
     } else {
       // Auth is configured, but still warn about network exposure
-      warnings.push(
-        `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
-        `  Ensure your auth credentials are strong and not exposed.`,
-        ...saferRemoteAccessLines,
-      );
+      findings.push({
+        checkId: "gateway.bind_network_accessible",
+        severity: "warn",
+        title: "WARNING",
+        detail: [
+          `Gateway bound to ${bindDescriptor} (network-accessible).`,
+          "Ensure your auth credentials are strong and not exposed.",
+        ].join("\n"),
+        remediation: saferRemoteAccessLines.join("\n"),
+      });
     }
   }
 
   const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env });
   if (tokenConflict) {
-    warnings.push(...tokenConflict.warningLines);
+    findings.push({
+      checkId: tokenConflict.checkId,
+      severity: tokenConflict.severity,
+      title: "WARNING",
+      detail: `${tokenConflict.title}.\n${tokenConflict.detail}`,
+      remediation: `Fix: ${tokenConflict.remediation}`,
+    });
   }
 
-  const warnDmPolicy = async (params: {
-    label: string;
-    provider: ChannelId;
-    accountId: string;
-    dmPolicy: string;
-    allowFrom?: Array<string | number> | null;
-    policyPath?: string;
-    allowFromPath: string;
-    approveHint: string;
-    normalizeEntry?: (raw: string) => string;
-  }) => {
-    const dmPolicy = params.dmPolicy;
-    const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowAuditState({
-      provider: params.provider,
-      accountId: params.accountId,
-      allowFrom: params.allowFrom,
-      dmPolicy,
-      normalizeEntry: params.normalizeEntry,
-    });
-    const dmScope = cfg.session?.dmScope ?? "main";
+  const channelFindings = await collectChannelSecurityFindingsCore({
+    cfg,
+    mode: "doctor",
+    plugins: listReadOnlyChannelPluginsForConfig(cfg, {
+      includePersistedAuthState: true,
+      includeSetupFallbackPlugins: true,
+    }),
+  });
+  findings.push(...channelFindings);
+  return findings;
+}
 
-    if (dmPolicy === "open") {
-      const allowFromPath = `${params.allowFromPath}allowFrom`;
-      warnings.push(`- ${params.label} DMs: OPEN (${policyPath}="open"). Anyone can DM it.`);
-      if (!hasWildcard) {
-        warnings.push(
-          `- ${params.label} DMs: config invalid — "open" requires ${allowFromPath} to include "*".`,
-        );
-      }
-    }
-
-    if (dmPolicy === "disabled") {
-      warnings.push(`- ${params.label} DMs: disabled (${policyPath}="disabled").`);
-      return;
-    }
-
-    if (dmPolicy !== "open" && allowCount === 0) {
-      warnings.push(
-        `- ${params.label} DMs: locked (${policyPath}="${dmPolicy}") with no allowlist; unknown senders will be blocked / get a pairing code.`,
-      );
-      warnings.push(`  ${params.approveHint}`);
-    }
-
-    if (dmScope === "main" && isMultiUserDm) {
-      warnings.push(
-        `- ${params.label} DMs: multiple senders share the main session; run: ` +
-          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-          ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-      );
-    }
-  };
-
-  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
-    includePersistedAuthState: true,
-    includeSetupFallbackPlugins: true,
-  })) {
-    if (!plugin.security) {
-      continue;
-    }
-    const { defaultAccountId, account, enabled, configured, diagnostics } =
-      await resolveDefaultChannelAccountContext(plugin, cfg, {
-        mode: "read_only",
-        commandName: "doctor",
-      });
-    for (const diagnostic of diagnostics) {
-      warnings.push(`- [secrets] ${diagnostic}`);
-    }
-    if (!enabled) {
-      continue;
-    }
-    if (!configured) {
-      continue;
-    }
-    const dmPolicy = plugin.security.resolveDmPolicy?.({
-      cfg,
-      accountId: defaultAccountId,
-      account,
-    });
-    if (dmPolicy) {
-      await warnDmPolicy({
-        label: plugin.meta.label ?? plugin.id,
-        provider: plugin.id,
-        accountId: defaultAccountId,
-        dmPolicy: dmPolicy.policy,
-        allowFrom: dmPolicy.allowFrom,
-        policyPath: dmPolicy.policyPath,
-        allowFromPath: dmPolicy.allowFromPath,
-        approveHint: dmPolicy.approveHint,
-        normalizeEntry: dmPolicy.normalizeEntry,
-      });
-    }
-    if (plugin.security.collectWarnings) {
-      const extra = await plugin.security.collectWarnings({
-        cfg,
-        accountId: defaultAccountId,
-        account,
-      });
-      if (extra?.length) {
-        warnings.push(...extra);
-      }
-    }
+function renderSecurityFindingLines(finding: SecurityAuditFinding): string[] {
+  const detailLines = finding.detail.split("\n");
+  const firstDetail = detailLines.shift() ?? "";
+  const lines = [`- ${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`];
+  lines.push(...detailLines.map((line) => `  ${line}`));
+  if (finding.remediation) {
+    lines.push(...finding.remediation.split("\n").map((line) => `  ${line}`));
   }
-  return warnings;
+  return lines;
 }
 
 /** Emits security warnings plus the deep audit follow-up command. */
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
-  const warnings = await collectSecurityWarnings(cfg);
-  if (warnings.length > 0) {
-    warnings.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
-    note(warnings.join("\n"), "Security");
+  const findings = await collectSecurityWarnings(cfg);
+  if (findings.length > 0) {
+    const lines = findings.flatMap(renderSecurityFindingLines);
+    lines.push(`- Run: ${formatCliCommand("openclaw security audit --deep")}`);
+    note(lines.join("\n"), "Security");
   }
 }

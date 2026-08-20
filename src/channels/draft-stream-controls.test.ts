@@ -1,6 +1,6 @@
 // Draft stream control tests cover pause, resume, and cancellation handling for channel drafts.
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,

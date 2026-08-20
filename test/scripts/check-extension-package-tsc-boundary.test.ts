@@ -21,7 +21,7 @@ import {
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
   runNodeStepsWithConcurrency,
-} from "../../scripts/check-extension-package-tsc-boundary.mjs";
+} from "../../scripts/check-extension-package-tsc-boundary.mts";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -643,7 +643,7 @@ describe("check-extension-package-tsc-boundary", () => {
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
       const scriptUrl = pathToFileURL(
-        path.resolve("scripts/check-extension-package-tsc-boundary.mjs"),
+        path.resolve("scripts/check-extension-package-tsc-boundary.mts"),
       ).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;

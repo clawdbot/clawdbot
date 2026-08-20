@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -18,7 +17,6 @@ import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective,
 } from "../../lib/agents/tools-effective.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
 import {
   buildAddMcpServerPatch,
   MCP_SERVER_NAME_PATTERN,
@@ -26,6 +24,7 @@ import {
   patchMcpServers,
   summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -39,22 +38,8 @@ import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type {
-  ChatComposerMenuSkill,
-  ChatComposerPlusMenuProps,
-} from "./components/chat-composer-plus-menu.ts";
-
-type CapabilityMenuProps = Omit<
-  ChatComposerPlusMenuProps,
-  | "attachments"
-  | "disabled"
-  | "open"
-  | "view"
-  | "toolOverrides"
-  | "onOpenChange"
-  | "onViewChange"
-  | "showCapabilities"
->;
+import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
+import type { CapabilityMenuProps } from "./components/chat-composer-types.ts";
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
@@ -130,7 +115,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
         stage: "config",
       };
     }
@@ -146,7 +131,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
         stage: "session",
       };
     }
@@ -166,7 +151,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
         stage: "session",
       };
     }
@@ -339,7 +324,7 @@ export class ChatComposerCapabilityHost {
       }
       return { ok: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatUiError(error);
       if (isCurrentPatch()) {
         try {
           await refreshCurrentChatSessionList(state);
@@ -410,7 +395,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false as const,
-        error: formatErrorMessage(error, { redact: redactToolDetail }),
+        error: formatUiError(error),
       };
     }
     if (!identityMatches()) {
@@ -482,10 +467,9 @@ export class ChatComposerCapabilityHost {
       this.addBusy = false;
     }
     if (!result.ok) {
+      const error = formatUiExternalText(result.error);
       this.addError =
-        result.stage === "session"
-          ? t("mcpServers.sessionEnableFailed", { error: result.error })
-          : result.error;
+        result.stage === "session" ? t("mcpServers.sessionEnableFailed", { error }) : error;
       this.notify();
       return;
     }

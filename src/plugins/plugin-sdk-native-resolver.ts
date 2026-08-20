@@ -3,6 +3,8 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
@@ -48,7 +50,6 @@ type InstallOpenClawPluginSdkNativeResolverOptions = {
   moduleUrl?: string;
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  trustedInstalledPrivateSdkOwner?: string;
 };
 
 const moduleWithResolver = Module as ModuleWithResolver;
@@ -86,25 +87,13 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["validation", "validation.ts"],
       ["internal/anthropic", path.join("internal", "anthropic.ts")],
       ["internal/openai", path.join("internal", "openai.ts")],
+      [
+        "internal/openai-responses-payload-policy",
+        path.join("internal", "openai-responses-payload-policy.ts"),
+      ],
       ["internal/retry-after", path.join("internal", "retry-after.ts")],
       ["internal/runtime", path.join("internal", "runtime.ts")],
       ["internal/shared", path.join("internal", "shared.ts")],
-    ],
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpaths: [
-      ["", "index.ts"],
-      ["base64", "base64.ts"],
-      ["constants", "constants.ts"],
-      ["content-length", "content-length.ts"],
-      ["file-name", "file-name.ts"],
-      ["inbound-path-policy", "inbound-path-policy.ts"],
-      ["inline-image-data-url", "inline-image-data-url.ts"],
-      ["media-source-url", "media-source-url.ts"],
-      ["mime", "mime.ts"],
-      ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
     ],
   },
   {
@@ -153,13 +142,7 @@ function isNativeLoadableSdkTarget(targetPath: string): boolean {
   }
 }
 
-function normalizePathForBoundary(candidate: string): string {
-  try {
-    return fs.realpathSync(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
+const normalizePathForBoundary = resolveRealpathOrAbsolute;
 
 function findNearestPackageRoot(modulePath: string): string {
   let cursor = path.dirname(path.resolve(modulePath));
@@ -181,10 +164,10 @@ function findBundledPluginRoot(modulePath: string): string | undefined {
   const packageRoot = normalizePathForBoundary(resolveLoaderPackageRootFromModulePath(modulePath));
   for (const relativeRoot of ["extensions", "dist/extensions", "dist-runtime/extensions"]) {
     const bundledRoot = path.join(packageRoot, relativeRoot);
-    const relative = path.relative(bundledRoot, resolvedModulePath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    if (!isPathStrictlyInside(bundledRoot, resolvedModulePath)) {
       continue;
     }
+    const relative = path.relative(bundledRoot, resolvedModulePath);
     const [pluginId] = relative.split(path.sep);
     if (pluginId) {
       return path.join(bundledRoot, pluginId);
@@ -255,8 +238,7 @@ function resolveAllowedParentRoots(
 }
 
 function isWithinRoot(candidate: string, root: string): boolean {
-  const relative = path.relative(root, normalizePathForBoundary(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return isPathInside(root, normalizePathForBoundary(candidate));
 }
 
 function resolveAliasTargetForParent(
@@ -303,7 +285,6 @@ function listPluginSdkNativeAliases(
     // plugin loader itself is configured to prefer source imports.
     "dist",
     options.devSourceRoot,
-    options.trustedInstalledPrivateSdkOwner,
   );
   const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
   if (cached) {
@@ -311,13 +292,6 @@ function listPluginSdkNativeAliases(
   }
   const aliases = Object.entries(aliasMap)
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
-    // This capability is injected through the owner-scoped plugin loader.
-    // A process-global resolver cannot authenticate caller-supplied parent metadata.
-    .filter(
-      ([specifier]) =>
-        specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime" &&
-        specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime.js",
-    )
     .filter(([, target]) => isNativeLoadableSdkTarget(target))
     .flatMap(([specifier, target]) => {
       if (specifier.endsWith(".js")) {
@@ -355,7 +329,7 @@ function listInternalCorePackageNativeAliases(
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    ...["normalization-core", "acp-core"].map((packageDir) => ({
+    ...["media-core", "normalization-core", "acp-core"].map((packageDir) => ({
       packageName: `@openclaw/${packageDir}`,
       packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({

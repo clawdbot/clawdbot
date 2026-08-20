@@ -2,7 +2,6 @@
 import type { HookConfig, HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 
 function hasEnabledFlag(entry: HookConfig | undefined): boolean {
   return entry?.enabled !== false;
@@ -23,7 +22,7 @@ function readConfiguredInstalls(): Record<string, HookInstallRecord> | undefined
   return readConfigMachineState<Record<string, HookInstallRecord>>("hooks.internal.installs");
 }
 
-/** Return whether config can load any internal hooks, including legacy handlers. */
+/** Return whether config can load any internal hooks. */
 export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   const internal = config.hooks?.internal;
   const installs = readConfiguredInstalls();
@@ -45,27 +44,26 @@ export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   if (hasConfiguredInstalls(installs)) {
     return true;
   }
-  return getLegacyInternalHookHandlers(config).length > 0;
+  return false;
 }
 
 /** Resolve explicitly configured internal hook names; null means all/discovered hooks may load. */
 export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<string> | null {
   const internal = config.hooks?.internal;
   const installs = readConfiguredInstalls();
-  if (!internal) {
-    return hasConfiguredInstalls(installs) ? null : new Set();
-  }
-  if (internal.enabled === false) {
+  if (internal?.enabled === false) {
     return new Set();
-  }
-  if (internal.enabled === true) {
-    return null;
   }
 
   const names = new Set<string>();
-  for (const [name, entry] of Object.entries(internal.entries ?? {})) {
+  let hasNamedEntries = false;
+  for (const [name, entry] of Object.entries(internal?.entries ?? {})) {
     const trimmed = name.trim();
-    if (trimmed && hasEnabledFlag(entry)) {
+    if (!trimmed) {
+      continue;
+    }
+    hasNamedEntries = true;
+    if (hasEnabledFlag(entry)) {
       names.add(trimmed);
     }
   }
@@ -84,11 +82,11 @@ export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<
     }
   }
 
-  if ((internal.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {
+  if ((internal?.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {
     return null;
   }
-  if (getLegacyInternalHookHandlers(config).length > 0) {
-    return null;
+  if (hasNamedEntries || names.size > 0) {
+    return names;
   }
-  return names;
+  return internal?.enabled === true ? null : names;
 }

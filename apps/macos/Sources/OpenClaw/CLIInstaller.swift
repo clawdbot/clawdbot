@@ -22,14 +22,14 @@ enum CLIInstallBuild {
 }
 
 enum CLIInstallPolicy {
-    static func storedPolicy(defaults: UserDefaults = .standard) -> String? {
+    static func storedPolicy(defaults: UserDefaults = AppDefaults.standard) -> String? {
         defaults.string(forKey: cliInstallPolicyKey)
     }
 
     static func requiredGatewayVersionString(
         appVersion: String?,
         isDebug: Bool,
-        defaults: UserDefaults = .standard) -> String?
+        defaults: UserDefaults = AppDefaults.standard) -> String?
     {
         guard !CLIInstallBuild.isStable(appVersion: appVersion, isDebug: isDebug) else {
             return appVersion
@@ -103,7 +103,10 @@ enum CLIInstaller {
     enum LocalGatewayActivation: Equatable {
         case ready
         case deferred
-        case failed
+        /// Binds the concrete failure to this activation attempt: GatewayProcessManager's
+        /// lastFailureReason is mutable shared state that a later attempt can overwrite before
+        /// a caller gets around to rereading it, misattributing a stale or newer reason.
+        case failed(reason: String?)
     }
 
     enum Status: Equatable {
@@ -176,8 +179,11 @@ enum CLIInstaller {
         return locations
     }
 
-    static func managedExecutableLocation() -> String {
-        URL(fileURLWithPath: self.installPrefix())
+    static func managedExecutableLocation(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        URL(fileURLWithPath: self.installPrefix(homeDirectory: homeDirectory, profile: profile))
             .appendingPathComponent("bin/openclaw")
             .path
     }
@@ -198,7 +204,7 @@ enum CLIInstaller {
                 expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
                 preferredPaths: preferredPaths)
             if status.isReady {
-                self.rememberValidated(status)
+                self.rememberValidated(status, defaults: AppDefaults.standard)
                 return status
             }
             fallbackStatus = fallbackStatus ?? status
@@ -222,7 +228,7 @@ enum CLIInstaller {
             expectedVersion: expectedVersion,
             preferredPaths: preferredPaths)
         if status.isReady {
-            self.rememberValidated(status)
+            self.rememberValidated(status, defaults: AppDefaults.standard)
         }
         return status
     }
@@ -313,10 +319,14 @@ enum CLIInstaller {
         return environment
     }
 
-    private static func rememberValidated(_ status: Status) {
+    static func rememberValidated(_ status: Status, defaults: UserDefaults) {
         guard case let .ready(location, version) = status else { return }
-        UserDefaults.standard.set(location, forKey: cliValidatedExecutableKey)
-        UserDefaults.standard.set(version, forKey: cliValidatedVersionKey)
+        if defaults.string(forKey: cliValidatedExecutableKey) != location {
+            defaults.set(location, forKey: cliValidatedExecutableKey)
+        }
+        if defaults.string(forKey: cliValidatedVersionKey) != version {
+            defaults.set(version, forKey: cliValidatedVersionKey)
+        }
     }
 
     @discardableResult
@@ -336,11 +346,15 @@ enum CLIInstaller {
             prefix: prefix,
             scriptPath: installerURL.path,
             compatibleWith: target.requiresExactVersion ? nil : appVersion)
-        let response = await ShellExecutor.runDetailed(
+        let response = await ShellExecutor.runStreamingDetailed(
             command: cmd,
             cwd: nil,
             env: nil,
             timeout: self.installWatchdogTimeout(for: target))
+        { line in
+            guard let status = self.installStatus(forEventLine: line) else { return }
+            await statusHandler(status)
+        }
 
         if response.success {
             let expectedVersion = target.requiresExactVersion ? GatewayEnvironment.appVersionString() : nil
@@ -370,8 +384,7 @@ enum CLIInstaller {
             return true
         }
 
-        let parsed = self.parseInstallEvents(response.stdout)
-        if let error = parsed.last(where: { $0.event == "error" })?.message {
+        if let error = self.installErrorMessage(from: response.stdout) {
             await statusHandler("Install failed: \(error)")
             return false
         }
@@ -427,10 +440,13 @@ enum CLIInstaller {
         target == .channel(.dev) ? 7200 : 900
     }
 
-    private static func installPrefix() -> String {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(".openclaw")
-            .path
+    static func installPrefix(
+        homeDirectory: URL = FileManager().homeDirectoryForCurrentUser,
+        profile: AppProfile = .current) -> String
+    {
+        // Managed install identity follows only the profile; a state override must not split
+        // the install used by its LaunchAgent.
+        profile.stateDirectoryURL(homeDirectory: homeDirectory).path
     }
 
     static func installScriptCommand(
@@ -467,11 +483,13 @@ enum CLIInstaller {
         executable: String,
         targetVersion: String,
         restartGateway: Bool = true,
-        repair: Bool = false) -> [String]
+        repair: Bool = false,
+        profile: AppProfile = .current) -> [String]
     {
-        var command = repair
-            ? [executable, "update", "repair", "--json", "--timeout", "900", "--yes"]
-            : [executable, "update", "--tag", targetVersion, "--json", "--timeout", "900"]
+        let arguments = repair
+            ? ["update", "repair", "--json", "--timeout", "900", "--yes"]
+            : ["update", "--tag", targetVersion, "--json", "--timeout", "900"]
+        var command = profile.localCLICommand(prefix: [executable], arguments: arguments)
         if !restartGateway {
             command.append("--no-restart")
         }
@@ -556,7 +574,7 @@ enum CLIInstaller {
         case .exact: "exact"
         case let .channel(channel): channel.rawValue
         }
-        UserDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
+        AppDefaults.standard.set(policy, forKey: cliInstallPolicyKey)
     }
 
     private static func devCheckoutLocation(prefix: String) -> String {
@@ -570,12 +588,16 @@ enum CLIInstaller {
         paused: Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
         waitUntilReady: @MainActor () async -> Bool = {
-            await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12)
-        }) async -> LocalGatewayActivation
+            await GatewayProcessManager.shared.waitForGatewayReady(
+                timeout: GatewayLaunchAgentManager.startupMigrationTolerance)
+        },
+        failureReason: @MainActor () -> String? = { GatewayProcessManager.shared.lastFailureReason }) async
+        -> LocalGatewayActivation
     {
         guard mode == .local, !paused else { return .deferred }
         start()
-        return await waitUntilReady() ? .ready : .failed
+        guard await waitUntilReady() else { return .failed(reason: failureReason()) }
+        return .ready
     }
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {
@@ -591,6 +613,37 @@ enum CLIInstaller {
             }
         }
         return events
+    }
+
+    nonisolated static func installStatus(forEventLine line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let event = try? JSONDecoder().decode(InstallEvent.self, from: data),
+              event.event == "step",
+              let name = event.name,
+              let status = event.status
+        else {
+            return nil
+        }
+
+        return switch (name, status) {
+        case ("disk-space", "start"): "Checking available disk space…"
+        case ("node", "start"): "Installing Node.js runtime…"
+        case ("git-tools", "start"): "Preparing Git and pnpm…"
+        case ("git-clone", "start"): "Downloading OpenClaw source…"
+        case ("git-update", "start"): "Updating OpenClaw source…"
+        case ("dependencies", "start"): "Installing dependencies…"
+        case ("control-ui", "start"): "Building interface…"
+        case ("cli-build", "start"): "Building OpenClaw CLI…"
+        case ("openclaw", "retry"): "Retrying OpenClaw CLI install…"
+        case ("disk-space", "warn"): "Couldn’t verify free disk space; continuing…"
+        case ("git-update", "warn"): "Using the existing modified OpenClaw source…"
+        case ("control-ui", "warn"): "Interface build did not finish; continuing…"
+        default: nil
+        }
+    }
+
+    static func installErrorMessage(from output: String) -> String? {
+        self.parseInstallEvents(output).last(where: { $0.event == "error" })?.message
     }
 
     static func parseManagedUpdateSummary(_ output: String) -> ManagedCLIUpdateSummary? {
@@ -627,6 +680,8 @@ enum CLIInstaller {
 
 private struct InstallEvent: Decodable {
     let event: String
+    let name: String?
+    let status: String?
     let version: String?
     let message: String?
 }

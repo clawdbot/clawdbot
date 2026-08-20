@@ -10,6 +10,7 @@ import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { isConfiguredChannel } from "./channel-selection.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 
 export type MessageBroadcastAccountPlan = {
   accountId: string;
@@ -75,7 +76,11 @@ export function validateExplicitMessageAccountSelection(params: {
   }
   const accountId = normalizeOptionalAccountId(rawAccountId);
   if (!accountId) {
-    throw new Error(`Invalid account ID "${rawAccountId}".`);
+    throw new MessageActionDeniedError(
+      `Invalid account ID "${rawAccountId}".`,
+      "message_account_invalid",
+      "message-account:valid",
+    );
   }
   const channel = normalizeOptionalString(params.channel);
   if (!channel) {
@@ -93,21 +98,34 @@ export function validateExplicitMessageAccountSelection(params: {
   }
   const listedAccountId = resolveListedAccountId({ plugin, cfg: params.cfg, accountId });
   if (!listedAccountId) {
-    throw new Error(`Unknown account "${rawAccountId}" for channel ${channel}.`);
+    throw new MessageActionDeniedError(
+      `Unknown account "${rawAccountId}" for channel ${channel}.`,
+      "message_account_unknown",
+      "message-account:known",
+    );
   }
   if (isExplicitAccountDisabled({ cfg: params.cfg, channel: plugin.id, listedAccountId })) {
-    throw new Error(`Account "${listedAccountId}" for channel ${channel} is disabled.`);
+    throw new MessageActionDeniedError(
+      `Account "${listedAccountId}" for channel ${channel} is disabled.`,
+      "message_account_disabled",
+      "message-account:enabled",
+    );
   }
   if (params.checkResolvedAccount !== false) {
     const account = plugin.config.resolveAccount(params.cfg, accountId);
     if (!resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg })) {
-      throw new Error(`Account "${listedAccountId}" for channel ${channel} is disabled.`);
+      throw new MessageActionDeniedError(
+        `Account "${listedAccountId}" for channel ${channel} is disabled.`,
+        "message_account_disabled",
+        "message-account:enabled",
+      );
     }
   }
   return accountId;
 }
 
-function isPotentialBroadcastChannel(params: {
+/** Selects configured, enabled, deliverable plugins without bootstrap or config mutation. */
+export function isPotentialConfiguredMessageChannel(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
 }): params is { cfg: OpenClawConfig; plugin: ChannelPlugin & { id: ChannelId } } {
@@ -156,7 +174,7 @@ export function resolveMessageBroadcastAccountPlan(params: {
   }
 
   const candidatePlugins = listChannelPlugins().filter((plugin) =>
-    isPotentialBroadcastChannel({ cfg: params.cfg, plugin }),
+    isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }),
   );
   const secretChannels = candidatePlugins.flatMap((plugin) => {
     try {

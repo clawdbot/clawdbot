@@ -12,11 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSlackAttachmentContent,
   resolveSlackMedia,
-  resolveSlackThreadHistory,
-  resolveSlackThreadStarter,
-  resetSlackThreadStarterCacheForTest,
   SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
 } from "./media.js";
+import { resolveSlackThreadHistory, resolveSlackThreadStarter } from "./thread.js";
 import { logVerbose } from "./thread.runtime.js";
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -29,13 +27,19 @@ type SaveMediaBufferMock = (
 ) => Promise<SavedMedia>;
 type SlackMediaResult = NonNullable<Awaited<ReturnType<typeof resolveSlackMedia>>>;
 type ResolveSlackThreadStarterParams = Parameters<typeof resolveSlackThreadStarter>[0];
+let threadStarterIdentitySequence = 0;
+let threadStarterIdentity = {
+  channelId: "CMEDIA0",
+  threadTs: "0.000",
+  workspaceScope: { accountId: "media-test-0", teamId: "TM0" },
+};
 
 function resolveTestSlackThreadStarter(
-  params: Omit<ResolveSlackThreadStarterParams, "workspaceScope">,
+  params: Omit<ResolveSlackThreadStarterParams, "channelId" | "threadTs" | "workspaceScope">,
 ) {
   return resolveSlackThreadStarter({
     ...params,
-    workspaceScope: { accountId: "test", teamId: "T1" },
+    ...threadStarterIdentity,
   });
 }
 
@@ -143,6 +147,15 @@ const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 
 beforeEach(() => {
+  threadStarterIdentitySequence += 1;
+  threadStarterIdentity = {
+    channelId: `CMEDIA${threadStarterIdentitySequence}`,
+    threadTs: `${threadStarterIdentitySequence}.000`,
+    workspaceScope: {
+      accountId: `media-test-${threadStarterIdentitySequence}`,
+      teamId: `TM${threadStarterIdentitySequence}`,
+    },
+  };
   readRemoteMediaBufferMock.mockClear();
   fetchWithRuntimeDispatcherMock.mockClear();
   logVerboseMock.mockClear();
@@ -623,39 +636,25 @@ describe("resolveSlackMedia", () => {
     expectFetchCalledWithUrl(mockFetch, "https://files.slack.com/fresh.jpg");
   });
 
-  it("skips id-only files when files.info returns no private URL", async () => {
+  it.each([
+    { name: "skips id-only files when files.info returns no private URL", fails: false },
+    { name: "skips id-only files when files.info fails", fails: true },
+  ])("$name", async ({ fails }) => {
+    const info = vi.fn();
+    if (fails) {
+      info.mockRejectedValue(new Error("files.info failed"));
+    } else {
+      info.mockResolvedValue({ file: { id: "F123" } });
+    }
     const mockClient = {
-      files: {
-        info: vi.fn().mockResolvedValue({ file: { id: "F123" } }),
-      },
+      files: { info },
     } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
-
     const result = await resolveSlackMedia({
       files: [{ id: "F123", name: "test.jpg" }],
       client: mockClient,
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
-
-    expect(result).toBeNull();
-    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("skips id-only files when files.info fails", async () => {
-    const mockClient = {
-      files: {
-        info: vi.fn().mockRejectedValue(new Error("files.info failed")),
-      },
-    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
-
-    const result = await resolveSlackMedia({
-      files: [{ id: "F123", name: "test.jpg" }],
-      client: mockClient,
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
     expect(result).toBeNull();
     expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
     expect(mockFetch).not.toHaveBeenCalled();
@@ -841,7 +840,7 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("returns all successfully downloaded files as an array", async () => {
+  it("preserves Slack metadata on every downloaded file", async () => {
     saveMediaBufferMock.mockImplementation(async (buffer, _contentType) => {
       const text = Buffer.from(buffer).toString("utf8");
       if (text.includes("image a")) {
@@ -873,8 +872,20 @@ describe("resolveSlackMedia", () => {
 
     const result = await resolveSlackMedia({
       files: [
-        { id: "FA", url_private: "https://files.slack.com/a.jpg", name: "a.jpg" },
-        { id: "FB", url_private: "https://files.slack.com/b.png", name: "b.png" },
+        {
+          id: "FA",
+          url_private: "https://files.slack.com/a.jpg",
+          name: "a.jpg",
+          mimetype: "image/jpeg",
+          size: 12,
+        },
+        {
+          id: "FB",
+          url_private: "https://files.slack.com/b.png",
+          name: "b.png",
+          mimetype: "image/png",
+          size: 34,
+        },
       ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
@@ -885,9 +896,9 @@ describe("resolveSlackMedia", () => {
     const first = expectDefined(media[0], "first Slack media result");
     const second = expectDefined(media[1], "second Slack media result");
     expect(first.path).toBe("/tmp/a.jpg");
-    expect(first.placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
+    expect(first.placeholder).toBe("[Slack file: a.jpg (image/jpeg, 12 bytes, fileId: FA)]");
     expect(second.path).toBe("/tmp/b.png");
-    expect(second.placeholder).toBe("[Slack file: b.png (fileId: FB)]");
+    expect(second.placeholder).toBe("[Slack file: b.png (image/png, 34 bytes, fileId: FB)]");
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
@@ -1180,6 +1191,7 @@ describe("resolveSlackAttachmentContent", () => {
     expect(result).toEqual({
       text: "[Forwarded message from Bob]\nPlease review this",
       media: [],
+      unavailableImageCount: 0,
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -1192,7 +1204,7 @@ describe("resolveSlackAttachmentContent", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toEqual({ text: "", media: [], files: [file] });
+    expect(result).toEqual({ text: "", media: [], unavailableImageCount: 0, files: [file] });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -1233,12 +1245,31 @@ describe("resolveSlackAttachmentContent", () => {
           placeholder: "[Forwarded image: forwarded.jpg]",
         },
       ],
+      unavailableImageCount: 0,
     });
     const firstCall = requireMockCall(mockFetch, 0, "fetch");
     expect(firstCall[0]).toBe("https://files.slack.com/forwarded.jpg");
     const firstInit = requireRecord(firstCall[1], "fetch init") as RequestInit;
     expect(firstInit.redirect).toBe("manual");
     expect(new Headers(firstInit.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+  });
+
+  it("reports Slack-hosted forwarded image download failures", async () => {
+    mockFetch.mockResolvedValueOnce(new Response("Not Found", { status: 404 }));
+
+    const result = await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({
+      text: "",
+      media: [],
+      unavailableImageCount: 1,
+    });
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1631,7 +1662,6 @@ describe("resolveSlackThreadHistory", () => {
 
 describe("resolveSlackThreadStarter", () => {
   beforeEach(() => {
-    resetSlackThreadStarterCacheForTest();
     vi.mocked(logVerbose).mockClear();
   });
 
@@ -1644,8 +1674,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1666,8 +1694,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1697,8 +1723,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1738,8 +1762,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1753,7 +1775,7 @@ describe("resolveSlackThreadStarter", () => {
           text: "   ",
           user: "U1",
           ts: "1.000",
-          files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+          files: [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }],
         },
       ],
     });
@@ -1762,17 +1784,15 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
     expect(result).toEqual({
-      text: "[attached: root.png (fileId: FROOT)]",
+      text: "[attached: root.png (image/png, 512 bytes, fileId: FROOT)]",
       userId: "U1",
       botId: undefined,
       ts: "1.000",
-      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }],
     });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
@@ -1784,16 +1804,14 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C42",
-      threadTs: "9.999",
       client,
     });
 
     expect(result).toBeNull();
     expectVerboseLogContains("slack thread starter fetch failed");
     expectVerboseLogContains("not_in_channel");
-    expectVerboseLogContains("channel=C42");
-    expectVerboseLogContains("ts=9.999");
+    expectVerboseLogContains(`channel=${threadStarterIdentity.channelId}`);
+    expectVerboseLogContains(`ts=${threadStarterIdentity.threadTs}`);
   });
 
   it("surfaces non-Error thrown values via logVerbose", async () => {
@@ -1803,8 +1821,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 

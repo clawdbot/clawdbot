@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import SQLite3
 import Testing
@@ -73,6 +74,30 @@ private func deviceAuthEntry(
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
+    @Test func `process state root configures once before identity use`() {
+        var state = DeviceIdentityStateRootState()
+        let work = URL(fileURLWithPath: "/Users/test/.openclaw-work", isDirectory: true)
+        let other = URL(fileURLWithPath: "/Users/test/.openclaw-other", isDirectory: true)
+        let configuredWork = state.configure(work)
+        let reconfiguredWork = state.configure(work)
+        let configuredOther = state.configure(other)
+        let resolvedWork = state.resolve()
+        let configuredWorkAfterUse = state.configure(work)
+        let configuredOtherAfterUse = state.configure(other)
+        #expect(configuredWork)
+        #expect(reconfiguredWork)
+        #expect(!configuredOther)
+        #expect(resolvedWork == work)
+        #expect(configuredWorkAfterUse)
+        #expect(!configuredOtherAfterUse)
+
+        var usedDefault = DeviceIdentityStateRootState()
+        let resolvedDefault = usedDefault.resolve()
+        let configuredDefaultAfterUse = usedDefault.configure(work)
+        #expect(resolvedDefault == nil)
+        #expect(!configuredDefaultAfterUse)
+    }
+
     @Test
     func `task scoped state directories isolate concurrent identity stores`() async throws {
         let fixture = DeviceIdentityMigrationFixture()
@@ -442,6 +467,21 @@ struct DeviceIdentityStoreTests {
             FileManager.default.attributesOfItem(atPath: fixture.databaseURL.path)[.posixPermissions] as? NSNumber)
         #expect(directoryMode.intValue & 0o777 == 0o700)
         #expect(databaseMode.intValue & 0o777 == 0o600)
+
+        let coordinatorURLs = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
+            databaseURL: fixture.databaseURL,
+            destinationStateDirURL: fixture.destination,
+            uid: getuid())
+        #expect(coordinatorURLs.count == 1)
+        for coordinatorURL in coordinatorURLs {
+            let coordinatorDirectoryMode = try #require(
+                FileManager.default.attributesOfItem(
+                    atPath: coordinatorURL.deletingLastPathComponent().path)[.posixPermissions] as? NSNumber)
+            let coordinatorFileMode = try #require(
+                FileManager.default.attributesOfItem(atPath: coordinatorURL.path)[.posixPermissions] as? NSNumber)
+            #expect(coordinatorDirectoryMode.intValue & 0o777 == 0o700)
+            #expect(coordinatorFileMode.intValue & 0o777 == 0o600)
+        }
     }
 
     @Test
@@ -496,19 +536,82 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `same key migration preserves the authoritative SQLite timestamp`() throws {
+    func `adopts a Node row and creates primary while the global version zero migration is pending`() throws {
         let fixture = DeviceIdentityMigrationFixture()
-        try Self.seedCanonicalSchema(fixture.databaseURL, nodeOwned: true)
+        try Self.seedCanonicalSchema(fixture.databaseURL)
+        try Self.execute(fixture.databaseURL, """
+        CREATE TABLE plugin_state_entries (entry_key TEXT NOT NULL PRIMARY KEY) STRICT;
+        INSERT INTO device_identities (
+          identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+        ) VALUES (
+          'node', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+          '\(Self.sql(Self.fixturePrivateKeyPEM))', 1800000000000, 1800000000123
+        )
+        """)
+
+        let nodeIdentity = try fixture.load(profile: .node)
+        let primaryIdentity = try fixture.load()
+
+        #expect(nodeIdentity.deviceId == Self.fixtureDeviceID)
+        #expect(nodeIdentity.createdAtMs == 1_800_000_000_000)
+        #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
+        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 0)
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'node'") == 1_800_000_000_123)
+        #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_identities") == 2)
+    }
+
+    @Test
+    func `gateway identity failure names corrupt row and state directory without rotating it`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalSchema(fixture.databaseURL)
         try Self.execute(fixture.databaseURL, """
         INSERT INTO device_identities (
           identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
         ) VALUES (
           'primary', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
-          '\(Self.sql(Self.fixturePrivateKeyPEM))', 1700000000000, 1700000000123
+          'not-a-private-key', 1800000000000, 1800000000123
         )
         """)
+
+        await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            do {
+                _ = try GatewayChannelActor.loadDeviceIdentityForConnect(
+                    includeDeviceIdentity: true,
+                    profile: .primary)
+                Issue.record("corrupt identity unexpectedly loaded")
+            } catch {
+                let message = error.localizedDescription
+                #expect(message.contains("Could not access the persisted device identity"))
+                #expect(message.contains("row \"primary\""))
+                #expect(message.contains(fixture.destination.path))
+                #expect(message.contains("invalid key material"))
+            }
+        }
+        #expect(try Self.scalarText(
+            fixture.databaseURL,
+            "SELECT private_key_pem FROM device_identities WHERE identity_key = 'primary'") ==
+            "not-a-private-key")
+    }
+
+    @Test
+    func `same key migration preserves the authoritative SQLite timestamp`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
         let source = try fixture.source()
-        let identity = try fixture.load(sources: [source])
+        let identity = try fixture.load(
+            sources: [source],
+            beforeLegacyClaim: { _ in
+                try Self.seedCanonicalSchema(fixture.databaseURL, nodeOwned: true)
+                try Self.execute(fixture.databaseURL, """
+                INSERT INTO device_identities (
+                  identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms
+                ) VALUES (
+                  'primary', '\(Self.fixtureDeviceID)', '\(Self.sql(Self.fixturePublicKeyPEM))',
+                  '\(Self.sql(Self.fixturePrivateKeyPEM))', 1700000000000, 1700000000123
+                )
+                """)
+            })
 
         #expect(identity.deviceId == Self.fixtureDeviceID)
         #expect(identity.createdAtMs == 1_700_000_000_000)
@@ -516,6 +619,38 @@ struct DeviceIdentityStoreTests {
             fixture.databaseURL,
             "SELECT updated_at_ms FROM device_identities WHERE identity_key = 'primary'") == 1_700_000_000_123)
         #expect(!FileManager.default.fileExists(atPath: source.identityURL.path))
+    }
+
+    @Test(arguments: [GatewayDeviceIdentityProfile.primary, .node])
+    func `canonical SQLite identity ignores a recreated retired file`(
+        profile: GatewayDeviceIdentityProfile) throws
+    {
+        let fixture = DeviceIdentityMigrationFixture()
+        let canonical = try fixture.load(profile: profile)
+        let createdAt = try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT created_at_ms FROM device_identities WHERE identity_key = '\(profile.rawValue)'")
+        let updatedAt = try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT updated_at_ms FROM device_identities WHERE identity_key = '\(profile.rawValue)'")
+        let source = try fixture.source(profile: profile)
+        let legacyBytes = try Data(contentsOf: source.identityURL)
+
+        let loaded = try fixture.load(
+            profile: profile,
+            sources: [source],
+            beforeLegacyClaim: { _ in Issue.record("canonical identity inspected a retired source") })
+
+        #expect(loaded == canonical)
+        #expect(canonical.deviceId != Self.fixtureDeviceID)
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT created_at_ms FROM device_identities WHERE identity_key = '\(profile.rawValue)'") == createdAt)
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT updated_at_ms FROM device_identities WHERE identity_key = '\(profile.rawValue)'") == updatedAt)
+        #expect(try Data(contentsOf: source.identityURL) == legacyBytes)
+        #expect(!FileManager.default.fileExists(atPath: fixture.claimURL(for: source).path))
     }
 
     @Test
@@ -755,19 +890,6 @@ struct DeviceIdentityStoreTests {
         }
         #expect(FileManager.default.fileExists(atPath: real.identityURL.path))
         #expect(FileManager.default.fileExists(atPath: hard.identityURL.path))
-    }
-
-    @Test
-    func `conflicting SQLite identity preserves the legacy source`() throws {
-        let fixture = DeviceIdentityMigrationFixture()
-        let existing = try fixture.load()
-        let source = try fixture.source("shared")
-
-        #expect(throws: NSError.self) {
-            try fixture.load(sources: [source])
-        }
-        #expect(FileManager.default.fileExists(atPath: source.identityURL.path))
-        #expect(try fixture.load().deviceId == existing.deviceId)
     }
 
     @Test

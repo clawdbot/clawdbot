@@ -2,6 +2,8 @@
  * Sanitizes and validates replayed session history before model calls.
  */
 import { isDeepStrictEqual } from "node:util";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -39,11 +41,12 @@ import {
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
-  sanitizeToolUseResultPairing,
+  sanitizeToolUseResultPairingForModel,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -68,7 +71,6 @@ import {
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
-  stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
@@ -134,7 +136,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       }
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: annotated,
       } as AgentMessage);
       continue;
@@ -166,7 +168,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       };
       touched = true;
       out.push({
-        ...(msg as unknown as Record<string, unknown>),
+        ...msg,
         content: nextContent,
       } as AgentMessage);
       continue;
@@ -174,7 +176,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
 
     touched = true;
     out.push({
-      ...(msg as unknown as Record<string, unknown>),
+      ...msg,
       content: [
         {
           type: "text",
@@ -220,19 +222,22 @@ function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   return touched ? ({ ...message, content: sanitizedContent } as AgentMessage) : message;
 }
 
-function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
+function normalizeAssistantReplayTextContent(
+  message: AssistantReplayMessage,
+  replayContent: string,
+): AssistantReplayMessage | null {
   const strippedText = stripInternalMetadataForDisplay(replayContent);
   const trimmed = strippedText.trim();
   if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
     return null;
   }
-  return {
-    ...message,
-    content: [{ type: "text", text: strippedText }],
-  } as AgentMessage;
+  return replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
 }
 
-function normalizeAssistantReplayBlockContent(message: AgentMessage, replayContent: unknown[]) {
+function normalizeAssistantReplayBlockContent(
+  message: AssistantReplayMessage,
+  replayContent: unknown[],
+): AssistantReplayMessage | null {
   let touched = false;
   let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
@@ -271,7 +276,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   if (sanitizedContent.length === 0) {
     return null;
   }
-  const normalized = { ...message, content: sanitizedContent } as AgentMessage;
+  const normalized = replaceCompactionReplayOwnerContent(
+    message,
+    sanitizedContent as AssistantReplayMessage["content"],
+  );
   // A silent reply has no visible assistant output. Do not let its signed
   // reasoning merge into the next assistant turn during strict replay.
   return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
@@ -340,7 +348,10 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (!Array.isArray(replayContent)) {
       replayContent =
         replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
-      assistantMessage = { ...message, content: replayContent } as AssistantReplayMessage;
+      assistantMessage = replaceCompactionReplayOwnerContent(
+        message,
+        replayContent as typeof message.content,
+      ) as AssistantReplayMessage;
       touched = true;
     }
     if (Array.isArray(replayContent)) {
@@ -379,10 +390,11 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // path.
       const stopReason = (assistantMessage as { stopReason?: unknown }).stopReason;
       if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(assistantMessage)) {
-        out.push({
-          ...assistantMessage,
-          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
-        });
+        out.push(
+          replaceCompactionReplayOwnerContent(assistantMessage, [
+            { type: "text", text: STREAM_ERROR_FALLBACK_TEXT },
+          ]),
+        );
         touched = true;
         continue;
       }
@@ -522,10 +534,6 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
   return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
 }
 
-function toFiniteCostNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {
   if (messages.length === 0) {
     return messages;
@@ -585,7 +593,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       continue;
     }
     out[i] = {
-      ...(message as unknown as Record<string, unknown>),
+      ...message,
       usage: normalizedUsage,
     } as AgentMessage;
     touched = true;
@@ -861,12 +869,7 @@ export async function sanitizeSessionHistory(params: {
   // tests plus live OpenAI/Codex and generic replay-repair model tests.
   const openAIRepairedToolCalls =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-          // Match upstream Codex history normalization for OpenAI Responses:
-          // missing function_call_output entries are model-visible "aborted".
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitizedToolCalls, true)
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
@@ -881,9 +884,7 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedToolCalls;
   const pairedToolCalls =
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(openAISafeToolCalls, {
-          erroredAssistantResultPolicy: "drop",
-        })
+      ? sanitizeToolUseResultPairingForModel(openAISafeToolCalls, false)
       : openAISafeToolCalls;
   const sanitizedToolIds =
     policy.sanitizeToolCallIds && policy.toolCallIdMode
@@ -915,15 +916,10 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
   const responsesProviderRepaired =
     isOpenAIResponsesApi && policy.repairToolUseResultPairing
-      ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
-          erroredAssistantResultPolicy: "drop",
-          // Provider replay hooks run after the core repair pipeline and may
-          // rewrite history. Keep the final Responses invariant guarded by the
-          // same Codex-compatible repair instead of failing on hook output.
-          missingToolResultText: "aborted",
-        })
+      ? sanitizeToolUseResultPairingForModel(sanitizedWithProvider, true)
       : sanitizedWithProvider;
   const responsesInvariantChecked = isOpenAIResponsesApi
     ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)

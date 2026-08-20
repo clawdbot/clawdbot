@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
-import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+
+const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 
 function createProgress(update: () => Promise<boolean | void> | boolean | void) {
   return createChannelProgressDraftCompositor({

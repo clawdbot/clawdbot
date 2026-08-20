@@ -1,6 +1,6 @@
 // Control UI tests cover WhatsApp logout feedback against a mocked Gateway.
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,7 +13,7 @@ const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
 
 suite.define(() => {
-  it("keeps the QR visible and explains a no-op logout", async () => {
+  it("confirms the explicit default account and preserves a no-op logout", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -72,6 +72,30 @@ suite.define(() => {
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
 
         await detail.getByRole("button", { name: "Logout" }).click();
+        await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
+        const firstConfirm = await waitForConfirmModal(page);
+        await expect(firstConfirm.textContent()).resolves.toContain(
+          "Log out of WhatsApp account default?",
+        );
+        await expect(firstConfirm.textContent()).resolves.toContain(
+          "Logging out of account default stops its listener and deletes its saved credentials.",
+        );
+        await firstConfirm.getByRole("button", { name: "Cancel" }).click();
+        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
+        await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
+        await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
+        await expect
+          .poll(() =>
+            detail
+              .locator("dt", { hasText: "Linked" })
+              .locator("xpath=following-sibling::dd[1]")
+              .textContent(),
+          )
+          .toContain("Yes");
+
+        await detail.getByRole("button", { name: "Logout" }).click();
+        const secondConfirm = await waitForConfirmModal(page);
+        await secondConfirm.getByRole("button", { name: "Logout" }).click();
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
           .toContain(
@@ -80,9 +104,74 @@ suite.define(() => {
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
         await expect(detail.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
         await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(1);
+        expect((await gateway.getRequests("channels.logout"))[0]?.params).toEqual({
+          channel: "whatsapp",
+          accountId: "default",
+        });
         await expect.poll(async () => gateway.getRequests("channels.status")).toHaveLength(3);
       },
     );
+  });
+
+  it("rejects a captured custom-account logout after the Gateway reconnects", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "channels.status": {
+            ts: Date.now(),
+            channelOrder: ["whatsapp"],
+            channelLabels: { whatsapp: "WhatsApp" },
+            channels: {
+              whatsapp: {
+                configured: true,
+                linked: true,
+                running: true,
+                connected: true,
+                reconnectAttempts: 0,
+              },
+            },
+            channelAccounts: {
+              whatsapp: [
+                {
+                  accountId: "work",
+                  configured: true,
+                  linked: true,
+                  running: true,
+                  connected: true,
+                },
+              ],
+            },
+            channelDefaultAccountId: { whatsapp: "work" },
+          },
+          "channels.pairing.list": {
+            accounts: [],
+            requests: [],
+            commandOwnerConfigured: true,
+            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+          },
+          "channels.logout": {
+            channel: "whatsapp",
+            accountId: "work",
+            cleared: true,
+            loggedOut: true,
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/channels`);
+      await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+      const detail = page.locator(".channels-detail");
+      await detail.waitFor();
+      await detail.getByRole("button", { name: "Logout" }).click();
+      const confirm = await waitForConfirmModal(page);
+      await expect(confirm.textContent()).resolves.toContain("work");
+      const socketCount = await gateway.getSocketCount();
+      await gateway.closeLatest(1012, "Reconnect during logout confirmation");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await confirm.getByRole("button", { name: "Logout" }).click();
+      await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
+      await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
+    });
   });
 
   it("preserves standard channel details and the complete Telegram setup wizard", async () => {
@@ -187,11 +276,15 @@ suite.define(() => {
       await page.locator(".channels-detail").getByRole("button", { name: "Run setup" }).click();
       const wizard = page.locator(".channels-wizard");
       await gateway.deferNext("wizard.next");
-      await wizard.getByRole("radio", { name: "Work bot" }).click();
+      const account = wizard.locator("wa-select");
+      await account.evaluate(async (select) => {
+        const picker = select as HTMLElement & { value: string; updateComplete: Promise<unknown> };
+        picker.value = "1";
+        await picker.updateComplete;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
       await expect.poll(async () => gateway.getRequests("wizard.next")).toHaveLength(1);
-      await expect
-        .poll(() => wizard.locator("wa-radio-group").getAttribute("disabled"))
-        .not.toBeNull();
+      await expect.poll(() => account.getAttribute("disabled")).not.toBeNull();
       await gateway.resolveDeferred("wizard.next");
 
       const token = wizard.getByLabel("Telegram bot token");

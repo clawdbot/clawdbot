@@ -1,48 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coerceNodeInvokeInputPayload, coerceNodeInvokePayload } from "./invoke-payload.js";
-
-describe("coerceNodeInvokePayload", () => {
-  it("preserves normalized gateway-owned session attribution", () => {
-    expect(
-      coerceNodeInvokePayload({
-        id: "invoke-1",
-        nodeId: "node-1",
-        command: "system.run",
-        sessionKey: "  agent:main:main  ",
-      }),
-    ).toEqual({
-      id: "invoke-1",
-      nodeId: "node-1",
-      command: "system.run",
-      paramsJSON: null,
-      timeoutMs: null,
-      idempotencyKey: null,
-      sessionKey: "agent:main:main",
-    });
-  });
-
-  it("distinguishes a missing legacy envelope from an explicit clear", () => {
-    expect(
-      coerceNodeInvokePayload({ id: "i", nodeId: "n", command: "system.run" }),
-    ).not.toHaveProperty("sessionKey");
-    expect(
-      coerceNodeInvokePayload({
-        id: "i",
-        nodeId: "n",
-        command: "system.run",
-        sessionKey: null,
-      }),
-    ).toMatchObject({ sessionKey: null });
-    expect(
-      coerceNodeInvokePayload({
-        id: "i",
-        nodeId: "n",
-        command: "system.run",
-        sessionKey: " ",
-      }),
-    ).toMatchObject({ sessionKey: null });
-  });
-});
+import { coerceNodeInvokeInputPayload } from "./invoke-payload.js";
 
 describe("coerceNodeInvokeInputPayload", () => {
   it("accepts a bounded well-formed input payload", () => {

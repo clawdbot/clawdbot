@@ -44,7 +44,7 @@ export function emitCommittedSessionEntryRemovals(
   }
 }
 
-export function emitCommittedSessionEntryChange(params: {
+function emitCommittedSessionEntryChange(params: {
   currentKey: string;
   currentEntry: SessionEntry;
   previousKey: string;

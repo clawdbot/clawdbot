@@ -9,8 +9,10 @@ import { completeSimple, streamSimple } from "./llm.js";
 
 /** Runtime adapter that lets the package agent-core use OpenClaw LLM helpers. */
 export const openClawAgentCoreRuntime = {
-  completeSimple: completeSimple as unknown as CompleteSimpleFn,
-  streamSimple: streamSimple as unknown as StreamFn,
+  completeSimple: ((model, context, options) =>
+    completeSimple(model, context, options)) satisfies CompleteSimpleFn,
+  streamSimple: ((model, context, options) =>
+    streamSimple(model, context, options)) satisfies StreamFn,
 } satisfies AgentCoreRuntimeDeps;
 
 /** Agent-core class preconfigured with OpenClaw runtime dependencies. */
@@ -49,6 +51,7 @@ export {
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
   DEFAULT_COMPACTION_SETTINGS,
+  IMAGE_BLOCK_TOKENS,
 } from "../../packages/agent-core/src/index.js";
 export type {
   AfterToolCallResult,

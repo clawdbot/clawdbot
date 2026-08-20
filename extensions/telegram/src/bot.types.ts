@@ -8,7 +8,10 @@ import type { TelegramTransport } from "./fetch.js";
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;
+  /** Agent that owns account-scoped Telegram runtime state. */
+  ownerAgentId?: string;
   runtime?: RuntimeEnv;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;

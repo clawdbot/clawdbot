@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
@@ -10,7 +11,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap, { pMapSkip } from "p-map";
 import type { OpenClawConfig } from "../api.js";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
@@ -230,16 +230,18 @@ async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
 ): Promise<QueryableWikiPage[]> {
-  return await pMap(
-    files,
-    async (relativePath) => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: files.map((relativePath) => async () => {
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await fs.readFile(absolutePath, "utf8");
       const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-      return summary ? { ...summary, raw } : pMapSkip;
-    },
-    { concurrency: QUERY_PAGE_READ_CONCURRENCY, stopOnError: true },
-  );
+      return summary ? { ...summary, raw } : null;
+    }),
+    limit: QUERY_PAGE_READ_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+  });
+  return results.filter((page): page is QueryableWikiPage => page !== null);
 }
 
 async function readQueryDigestBundle(
@@ -970,16 +972,10 @@ function assertSessionVisibilityAppConfig(params: {
   }
 }
 
-const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/sessions-"] as const;
-const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
-
 // Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
 function isSessionMemoryPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
-  return (
-    SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
-    SESSION_MEMORY_ROOT_PATHS.some((rootPath) => normalized === rootPath)
-  );
+  return normalized.startsWith("sessions/");
 }
 
 function shouldSearchWiki(config: ResolvedMemoryWikiConfig): boolean {
@@ -1469,7 +1465,7 @@ export async function getMemoryWikiPage(input: {
       from: fromLine,
       lines: lineCount,
     });
-    if (result.path === relPath && result.text === "" && result.from === undefined) {
+    if (result.status === "not_found") {
       continue;
     }
     return {

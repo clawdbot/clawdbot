@@ -8,10 +8,12 @@ const mocks = vi.hoisted(() => ({
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
 }));
 
-vi.mock("./server-plugin-fallback-context.js", () => ({
-  getFallbackGatewayContext: () => ({
-    getRuntimeConfig: mocks.getRuntimeConfig,
-    nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    context: {
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+    },
   }),
 }));
 
@@ -85,30 +87,6 @@ describe("invokeNodeClaudeCliRun", () => {
         params: expect.objectContaining({
           env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
           clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        }),
-      }),
-    );
-  });
-
-  it("forwards admitted session attribution to the envelope and legacy command params", async () => {
-    mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
-    mocks.invoke.mockResolvedValue({ ok: true });
-
-    await invokeNodeClaudeCliRun({
-      nodeId: "node-1",
-      argv: ["-p"],
-      stdin: "hello",
-      sessionKey: "agent:main:claude",
-      timeoutMs: 10_000,
-      idleTimeoutMs: 1_000,
-      onProgress: () => {},
-    });
-
-    expect(mocks.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:claude",
-        params: expect.objectContaining({
-          sessionKey: "agent:main:claude",
         }),
       }),
     );

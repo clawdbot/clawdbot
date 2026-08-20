@@ -1,5 +1,4 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 import UIKit
 
@@ -28,7 +27,6 @@ struct RootTabs: View {
     @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
     @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
-    @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? =
         Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
@@ -49,6 +47,7 @@ struct RootTabs: View {
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
+    @State private var gatewayRetryFailure: String?
     // Swipe-up hides the toast only until the next problem report.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
@@ -168,8 +167,15 @@ struct RootTabs: View {
 
     private var sidebarSplitContent: some View {
         GeometryReader { proxy in
-            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: proxy.size)
-            let sidebarWidth = self.sidebarWidth(containerWidth: proxy.size.width, isDrawerLayout: isDrawerLayout)
+            // Keyboard safe-area changes must not masquerade as window/orientation changes;
+            // switching layouts destroys the focused detail subtree.
+            let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                contentSize: proxy.size,
+                windowSize: self.foregroundKeyWindowSize())
+            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
+            let sidebarWidth = self.sidebarWidth(
+                containerWidth: layoutContainerSize.width,
+                isDrawerLayout: isDrawerLayout)
             Group {
                 if isDrawerLayout {
                     self.sidebarDrawerContent(
@@ -180,10 +186,13 @@ struct RootTabs: View {
                 }
             }
             .onAppear {
-                self.updateSidebarLayout(containerSize: proxy.size, force: false)
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             .onChange(of: proxy.size) { _, size in
-                self.updateSidebarLayout(containerSize: size, force: false)
+                let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                    contentSize: size,
+                    windowSize: self.foregroundKeyWindowSize())
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             // Single refresh owner: identity/session changes, scene activation,
             // and the periodic attention refresh all land here.
@@ -384,6 +393,10 @@ struct RootTabs: View {
                 headerTitle: "Automations",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
+        case .desktop:
+            DesktopHubScreen(
+                headerSidebarAction: self.sidebarHeaderAction,
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .terminal:
             TerminalHubScreen(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -498,23 +511,47 @@ struct RootTabs: View {
         Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
     }
 
+    private func foregroundKeyWindowSize() -> CGSize? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .windows
+            .first(where: \.isKeyWindow)?
+            .bounds.size
+    }
+
     private func rootOverlays(_ content: some View) -> some View {
         content
             .overlay(alignment: .top) {
                 // Stable container so the toast's move/opacity transition animates
                 // when the gateway problem appears or clears outside withAnimation.
                 ZStack(alignment: .top) {
-                    if let gatewayProblem = self.activeGatewayProblemToast {
+                    if let gatewayRetryFailure {
+                        OpenClawNoticeBanner(
+                            icon: "wifi.exclamationmark",
+                            title: "Gateway reconnect failed",
+                            message: .verbatim(gatewayRetryFailure),
+                            ownerLabel: "Needs attention",
+                            tint: OpenClawBrand.warn,
+                            secondaryActionTitle: "Dismiss",
+                            onSecondaryAction: { self.gatewayRetryFailure = nil })
+                            .padding(.horizontal, 12)
+                            .safeAreaPadding(.top, 10)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    } else if let gatewayProblem = self.activeGatewayProblemToast {
                         self.gatewayProblemToast(gatewayProblem)
                     }
                 }
+                .animation(self.gatewayToastAnimation, value: self.gatewayRetryFailure)
                 .animation(self.gatewayToastAnimation, value: self.activeGatewayProblemToast)
             }
             .overlay(alignment: .topLeading) {
                 if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                     VoiceWakeToast(command: voiceWakeToastText)
                         .padding(.leading, 10)
-                        .safeAreaPadding(.top, self.activeGatewayProblemToast == nil ? 58 : 132)
+                        .safeAreaPadding(
+                            .top,
+                            self.activeGatewayProblemToast == nil && self.gatewayRetryFailure == nil ? 58 : 132)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -523,13 +560,6 @@ struct RootTabs: View {
                 // Keep the observer mounted so the first 0 -> 1 capture transition
                 // flashes without treating a later remount as a new capture.
                 RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
-            }
-            .overlay {
-                if self.appModel.screen.isCanvasPresented {
-                    self.canvasPresentationOverlay
-                        .transition(.opacity)
-                        .zIndex(20)
-                }
             }
     }
 
@@ -587,29 +617,6 @@ struct RootTabs: View {
         self.isGatewayToastSwipeDismissed = false
     }
 
-    private var canvasPresentationOverlay: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-            ScreenWebView(controller: self.appModel.screen)
-                .ignoresSafeArea()
-            Button {
-                self.appModel.screen.hideCanvas()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 30, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.32), radius: 8, y: 2)
-                    .frame(width: 48, height: 48)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close canvas")
-            .safeAreaPadding(.top, 8)
-            .padding(.trailing, 12)
-        }
-    }
-
     private func rootLifecycle(_ content: some View) -> some View {
         self.rootRequestLifecycle(
             self.rootGatewayLifecycle(
@@ -639,7 +646,6 @@ struct RootTabs: View {
     private func rootAppearLifecycle(_ content: some View) -> some View {
         content
             .onAppear { self.updateIdleTimer() }
-            .onAppear { self.updateCanvasState() }
             .onAppear { self.evaluateOnboardingPresentation(force: false) }
             .onAppear { self.maybeAutoOpenSettings() }
             .onAppear { self.maybeOpenSettingsForGatewaySetup() }
@@ -649,7 +655,6 @@ struct RootTabs: View {
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
                 self.updateIdleTimer()
-                self.updateHomeCanvasState()
                 guard newValue == .active else {
                     self.clearVoiceWakeToast()
                     return
@@ -657,9 +662,6 @@ struct RootTabs: View {
                 self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
                     await self.appModel.refreshGatewayOverviewIfConnected()
-                    await MainActor.run {
-                        self.updateHomeCanvasState()
-                    }
                 }
             }
             .onDisappear {
@@ -687,7 +689,6 @@ struct RootTabs: View {
 
     private func rootGatewayLifecycle(_ content: some View) -> some View {
         self.rootGatewayProblemLifecycle(content)
-            .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
@@ -697,18 +698,6 @@ struct RootTabs: View {
                 }
                 self.maybeAutoOpenSettings()
                 self.maybeShowQuickSetup()
-                self.updateCanvasState()
-            }
-            .onChange(of: self.appModel.gatewayStatusText) { _, _ in self.updateCanvasState() }
-            .onChange(of: self.appModel.gatewayRemoteAddress) { _, _ in self.updateCanvasState() }
-            .onChange(of: self.appModel.gatewayDisplayStatusText) { _, _ in self.updateCanvasState() }
-            .onChange(of: self.appModel.homeCanvasRevision) { _, _ in self.updateHomeCanvasState() }
-            .onChange(of: self.appModel.gatewayAgents.count) { _, _ in self.updateHomeCanvasState() }
-            .onChange(of: self.appModel.selectedAgentId) { _, _ in self.updateHomeCanvasState() }
-            .onChange(of: self.appModel.gatewayDefaultAgentId) { _, _ in self.updateHomeCanvasState() }
-            .onChange(of: self.appModel.activeAgentName) { _, _ in self.updateHomeCanvasState() }
-            .onChange(of: self.appModel.connectedGatewayID) { _, _ in
-                self.updateCanvasState()
             }
     }
 
@@ -796,130 +785,9 @@ struct RootTabs: View {
             })
     }
 
-    private var gatewayStatus: GatewayDisplayState {
-        GatewayStatusBuilder.build(appModel: self.appModel)
-    }
-
     private func updateIdleTimer() {
         UIApplication.shared.isIdleTimerDisabled =
             self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
-    }
-}
-
-extension RootTabs {
-    private func updateCanvasState() {
-        self.updateHomeCanvasState()
-        self.updateCanvasDebugStatus()
-    }
-
-    private func updateCanvasDebugStatus() {
-        self.appModel.screen.setDebugStatusEnabled(self.canvasDebugStatusEnabled)
-        guard self.canvasDebugStatusEnabled else { return }
-        let title = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let subtitle = self.appModel.gatewayServerName ?? self.appModel.gatewayRemoteAddress
-        self.appModel.screen.updateDebugStatus(title: title, subtitle: subtitle)
-    }
-
-    private func updateHomeCanvasState() {
-        let payload = self.makeHomeCanvasPayload()
-        guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            self.appModel.screen.updateHomeCanvasState(json: nil)
-            return
-        }
-        self.appModel.screen.updateHomeCanvasState(json: json)
-    }
-
-    private func makeHomeCanvasPayload() -> RootTabsHomeCanvasPayload {
-        let gatewayName = normalized(appModel.gatewayServerName)
-        let gatewayAddress = normalized(appModel.gatewayRemoteAddress)
-        let gatewayLabel = gatewayName ?? gatewayAddress ?? "Gateway"
-        let activeAgentID = self.resolveActiveAgentID()
-        let agents = self.homeCanvasAgents(activeAgentID: activeAgentID)
-
-        switch self.gatewayStatus {
-        case .connected:
-            return RootTabsHomeCanvasPayload(
-                gatewayState: "connected",
-                eyebrow: "\(gatewayLabel) online",
-                title: "Command center",
-                subtitle:
-                "Use Chat for code work or realtime voice, plus gateway tools for approved device actions.",
-                gatewayLabel: gatewayLabel,
-                activeAgentName: self.appModel.activeAgentName,
-                activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
-                activeAgentCaption: "Routes chat and voice",
-                agentCount: agents.count,
-                agents: Array(agents.prefix(6)),
-                footer: "OpenClaw only runs phone-side capabilities while the app is connected and permitted.")
-        case .connecting:
-            return RootTabsHomeCanvasPayload(
-                gatewayState: "connecting",
-                eyebrow: "Gateway handshake",
-                title: "Reconnecting",
-                subtitle:
-                "Restoring the local node session, agent list, voice config, and device capability state.",
-                gatewayLabel: gatewayLabel,
-                activeAgentName: self.appModel.activeAgentName,
-                activeAgentBadge: "OC",
-                activeAgentCaption: "Session in progress",
-                agentCount: agents.count,
-                agents: Array(agents.prefix(4)),
-                footer: "If the gateway is reachable, the local node should recover without re-pairing.")
-        case .error, .disconnected:
-            return RootTabsHomeCanvasPayload(
-                gatewayState: self.gatewayStatus == .error ? "error" : "offline",
-                eyebrow: self.gatewayStatus == .error ? "Gateway needs attention" : "OpenClaw iOS",
-                title: "Pair a gateway",
-                subtitle:
-                "Connect this phone as a local node for chat, realtime voice, share intake, and approved device tools.",
-                gatewayLabel: gatewayLabel,
-                activeAgentName: "Main",
-                activeAgentBadge: "OC",
-                activeAgentCaption: "Connect to load your agents",
-                agentCount: agents.count,
-                agents: Array(agents.prefix(4)),
-                footer:
-                "Use Settings to scan a pairing QR code or paste a setup code from your OpenClaw gateway.")
-        }
-    }
-
-    private func resolveActiveAgentID() -> String {
-        let selected = normalized(appModel.selectedAgentId) ?? ""
-        if !selected.isEmpty {
-            return selected
-        }
-        return self.resolveDefaultAgentID()
-    }
-
-    private func resolveDefaultAgentID() -> String {
-        normalized(self.appModel.gatewayDefaultAgentId) ?? ""
-    }
-
-    private func homeCanvasAgents(activeAgentID: String) -> [RootTabsHomeCanvasAgentCard] {
-        let defaultAgentID = self.resolveDefaultAgentID()
-        let cards = self.appModel.gatewayAgents.map { agent -> RootTabsHomeCanvasAgentCard in
-            let isActive = !activeAgentID.isEmpty && agent.id == activeAgentID
-            let isDefault = !defaultAgentID.isEmpty && agent.id == defaultAgentID
-            return RootTabsHomeCanvasAgentCard(
-                id: agent.id,
-                name: self.homeCanvasName(for: agent),
-                badge: self.homeCanvasBadge(for: agent),
-                caption: isActive ? "Routed on this phone" : (isDefault ? "Gateway default" : "Available"),
-                isActive: isActive)
-        }
-
-        return cards.sorted { lhs, rhs in
-            if lhs.isActive != rhs.isActive {
-                return lhs.isActive
-            }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-        }
-    }
-
-    private func homeCanvasName(for agent: AgentSummary) -> String {
-        normalized(agent.name) ?? agent.id
     }
 }
 
@@ -1030,29 +898,6 @@ extension RootTabs {
         self.isSidebarVisible = isVisible
     }
 
-    private func homeCanvasBadge(for agent: AgentSummary) -> String {
-        if let identity = agent.identity,
-           let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = normalized(emoji)
-        {
-            return normalizedEmoji
-        }
-        let words = self.homeCanvasName(for: agent)
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
-            .prefix(2)
-        let initials = words.compactMap(\.first).map(String.init).joined()
-        if !initials.isEmpty {
-            return initials.uppercased()
-        }
-        return "OC"
-    }
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
         GatewayProblemPrimaryAction.title(
             for: problem,
@@ -1073,7 +918,12 @@ extension RootTabs {
         } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectActiveGateway() }
+            self.gatewayRetryFailure = nil
+            Task {
+                if case let .failed(message) = await self.gatewayController.connectActiveGateway() {
+                    self.gatewayRetryFailure = message
+                }
+            }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1234,7 +1084,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1242,7 +1092,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, sidebarVisible: true)
+    RootTabsPreviewHost(sidebarVisible: true)
 }
 
 #Preview(
@@ -1250,7 +1100,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1258,7 +1108,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 #Preview(
@@ -1266,7 +1116,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 852, height: 393),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
         .environment(\.horizontalSizeClass, .regular)
         .environment(\.verticalSizeClass, .compact)
 }
@@ -1276,7 +1126,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1024, height: 1366),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .pad)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1284,7 +1134,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1292,7 +1142,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connecting)
+    RootTabsPreviewHost(gatewayState: .connecting)
 }
 
 #Preview(
@@ -1300,24 +1150,21 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 private struct RootTabsPreviewHost: View {
     @State private var appearanceModel = AppAppearanceModel()
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
-    private let idiom: UIUserInterfaceIdiom
     private let sidebarVisible: Bool?
 
     init(
-        idiom: UIUserInterfaceIdiom,
         gatewayState: RootTabsPreviewGatewayState = .offline,
         sidebarVisible: Bool? = nil)
     {
         let appModel = NodeAppModel()
         gatewayState.apply(to: appModel)
-        self.idiom = idiom
         self.sidebarVisible = sidebarVisible
         _appModel = State(initialValue: appModel)
         _gatewayController = State(

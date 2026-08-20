@@ -41,7 +41,10 @@ export const GatewaySuspendBlockerSchema = closedObject({
   task: Type.Optional(GatewaySuspendTaskBlockerSchema),
 });
 
-export const GatewaySuspendPrepareParamsSchema = closedObject({ requestId: SuspensionTokenSchema });
+export const GatewaySuspendPrepareParamsSchema = closedObject({
+  requestId: SuspensionTokenSchema,
+  terminalPolicy: Type.Optional(Type.Union([Type.Literal("preserve"), Type.Literal("terminate")])),
+});
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({
   status: Type.Literal("busy"),

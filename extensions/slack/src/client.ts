@@ -15,12 +15,12 @@ const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
 const SLACK_STARTUP_AUTH_TIMEOUT_MS = 10_000;
 const SLACK_STARTUP_AUTH_RETRY_BUDGET_MS = 35_000;
 const slackWriteClientCache = new Map<string, WebClient>();
-let slackListenerUploadCompletionClientCache = new WeakMap<
+const slackListenerUploadCompletionClientCache = new WeakMap<
   WebClient,
   { teamId: string; client: WebClient }
 >();
 
-type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl">;
+type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl" | "teamId">;
 type SlackFetch = NonNullable<WebClientOptions["fetch"]>;
 
 export {
@@ -92,7 +92,9 @@ export function createSlackTokenCacheKey(token: string): string {
 
 function slackWriteClientCacheKey(token: string, options: SlackWriteClientCacheOptions): string {
   const tokenKey = createSlackTokenCacheKey(token);
-  return options.slackApiUrl ? `${tokenKey}:api:${options.slackApiUrl}` : tokenKey;
+  const apiScope = options.slackApiUrl ? `:api:${options.slackApiUrl}` : "";
+  const teamScope = options.teamId ? `:team:${options.teamId.trim().toLowerCase()}` : "";
+  return `${tokenKey}${apiScope}${teamScope}`;
 }
 
 export function getSlackWriteClient(
@@ -154,9 +156,4 @@ export function getSlackListenerUploadCompletionClient(params: {
   );
   slackListenerUploadCompletionClientCache.set(params.listenerClient, { teamId, client });
   return client;
-}
-
-export function clearSlackWriteClientCacheForTest(): void {
-  slackWriteClientCache.clear();
-  slackListenerUploadCompletionClientCache = new WeakMap();
 }

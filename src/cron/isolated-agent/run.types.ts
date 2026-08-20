@@ -1,3 +1,4 @@
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 /** Result types returned by isolated cron agent runs. */
 import type {
   CronDeliveryTrace,
@@ -30,6 +31,8 @@ export type RunCronAgentTurnResult = {
   deliveryAttempted?: boolean;
   /** Post-run delivery failure on an otherwise successful isolated turn. */
   deliveryError?: string;
+  /** Intentional direct-delivery non-outcome recorded before transport custody. */
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   delivery?: CronDeliveryTrace;
   nextCheck?: CronNextCheckProposal;
 } & CronRunOutcome &

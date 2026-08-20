@@ -1,4 +1,5 @@
 // Retry policy: backoff, attempt floor + age gate for dead-letter.
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -141,7 +142,7 @@ describe("ingress retry policy", () => {
         receivedAt,
         attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
       },
-      formatError: (err) => (err instanceof Error ? err.message : String(err)),
+      formatError: coerceErrorMessage,
       now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS - 1,
     });
     expect(young.kind).toBe("release");
@@ -153,7 +154,7 @@ describe("ingress retry policy", () => {
         receivedAt,
         attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
       },
-      formatError: (err) => (err instanceof Error ? err.message : String(err)),
+      formatError: coerceErrorMessage,
       now: receivedAt + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
     });
     expect(aged).toMatchObject({

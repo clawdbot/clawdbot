@@ -3,7 +3,7 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-boundary.js";
+import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 
 function createActiveSession(messages: AgentMessage[] = []) {
   const reset = vi.fn();

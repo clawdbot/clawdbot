@@ -419,8 +419,8 @@ const cachedWorkspacePackageAliasMaps = new PluginLruCache<Record<string, string
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
-const AGENT_HARNESS_TOOL_AUTHORITY_PLUGIN_SDK_SUBPATH = "agent-harness-tool-authority-runtime";
-const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+const NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH = "native-hook-relay-runtime";
+const CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
 const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
@@ -449,35 +449,35 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
-  privateQaCliSubpaths?: readonly string[];
+  allowPrivateQaCli: boolean;
   subpaths: readonly string[];
 };
 const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[] = [
   {
     bundledPluginId: "codex",
     officialInstalledPackageName: "@openclaw/codex",
-    privateQaCliSubpaths: [
-      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-      CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
-    ],
+    allowPrivateQaCli: true,
     subpaths: [
-      AGENT_HARNESS_TOOL_AUTHORITY_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
       CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
     ],
-  },
-  {
-    bundledPluginId: "copilot",
-    officialInstalledPackageName: "@openclaw/copilot",
-    subpaths: [AGENT_HARNESS_TOOL_AUTHORITY_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "ollama",
-    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+    allowPrivateQaCli: false,
+    subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "browser",
-    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+    allowPrivateQaCli: false,
+    subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
+  {
+    bundledPluginId: "llama-cpp",
+    officialInstalledPackageName: "@openclaw/llama-cpp-provider",
+    allowPrivateQaCli: false,
+    subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
 ];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
@@ -497,7 +497,7 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Packaged installs omit workspace manifests; preserve the exact curated subpaths
 // instead of expanding aliases from package exports.
 const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
-  ["gateway-client", ["", "readiness", "timeouts"]],
+  ["gateway-client", ["", "readiness", "timeouts", "websocket-data"]],
   [
     "gateway-protocol",
     [
@@ -525,21 +525,6 @@ const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
     ],
   ],
   ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
-  [
-    "media-core",
-    [
-      "",
-      "base64",
-      "constants",
-      "content-length",
-      "file-name",
-      "inbound-path-policy",
-      "inline-image-data-url",
-      "media-source-url",
-      "mime",
-      "read-byte-stream-with-limit",
-    ],
-  ],
   ["retry", [""]],
   [
     "terminal-core",
@@ -677,14 +662,7 @@ export function listWorkspacePackageExportAliasEntries(params: {
     params.packageDir,
     "package.json",
   );
-  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
-  const packageJson =
-    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
-    (fallbackPackageRoot
-      ? tryReadJsonSync<PluginSdkPackageJson>(
-          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
-        )
-      : null);
+  const packageJson = tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath);
   const exports = packageJson?.exports;
   if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
     return listRootPackagedWorkspacePackageAliasEntries(params);
@@ -745,7 +723,8 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   return [
     ...new Set([
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-      OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
+      CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
         : []),
@@ -922,7 +901,7 @@ function resolveWorkspacePackageAliasMap(params: {
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
-    ...["normalization-core", "acp-core"].flatMap((packageDir) =>
+    ...["media-core", "normalization-core", "acp-core"].flatMap((packageDir) =>
       listWorkspacePackageExportAliasEntries({
         packageRoot,
         packageName: `@openclaw/${packageDir}`,
@@ -1029,7 +1008,6 @@ function isTrustedPrivatePluginSdkOwnerPath(params: {
   packageRoot: string;
   modulePath: string;
   owner: PrivatePluginSdkSubpathOwner;
-  trustedInstalledPrivateSdkOwner?: string;
 }) {
   if (
     isBundledPluginModulePath({
@@ -1040,10 +1018,7 @@ function isTrustedPrivatePluginSdkOwnerPath(params: {
   ) {
     return true;
   }
-  // Installed package metadata is attacker-controlled. Require the host manifest
-  // registry to authenticate this exact official plugin ID before granting aliases.
-  return params.trustedInstalledPrivateSdkOwner === params.owner.bundledPluginId &&
-    params.owner.officialInstalledPackageName
+  return params.owner.officialInstalledPackageName
     ? isOfficialInstalledPluginModulePath({
         modulePath: params.modulePath,
         packageName: params.owner.officialInstalledPackageName,
@@ -1060,7 +1035,6 @@ function findPrivatePluginSdkSubpathOwners(
 function listTrustedPrivatePluginSdkOwnerKeys(params: {
   packageRoot: string;
   modulePath: string;
-  trustedInstalledPrivateSdkOwner?: string;
 }): string[] {
   return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
     isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }),
@@ -1086,7 +1060,6 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   packageRoot: string;
   modulePath: string;
   subpath: string;
-  trustedInstalledPrivateSdkOwner?: string;
 }) {
   if (PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS.has(params.subpath)) {
     return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
@@ -1100,8 +1073,7 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   return owners.some(
     (owner) =>
       isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
-      (owner.privateQaCliSubpaths?.includes(params.subpath) === true &&
-        shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
+      (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
   );
 }
 
@@ -1134,7 +1106,6 @@ function listPrivateLocalOnlyPluginSdkSubpaths(params: {
   packageRoot: string;
   ownerPackageRoot: string;
   modulePath: string;
-  trustedInstalledPrivateSdkOwner?: string;
 }): string[] {
   return readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).filter(
     (subpath) =>
@@ -1142,7 +1113,6 @@ function listPrivateLocalOnlyPluginSdkSubpaths(params: {
         packageRoot: params.ownerPackageRoot,
         modulePath: params.modulePath,
         subpath,
-        trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
       }) && hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
   );
 }
@@ -1154,7 +1124,6 @@ function listPluginSdkExportedSubpaths(
     moduleUrl?: string;
     devSourceRoot?: string | null;
     pluginSdkResolution?: PluginSdkResolutionPreference;
-    trustedInstalledPrivateSdkOwner?: string;
   } = {},
 ): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -1176,7 +1145,6 @@ function listPluginSdkExportedSubpaths(
   const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
     packageRoot: ownerPackageRoot,
     modulePath,
-    trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
   });
   const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
@@ -1186,12 +1154,7 @@ function listPluginSdkExportedSubpaths(
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...listPrivateLocalOnlyPluginSdkSubpaths({
-        packageRoot,
-        ownerPackageRoot,
-        modulePath,
-        trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
-      }),
+      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, ownerPackageRoot, modulePath }),
     ]),
   ].toSorted();
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
@@ -1205,7 +1168,6 @@ function resolvePluginSdkScopedAliasMap(
     moduleUrl?: string;
     devSourceRoot?: string | null;
     pluginSdkResolution?: PluginSdkResolutionPreference;
-    trustedInstalledPrivateSdkOwner?: string;
   } = {},
 ): Record<string, string> {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
@@ -1232,7 +1194,6 @@ function resolvePluginSdkScopedAliasMap(
   const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
     packageRoot: ownerPackageRoot,
     modulePath,
-    trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
   });
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
@@ -1249,7 +1210,6 @@ function resolvePluginSdkScopedAliasMap(
     moduleUrl: params.moduleUrl,
     devSourceRoot: params.devSourceRoot,
     pluginSdkResolution: params.pluginSdkResolution,
-    trustedInstalledPrivateSdkOwner: params.trustedInstalledPrivateSdkOwner,
   })) {
     for (const kind of orderedKinds) {
       if (kind === "dist") {
@@ -1457,7 +1417,6 @@ function buildPluginLoaderAliasMapCacheKey(params: {
   moduleUrl?: string;
   pluginSdkResolution: PluginSdkResolutionPreference;
   devSourceRoot?: string | null;
-  trustedInstalledPrivateSdkOwner?: string;
 }) {
   const devSourceRoot = resolveDevSourceRootParam(params);
   return [
@@ -1469,7 +1428,6 @@ function buildPluginLoaderAliasMapCacheKey(params: {
     devSourceRoot ?? "",
     process.env.NODE_ENV === "production" ? "production" : "non-production",
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
-    params.trustedInstalledPrivateSdkOwner ?? "",
   ].join("\0");
 }
 
@@ -1499,7 +1457,6 @@ export function buildPluginLoaderAliasMap(
   moduleUrl?: string,
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
   devSourceRoot?: string | null,
-  trustedInstalledPrivateSdkOwner?: string,
 ): Record<string, string> {
   const cacheKey = buildPluginLoaderAliasMapCacheKey({
     modulePath,
@@ -1507,7 +1464,6 @@ export function buildPluginLoaderAliasMap(
     moduleUrl,
     pluginSdkResolution,
     devSourceRoot,
-    trustedInstalledPrivateSdkOwner,
   });
   const cached = aliasMapCache.get(cacheKey);
   if (cached) {
@@ -1535,7 +1491,6 @@ export function buildPluginLoaderAliasMap(
       moduleUrl,
       pluginSdkResolution,
       devSourceRoot,
-      trustedInstalledPrivateSdkOwner,
     }),
   );
   // Different plugin entrypoints commonly resolve the same process-stable SDK surface.

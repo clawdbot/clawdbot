@@ -1,5 +1,5 @@
-// Push method tests cover APNs direct/relay registrations, alert delivery,
-// stale registration cleanup, config resolution, and error mapping.
+// Push method tests cover APNs direct/relay registrations, Web Push delivery
+// outcomes, stale registration cleanup, config resolution, and error mapping.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +24,13 @@ vi.mock("../../infra/push-apns.js", () => ({
   shouldClearStoredApnsRegistration: vi.fn(),
 }));
 
+vi.mock("../../infra/push-web.js", () => ({
+  broadcastWebPush: vi.fn(),
+  clearWebPushSubscriptionByEndpoint: vi.fn(),
+  registerWebPushSubscription: vi.fn(),
+  resolveVapidKeys: vi.fn(),
+}));
+
 import {
   type ApnsRegistration,
   clearApnsRegistrationIfCurrent,
@@ -34,10 +41,12 @@ import {
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
+import { broadcastWebPush } from "../../infra/push-web.js";
 
 type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
+type WebPushResults = Awaited<ReturnType<typeof broadcastWebPush>>;
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
 
 const DEFAULT_DIRECT_REGISTRATION = {
   nodeId: "ios-node-1",
@@ -110,6 +119,25 @@ function createInvokeParams(params: Record<string, unknown>) {
         context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "push.test" },
+        isWebchatConnect: () => false,
+      }),
+  };
+}
+
+function createWebPushTestInvokeParams(params: Record<string, unknown> = {}) {
+  const respond = vi.fn();
+  return {
+    respond,
+    invoke: async () =>
+      await expectDefined(
+        pushHandlers["push.web.test"],
+        'pushHandlers["push.web.test"] test invariant',
+      )({
+        params,
+        respond: respond as never,
+        context: {} as never,
+        client: null,
+        req: { type: "req", id: "req-1", method: "push.web.test" },
         isWebchatConnect: () => false,
       }),
   };
@@ -332,5 +360,71 @@ describe("push.test handler", () => {
       overrideEnvironment: "production",
     });
     expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
+  });
+});
+
+describe("push.web.test handler", () => {
+  beforeEach(() => {
+    vi.mocked(broadcastWebPush).mockReset();
+  });
+
+  it("returns unavailable with delivery results when every attempt fails", async () => {
+    const results: WebPushResults = [
+      {
+        ok: false,
+        subscriptionId: "expired-subscription",
+        statusCode: 410,
+        error: "Gone",
+      },
+      {
+        ok: false,
+        subscriptionId: "rejected-subscription",
+        statusCode: 503,
+        error: "Service Unavailable",
+      },
+    ];
+    vi.mocked(broadcastWebPush).mockResolvedValue(results);
+
+    const { respond, invoke } = createWebPushTestInvokeParams();
+    await invoke();
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const call = firstRespondCall(respond);
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(call?.[2]?.details).toEqual({ results });
+  });
+
+  it("returns all delivery results when at least one attempt succeeds", async () => {
+    const results: WebPushResults = [
+      {
+        ok: true,
+        subscriptionId: "active-subscription",
+        statusCode: 201,
+      },
+      {
+        ok: false,
+        subscriptionId: "expired-subscription",
+        statusCode: 410,
+        error: "Gone",
+      },
+    ];
+    vi.mocked(broadcastWebPush).mockResolvedValue(results);
+
+    const { respond, invoke } = createWebPushTestInvokeParams();
+    await invoke();
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(firstRespondCall(respond)).toEqual([true, { results }, undefined]);
+  });
+
+  it("returns invalid request when no subscriptions are registered", async () => {
+    vi.mocked(broadcastWebPush).mockResolvedValue([]);
+
+    const { respond, invoke } = createWebPushTestInvokeParams();
+    await invoke();
+
+    expectInvalidRequestResponse(respond, "no web push subscriptions registered");
   });
 });

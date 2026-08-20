@@ -193,6 +193,9 @@ export function createGenericTargetTestPlugin(
     },
     messaging: {
       targetPrefixes: [String(id)],
+      // Owner-route tests need positive direct classification; syntax alone
+      // never admits an implicit owner destination.
+      inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
     },
     resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, String(id)),
   });

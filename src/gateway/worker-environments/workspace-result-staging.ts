@@ -5,6 +5,11 @@ import path from "node:path";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import {
+  activeWorkspaceHashContext,
+  withWorkspaceHashContext,
+  withWorkspaceHashMemo,
+} from "./workspace-hash-memo.js";
+import {
   MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
@@ -17,8 +22,8 @@ import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
-  changedEntryPaths,
   inspectAcceptedWorkerWorkspace,
+  manifestNodes,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
 
@@ -44,21 +49,44 @@ export function workerWorkspaceTransferPaths(
   base: WorkerWorkspaceManifest,
 ): string[] {
   // Staging is directory-agnostic because it transfers file and symlink bytes only.
-  const changed = changedEntryPaths(base, current);
-  const paths = reconciliationEntries(current.entries)
-    .filter((entry) => changed.has(entry.path))
-    .map((entry) => {
-      if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-        throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-      }
-      return entry.path;
-    });
-  if (paths.length > MAX_RECONCILIATION_ENTRIES) {
+  return parseChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
+}
+
+function parseChangedWorkspaceResult(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+  enforceRecordLimit = true,
+): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  const changed = new Set(
+    [...new Set([...baseNodes.keys(), ...currentNodes.keys()])].filter(
+      (entryPath) =>
+        JSON.stringify(baseNodes.get(entryPath)) !== JSON.stringify(currentNodes.get(entryPath)),
+    ),
+  );
+  const recordCount = [...changed].reduce(
+    (count, entryPath) =>
+      count + Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath)),
+    0,
+  );
+  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
     throw new Error(
       `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
     );
   }
-  return paths;
+  let totalBytes = 0;
+  const entries = reconciliationEntries(current.entries).filter((entry) => changed.has(entry.path));
+  for (const entry of entries) {
+    if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
+      throw new Error(`Cloud workspace result is too large: ${entry.path}`);
+    }
+    totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
+    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
+      throw new Error("Cloud workspace staged result exceeds its byte limit");
+    }
+  }
+  return { changed: recordCount > 0, entries };
 }
 
 async function requireGit(cwd: string, args: string[]): Promise<string> {
@@ -187,7 +215,7 @@ function stagedResultMessage(params: {
   const base = Buffer.from(params.baseManifestRaw);
   const current = Buffer.from(params.currentManifestRaw);
   const header = Buffer.from(
-    `${STAGED_RESULT_MESSAGE}\nversion 1\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
+    `${STAGED_RESULT_MESSAGE}\nversion 2\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
   );
   return Buffer.concat([header, base, current]);
 }
@@ -244,25 +272,14 @@ async function stageWorkerWorkspaceResult(params: {
     params.currentManifestRaw,
     params.currentManifestRef,
   );
-  // This ref is the complete worker-result artifact, not a patch cache. Keep
-  // unchanged blobs too so recovery is self-contained after the worker dies.
-  const entries = reconciliationEntries(current.entries).toSorted((left, right) =>
+  // The authenticated manifests define the complete result. The durable tree
+  // stores only changed resulting blobs; deletions intentionally have no blob.
+  const entries = parseChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   );
-  if (entries.length > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  const changed = changedEntryPaths(base, current);
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
-  let totalBytes = 0;
   for (const [index, entry] of entries.entries()) {
-    if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-      throw new Error(`Cloud workspace result is too large: ${entry.path}`);
-    }
-    const sourceRoot = changed.has(entry.path) ? params.stagingRoot : root;
-    const source = localPath(sourceRoot, entry.path);
+    const source = localPath(params.stagingRoot, entry.path);
     if (!(await absoluteEntryMatches(source, entry))) {
       throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
     }
@@ -274,10 +291,6 @@ async function stageWorkerWorkspaceResult(params: {
         createHash("sha256").update(content).digest("hex") !== entry.sha256)
     ) {
       throw new Error(`Cloud workspace staged payload changed while reading: ${entry.path}`);
-    }
-    totalBytes += content.byteLength;
-    if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-      throw new Error("Cloud workspace staged result exceeds its byte limit");
     }
     blobs.push({ entry, mark: index + 1, content });
   }
@@ -320,6 +333,8 @@ type LoadedStagedWorkerWorkspace = {
   currentManifestRef: string;
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
+  changed: boolean;
+  changedEntries: WorkerWorkspaceManifestEntry[];
   objectsByPath: Map<string, { mode: string; objectId: string }>;
 };
 
@@ -345,6 +360,7 @@ async function loadStagedWorkerWorkspace(
     throw new Error("Cloud workspace staged result metadata is invalid");
   }
   const lines = message.subarray(0, metadataEnd).toString("utf8").split("\n");
+  const version = lines[1] === "version 1" ? 1 : lines[1] === "version 2" ? 2 : undefined;
   const match = /^sha256:[a-f0-9]{64}$/u;
   const baseManifestRef = lines[2]?.slice("base-ref ".length) ?? "";
   const currentManifestRef = lines[3]?.slice("current-ref ".length) ?? "";
@@ -352,7 +368,7 @@ async function loadStagedWorkerWorkspace(
   const currentBytes = Number(lines[5]?.slice("current-bytes ".length));
   if (
     lines[0] !== STAGED_RESULT_MESSAGE ||
-    lines[1] !== "version 1" ||
+    version === undefined ||
     !lines[2]?.startsWith("base-ref ") ||
     !lines[3]?.startsWith("current-ref ") ||
     !lines[4]?.startsWith("base-bytes ") ||
@@ -375,6 +391,12 @@ async function loadStagedWorkerWorkspace(
   const currentRaw = manifests.subarray(baseBytes).toString("utf8");
   const base = parseWorkerWorkspaceManifest(baseRaw, baseManifestRef);
   const current = parseWorkerWorkspaceManifest(currentRaw, currentManifestRef);
+  // Shipped v1 refs carry a complete current tree and predate the conservative
+  // manifest worst-case record gate. Recovery still validates their manifests,
+  // tree shape, and changed payload bytes; the apply owner caps actual records.
+  const changedResult = parseChangedWorkspaceResult(base, current, version !== 1);
+  const changedEntries = changedResult.entries;
+  const treeEntries = version === 1 ? reconciliationEntries(current.entries) : changedEntries;
   const tree = await runCommandBuffered(
     gitCommand(root, ["ls-tree", "-r", "-z", "--full-tree", ref]),
     { timeoutMs: PATCH_TIMEOUT_MS, maxOutputBytes: 2 * MAX_RECONCILIATION_FILE_BYTES },
@@ -392,11 +414,10 @@ async function loadStagedWorkerWorkspace(
     }
     objectsByPath.set(parsed[3]!, { mode: parsed[1]!, objectId: parsed[2]! });
   }
-  const entries = reconciliationEntries(current.entries);
-  if (objectsByPath.size !== entries.length) {
+  if (objectsByPath.size !== treeEntries.length) {
     throw new Error("Cloud workspace staged result tree does not match its manifest");
   }
-  for (const entry of entries) {
+  for (const entry of treeEntries) {
     const object = objectsByPath.get(entry.path);
     const expectedMode =
       entry.type === "symlink" ? "120000" : (entry.mode & 0o111) !== 0 ? "100755" : "100644";
@@ -404,7 +425,15 @@ async function loadStagedWorkerWorkspace(
       throw new Error(`Cloud workspace staged result tree is invalid: ${entry.path}`);
     }
   }
-  return { baseManifestRef, currentManifestRef, base, current, objectsByPath };
+  return {
+    baseManifestRef,
+    currentManifestRef,
+    base,
+    current,
+    changed: changedResult.changed,
+    changedEntries,
+    objectsByPath,
+  };
 }
 
 async function materializeStagedEntry(params: {
@@ -440,6 +469,14 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     conflictPaths: string[];
   }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
+  return await withWorkspaceHashContext(
+    async () => await applyStagedWorkerWorkspaceResultWithMemo(params),
+  );
+}
+
+async function applyStagedWorkerWorkspaceResultWithMemo(
+  params: Parameters<typeof applyStagedWorkerWorkspaceResult>[0],
+): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
   const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
   if (params.alreadyAccepted || staged.baseManifestRef !== params.expectedBaseManifestRef) {
@@ -459,16 +496,12 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     params.journal.commit(accepted.manifestRef);
     return {
       ...accepted,
-      changed: changedEntryPaths(staged.base, staged.current).size > 0,
+      changed: staged.changed,
     };
   }
-  const changed = changedEntryPaths(staged.base, staged.current);
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
   try {
-    for (const entry of reconciliationEntries(staged.current.entries)) {
-      if (!changed.has(entry.path)) {
-        continue;
-      }
+    for (const entry of staged.changedEntries) {
       const object = staged.objectsByPath.get(entry.path)!;
       const content = await readGitBlob({
         root,
@@ -494,7 +527,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
       journal: params.journal,
       publishAcceptedManifest: params.publishAcceptedManifest,
     });
-    return { ...applied, changed: changed.size > 0 };
+    return { ...applied, changed: staged.changed };
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true });
   }
@@ -523,6 +556,9 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
     throw new Error("Cloud workspace durable result staging was not requested");
   }
   const candidateRef = preparedWorkerWorkspaceResultRef(stagedResult.ref);
+  const active = activeWorkspaceHashContext();
+  const hashMemo = active?.memo ?? new Map();
+  const metrics = active?.metrics;
   let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
   await stageWorkerWorkspaceResult({
     root: params.request.localPath,
@@ -536,13 +572,18 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   return {
     applyPreparedStagedResult: async () => {
       const root = await ensureWorkerWorkspaceResultRepository(params.request.localPath);
-      appliedWorkspaceResult = await applyStagedWorkerWorkspaceResult({
-        root,
-        stagedResultRef: candidateRef,
-        expectedBaseManifestRef: params.request.baseManifestRef,
-        journal: params.request.journal,
-        publishAcceptedManifest: params.publishAcceptedManifest,
-      });
+      appliedWorkspaceResult = await withWorkspaceHashMemo(
+        hashMemo,
+        async () =>
+          await applyStagedWorkerWorkspaceResult({
+            root,
+            stagedResultRef: candidateRef,
+            expectedBaseManifestRef: params.request.baseManifestRef,
+            journal: params.request.journal,
+            publishAcceptedManifest: params.publishAcceptedManifest,
+          }),
+        metrics,
+      );
     },
     getAppliedWorkspaceResult: () => appliedWorkspaceResult,
     verifyLocalStable: async () => {

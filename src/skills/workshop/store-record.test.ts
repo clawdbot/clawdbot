@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseSkillProposalEvaluation,
   parseSkillProposalRecord,
   parseSkillProposalRollback,
   validateSkillProposalRecord,
@@ -74,6 +75,16 @@ const shippedRollback = {
   ],
 } as const;
 
+const validEvaluation = {
+  id: "evaluation-1",
+  proposedVersion: "v1",
+  revisionHash: "a".repeat(64),
+  trigger: "manual",
+  startedAt: "2026-07-29T00:00:00.000Z",
+  completedAt: "2026-07-29T00:00:01.000Z",
+  outcomes: [],
+} as const;
+
 describe("Skill Workshop persisted record validation", () => {
   it("accepts the shipped v1 proposal and rollback shapes unchanged", () => {
     expect(validateSkillProposalRecord(shippedProposal)).toEqual({
@@ -85,6 +96,12 @@ describe("Skill Workshop persisted record validation", () => {
       value: shippedRollback,
     });
     expect(parseSkillProposalRecord(shippedProposal)).toBe(shippedProposal);
+    expect(
+      parseSkillProposalRecord({
+        ...shippedProposal,
+        draftFile: "generations/123e4567-e89b-42d3-a456-426614174000/PROPOSAL.md",
+      }),
+    ).not.toBeNull();
     expect(parseSkillProposalRollback(shippedRollback)).toBe(shippedRollback);
   });
 
@@ -103,5 +120,65 @@ describe("Skill Workshop persisted record validation", () => {
         message: "invalid rollback metadata",
       },
     });
+  });
+
+  it.each([
+    {
+      name: "non-generation draft path",
+      value: { ...shippedProposal, draftFile: "generations/../PROPOSAL.md" },
+    },
+    {
+      name: "duplicate normalized support paths",
+      value: {
+        ...shippedProposal,
+        supportFiles: [
+          shippedProposal.supportFiles[0],
+          { ...shippedProposal.supportFiles[0], path: "references/./proof.md" },
+        ],
+      },
+    },
+    {
+      name: "invalid nested evaluation findings",
+      value: {
+        ...shippedProposal,
+        evaluation: {
+          ...validEvaluation,
+          outcomes: [
+            {
+              evaluatorId: "reviewer",
+              pluginId: "review-plugin",
+              status: "completed",
+              result: {
+                findings: [{ ruleId: "", severity: "info", message: "missing rule id" }],
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      name: "invalid own prototype-key metric",
+      value: {
+        ...shippedProposal,
+        evaluation: {
+          ...validEvaluation,
+          outcomes: [
+            {
+              evaluatorId: "reviewer",
+              pluginId: "review-plugin",
+              status: "completed",
+              result: { metrics: JSON.parse('{"__proto__":null}') as unknown },
+            },
+          ],
+        },
+      },
+    },
+  ])("rejects $name", ({ value }) => {
+    expect(parseSkillProposalRecord(value)).toBeNull();
+  });
+
+  it("keeps evaluation validation at the persisted boundary", () => {
+    expect(parseSkillProposalEvaluation(validEvaluation)).toBe(validEvaluation);
+    expect(parseSkillProposalEvaluation({ ...validEvaluation, targetTreeSha256: 42 })).toBeNull();
   });
 });

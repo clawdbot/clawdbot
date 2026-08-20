@@ -4,7 +4,11 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
+import {
+  copyProviderCatalogOutcomes,
+  copyProviderCatalogResultProjection,
+} from "./provider-catalog-result.js";
+import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
@@ -49,7 +53,6 @@ type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
@@ -141,7 +144,7 @@ export function normalizePluginDiscoveryResult(params: {
   return normalized;
 }
 
-export function runProviderCatalog(params: {
+export async function runProviderCatalog(params: {
   provider: ProviderPlugin;
   config: OpenClawConfig;
   agentDir?: string;
@@ -161,8 +164,13 @@ export function runProviderCatalog(params: {
     source: "env" | "profile" | "none";
     profileId?: string;
   };
+  reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 }) {
-  return resolveProviderCatalogHook(params.provider)?.run({
+  const hook = resolveProviderCatalogHook(params.provider);
+  if (!hook) {
+    return undefined;
+  }
+  const result = await hook.run({
     config: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
@@ -170,6 +178,10 @@ export function runProviderCatalog(params: {
     resolveProviderApiKey: params.resolveProviderApiKey,
     resolveProviderAuth: params.resolveProviderAuth,
   });
+  for (const outcome of copyProviderCatalogOutcomes(result)) {
+    params.reportCatalogOutcome?.(outcome);
+  }
+  return result;
 }
 
 export function runProviderStaticCatalog(params: { provider: ProviderPlugin }) {

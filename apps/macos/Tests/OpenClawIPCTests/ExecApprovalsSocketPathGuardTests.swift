@@ -159,18 +159,12 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
-    func `socket path resolves under the configured state directory`() async throws {
+    func `socket path resolves under the configured state directory`() async {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
 
-        // String-level assertion only. The isolation lock serializes env
-        // mutation but not env consumption: concurrent suites that resolve
-        // OPENCLAW_STATE_DIR mid-window would create this directory and the
-        // old filesystem assertions here flaked on their 0755 default
-        // (#104019). Creation-with-0700 is covered by the explicit-path
-        // tests in this suite.
-        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        await ExecApprovalsStore.withStateDirectory(stateDir) {
             let socketPath = ExecApprovalsStore.socketPath()
             #expect(socketPath == stateDir.appendingPathComponent("exec-approvals.sock").path)
         }

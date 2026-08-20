@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { pushServerUiPrefs } from "./server-prefs.ts";
 
 export type RequestMock = ReturnType<

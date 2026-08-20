@@ -1,8 +1,8 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
@@ -29,17 +29,9 @@ function normalizeToolHistoryType(value: unknown): string | undefined {
   return normalized ? normalized.replace(/_/g, "") : undefined;
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  try {
-    return readRecord(JSON.parse(value));
-  } catch {
-    return undefined;
-  }
-}
-
 function readMaybeJsonRecord(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === "string") {
-    return parseJsonRecord(value);
+    return safeParseJsonRecord(value);
   }
   return readRecord(value);
 }
@@ -125,7 +117,7 @@ function readMessageToolVisibleText(args: Record<string, unknown>): string | und
   for (const field of ["message", "text", "content", "body", "caption"] as const) {
     const value = args[field];
     if (typeof value === "string" && value.trim()) {
-      return stripInlineDirectiveTagsForDisplay(value).text;
+      return value;
     }
   }
   return undefined;

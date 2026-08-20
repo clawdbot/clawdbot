@@ -2,18 +2,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   ensureMigrationDir,
   existsDir,
-  fileExists,
+  migrationFileExists,
   readSessionStoreJson5,
   safeReadDir,
 } from "./state-migrations.fs.js";
 
 describe("state migration fs helpers", () => {
   it("reads directories safely and creates missing directories", async () => {
-    await withTempDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
       const nested = path.join(base, "nested");
 
       expect(safeReadDir(nested)).toStrictEqual([]);
@@ -27,20 +27,20 @@ describe("state migration fs helpers", () => {
   });
 
   it("distinguishes files from directories", async () => {
-    await withTempDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
       const filePath = path.join(base, "store.json");
       const dirPath = path.join(base, "dir");
       fs.writeFileSync(filePath, "{}", "utf8");
       fs.mkdirSync(dirPath);
 
-      expect(fileExists(filePath)).toBe(true);
-      expect(fileExists(dirPath)).toBe(false);
-      expect(fileExists(path.join(base, "missing.json"))).toBe(false);
+      expect(migrationFileExists(filePath)).toBe(true);
+      expect(migrationFileExists(dirPath)).toBe(false);
+      expect(migrationFileExists(path.join(base, "missing.json"))).toBe(false);
     });
   });
 
   it("parses json5 session stores and rejects invalid shapes", async () => {
-    await withTempDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-state-migrations-fs-" }, async (base) => {
       const okPath = path.join(base, "store.json");
       const jsonPath = path.join(base, "plain.json");
       const badPath = path.join(base, "bad.json");

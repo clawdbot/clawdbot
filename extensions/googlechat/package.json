@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -66,39 +66,65 @@
             "key": "token",
             "kind": "string",
             "sensitive": true,
-            "cli": { "flags": "--token <json>", "description": "Google Chat service account JSON" }
+            "cli": {
+              "flags": "--token <json>",
+              "description": "Google Chat service account JSON"
+            }
           },
           {
             "key": "tokenFile",
             "kind": "string",
             "sensitive": true,
-            "cli": { "flags": "--token-file <path>", "description": "Google Chat service account file" }
+            "cli": {
+              "flags": "--token-file <path>",
+              "description": "Google Chat service account file"
+            }
           },
           {
             "key": "audienceType",
             "kind": "choice",
-            "choices": ["app-url", "project-number"],
-            "cli": { "flags": "--audience-type <type>", "description": "Google Chat audience type" }
+            "choices": [
+              "app-url",
+              "project-number"
+            ],
+            "cli": {
+              "flags": "--audience-type <type>",
+              "description": "Google Chat audience type"
+            }
           },
           {
             "key": "audience",
             "kind": "string",
-            "cli": { "flags": "--audience <value>", "description": "Google Chat audience value" }
+            "cli": {
+              "flags": "--audience <value>",
+              "description": "Google Chat audience value"
+            }
           },
           {
             "key": "webhookPath",
             "kind": "string",
-            "cli": { "flags": "--webhook-path <path>", "description": "Google Chat webhook path" }
+            "cli": {
+              "flags": "--webhook-path <path>",
+              "description": "Google Chat webhook path"
+            }
           },
           {
             "key": "webhookUrl",
             "kind": "string",
-            "cli": { "flags": "--webhook-url <url>", "description": "Google Chat webhook URL" }
+            "cli": {
+              "flags": "--webhook-url <url>",
+              "description": "Google Chat webhook URL"
+            }
           },
           {
             "key": "useEnv",
             "kind": "boolean",
-            "cli": { "flags": "--use-env", "description": "Use Google Chat environment credentials" }
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use Google Chat environment credentials"
+            },
+            "envVars": ["GOOGLE_CHAT_SERVICE_ACCOUNT", "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"],
+            "envVarMode": "any"
           }
         ]
       }
@@ -109,10 +135,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2"
+      "openclawVersion": "2026.8.1"
     },
     "release": {
       "publishToClawHub": true,

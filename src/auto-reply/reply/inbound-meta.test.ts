@@ -436,6 +436,7 @@ describe("buildInboundUserContextPrefix", () => {
     const entry = createGoalSessionEntry("active");
     entry.totalTokens = 10;
     entry.totalTokensFresh = true;
+    entry.totalTokensVersion = 1;
     entry.goal = { ...entry.goal!, tokenBudget: 10 };
 
     expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");
@@ -732,13 +733,30 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("labels reply context as the current message target", () => {
     const text = buildInboundUserContextPrefix({
+      ReplyToId: "message-41",
       ReplyToSender: "Quoter",
       ReplyToBody: "quoted body",
     } as TemplateContext);
 
     const reply = parseReplyPayload(text);
+    expect(reply["message_id"]).toBe("message-41");
     expect(reply["sender_label"]).toBe("Quoter");
     expect(reply["body"]).toBe("quoted body");
+  });
+
+  it("renders reply metadata without a body but not without any reply fields", () => {
+    const text = buildInboundUserContextPrefix({
+      ReplyToId: "message-42",
+      ReplyToSender: "Attachment Sender",
+    } as TemplateContext);
+
+    expect(parseReplyPayload(text)).toEqual({
+      message_id: "message-42",
+      sender_label: "Attachment Sender",
+    });
+    expect(buildInboundUserContextPrefix({} as TemplateContext)).not.toContain(
+      "Reply target of current user message",
+    );
   });
 
   it("renders hydrated reply chain instead of duplicate one-hop reply target", () => {

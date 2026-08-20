@@ -12,11 +12,17 @@ import {
 } from "./fast-mode.js";
 
 describe("resolveFastModeState", () => {
-  it("prefers session overrides", () => {
+  it("prefers session overrides over per-agent and global defaults", () => {
     const state = resolveFastModeState({
-      cfg: {} as OpenClawConfig,
+      cfg: {
+        agents: {
+          defaults: { fastModeDefault: "auto" },
+          list: [{ id: "main", fastModeDefault: false }],
+        },
+      } as OpenClawConfig,
       provider: "openai",
       model: "gpt-4o",
+      agentId: "main",
       sessionEntry: { fastMode: true },
     });
 
@@ -37,10 +43,47 @@ describe("resolveFastModeState", () => {
     expect(state.enabled).toBe(true);
   });
 
-  it("uses agent fastModeDefault when present", () => {
+  it.each([
+    [true, false],
+    [false, true],
+    ["auto", false],
+  ] as const)(
+    "uses rosterless global fastModeDefault %s over model config",
+    (fastModeDefault, modelFastMode) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            fastModeDefault,
+            models: {
+              "openai/gpt-4o": { params: { fastMode: modelFastMode } },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const state = resolveFastModeState({
+        cfg,
+        provider: "openai",
+        model: "gpt-4o",
+        agentId: "main",
+      });
+
+      expect(state.mode).toBe(fastModeDefault);
+      expect(state.enabled).toBe(fastModeDefault === "auto" ? true : fastModeDefault);
+      expect(state.source).toBe("agent");
+    },
+  );
+
+  it("prefers per-agent fastModeDefault over the global default", () => {
     const cfg = {
       agents: {
-        list: [{ id: "alpha", fastModeDefault: true }],
+        defaults: {
+          fastModeDefault: true,
+          models: {
+            "openai/gpt-4o": { params: { fastMode: true } },
+          },
+        },
+        list: [{ id: "main", fastModeDefault: false }],
       },
     } as OpenClawConfig;
 
@@ -48,10 +91,10 @@ describe("resolveFastModeState", () => {
       cfg,
       provider: "openai",
       model: "gpt-4o",
-      agentId: "alpha",
+      agentId: "main",
     });
 
-    expect(state.enabled).toBe(true);
+    expect(state.mode).toBe(false);
     expect(state.source).toBe("agent");
   });
 

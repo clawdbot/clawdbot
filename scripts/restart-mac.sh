@@ -153,6 +153,12 @@ fi
 if [[ "$TARGET_ONLY" -eq 1 && -n "$APP_BUNDLE" ]]; then
   fail "--target-only does not accept OPENCLAW_APP_BUNDLE"
 fi
+if [[ -n "${OPENCLAW_PROFILE:-}" ]]; then
+  normalized_profile="$(printf '%s' "${OPENCLAW_PROFILE}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${normalized_profile}" != "default" ]]; then
+    fail "restart-mac.sh cannot safely target one app profile; launch that profile directly instead"
+  fi
+fi
 canonicalize_app_bundle
 
 mkdir -p "$(dirname "$LOG_PATH")"
@@ -399,7 +405,6 @@ elif [ "$SIGN" -eq 1 ]; then
     fail "No signing identity found. Use --no-sign or install a signing key."
   fi
   unset ALLOW_ADHOC_SIGNING
-  unset SIGN_IDENTITY
 fi
 
 # 3) Package and sign outside the live bundle. A failed package/sign operation
@@ -505,14 +510,15 @@ fi
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
 # LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
 # That can cause launchd spawn failures and is undesirable for a GUI app anyway.
-run_step "launch app" env -i \
-  HOME="${HOME}" \
-  USER="${USER:-$(id -un)}" \
-  LOGNAME="${LOGNAME:-$(id -un)}" \
-  TMPDIR="${TMPDIR:-/tmp}" \
-  PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-  LANG="${LANG:-en_US.UTF-8}" \
-  /usr/bin/open "${OPEN_ARGS[@]}"
+LAUNCH_ENV=(
+  "HOME=${HOME}"
+  "USER=${USER:-$(id -un)}"
+  "LOGNAME=${LOGNAME:-$(id -un)}"
+  "TMPDIR=${TMPDIR:-/tmp}"
+  "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  "LANG=${LANG:-en_US.UTF-8}"
+)
+run_step "launch app" env -i "${LAUNCH_ENV[@]}" /usr/bin/open "${OPEN_ARGS[@]}"
 
 # 5) Verify the app is alive.
 sleep 1.5

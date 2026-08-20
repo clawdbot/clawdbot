@@ -3,7 +3,7 @@ import {
   compareOpenClawVersions,
   parseArgs,
   resolveDefaultReleaseUpgradeBaseline,
-} from "../../scripts/lib/release-upgrade-baseline.mjs";
+} from "../../scripts/lib/release-upgrade-baseline.mts";
 
 describe("release upgrade baseline resolver", () => {
   it("rejects short flag values before resolving baselines", () => {

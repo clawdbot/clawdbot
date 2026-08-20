@@ -145,6 +145,8 @@ vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
     const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
+  loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
+    await modelCatalogMocks.loadPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({

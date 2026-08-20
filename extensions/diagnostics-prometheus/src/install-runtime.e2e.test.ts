@@ -3,10 +3,14 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
@@ -14,7 +18,7 @@ const packageName = "@openclaw/diagnostics-prometheus";
 const pluginId = "diagnostics-prometheus";
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const pluginRoot = path.resolve(import.meta.dirname, "..");
-const tempDirs: string[] = [];
+const tempWorkspaces: TempWorkspace[] = [];
 const children: ChildProcess[] = [];
 
 async function stopChild(child: ChildProcess): Promise<void> {
@@ -31,14 +35,8 @@ async function stopChild(child: ChildProcess): Promise<void> {
 
 afterEach(async () => {
   await Promise.all(children.splice(0).map(stopChild));
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prometheus-install-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 async function reservePort(): Promise<number> {
   const server = net.createServer();
@@ -260,7 +258,12 @@ async function waitForGateway(params: {
 
 describe("diagnostics-prometheus managed install runtime", () => {
   it("installs the exact official package and exports metrics at Gateway startup", async () => {
-    const root = await makeTempDir();
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-prometheus-install-",
+    });
+    tempWorkspaces.push(workspace);
+    const root = workspace.dir;
     const home = path.join(root, "home");
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");

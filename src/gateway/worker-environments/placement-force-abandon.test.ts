@@ -30,7 +30,7 @@ describe("forced worker environment abandonment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("records result loss and releases a pending worker claim before teardown", async () => {
+  it("drains nested operations before recording result loss and releasing the claim", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
@@ -44,12 +44,40 @@ describe("forced worker environment abandonment", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
     store.markWorkspaceResultPending(claim);
+    const binding = claim;
+    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    expect(
+      store.beginWorkerSessionToolOperation({
+        claim: binding,
+        toolName: "sessions_send",
+        toolCallId: "forced-send",
+        requestDigest: "forced-send-digest",
+      }),
+    ).toMatchObject({ kind: "execute" });
 
-    await forceAbandonWorkerEnvironment({
+    const abandonment = forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
       resolveWorkspacePath: async () => root,
     });
+
+    await vi.waitFor(() => {
+      expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+    });
+    expect(store.get(REQUEST.sessionId)).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(
+      store.completeWorkerSessionToolOperation({
+        sourceSessionId: claim.sessionId,
+        sourceClaimId: claim.claimId,
+        toolCallId: "forced-send",
+        requestDigest: "forced-send-digest",
+        resultJson: '{"status":"ok"}',
+      }),
+    ).toBe(true);
+    await abandonment;
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",

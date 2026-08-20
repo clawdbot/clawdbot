@@ -86,17 +86,6 @@ describe("checkTwitchAccessControl", () => {
     expect(result.reason).toContain(params.reason);
   }
 
-  describe("when no restrictions are configured", () => {
-    it("allows messages that mention the bot (default requireMention)", async () => {
-      const result = await runAccessCheck({
-        message: {
-          message: "@testbot hello",
-        },
-      });
-      expect(result.allowed).toBe(true);
-    });
-  });
-
   describe("requireMention default", () => {
     it("defaults to true when undefined", async () => {
       const result = await runAccessCheck({

@@ -182,18 +182,14 @@ describe("native Gateway protocol levels", () => {
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
-    const swiftSupportPath =
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannelSupport.swift";
-    const swiftSupport = await readRepoFile(swiftSupportPath);
+    const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
+    const swiftChannel = await readRepoFile(swiftChannelPath);
     assertPattern(
-      swiftSupport,
-      swiftSupportPath,
+      swiftChannel,
+      swiftChannelPath,
       /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
       "node connections must use the node compatibility floor without changing operator clients.",
     );
-
-    const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
-    const swiftChannel = await readRepoFile(swiftChannelPath);
     assertPattern(
       swiftChannel,
       swiftChannelPath,
@@ -335,6 +331,37 @@ describe("native Gateway protocol levels", () => {
       swiftGeneratedPath,
       /case terminal\(TerminalSessionApprovalEvent\)/,
       "SessionApprovalEvent must decode terminal transitions.",
+    );
+  });
+
+  it("emits the scope upgrade result as a discriminated Swift union", async () => {
+    const swiftGeneratedPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum ScopeUpgradeResult: Codable, Sendable \{/,
+      "missing the generated ScopeUpgradeResult union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case approved\(ScopeUpgradeApproved\)/,
+      "ScopeUpgradeResult must decode approved outcomes.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case rejected\(ScopeUpgradeRejected\)/,
+      "ScopeUpgradeResult must decode rejected outcomes.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case expired\(ScopeUpgradeExpired\)/,
+      "ScopeUpgradeResult must decode expired outcomes.",
     );
   });
 });

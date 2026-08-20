@@ -50,10 +50,6 @@ function clearZaloWebhookSecurityStateForTest(): void {
   webhookAnomalyTracker.clear();
 }
 
-function getZaloWebhookRateLimitStateSizeForTest(): number {
-  return webhookRateLimiter.size();
-}
-
 function getZaloWebhookStatusCounterSizeForTest(): number {
   return webhookAnomalyTracker.size();
 }
@@ -192,7 +188,6 @@ async function handleZaloWebhookRequest(
 
 export const zaloWebhookRuntime = {
   clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest,
   registerZaloWebhookTarget,

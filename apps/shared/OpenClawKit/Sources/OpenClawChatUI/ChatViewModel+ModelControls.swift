@@ -3,6 +3,35 @@ import Foundation
 extension OpenClawChatViewModel {
     public static let verboseLevelOptions = ["off", "on", "full"]
 
+    public var modelPickerSections: ChatModelPickerSections {
+        let defaultProvider = ChatModelPickerStore.resolvedDefaultProvider(
+            provider: self.sessionDefaults?.modelProvider,
+            model: self.sessionDefaults?.model)
+        return ChatModelPickerStore.sections(
+            choices: self.modelChoices,
+            favorites: self.modelPickerFavorites,
+            recents: self.modelPickerRecents,
+            defaultProvider: defaultProvider)
+    }
+
+    public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
+        ChatModelPickerStore.isDefaultModel(
+            model,
+            defaultProvider: self.sessionDefaults?.modelProvider,
+            defaultModel: self.sessionDefaults?.model)
+    }
+
+    public var isSelectedModelPinned: Bool {
+        self.modelSelectionID != Self.defaultModelSelectionID &&
+            self.modelPickerFavorites.contains(self.modelSelectionID)
+    }
+
+    public func toggleSelectedModelPinned() {
+        guard self.modelSelectionID != Self.defaultModelSelectionID else { return }
+        self.modelPickerStore.toggleFavorite(self.modelSelectionID)
+        self.modelPickerFavorites = self.modelPickerStore.favorites
+    }
+
     public var thinkingSelectionID: String {
         self.thinkingOverrideIsInherited ? Self.inheritedThinkingSelectionID : self.thinkingLevel
     }

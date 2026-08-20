@@ -10,14 +10,14 @@ import {
   cancelFlowById,
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
-  completeTaskRunByRunId,
-  createQueuedTaskRun as createQueuedTaskRunOrNull,
-  createRunningTaskRun as createRunningTaskRunOrNull,
-  failTaskRunByRunId,
-  recordTaskRunProgressByRunId,
+  completeTaskRunByRunIdCore as completeTaskRunByRunId,
+  createQueuedTaskRunCore as createQueuedTaskRunOrNull,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
+  failTaskRunByRunIdCore as failTaskRunByRunId,
+  recordTaskRunProgressByRunIdCore as recordTaskRunProgressByRunId,
   runTaskInFlowForOwner,
-  setDetachedTaskDeliveryStatusByRunId,
-  startTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunIdCore as setDetachedTaskDeliveryStatusByRunId,
+  startTaskRunByRunIdCore as startTaskRunByRunId,
 } from "./task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -99,7 +99,7 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../agents/subagent-control.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 

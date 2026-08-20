@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * Sandbox registry pruning.
  *
@@ -5,7 +6,6 @@
  */
 import { getRuntimeConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";

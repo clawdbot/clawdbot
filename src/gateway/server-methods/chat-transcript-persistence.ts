@@ -1,9 +1,10 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
+import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
   rewriteTranscriptEventRowsExact,
@@ -11,11 +12,11 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -67,22 +68,13 @@ export function assistantTranscriptScope(
   };
 }
 
-function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
-  return event && typeof event === "object" && !Array.isArray(event)
-    ? (event as Record<string, unknown>)
-    : undefined;
-}
-
 function transcriptEventId(event: TranscriptEvent): string | undefined {
   const id = transcriptEventRecord(event)?.id;
   return typeof id === "string" && id.trim().length > 0 ? id : undefined;
 }
 
 function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
-  const message = transcriptEventRecord(event)?.message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return transcriptEventRecord(transcriptEventRecord(event)?.message);
 }
 
 function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
@@ -163,9 +155,8 @@ function mergeManagedMediaIntoAssistantContent(params: {
       continue;
     }
     const split = splitMediaFromOutput(block.text);
-    const directiveTagsChanged = stripInlineDirectiveTagsForDisplay(split.text).changed;
     const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: !directiveTagsChanged,
+      preserveBoundaries: true,
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
@@ -310,7 +301,7 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,
@@ -489,11 +480,12 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!mergedContent) {
     return null;
   }
+  const rewrittenMessage = applyAssistantDeliveryDirectives({
+    ...target.message,
+    content: mergedContent,
+  });
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
-    message: {
-      ...target.message,
-      content: mergedContent,
-    },
+    message: rewrittenMessage,
   });
   const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
     allowInitialGenerationMaterialization: initialGenerationMaterialized,

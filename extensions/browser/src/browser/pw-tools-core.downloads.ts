@@ -49,6 +49,7 @@ function createExplicitDownloadCapture(params: {
   timeoutMs: number;
   outPath?: string;
   rootDir?: string;
+  signal?: AbortSignal;
 }) {
   params.state.armIdDownload = bumpDownloadArmId();
   const armId = params.state.armIdDownload;
@@ -56,6 +57,7 @@ function createExplicitDownloadCapture(params: {
     mode: "explicit",
     outputPath: params.outPath,
     outputRoot: params.rootDir,
+    signal: params.signal,
     beforeSave: () => {
       if (params.state.armIdDownload !== armId) {
         throw new Error("Download was superseded by another waiter");
@@ -69,12 +71,15 @@ function resolveImplicitDownloadRoot(): string {
 }
 
 /** Arms the next page file chooser and fills it with strict existing paths. */
-export async function armFileUploadViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  paths?: string[];
-  timeoutMs?: number;
-}): Promise<void> {
+export async function armFileUploadViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    browserFilesystemLocal?: boolean;
+    targetId?: string;
+    paths?: string[];
+    timeoutMs?: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const key = opts.cdpUrl;
   const armId = bumpUploadArmId();
   pendingUploadClaims.set(key, armId);
@@ -115,7 +120,17 @@ export async function armFileUploadViaPlaywright(opts: {
           await dismissFileChooser(page);
           return;
         }
-        await fileChooser.setFiles(uploadPathsResult.paths);
+        await setFileChooserFilesViaPlaywright({
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.targetId,
+          page,
+          fileChooser,
+          paths: uploadPathsResult.paths,
+          timeoutMs: timeout,
+          browserFilesystemLocal: opts.browserFilesystemLocal,
+          ssrfPolicy: opts.ssrfPolicy,
+          browserProxyMode: opts.browserProxyMode,
+        });
       })
       .catch(() => {
         // Ignore timeouts; the chooser may never appear.
@@ -131,6 +146,7 @@ export async function armFileUploadViaPlaywright(opts: {
 export async function uploadViaPlaywright(
   opts: {
     cdpUrl: string;
+    browserFilesystemLocal?: boolean;
     targetId?: string;
     ref: string;
     paths: string[];
@@ -274,6 +290,7 @@ export async function uploadViaPlaywright(
           fileChooser: chooser,
           paths: uploadPathsResult.paths,
           timeoutMs: Math.max(1, deadline - Date.now()),
+          browserFilesystemLocal: opts.browserFilesystemLocal,
           ssrfPolicy: opts.ssrfPolicy,
           browserProxyMode: opts.browserProxyMode,
         });
@@ -359,6 +376,7 @@ export async function waitForDownloadViaPlaywright(opts: {
   targetId?: string;
   path?: string;
   rootDir?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
@@ -371,13 +389,9 @@ export async function waitForDownloadViaPlaywright(opts: {
     timeoutMs: timeout,
     outPath: opts.path,
     rootDir: opts.path?.trim() ? opts.rootDir : (opts.rootDir ?? resolveImplicitDownloadRoot()),
+    signal: opts.signal,
   });
-  try {
-    return await capture.promise;
-  } catch (err) {
-    capture.cancel();
-    throw err;
-  }
+  return await capture.promise;
 }
 
 /** Clicks an element ref and saves the download triggered by that click. */
@@ -387,6 +401,7 @@ export async function downloadViaPlaywright(opts: {
   ref: string;
   path: string;
   rootDir?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
 }): Promise<BrowserDownloadResult> {
   const page = await getPageForTargetId(opts);
@@ -406,17 +421,17 @@ export async function downloadViaPlaywright(opts: {
     timeoutMs: timeout,
     outPath,
     rootDir: opts.rootDir,
+    signal: opts.signal,
   });
+  void capture.promise.catch(() => {});
   try {
     const locator = refLocator(page, ref);
-    try {
-      await locator.click({ timeout });
-    } catch (err) {
-      throw toAIFriendlyError(err, ref);
-    }
-    return await capture.promise;
+    await locator.click({ timeout, signal: opts.signal });
   } catch (err) {
     capture.cancel();
-    throw err;
+    throw opts.signal?.aborted && opts.signal.reason instanceof Error
+      ? opts.signal.reason
+      : toAIFriendlyError(err, ref);
   }
+  return await capture.promise;
 }

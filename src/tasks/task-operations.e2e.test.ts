@@ -18,7 +18,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun, recordTaskRunProgressByRunId } from "./task-executor.js";
+import { createRunningTaskRunCore, recordTaskRunProgressByRunIdCore } from "./task-executor.js";
 import { createTaskRecord, getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
 import {
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -122,7 +122,7 @@ describe("task operations product boundary", () => {
             notifyPolicy: "silent",
           });
           vi.setSystemTime(now - 40 * 60_000);
-          const stale = createRunningTaskRun({
+          const stale = createRunningTaskRunCore({
             runtime: "cli",
             requesterSessionKey: OWNER_KEY,
             runId: "run-a07-stale",
@@ -134,7 +134,7 @@ describe("task operations product boundary", () => {
           vi.setSystemTime(now);
           vi.useRealTimers();
 
-          const operatorTask = createRunningTaskRun({
+          const operatorTask = createRunningTaskRunCore({
             runtime: "cli",
             requesterSessionKey: OWNER_KEY,
             runId: "run-a07-operator",
@@ -187,7 +187,7 @@ describe("task operations product boundary", () => {
           ]);
           expect(requireTask(operatorTask.taskId).notifyPolicy).toBe("state_changes");
 
-          recordTaskRunProgressByRunId({
+          recordTaskRunProgressByRunIdCore({
             runId: "run-a07-operator",
             progressSummary: "Indexed 3 records",
             eventSummary: "Indexed 3 records",

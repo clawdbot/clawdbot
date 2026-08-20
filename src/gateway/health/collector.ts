@@ -1,14 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
@@ -19,23 +21,23 @@ import {
   toPublicPluginVerificationDiagnostic,
 } from "../../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-  evaluateChannelHealth,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
+import { buildContextEngineHealthSummary } from "./context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
   ChannelHealthSummary,
-  ContextEngineHealthSummary,
   HealthSummary,
   PluginHealthErrorSummary,
   PluginHealthSummary,
@@ -56,28 +58,24 @@ const debugHealth = (
   }
 };
 
-function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefined {
-  const quarantined: ContextEngineHealthSummary["quarantined"] = [];
-  for (const entry of listContextEngineQuarantines()) {
-    const summary: ContextEngineHealthSummary["quarantined"][number] = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: entry.failedAt.getTime(),
-    };
-    if (entry.owner) {
-      summary.owner = entry.owner;
-    }
-    quarantined.push(summary);
-  }
-  return quarantined.length > 0 ? { quarantined } : undefined;
-}
-
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
+function attachPluginActivation(
+  plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
+  error: PluginHealthErrorSummary,
+): PluginHealthErrorSummary {
+  if (plugin?.activationSource) {
+    error.activationSource = plugin.activationSource;
+  }
+  if (plugin?.activationReason) {
+    error.activationReason = plugin.activationReason;
+  }
+  return error;
+}
+
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
@@ -97,10 +95,10 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
     ordered.push({ id, name: typeof entry.name === "string" ? entry.name : undefined });
   }
 
-  if (!seen.has(defaultAgentId)) {
+  if (defaultAgentId && !seen.has(defaultAgentId)) {
     ordered.unshift({ id: defaultAgentId });
   }
-  if (ordered.length === 0) {
+  if (ordered.length === 0 && defaultAgentId) {
     ordered.push({ id: defaultAgentId });
   }
 
@@ -108,6 +106,7 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
 }
 
 export async function buildHealthSessionSummary(storePath: string, agentId?: string) {
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
   const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   let listed: ReturnType<typeof listSessionEntriesReadOnly>;
@@ -133,7 +132,7 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
     age: session.updatedAt ? Date.now() - session.updatedAt : null,
   }));
   return {
-    path: storePath,
+    path: databasePath,
     count: sessions.length,
     recent,
   } satisfies HealthSummary["sessions"];
@@ -153,7 +152,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = (registry?.plugins ?? [])
+  const loadErrors = (registry?.plugins ?? [])
     .filter(
       (plugin) =>
         plugin.status === "error" &&
@@ -166,25 +165,33 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
             degradedPluginMatchesRoot(degraded, plugin.rootDir ?? ""),
         ),
     )
-    .map((plugin) => {
-      const error: PluginHealthErrorSummary = {
+    .map((plugin) =>
+      attachPluginActivation(plugin, {
         id: plugin.id,
         origin: plugin.origin,
         activated: plugin.activated === true,
         error: plugin.error ?? "unknown plugin load error",
-      };
-      if (plugin.activationSource) {
-        error.activationSource = plugin.activationSource;
-      }
-      if (plugin.activationReason) {
-        error.activationReason = plugin.activationReason;
-      }
-      if (plugin.failurePhase) {
-        error.failurePhase = plugin.failurePhase;
-      }
-      return error;
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+        ...(plugin.failurePhase ? { failurePhase: plugin.failurePhase } : {}),
+      }),
+    );
+  const serviceErrors = registry
+    ? listPluginServiceHealthFailures(registry).map((failure) =>
+        attachPluginActivation(
+          registry.plugins.find((entry) => entry.id === failure.pluginId),
+          {
+            id: failure.pluginId,
+            origin: failure.origin,
+            // Starting the registered service is the authoritative activation fact.
+            activated: true,
+            failurePhase: "service",
+            error: `service ${failure.serviceId}: ${failure.error}`,
+          },
+        ),
+      )
+    : [];
+  const errors = [...loadErrors, ...serviceErrors].toSorted(
+    (left, right) => left.id.localeCompare(right.id) || left.error.localeCompare(right.error),
+  );
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;
   }
@@ -206,7 +213,7 @@ export async function collectGatewayHealthSnapshot(params: {
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id });
     const sessionCacheKey = `${storePath}\0${entry.id}`;
     const sessions =
       sessionCache.get(sessionCacheKey) ?? (await buildHealthSessionSummary(storePath, entry.id));
@@ -219,15 +226,24 @@ export async function collectGatewayHealthSnapshot(params: {
       sessions,
     });
   }
-  const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const heartbeatSeconds = defaultAgent?.heartbeat.everyMs
-    ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+  const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const configuredHeartbeatAgentId = normalizeOptionalString(
+    cfg.agents?.defaults?.heartbeat?.agentId,
+  );
+  const heartbeatSummaryAgent =
+    (configuredHeartbeatAgentId
+      ? agents.find((agent) => agent.agentId === normalizeAgentId(configuredHeartbeatAgentId))
+      : undefined) ??
+    agents.find((agent) => agent.heartbeat.enabled) ??
+    summaryAgent;
+  const heartbeatSeconds = heartbeatSummaryAgent?.heartbeat.everyMs
+    ? Math.round(heartbeatSummaryAgent.heartbeat.everyMs / 1000)
     : 0;
   const sessions =
-    defaultAgent?.sessions ??
+    summaryAgent?.sessions ??
     (await buildHealthSessionSummary(
-      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
-      defaultAgentId,
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: summaryAgent?.agentId }),
+      summaryAgent?.agentId,
     ));
 
   const start = Date.now();
@@ -248,7 +264,9 @@ export async function collectGatewayHealthSnapshot(params: {
       cfg,
       accountIds,
     });
-    const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+    const boundAccounts = defaultAgentId
+      ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+      : [];
     const preferredAccountId = resolvePreferredAccountId({
       accountIds,
       defaultAccountId,
@@ -331,13 +349,12 @@ export async function collectGatewayHealthSnapshot(params: {
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
-      const health = evaluateChannelHealth(snapshot, {
+      const healthState = resolveChannelHealthState(snapshot, {
         channelId: plugin.id,
         now: Date.now(),
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      const healthState = resolveChannelHealthState(snapshot, health);
       if (healthState !== undefined) {
         snapshot.healthState = healthState;
       }
@@ -413,7 +430,7 @@ export async function collectGatewayHealthSnapshot(params: {
     channelOrder,
     channelLabels,
     heartbeatSeconds,
-    defaultAgentId,
+    ...(defaultAgentId ? { defaultAgentId } : {}),
     agents,
     sessions: {
       path: sessions.path,

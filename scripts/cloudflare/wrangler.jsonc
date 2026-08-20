@@ -1,0 +1,52 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openclaw-cloudflare",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+  },
+  "vars": {
+    "LITESTREAM_BUCKET": "openclaw-backups",
+    "LITESTREAM_ENDPOINT": "https://<account-id>.r2.cloudflarestorage.com",
+    "LITESTREAM_REGION": "auto",
+    // Keep false for Discord, Slack Socket Mode, WhatsApp, or any other socket channel.
+    "OPENCLAW_WEBHOOK_ONLY": "false",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OPENCLAW_CONTAINER",
+        "class_name": "OpenClawContainer",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["OpenClawContainer"],
+    },
+  ],
+  "r2_buckets": [
+    {
+      // Documentation/Worker access only. Litestream uses the R2 S3 API and
+      // credentials supplied with `wrangler secret put`, not this binding.
+      "binding": "OPENCLAW_BACKUPS",
+      "bucket_name": "openclaw-backups",
+    },
+  ],
+  "containers": [
+    {
+      "name": "openclaw-cloudflare",
+      "class_name": "OpenClawContainer",
+      // Build scripts/cloudflare/Dockerfile for linux/amd64, publish it publicly
+      // on Docker Hub, then replace this placeholder with its immutable digest.
+      "image": "docker.io/<docker-hub-user>/openclaw-cloudflare@sha256:<derived-image-digest>",
+      "instance_type": "standard-2",
+      "max_instances": 1,
+      // For debugging you can add `"ssh": { "enabled": true }` to allow
+      // wrangler-mediated SSH for accounts with container write access.
+    },
+  ],
+}

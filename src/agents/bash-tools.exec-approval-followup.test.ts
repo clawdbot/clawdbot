@@ -146,6 +146,17 @@ function expectStableDirectDelivery(params: Record<string, unknown>, approvalId:
 }
 
 describe("exec approval followup", () => {
+  it("carries the prepared agent owner for a bare session key", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-bare-owner",
+      agentId: "research",
+      sessionKey: "global",
+      resultText: "Exec finished (gateway id=req-bare-owner, code 0)\nok",
+    });
+
+    expectGatewayAgentFollowup({ sessionKey: "global", agentId: "research" });
+  });
+
   it("uses an explicit denial prompt when the command did not run", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-1",
@@ -758,6 +769,38 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedMessage: "delivery was suppressed",
+    },
+    {
+      suppressionReason: "adapter_returned_no_identity",
+      expectedMessage: "delivery could not be confirmed",
+    },
+  ] as const)(
+    "rejects direct followup after $suppressionReason",
+    async ({ suppressionReason, expectedMessage }) => {
+      vi.mocked(sendMessage).mockResolvedValueOnce({
+        channel: "discord",
+        to: "123",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "suppressed",
+        suppressionReason,
+      });
+
+      await expect(
+        sendExecApprovalFollowup({
+          approvalId: `req-${suppressionReason}`,
+          turnSourceChannel: "discord",
+          turnSourceTo: "123",
+          resultText: "Exec finished (gateway id=req-suppressed, code 0)\nall good",
+        }),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
+
   it("redacts credentials before direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
 
@@ -781,7 +824,8 @@ describe("exec approval followup", () => {
   it("can force direct delivery even when a session key exists", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-direct",
-      sessionKey: "agent:main:telegram:direct:123",
+      agentId: "research",
+      sessionKey: "global",
       turnSourceChannel: "telegram",
       turnSourceTo: "123",
       turnSourceAccountId: "default",
@@ -794,6 +838,7 @@ describe("exec approval followup", () => {
       channel: "telegram",
       to: "123",
       accountId: "default",
+      agentId: "research",
       content: "pasteable diagnostics report",
       idempotencyKey: "exec-approval-followup:req-direct",
     });

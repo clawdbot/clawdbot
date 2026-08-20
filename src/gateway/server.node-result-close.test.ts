@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./server/ws-connection/node-lifecycle-dispatch.js";
@@ -15,12 +15,12 @@ const pairingRead = vi.hoisted(() => ({
   release: null as (() => void) | null,
 }));
 
-vi.mock("../infra/node-pairing-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/node-pairing-state.js")>();
+vi.mock("../infra/device-pairing-node-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-pairing-node-state.js")>();
   return {
     ...actual,
-    resolveCurrentNodePairingBinding: async (nodeId: string) => {
-      const current = await actual.resolveCurrentNodePairingBinding(nodeId);
+    resolveCurrentPairedDeviceNodeBinding: async (nodeId: string) => {
+      const current = await actual.resolveCurrentPairedDeviceNodeBinding(nodeId);
       if (pairingRead.blocked) {
         pairingRead.onBlocked?.();
         await pairingRead.blocked;

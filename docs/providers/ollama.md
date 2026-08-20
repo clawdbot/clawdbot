@@ -86,11 +86,10 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
     Non-interactive:
 
     ```bash
-    openclaw onboard --non-interactive \
+    openclaw onboard --non-interactive --accept-risk --skip-health \
       --auth-choice ollama \
       --custom-base-url "http://ollama-host:11434" \
-      --custom-model-id "qwen3.5:27b" \
-      --accept-risk
+      --custom-model-id "qwen3.5:27b"
     ```
 
     `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
@@ -421,9 +420,16 @@ timeout and cap `num_ctx`:
   },
   tools: {
     media: {
+      models: [
+        {
+          provider: "ollama",
+          model: "qwen2.5vl:7b",
+          timeoutSeconds: 300,
+          capabilities: ["image"],
+        },
+      ],
       image: {
         timeoutSeconds: 180,
-        models: [{ provider: "ollama", model: "qwen2.5vl:7b", timeoutSeconds: 300 }],
       },
     },
   },
@@ -431,7 +437,7 @@ timeout and cap `num_ctx`:
 ```
 
 This timeout applies to inbound image understanding and to the explicit
-`image` tool. `models.providers.ollama.timeoutSeconds` still controls the
+`view_image` tool. `models.providers.ollama.timeoutSeconds` still controls the
 underlying Ollama HTTP request guard for normal model calls.
 
 Live verification:
@@ -568,7 +574,6 @@ Replace model IDs with exact names from `ollama list` or
             apiKey: "ollama-local",
             api: "ollama",
             timeoutSeconds: 300,
-            contextWindow: 32768,
             maxTokens: 8192,
             models: [
               {
@@ -576,6 +581,7 @@ Replace model IDs with exact names from `ollama list` or
                 name: "qwen3.5:9b",
                 reasoning: true,
                 input: ["text"],
+                contextTokens: 32768,
                 params: {
                   num_ctx: 32768,
                   thinking: false,
@@ -594,9 +600,9 @@ Replace model IDs with exact names from `ollama list` or
     }
     ```
 
-    `contextWindow` is OpenClaw's context budget; `params.num_ctx` is sent to
-    Ollama. Keep them aligned when hardware cannot run the model's full
-    advertised context.
+    `contextTokens` caps OpenClaw's active-input budget; `params.num_ctx` sets
+    Ollama's request context. Keep them aligned when hardware cannot run the
+    model's full advertised context.
 
   </Accordion>
 
@@ -688,17 +694,19 @@ Replace model IDs with exact names from `ollama list` or
             baseUrl: "http://mini.local:11434",
             apiKey: "ollama-local",
             api: "ollama",
-            contextWindow: 32768,
-            models: [{ id: "gemma4", name: "gemma4", input: ["text"] }],
+            models: [
+              { id: "gemma4", name: "gemma4", input: ["text"], contextTokens: 32768 },
+            ],
           },
           "ollama-large": {
             baseUrl: "http://gpu-box.local:11434",
             apiKey: "ollama-local",
             api: "ollama",
             timeoutSeconds: 420,
-            contextWindow: 131072,
             maxTokens: 16384,
-            models: [{ id: "qwen3.5:27b", name: "qwen3.5:27b", input: ["text"] }],
+            models: [
+              { id: "qwen3.5:27b", name: "qwen3.5:27b", input: ["text"], contextTokens: 131072 },
+            ],
           },
         },
       },
@@ -727,15 +735,15 @@ Replace model IDs with exact names from `ollama list` or
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "local",
+        entries: {
+          local: {
+            default: true,
             experimental: {
               localModelLean: true,
             },
             model: { primary: "ollama/gemma4" },
           },
-        ],
+        },
       },
       models: {
         providers: {
@@ -743,12 +751,12 @@ Replace model IDs with exact names from `ollama list` or
             baseUrl: "http://127.0.0.1:11434",
             apiKey: "ollama-local",
             api: "ollama",
-            contextWindow: 32768,
             models: [
               {
                 id: "gemma4",
                 name: "gemma4",
                 input: ["text"],
+                contextTokens: 32768,
                 params: { num_ctx: 32768 },
                 compat: { supportsTools: false },
               },
@@ -950,17 +958,17 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     Modelfiles; otherwise it falls back to OpenClaw's default Ollama context
     window.
 
-    Provider-level `contextWindow`, `contextTokens`, and `maxTokens` set
-    defaults for every model under that provider and can be overridden per
-    model. `contextWindow` is OpenClaw's own prompt/compaction budget. Native
+    Per-model `contextWindow` declares native window metadata, and per-model
+    `contextTokens` caps active input. Provider-level `maxTokens` remains an
+    output-token default; a model entry can override it. Native
     `/api/chat` requests leave `options.num_ctx` unset unless you set
     `params.num_ctx` explicitly, so Ollama applies its own model,
     `OLLAMA_CONTEXT_LENGTH`, or VRAM-based default; invalid, zero, negative,
-    or non-finite `params.num_ctx` values are ignored. If an older config used
-    only `contextWindow`/`maxTokens` to force native request context, run
-    `openclaw doctor --fix` to copy those into `params.num_ctx`. The
+    or non-finite `params.num_ctx` values are ignored. After upgrading an older
+    configuration, run `openclaw doctor --fix`, then set `params.num_ctx`
+    explicitly when you need to force native request context. The
     OpenAI-compatible adapter still injects `options.num_ctx` by default from
-    the configured `params.num_ctx` or `contextWindow`; disable with
+    `params.num_ctx` or the matching model entry's `contextWindow`; disable with
     `injectNumCtxForOpenAICompat: false` if the upstream rejects `options`.
 
     Native model entries also accept common Ollama runtime options under
@@ -980,11 +988,11 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
       models: {
         providers: {
           ollama: {
-            contextWindow: 32768,
             models: [
               {
                 id: "llama3.3",
                 contextWindow: 131072,
+                contextTokens: 32768,
                 maxTokens: 65536,
                 params: {
                   num_ctx: 32768,
@@ -1024,7 +1032,7 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
         defaults: {
           models: {
             "ollama/gemma4": {
-              thinking: "low",
+              params: { thinking: "low" },
             },
           },
         },
@@ -1077,28 +1085,17 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     | --- | --- |
     | Default model | `nomic-embed-text` |
     | Auto-pull | Yes, if not present locally |
-    | Default inline concurrency | 1 (other providers default higher; raise with `nonBatchConcurrency` if the host can take it) |
+    | Embedding concurrency | Provider-owned; no memory-search tuning key is required |
 
     Query-time embeddings use retrieval prefixes for models that require or
     recommend them: `nomic-embed-text`, `qwen3-embedding`, and
     `mxbai-embed-large`. Document batches stay raw, so existing indexes need
     no format migration.
 
-    ```json5
-    {
-      memory: {
-        search: {
-          provider: "ollama",
-          remote: {
-            // Default for Ollama. Raise on larger hosts if reindexing is too slow.
-            nonBatchConcurrency: 1,
-          },
-        },
-      },
-    }
-    ```
-
-    For a remote embedding host, keep auth scoped to that host:
+    Embedding concurrency and batching behavior are owned by the Ollama
+    memory provider. For a remote embedding host, use the supported
+    `remote.baseUrl` and `remote.apiKey` fields to keep auth scoped to that
+    host:
 
     ```json5
     {
@@ -1109,7 +1106,6 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
           remote: {
             baseUrl: "http://gpu-box.local:11434",
             apiKey: "ollama-local",
-            nonBatchConcurrency: 2,
           },
         },
       },
@@ -1125,8 +1121,10 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     For native requests, thinking control is forwarded directly: `/think off`
     and `openclaw agent --thinking off` send top-level `think: false` unless
     an explicit `params.think`/`params.thinking` is configured; `/think
-    low|medium|high` send the matching effort string; `/think max` maps to
-    Ollama's highest effort, `think: "high"`.
+    low|medium|high` send the matching effort string. Verified full-effort
+    Ollama Cloud families such as GLM 5.2 and DeepSeek V4 also send native
+    `think: "max"` for `/think max`; other models and local servers keep the
+    compatible `think: "high"` mapping.
 
     <Tip>
     For the OpenAI-compatible endpoint instead, see "Legacy OpenAI-compatible mode" above — streaming and tool calling may not work together there.
@@ -1308,12 +1306,12 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
       models: {
         providers: {
           ollama: {
-            contextWindow: 32768,
             maxTokens: 8192,
             models: [
               {
                 id: "qwen3.5:9b",
                 name: "qwen3.5:9b",
+                contextTokens: 32768,
                 params: { num_ctx: 32768, thinking: false },
               },
             ],
@@ -1323,7 +1321,7 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     }
     ```
 
-    Lower `contextWindow` if OpenClaw sends too much prompt. Lower
+    Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
 

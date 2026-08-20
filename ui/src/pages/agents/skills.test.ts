@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { clearAgentSkillFilter } from "./skills.ts";
 
 describe("clearAgentSkillFilter", () => {
@@ -23,7 +23,7 @@ describe("clearAgentSkillFilter", () => {
           },
         },
       },
-      note: "Enable all agent skills",
+      note: "Reset agent skills to inherited defaults",
       replacePaths: ["agents.entries.Research.skills"],
       canDispatch: expect.any(Function),
     });

@@ -1,11 +1,16 @@
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  logVerbose,
+  warn,
+  createSubsystemLogger,
+  createNonExitingRuntime,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -59,7 +64,7 @@ export type MonitorDiscordOpts = {
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
@@ -249,9 +254,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime,
     nativeEnabled,
     nativeSkillsEnabled,
+    voiceEnabled,
     listSkillCommandsForAgents: discordProviderRuntime.listSkillCommandsForAgents,
     listNativeCommandSpecsForConfig: discordProviderRuntime.listNativeCommandSpecsForConfig,
-    getPluginCommandSpecs: discordProviderRuntime.getPluginCommandSpecs,
   });
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
   const threadBindings = threadBindingsEnabled
@@ -437,6 +442,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       token,
       runtime,
+      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
       botUserId,

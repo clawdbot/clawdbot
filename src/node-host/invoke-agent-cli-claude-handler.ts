@@ -1,3 +1,5 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
@@ -25,6 +27,11 @@ export type NodeHostInvokeRuntime = {
   installedAppsSharingEnabled?: boolean;
   installedAppsPlatform?: NodeJS.Platform;
   scanInstalledApps?: typeof scanInstalledApps;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
+  desktopHostConfig?: DesktopHostConfig;
+  emitProgress?: (text: string) => Promise<void>;
 };
 
 type ClaudeCliNodeInvokeDeps = Pick<
@@ -121,16 +128,6 @@ export async function handleClaudeCliNodeInvoke(params: {
   } catch (error) {
     await params.deps.sendInvalidRequestResult(params.client, params.frame, error);
     return;
-  }
-  if (Object.hasOwn(params.frame, "sessionKey")) {
-    const sessionKey = params.frame.sessionKey ?? null;
-    const requestWithoutSessionKey = { ...request };
-    delete requestWithoutSessionKey.sessionKey;
-    request = {
-      ...requestWithoutSessionKey,
-      ...(sessionKey ? { sessionKey } : {}),
-      ...(request.systemRunPlan ? { systemRunPlan: { ...request.systemRunPlan, sessionKey } } : {}),
-    };
   }
   const approvalCommand = [claudePath, ...request.argv];
   const preparedApproval = buildSystemRunApprovalPlan({

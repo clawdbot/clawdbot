@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
@@ -20,10 +21,6 @@ import {
 } from "./sdk-alias.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-type PluginModuleLoadAuthority = {
-  trustedInstalledPrivateSdkOwner?: string;
-};
-
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -44,14 +41,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "musicGeneration",
   "llm",
 ] as const satisfies readonly (keyof PluginRuntime)[];
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === "function"
-  );
-}
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
@@ -113,13 +102,12 @@ export function runPluginRegisterSyncInRegistry(
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  aliasOverrides?: Readonly<Record<string, string>>;
   tryNative?: boolean;
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
 }) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-  const createLoaderForModule = (modulePath: string, authority?: PluginModuleLoadAuthority) => {
+  const createLoaderForModule = (modulePath: string) => {
     if (options.installNativeSdkResolver !== false && options.tryNative !== false) {
       installOpenClawPluginSdkNativeResolver({
         argv1: process.argv[1],
@@ -127,24 +115,15 @@ export function createPluginModuleLoader(options: {
         pluginModulePath: modulePath,
         devSourceRoot: options.devSourceRoot,
         pluginSdkResolution: options.pluginSdkResolution,
-        ...(authority?.trustedInstalledPrivateSdkOwner
-          ? {
-              trustedInstalledPrivateSdkOwner: authority.trustedInstalledPrivateSdkOwner,
-            }
-          : {}),
       });
     }
-    const defaultAliasMap = buildPluginLoaderAliasMap(
+    const aliasMap = buildPluginLoaderAliasMap(
       modulePath,
       process.argv[1],
       import.meta.url,
       options.pluginSdkResolution,
       options.devSourceRoot,
-      authority?.trustedInstalledPrivateSdkOwner,
     );
-    const aliasMap = options.aliasOverrides
-      ? { ...defaultAliasMap, ...options.aliasOverrides }
-      : defaultAliasMap;
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,
@@ -156,8 +135,8 @@ export function createPluginModuleLoader(options: {
       ...(options.tryNative !== undefined ? { tryNative: options.tryNative } : {}),
     });
   };
-  return (modulePath: string, authority?: PluginModuleLoadAuthority): unknown =>
-    createLoaderForModule(modulePath, authority)(toSafeImportPath(modulePath));
+  return (modulePath: string): unknown =>
+    createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
 }
 
 function formatPluginRuntimeModuleResolutionError(params: {
@@ -244,6 +223,14 @@ export function createLazyPluginRuntime(params: {
   };
   return new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
+      // Instance-bound surfaces are complete runtime objects. Keep them direct so
+      // the first Gateway call does not materialize the broad plugin runtime graph.
+      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+        const value = params.runtimeOptions?.[prop];
+        if (value !== undefined) {
+          return value;
+        }
+      }
       return Reflect.get(resolveRuntime(), prop, receiver);
     },
     set(_target, prop, value, receiver) {

@@ -1,8 +1,7 @@
 import { createServer } from "node:net";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
-import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
+import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
@@ -62,20 +61,12 @@ function isMissingQaRuntimeError(error: unknown) {
   );
 }
 
-/** Load the bundled QA lab runtime surface, throwing when the private bundle is absent. */
-export function loadQaRuntimeModule(): QaRuntimeSurface {
-  const env = resolvePrivateQaBundledPluginsEnv();
-  return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
-    dirName: "qa-lab",
-    artifactBasename: "runtime-api.js",
-    ...(env ? { env } : {}),
-  });
-}
+const loadQaLabRuntimeModule = loadQaRunnerRuntimeModule as unknown as () => QaRuntimeSurface;
+export { loadQaLabRuntimeModule as loadQaRuntimeModule };
 
-/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
-export function isQaRuntimeAvailable(): boolean {
+function isQaRuntimeAvailableStrict(): boolean {
   try {
-    loadQaRuntimeModule();
+    loadQaLabRuntimeModule();
     return true;
   } catch (error) {
     if (isMissingQaRuntimeError(error)) {
@@ -84,6 +75,8 @@ export function isQaRuntimeAvailable(): boolean {
     throw error;
   }
 }
+
+export { isQaRuntimeAvailableStrict as isQaRuntimeAvailable };
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (

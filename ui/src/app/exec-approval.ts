@@ -1,6 +1,6 @@
 // Application-owned approval parsing and queue state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -145,8 +145,16 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
   };
 }
 
-export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolved | null {
-  if (!isRecord(payload)) {
+export function parseApprovalResolvedEvent(
+  event: string,
+  payload: unknown,
+): ExecApprovalResolved | null {
+  if (
+    (event !== "exec.approval.resolved" &&
+      event !== "plugin.approval.resolved" &&
+      event !== "openclaw.approval.resolved") ||
+    !isRecord(payload)
+  ) {
     return null;
   }
   const id = normalizeOptionalString(payload.id) ?? "";

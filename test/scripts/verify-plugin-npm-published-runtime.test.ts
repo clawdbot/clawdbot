@@ -10,7 +10,7 @@ import {
   resolveNpmPackFilename,
   runPluginNpmCommand,
   usage,
-} from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+} from "../../scripts/verify-plugin-npm-published-runtime.mts";
 
 describe("plugin npm publish verifier args", () => {
   it("parses help and package specs before npm calls", () => {
@@ -276,7 +276,7 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
     expect(
       collectPluginNpmPublishedRuntimeErrors({
         packageJson: {
-          name: "@openclaw/qqbot",
+          name: "@openclaw/example-channel",
           version: "2026.5.3",
           openclaw: {
             extensions: ["./index.ts"],

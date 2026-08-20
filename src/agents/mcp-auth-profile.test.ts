@@ -68,8 +68,10 @@ describe("mcp auth profile bearer projection", () => {
     );
     expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com/mcp",
+        identity: expect.objectContaining({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        }),
         config: { scope: "docs.read" },
         fetchFn: expect.any(Function),
       }),

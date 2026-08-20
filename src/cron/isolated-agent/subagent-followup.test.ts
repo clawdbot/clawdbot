@@ -1,6 +1,6 @@
 // Subagent followup tests cover followup handling after isolated cron agent runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 
 // vi.hoisted runs before module imports, ensuring FAST_TEST_MODE is picked up.
 vi.hoisted(() => {
@@ -13,7 +13,7 @@ import {
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
@@ -31,7 +31,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
 }));
 
-const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
+const { listDescendantRunsForRequester } =
+  await import("../../agents/subagents/registry/subagent-registry-read.js");
 const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 

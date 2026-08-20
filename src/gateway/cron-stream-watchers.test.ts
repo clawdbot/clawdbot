@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ManagedRun, ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,
@@ -72,7 +72,8 @@ describe("cron stream watchers", () => {
       "stream-job",
       expect.objectContaining({
         streamStatus: "disabled",
-        streamError: "stream sources require cron.triggers.enabled=true",
+        streamError:
+          "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
       }),
       expect.any(String),
       expect.any(String),
@@ -105,7 +106,8 @@ describe("cron stream watchers", () => {
       "stream-job",
       expect.objectContaining({
         streamStatus: "disabled",
-        streamError: "stream sources require cron.triggers.enabled=true",
+        streamError:
+          "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
       }),
       expect.any(String),
       expect.any(String),

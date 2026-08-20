@@ -7,6 +7,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
+import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
 export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
   return fingerprintDynamicTools(dynamicTools);
@@ -85,7 +86,7 @@ export function fingerprintJsonObject(value: JsonObject): string {
   return JSON.stringify(stabilizeJsonValue(value));
 }
 
-/** Hash every resume-visible setting without retaining config, credentials, or instructions. */
+/** Hash thread-creation identity; settings already applied by turn/start must not restart Codex. */
 export function fingerprintCodexThreadConfig(
   request: JsonObject,
   authProfileId?: string,
@@ -95,20 +96,24 @@ export function fingerprintCodexThreadConfig(
     fingerprintJsonObject({
       authProfileId: authProfileId ?? null,
       dynamicToolsFingerprint: dynamicToolsFingerprint ?? null,
-      model: request.model ?? null,
-      requestedModel:
-        request.requestedModel === undefined ? (request.model ?? null) : request.requestedModel,
+      // Codex fixes its model-selected native multi-agent generation for the
+      // whole session; only same-generation model changes are turn-mutable.
+      nativeMultiAgentVersion:
+        resolveCodexGpt56MultiAgentVersion(
+          typeof request.requestedModel === "string"
+            ? request.requestedModel
+            : typeof request.model === "string"
+              ? request.model
+              : undefined,
+        ) ?? null,
       modelProvider: request.modelProvider ?? null,
       requestedModelProvider:
         request.requestedModelProvider === undefined
           ? (request.modelProvider ?? null)
           : request.requestedModelProvider,
-      approvalPolicy: request.approvalPolicy ?? null,
-      approvalsReviewer: request.approvalsReviewer ?? null,
-      sandbox: request.sandbox ?? null,
+      // Named permission profiles are not currently forwarded by turn/start,
+      // so changing one still requires recreating the native thread.
       permissions: request.permissions ?? null,
-      personality: request.personality ?? null,
-      serviceTier: request.serviceTier === undefined ? "<omitted>" : request.serviceTier,
       baseInstructions: request.baseInstructions ?? null,
       developerInstructions: request.developerInstructions ?? null,
       config: request.config ?? {},

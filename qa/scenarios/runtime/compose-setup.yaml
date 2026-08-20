@@ -32,8 +32,8 @@ scenario:
     - src/docker-healthcheck.ts
     - src/gateway/server-http.ts
     - scripts/e2e/compose-setup.sh
-    - scripts/lib/docker-e2e-scenarios.mjs
-    - scripts/package-openclaw-for-docker.mjs
+    - scripts/lib/docker-e2e-scenarios.mts
+    - scripts/package-openclaw-for-docker.mts
     - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
   execution:
     kind: script

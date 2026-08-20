@@ -1,15 +1,12 @@
 /** Doctor-owned migration of Skill Workshop proposal metadata into shared SQLite. */
 import path from "node:path";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
@@ -36,11 +33,6 @@ type MigrationResult = {
   migrated: number;
 };
 
-function isNotFoundError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "not-found" || code === "ENOENT";
-}
-
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
   const read = await rootDir.read(relativePath, {
     hardlinks: "reject",
@@ -55,9 +47,7 @@ function proposalWorkspace(record: SkillProposalRecord): string {
 }
 
 function configuredAgentIds(config: OpenClawConfig): string[] {
-  return [
-    ...new Set([resolveDefaultAgentId(config), ...listAgentIds(config)].map(normalizeAgentId)),
-  ];
+  return listAgentIds(config);
 }
 
 function inferOwnerAgentId(params: {
@@ -70,13 +60,9 @@ function inferOwnerAgentId(params: {
     return normalizeAgentId(params.record.origin.agentId);
   }
   if (params.record.origin?.sessionKey) {
-    try {
-      return resolveAgentIdFromSessionKey(
-        params.record.origin.sessionKey,
-        resolveDefaultAgentId(params.config),
-      );
-    } catch {
-      // Fall through to the workspace and single-agent evidence below.
+    const sessionAgentId = parseAgentSessionKey(params.record.origin.sessionKey)?.agentId;
+    if (sessionAgentId) {
+      return normalizeAgentId(sessionAgentId);
     }
   }
   const agentIds = configuredAgentIds(params.config);
@@ -107,7 +93,7 @@ async function readLegacyRollback(
     }
     return rollback.value;
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (isMissingPathError(error)) {
       return undefined;
     }
     throw error;
@@ -240,7 +226,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
       });
       migrated += 1;
     } catch (error) {
-      if (isNotFoundError(error)) {
+      if (isMissingPathError(error)) {
         if (await readSkillProposal(proposalId, { env }, {}, { reconcile: false })) {
           continue;
         }
@@ -250,7 +236,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   }
   await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH }).catch(
     (error: unknown) => {
-      if (!isNotFoundError(error)) {
+      if (!isMissingPathError(error)) {
         warnings.push(`Failed to remove legacy Skill Workshop proposal index: ${String(error)}`);
       }
     },

@@ -3,6 +3,20 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct NodeServiceManagerTests {
+    @Test func `active profile performs no persistent node service work`() async {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        NodeServiceManager._testResetPersistentServiceCalls()
+
+        #expect(await NodeServiceManager.start(profile: profile) == nil)
+        #expect(await NodeServiceManager.stop(profile: profile) == nil)
+        #expect(await NodeServiceManager.restart(profile: profile) == nil)
+        #expect(NodeServiceManager.launchdProgramArguments(profile: profile) == [])
+        #expect(await !(NodeServiceManager.waitUntilRunning(profile: profile)))
+        let snapshot = NodeServiceManager._testPersistentServiceCallSnapshot()
+        #expect(snapshot.commands.isEmpty)
+        #expect(snapshot.ownershipReads == 0)
+    }
+
     @Test func `builds node service commands with current CLI shape`() async throws {
         try await TestIsolation.withUserDefaultsValues(["openclaw.gatewayProjectRootPath": nil]) {
             let tmp = try makeTempDirForTests()

@@ -1,4 +1,8 @@
 // Slack plugin module normalizes Agent View active-context entities.
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type SlackAppContext = {
   entities?: unknown;
@@ -19,29 +23,19 @@ type SlackAppContextEntity =
       team_id?: string;
     };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function trimmedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function normalizeEntity(value: unknown): SlackAppContextEntity | undefined {
-  const entity = asRecord(value);
-  const type = trimmedString(entity?.type);
+  const entity = asOptionalRecord(value);
+  const type = normalizeOptionalString(entity?.type);
   if (!entity || !type) {
     return undefined;
   }
-  const teamId = trimmedString(entity.team_id);
+  const teamId = normalizeOptionalString(entity.team_id);
   if (
     type === "slack#/types/channel_id" ||
     type === "slack#/types/canvas_id" ||
     type === "slack#/types/list_id"
   ) {
-    const entityValue = trimmedString(entity.value);
+    const entityValue = normalizeOptionalString(entity.value);
     return entityValue
       ? { type, value: entityValue, ...(teamId ? { team_id: teamId } : {}) }
       : undefined;
@@ -49,9 +43,9 @@ function normalizeEntity(value: unknown): SlackAppContextEntity | undefined {
   if (type !== "slack#/types/message_context") {
     return undefined;
   }
-  const message = asRecord(entity.value);
-  const channelId = trimmedString(message?.channel_id);
-  const messageTs = trimmedString(message?.message_ts);
+  const message = asOptionalRecord(entity.value);
+  const channelId = normalizeOptionalString(message?.channel_id);
+  const messageTs = normalizeOptionalString(message?.message_ts);
   return channelId && messageTs
     ? {
         type,
@@ -62,11 +56,11 @@ function normalizeEntity(value: unknown): SlackAppContextEntity | undefined {
 }
 
 export function isSlackAppContext(value: unknown): value is SlackAppContext {
-  return Boolean(asRecord(value));
+  return Boolean(asOptionalRecord(value));
 }
 
 export function normalizeSlackAppContextEntities(value: unknown): SlackAppContextEntity[] {
-  const context = asRecord(value);
+  const context = asOptionalRecord(value);
   if (!Array.isArray(context?.entities)) {
     return [];
   }

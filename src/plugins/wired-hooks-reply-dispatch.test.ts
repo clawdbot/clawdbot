@@ -11,6 +11,7 @@ const replyDispatchEvent = {
   inboundAudio: false,
   shouldRouteToOriginating: false,
   shouldSendToolSummaries: true,
+  shouldSendFullToolDetails: false,
   sendPolicy: "allow" as const,
 };
 

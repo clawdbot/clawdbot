@@ -4,7 +4,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
-  readSqliteTranscriptStorageRows,
+  readTranscriptStorageRows,
   type SqliteTranscriptStorageRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -165,7 +165,7 @@ function assertRepairPreservedEvents(params: {
   database: OpenClawAgentDatabase;
   sessionId: string;
 }): void {
-  const after = readSqliteTranscriptStorageRows(params.database, params.sessionId);
+  const after = readTranscriptStorageRows(params.database, params.sessionId);
   if (after.length !== params.before.length + 1) {
     throw new Error(`header repair changed the event count for ${params.sessionId}`);
   }
@@ -246,7 +246,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         try {
           runOpenClawAgentWriteTransaction(
             (database) => {
-              const currentRows = readSqliteTranscriptStorageRows(database, sessionId);
+              const currentRows = readTranscriptStorageRows(database, sessionId);
               if (!snapshotsMatch(snapshot.rows, currentRows)) {
                 throw new Error(
                   `transcript changed while preparing header repair for ${sessionId}`,

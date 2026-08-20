@@ -1,19 +1,31 @@
-import type { InternalToolBatchCall, ToolLoopIntervention } from "@openclaw/agent-core";
+import type {
+  InternalBeforeToolBatchResult,
+  InternalToolBatchCall,
+  ToolLoopIntervention,
+} from "@openclaw/agent-core";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
   loadBeforeToolCallRuntime,
   shouldEmitLoopWarning,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import { recordBatchAdmittedToolCall } from "./agent-tools.before-tool-call.state.js";
+import {
+  recordBatchAdmittedToolCall,
+  releaseBatchAdmittedToolCalls,
+} from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
   toolName: string;
   params: unknown;
   toolCallId?: string;
+};
+
+type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
+  commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 };
 
 async function evaluateToolLoopCall(
@@ -24,7 +36,7 @@ async function evaluateToolLoopCall(
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return undefined;
   }
-  const toolName = normalizeToolName(call.toolName || "tool");
+  const toolName = normalizeToolPolicyName(call.toolName || "tool");
   const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
     await loadBeforeToolCallRuntime();
   const sessionState =
@@ -92,7 +104,7 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
   const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
   recordToolCall(
     getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
-    normalizeToolName(call.toolName || "tool"),
+    normalizeToolPolicyName(call.toolName || "tool"),
     call.params,
     call.toolCallId,
     ctx.loopDetection,
@@ -113,17 +125,25 @@ export async function admitSingleToolCallLoop(
 }
 
 /**
- * Admit an assistant tool batch atomically. Calls are only recorded after every
- * sibling passes detection, so no side effect can start before a later veto.
+ * Admit an assistant tool batch atomically. Successful calls reserve exact
+ * markers here, then agent-core commits their history in assistant order at
+ * the final launch boundary. A later veto still records only denial evidence.
  */
 export async function admitToolCallBatch(
   calls: InternalToolBatchCall[],
   ctx: HookContext,
-): Promise<ToolLoopIntervention | undefined> {
+): Promise<ToolLoopBatchAdmission> {
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
-    return undefined;
+    return {};
   }
-  const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
+  const {
+    getDiagnosticSessionState,
+    markDiagnosticArgumentChurnObservation,
+    reconcileToolCallExecutionParams,
+    recordToolCall,
+    resolveToolLoopWarningThreshold,
+  } = await loadBeforeToolCallRuntime();
+  const warningThreshold = resolveToolLoopWarningThreshold();
   const sessionState = getDiagnosticSessionState({
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -135,7 +155,7 @@ export async function admitToolCallBatch(
   const recordLoopVeto = (state: SessionState, call: InternalToolBatchCall) => {
     recordToolCall(
       state,
-      normalizeToolName(call.toolCall.name || "tool"),
+      normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
       ctx.loopDetection,
@@ -162,7 +182,7 @@ export async function admitToolCallBatch(
     }
   };
   for (const call of calls) {
-    const toolName = normalizeToolName(call.toolCall.name || "tool");
+    const toolName = normalizeToolPolicyName(call.toolCall.name || "tool");
     const intervention = await evaluateToolLoopCall(
       {
         toolName,
@@ -178,28 +198,73 @@ export async function admitToolCallBatch(
       // threshold. Unrelated skipped actions remain valid recovery choices.
       for (const rejectedCall of calls) {
         const rejectedActionKey = hashToolCall(
-          normalizeToolName(rejectedCall.toolCall.name || "tool"),
+          normalizeToolPolicyName(rejectedCall.toolCall.name || "tool"),
           rejectedCall.args,
         );
         if (rejectedActionKey === intervention.actionKey) {
           recordLoopVeto(sessionState, rejectedCall);
         }
       }
-      return intervention;
+      return { intervention };
     }
     // A later sibling must assume this candidate makes no progress.
     projectLoopVeto(call);
   }
   for (const call of calls) {
-    await recordToolLoopCall(
-      {
-        toolName: call.toolCall.name,
-        params: call.args,
-        toolCallId: call.toolCall.id,
-      },
-      ctx,
-    );
     recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
   }
-  return undefined;
+  const admittedById = new Map(
+    calls.map((call) => [
+      call.toolCall.id,
+      { toolName: normalizeToolPolicyName(call.toolCall.name || "tool") },
+    ]),
+  );
+  const committedIds = new Set<string>();
+  const commitReadyCall = (readyCall: { toolCallId: string; args: unknown }) => {
+    const admitted = admittedById.get(readyCall.toolCallId);
+    if (!admitted || committedIds.has(readyCall.toolCallId)) {
+      return;
+    }
+    recordToolCall(
+      sessionState,
+      admitted.toolName,
+      readyCall.args,
+      readyCall.toolCallId,
+      ctx.loopDetection,
+      ctx.runId ? { runId: ctx.runId } : undefined,
+    );
+    const churn = reconcileToolCallExecutionParams(sessionState, {
+      toolName: admitted.toolName,
+      toolParams: readyCall.args,
+      toolCallId: readyCall.toolCallId,
+      runId: ctx.runId,
+      warningThreshold,
+    });
+    markDiagnosticArgumentChurnObservation({
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      runId: ctx.runId,
+      active: churn.active,
+    });
+    committedIds.add(readyCall.toolCallId);
+  };
+  return {
+    commitReadyCalls(readyCalls) {
+      if (readyCalls.length === 1 && readyCalls[0]) {
+        commitReadyCall(readyCalls[0]);
+        return;
+      }
+      const readyById = new Map(readyCalls.map((call) => [call.toolCallId, call]));
+      for (const call of calls) {
+        const readyCall = readyById.get(call.toolCall.id);
+        if (readyCall) {
+          commitReadyCall(readyCall);
+        }
+      }
+    },
+    releaseSkippedCalls(toolCallIds) {
+      // Agent-core only supplies admitted prepared calls suppressed at a steering checkpoint.
+      releaseBatchAdmittedToolCalls(toolCallIds, ctx.runId);
+    },
+  };
 }

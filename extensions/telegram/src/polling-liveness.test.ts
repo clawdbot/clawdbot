@@ -40,6 +40,58 @@ describe("TelegramPollingLivenessTracker", () => {
     ).toContain("Polling stall detected");
   });
 
+  it("keeps idle polling alive only until its recorded server-directed wait expires", () => {
+    let now = 0;
+    const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });
+
+    tracker.noteGetUpdatesStarted({ offset: null });
+    tracker.noteGetUpdatesError(new Error("Too Many Requests"), 0, 180_000);
+    tracker.noteGetUpdatesFinished();
+
+    for (const elapsedMs of [30_000, 60_000, 90_000, 120_000, 150_000, 180_000]) {
+      now = elapsedMs;
+      expect(tracker.detectStall({ thresholdMs: 120_000 })).toBeNull();
+    }
+
+    now = 180_001;
+    expect(tracker.detectStall({ thresholdMs: 120_000 })?.message).toContain(
+      "Polling stall detected",
+    );
+  });
+
+  it("never lets an old flood wait hide a newly stuck getUpdates request", () => {
+    let now = 0;
+    const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });
+
+    tracker.noteGetUpdatesStarted({ offset: null });
+    tracker.noteGetUpdatesError(new Error("Too Many Requests"), 0, 180_000);
+    tracker.noteGetUpdatesFinished();
+    now = 10_000;
+    tracker.noteGetUpdatesStarted({ offset: 1 });
+
+    now = 150_000;
+    expect(tracker.detectStall({ thresholdMs: 120_000 })?.message).toContain(
+      "active getUpdates stuck",
+    );
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, -1])(
+    "ignores an invalid server-directed wait (%s)",
+    (retryAfterMs) => {
+      let now = 0;
+      const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });
+
+      tracker.noteGetUpdatesStarted({ offset: null });
+      tracker.noteGetUpdatesError(new Error("Too Many Requests"), 0, retryAfterMs);
+      tracker.noteGetUpdatesFinished();
+
+      now = 150_000;
+      expect(tracker.detectStall({ thresholdMs: 120_000 })?.message).toContain(
+        "Polling stall detected",
+      );
+    },
+  );
+
   it("detects and throttles stale polling diagnostics", () => {
     let now = 0;
     const tracker = new TelegramPollingLivenessTracker({ monotonicNow: () => now });

@@ -1,16 +1,14 @@
 // System prompt params tests cover runtime metadata assembly, especially repo
 // root discovery from workspace, cwd, and explicit config.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
-async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
@@ -74,7 +72,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("detects repo root from workspaceDir", async () => {
-    const temp = await makeTempDir("workspace");
+    const temp = tempDirs.make("openclaw-workspace-");
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(repoRoot, "nested", "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -86,7 +84,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("falls back to cwd when workspaceDir has no repo", async () => {
-    const temp = await makeTempDir("cwd");
+    const temp = tempDirs.make("openclaw-cwd-");
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(temp, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -98,7 +96,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("uses configured repoRoot when valid", async () => {
-    const temp = await makeTempDir("config");
+    const temp = tempDirs.make("openclaw-config-");
     const repoRoot = path.join(temp, "config-root");
     const workspaceDir = path.join(temp, "workspace");
     await fs.mkdir(repoRoot, { recursive: true });
@@ -121,7 +119,7 @@ describe("buildSystemPromptParams", () => {
   it("ignores invalid repoRoot config and auto-detects", async () => {
     // Invalid explicit roots must not poison runtime metadata; auto-detection
     // still finds the real repository root from the workspace path.
-    const temp = await makeTempDir("invalid");
+    const temp = tempDirs.make("openclaw-invalid-");
     const repoRoot = path.join(temp, "repo");
     const workspaceDir = path.join(repoRoot, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -141,7 +139,7 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("returns undefined when no repo is found", async () => {
-    const workspaceDir = await makeTempDir("norepo");
+    const workspaceDir = tempDirs.make("openclaw-norepo-");
 
     const { runtimeInfo } = buildParams({ workspaceDir });
 
@@ -149,8 +147,8 @@ describe("buildSystemPromptParams", () => {
   });
 
   it("does not rediscover the repository after preparation", async () => {
-    const workspaceDir = await makeTempDir("prepared-norepo");
-    const repoRoot = await makeTempDir("late-repo");
+    const workspaceDir = tempDirs.make("openclaw-prepared-norepo-");
+    const repoRoot = tempDirs.make("openclaw-late-repo-");
     const preparedRepoRoot = resolveSystemPromptRepoRoot({ workspaceDir });
     await makeRepoRoot(repoRoot);
 
@@ -186,5 +184,71 @@ describe("buildSystemPromptParams", () => {
 
     expect(runtimeInfo.sessionKey).toBe("agent:main:main");
     expect(runtimeInfo.sessionId).toBe("23ae7fce-3c27-4a51-b58e-d800d8ca091f");
+  });
+
+  it.each([
+    {
+      name: "an HTTPS public origin",
+      config: {
+        gateway: {
+          publicOrigin: "https://gateway.example",
+          controlUi: { basePath: "/control" },
+        },
+      },
+      expected:
+        "https://gateway.example/control/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+    },
+    {
+      name: "no public origin",
+      config: { gateway: {} },
+      expected: undefined,
+    },
+    {
+      name: "a disabled Control UI",
+      config: {
+        gateway: {
+          publicOrigin: "https://gateway.example",
+          controlUi: { enabled: false },
+        },
+      },
+      expected: undefined,
+    },
+    {
+      name: "an HTTP loopback origin",
+      config: { gateway: { publicOrigin: "http://127.0.0.1:18789" } },
+      expected: undefined,
+    },
+  ] as const)("publishes the current session URL with $name", ({ config, expected }) => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config,
+      agentId: "main",
+      runtime: {
+        sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionUrl).toBe(expected);
+  });
+
+  it("omits oversized current session URLs from model context", () => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: { gateway: { publicOrigin: "https://gateway.example" } },
+      agentId: "main",
+      runtime: {
+        sessionKey: `agent:main:dashboard:${"a".repeat(512)}`,
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.sessionUrl).toBeUndefined();
   });
 });

@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
-import { callGatewayCli } from "./nodes-cli/rpc.js";
+import { callNodesGatewayCli } from "./nodes-cli/rpc.js";
 
 type NodeInvokeCall = {
   method?: string;
@@ -431,7 +431,7 @@ describe("nodes-cli coverage", () => {
       idempotencyKey: "rk_test",
     };
 
-    await callGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
+    await callNodesGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
 
     expect(getNodeInvokeCall()).toMatchObject({
       method: "node.invoke",

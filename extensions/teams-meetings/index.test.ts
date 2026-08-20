@@ -255,6 +255,23 @@ describe("Microsoft Teams meetings plugin surface", () => {
     });
   });
 
+  it.each([
+    ["teamsmeetings.testSpeech", "transcribe", "test_speech requires mode: agent or bidi"],
+    ["teamsmeetings.testListen", "agent", "test_listen requires mode: transcribe"],
+  ])(
+    "classifies invalid probe mode for %s as an invalid request",
+    async (method, mode, message) => {
+      const { invoke } = authorizationHarness();
+      const response = await invoke(method, { mode, timeoutMs: 1, url: MEETING_URL });
+
+      expect(response).toMatchObject({
+        error: { code: ErrorCodes.INVALID_REQUEST },
+        ok: false,
+        payload: { error: message },
+      });
+    },
+  );
+
   it("classifies browser failures as unavailable, not invalid requests", async () => {
     const { invoke } = authorizationHarness({ browserError: new Error("browser unavailable") });
     const response = await invoke("teamsmeetings.join", {

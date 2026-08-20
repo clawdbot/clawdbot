@@ -4,7 +4,7 @@
  * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
  */
 import {
-  ensureConfiguredAcpBindingReady,
+  ensureConfiguredAcpBindingReadyCore,
   ensureConfiguredAcpBindingSession,
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
@@ -12,8 +12,8 @@ import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { performGatewaySessionReset } from "../../gateway/session-reset-service.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { performGatewaySessionReset } from "./acp-stateful-target-reset.runtime.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -86,7 +86,7 @@ async function ensureAcpTargetReady(params: {
       error: "Configured ACP binding unavailable",
     };
   }
-  return await ensureConfiguredAcpBindingReady({
+  return await ensureConfiguredAcpBindingReadyCore({
     cfg: params.cfg,
     configuredBinding: {
       spec: configuredBinding,
@@ -130,6 +130,7 @@ async function resetAcpTargetInPlace(params: {
     key: params.sessionKey,
     reason: params.reason,
     commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
+    armSessionDiffBaselineCapture: true,
   });
   if (result.ok) {
     if ("incognitoDeleted" in result) {

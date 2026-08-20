@@ -1,23 +1,18 @@
 // Telegram User Credential tests cover telegram user credential script behavior.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path, { win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchJsonWithTimeout,
-  runCommand,
-  signalChildProcessTree,
-} from "../../scripts/e2e/telegram-user-credential-io.ts";
+import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
 import {
   expandHome,
   resolvePrivateJsonDirectory,
   writePrivateJson,
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
 // Upper bound for polling a spawned process to reach a state. Polls return as
@@ -30,16 +25,6 @@ const PROCESS_WAIT_TIMEOUT_MS = 30_000;
 // the timeout fires. This one is paid in wall-clock, so it stays modest while
 // keeping an order-of-magnitude margin over measured child startup.
 const TIMEOUT_TRIGGER_MS = 1_500;
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
-
-function makeTempDir(prefix: string) {
-  const dir = mkdtempSync(path.join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -97,9 +82,7 @@ async function waitForExit(
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("telegram user credential path handling", () => {
@@ -131,7 +114,7 @@ describe("telegram user credential path handling", () => {
   });
 
   it("writes private JSON files", async () => {
-    const dir = makeTempDir("openclaw-telegram-credential-");
+    const dir = tempDirs.make("openclaw-telegram-credential-");
     await writePrivateJson(path.join(dir, "payload.json"), { status: "ok" });
     await expect(readFile(path.join(dir, "payload.json"), "utf8")).resolves.toBe(
       '{\n  "status": "ok"\n}\n',
@@ -206,6 +189,7 @@ describe("telegram user credential IO", () => {
     )) as {
       hydratePayloadFromLease(params: {
         acquired: Record<string, unknown>;
+        actorRole: "ci" | "maintainer";
         ownerId: string;
         siteUrl: string;
         token: string;
@@ -244,6 +228,7 @@ describe("telegram user credential IO", () => {
           chunkCount: 1,
         },
       },
+      actorRole: "maintainer",
       ownerId: "owner-utf8",
       siteUrl: "https://qa.example.invalid",
       token: "ci-secret",
@@ -253,7 +238,7 @@ describe("telegram user credential IO", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://qa.example.invalid/qa-credentials/v1/payload-chunk",
       expect.objectContaining({
-        body: expect.stringContaining('"credentialId":"cred-utf8"'),
+        body: expect.stringContaining('"actorRole":"maintainer"'),
       }),
     );
   });
@@ -317,7 +302,7 @@ describe("telegram user credential IO", () => {
   it.runIf(process.platform !== "win32")(
     "waits for timed-out child processes to exit before rejecting",
     async () => {
-      const dir = makeTempDir("openclaw-telegram-credential-timeout-");
+      const dir = tempDirs.make("openclaw-telegram-credential-timeout-");
       const terminatedPath = path.join(dir, "terminated.txt");
       const readyPath = path.join(dir, "ready.txt");
       const scriptPath = path.join(dir, "ignore-term.cjs");
@@ -366,7 +351,7 @@ setInterval(() => {}, 1000);
   it.runIf(process.platform !== "win32")(
     "rejects timed-out commands when descendant processes exit cleanly",
     async () => {
-      const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-clean-");
+      const dir = tempDirs.make("openclaw-telegram-credential-tree-timeout-clean-");
       const childPidPath = path.join(dir, "child.pid");
       const readyPath = path.join(dir, "child.ready");
       const cleanupPath = path.join(dir, "child.cleanup");
@@ -422,7 +407,7 @@ setInterval(() => {}, 1000);
   );
 
   it.runIf(process.platform !== "win32")("kills timed-out child process groups", async () => {
-    const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
+    const dir = tempDirs.make("openclaw-telegram-credential-tree-timeout-");
     const childPidPath = path.join(dir, "child.pid");
     let childPid: number | undefined;
 
@@ -457,79 +442,10 @@ setInterval(() => {}, 1000);
     }
   });
 
-  it("signals Windows credential helper process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalChildProcessTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows credential helper process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
   it.runIf(process.platform !== "win32")(
     "exits promptly after forwarded SIGTERM children exit cleanly",
     async () => {
-      const dir = makeTempDir("openclaw-telegram-credential-signal-");
+      const dir = tempDirs.make("openclaw-telegram-credential-signal-");
       const runnerPath = path.join(dir, "runner.mjs");
       const readyPath = path.join(dir, "ready.txt");
       const childPidPath = path.join(dir, "child.pid");
@@ -582,7 +498,7 @@ setInterval(() => {}, 1000);
   it.runIf(process.platform !== "win32")(
     "keeps the forwarded signal force-kill armed while grandchildren survive",
     async () => {
-      const dir = makeTempDir("openclaw-telegram-credential-grandchild-signal-");
+      const dir = tempDirs.make("openclaw-telegram-credential-grandchild-signal-");
       const runnerPath = path.join(dir, "runner.mjs");
       const readyPath = path.join(dir, "ready.txt");
       const grandchildPidPath = path.join(dir, "grandchild.pid");

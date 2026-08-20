@@ -3,7 +3,11 @@ import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway, waitForControlUiRoute } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard routing",
@@ -64,7 +68,7 @@ async function newRecordedPage(label: string): Promise<{
     viewport: { width: 1600, height: 1000 },
   });
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   return { context, page, rawVideoDir };
 }
 

@@ -129,7 +129,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     });
     resolveOpenClawWrapperPathMock.mockResolvedValue("/usr/bin/openclaw");
     formatGatewayServiceStartRepairIssuesMock.mockReturnValue(
-      "service was installed by an older version",
+      "service port does not match current gateway config",
     );
   });
 
@@ -137,7 +137,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     vi.unstubAllEnvs();
   });
 
-  it("forwards existing env value-source metadata when repairing stale service definitions", async () => {
+  it("drops legacy version metadata when repairing genuine service drift", async () => {
     const installMock = vi.fn(async () => {});
     const isLoadedMock = vi.fn(async () => true);
     const service = {
@@ -155,7 +155,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     };
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -168,7 +168,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     await repairLoadedGatewayServiceForStart({
       service,
       state,
-      issues: [{ code: "version-mismatch", message: "old service" }],
+      issues: [{ code: "port-mismatch", message: "old port" }],
       json: true,
       stdout: process.stdout,
     });
@@ -214,7 +214,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       } as unknown as GatewayService;
       const state: GatewayServiceState = {
         installed: true,
-        loaded: true,
+        loadState: { status: "loaded" },
         running: false,
         env: {},
         command: {
@@ -282,7 +282,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     } as unknown as GatewayService;
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -295,7 +295,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "version-mismatch", message: "old service" }],
+        issues: [{ code: "port-mismatch", message: "old port" }],
         json: true,
         stdout: process.stdout,
       }),
@@ -313,7 +313,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     } as unknown as GatewayService;
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -329,7 +329,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "version-mismatch", message: "old service" }],
+        issues: [{ code: "port-mismatch", message: "old port" }],
         json: true,
         stdout: process.stdout,
       }),
@@ -348,7 +348,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     } as unknown as GatewayService;
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -361,7 +361,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "version-mismatch", message: "old service" }],
+        issues: [{ code: "missing-program", message: "missing program" }],
         json: true,
         stdout: process.stdout,
       }),

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as optionalString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import {
   TasksCancelResultSchema,
@@ -19,10 +20,6 @@ type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 const STATUS_LABEL_KEYS = {
   queued: "tasksPage.status.queued",
@@ -173,13 +170,18 @@ export function partitionTasks(tasks: readonly TaskSummary[]): {
   };
 }
 
-export function normalizeTasksListResult(value: unknown): TaskSummary[] | null {
+export function normalizeTasksListResult(
+  value: unknown,
+): { tasks: TaskSummary[]; nextCursor?: string } | null {
   if (!Value.Check(TasksListResultSchema, value)) {
     return null;
   }
-  return sortTasks(
-    value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
-  );
+  return {
+    tasks: sortTasks(
+      value.tasks.map(normalizeTaskSummary).filter((task): task is TaskSummary => task !== null),
+    ),
+    ...(value.nextCursor !== undefined ? { nextCursor: value.nextCursor } : {}),
+  };
 }
 
 export function normalizeTasksGetResult(value: unknown): TaskSummary | null {

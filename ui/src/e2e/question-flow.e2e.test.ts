@@ -5,11 +5,13 @@ import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -156,10 +158,95 @@ async function emitRequested(
   await gateway.emitGatewayEvent("question.requested", record);
 }
 
+function scrollRegressionQuestion(id: string, prompt: string) {
+  return questionRecord(id, [
+    {
+      questionId: "release_strategy",
+      header: "Strategy",
+      question: prompt,
+      options: Array.from({ length: 4 }, (_, index) => ({
+        label: `Release strategy ${index + 1}`,
+        description: `Deterministic option ${index + 1} makes the rendered panel exceed the near-bottom threshold after layout, proving resize reconciliation follows explicit user intent instead of stale geometry.`,
+      })),
+      isOther: true,
+    },
+  ]);
+}
+
 suite.define(() => {
   afterEach(async () => {
     await context?.close().catch(() => {});
     context = undefined;
+  });
+
+  it("settles a live-edge transcript after a question enters footer flow", async () => {
+    const { gateway, page } = await openQuestionPage();
+    await waitForChatScrollIdle(page);
+    await expect
+      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+
+    const prompt = "Which detailed release strategy should I use?";
+    await emitRequested(gateway, scrollRegressionQuestion("question-live-edge-scroll", prompt));
+    const panel = panelFor(page, prompt);
+    await panel.waitFor();
+    await waitForChatScrollIdle(page);
+
+    await expect
+      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+    await expect
+      .poll(async () => {
+        const panelBox = await panel.boundingBox();
+        const conversationBox = await page.locator(".chat-main__conversation").boundingBox();
+        return Boolean(
+          panelBox &&
+          conversationBox &&
+          panelBox.y >= conversationBox.y - 1 &&
+          panelBox.y + panelBox.height <= conversationBox.y + conversationBox.height + 1,
+        );
+      })
+      .toBe(true);
+    await expect.poll(() => page.getByRole("button", { name: "Scroll to latest" }).count()).toBe(0);
+    await screenshot(page, "05-question-live-edge-scroll.png");
+  });
+
+  it("preserves explicit backscroll and keeps the latest arrow above the question", async () => {
+    const { gateway, page } = await openQuestionPage();
+    await waitForChatScrollIdle(page);
+    const thread = page.locator(".chat-thread");
+    await thread.hover();
+    await page.mouse.wheel(0, -600);
+    await expect
+      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+      .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+    const scrollToLatest = page.getByRole("button", { name: "Scroll to latest" });
+    await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+    await waitForChatScrollIdle(page);
+    const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
+
+    const prompt = "Which detailed release strategy should stay below my reading position?";
+    await emitRequested(gateway, scrollRegressionQuestion("question-backscroll-position", prompt));
+    const panel = panelFor(page, prompt);
+    await panel.waitFor();
+    await waitForChatScrollIdle(page);
+
+    await expect
+      .poll(
+        async () =>
+          Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
+        { timeout: 10_000 },
+      )
+      .toBeLessThanOrEqual(2);
+    await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
+    await expect
+      .poll(async () => {
+        const arrowBox = await scrollToLatest.boundingBox();
+        const panelBox = await panel.boundingBox();
+        return Boolean(arrowBox && panelBox && arrowBox.y + arrowBox.height <= panelBox.y);
+      })
+      .toBe(true);
+    await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
@@ -217,15 +304,6 @@ suite.define(() => {
         };
       })
       .toEqual({ left: 0, width: 0 });
-    await expect
-      .poll(async () => {
-        const panelHeight = (await panel.boundingBox())?.height ?? 0;
-        const padding = await page
-          .locator(".chat-thread")
-          .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
-        return padding >= panelHeight;
-      })
-      .toBe(true);
     await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();

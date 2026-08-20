@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -27,20 +28,6 @@ const createHandler = (): MediaStreamHandler =>
     providerConfig: {},
   });
 
-const createDeferred = (): {
-  promise: Promise<void>;
-  resolve: () => void;
-} => {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred callback to be initialized");
-  }
-  return { promise, resolve };
-};
-
 const waitForAbort = (signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => {
     if (signal.aborted) {
@@ -53,7 +40,7 @@ const waitForAbort = (signal: AbortSignal): Promise<void> =>
 describe("MediaStreamHandler TTS queue", () => {
   it("bounds pending playback per stream and recovers after draining", async () => {
     const handler = createHandler();
-    const activeGate = createDeferred();
+    const activeGate = createDeferred<void>();
     const playbackOrder: number[] = [];
 
     const active = handler.queueTts("stream-1", async () => {
@@ -91,7 +78,7 @@ describe("MediaStreamHandler TTS queue", () => {
     const handler = createHandler();
     const started: number[] = [];
     const finished: number[] = [];
-    const firstGate = createDeferred();
+    const firstGate = createDeferred<void>();
 
     const first = handler.queueTts("stream-1", async () => {
       started.push(1);

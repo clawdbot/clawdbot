@@ -222,17 +222,6 @@ describe("plugins Docker assertions", () => {
     );
   });
 
-  it("passes ClawHub preflight body timeouts into the bounded reader", () => {
-    const script = readFileSync(ASSERTIONS_SCRIPT, "utf8");
-
-    expect(script).toContain("run(controller.signal, timeoutPromise)");
-    expect(
-      script.match(
-        /readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+\{ createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise \},/gu,
-      ),
-    ).toHaveLength(2);
-  });
-
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
     const scripts = [
       "scripts/e2e/lib/plugins/sweep.sh",

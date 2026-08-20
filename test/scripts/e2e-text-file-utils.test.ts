@@ -7,17 +7,9 @@ import {
   readTextFileTail,
   tailText,
 } from "../../scripts/e2e/lib/text-file-utils.mjs";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot() {
-  return makeTempDir(tempRoots, "openclaw-e2e-text-file-utils-");
-}
-
-afterEach(() => {
-  cleanupTempDirs(tempRoots);
-});
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 describe("e2e text file utilities", () => {
   it("keeps short diagnostic text intact and trims long text by byte count", () => {
@@ -28,7 +20,7 @@ describe("e2e text file utilities", () => {
   });
 
   it("reads only the requested file tail and treats missing or non-file paths as empty", () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-e2e-text-file-utils-");
     const file = path.join(root, "output.log");
     const directory = path.join(root, "nested");
     mkdirSync(directory);
@@ -45,7 +37,7 @@ describe("e2e text file utilities", () => {
   });
 
   it("returns bounded file text and reports oversize diagnostics with a tail", () => {
-    const root = makeTempRoot();
+    const root = tempRoots.make("openclaw-e2e-text-file-utils-");
     const file = path.join(root, "artifact.json");
     writeFileSync(file, `old prefix\n${"x".repeat(64)}\nfinal tail`, "utf8");
 

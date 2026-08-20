@@ -4,12 +4,8 @@ import {
   type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,
@@ -196,10 +192,10 @@ function buildPluginGroups(params: {
 /** Build the merged core/plugin tool catalog for one agent. */
 function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {
-  const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
+  const agentId = params.agentId;
   const includePlugins = params.includePlugins !== false;
   const groups = buildCoreGroups({ cfg: params.cfg, agentId });
   if (includePlugins) {

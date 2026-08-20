@@ -53,8 +53,8 @@ export async function sendTranscriptEcho(params: {
   const text = formatEchoTranscript(transcript, params.format ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT);
 
   try {
-    const { sendDurableMessageBatch } = await loadMessageRuntime();
-    const send = await sendDurableMessageBatch({
+    const { sendDurableMessageBatchCore } = await loadMessageRuntime();
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: normalizedChannel,
       to,

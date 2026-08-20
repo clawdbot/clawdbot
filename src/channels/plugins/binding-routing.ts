@@ -14,9 +14,9 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
-import { resolveConfiguredBinding } from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
+import { resolveConfiguredBinding } from "./configured-binding-registry.js";
 
 const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
 

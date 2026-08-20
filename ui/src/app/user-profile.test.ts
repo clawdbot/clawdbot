@@ -4,15 +4,14 @@ import {
   readPresenceEntries,
   resolveCurrentSelfUser,
   resolveSelfPresenceUser,
-  userProfileAvatarUrl,
 } from "./user-profile.ts";
 
 describe("connection user profile helpers", () => {
   it("resolves identity only from the current live presence entry", () => {
     const entries = [
-      { instanceId: "other", user: { id: "other-profile", name: "Other" } },
-      { instanceId: "self", user: { id: "old", name: "Old" }, reason: "disconnect" },
-      { instanceId: "self", user: { id: "profile-1", name: "Ada" } },
+      { instanceId: "other", user: { id: "other-profile", name: "Other" }, ts: 1 },
+      { instanceId: "self", user: { id: "old", name: "Old" }, reason: "disconnect", ts: 2 },
+      { instanceId: "self", user: { id: "profile-1", name: "Ada" }, ts: 3 },
     ];
 
     expect(resolveSelfPresenceUser(entries, "self")).toEqual({ id: "profile-1", name: "Ada" });
@@ -21,7 +20,7 @@ describe("connection user profile helpers", () => {
   });
 
   it("prefers locally refreshed identity state over the presence snapshot", () => {
-    const presenceEntries = [{ instanceId: "self", user: { id: "profile-1", name: "Ada" } }];
+    const presenceEntries = [{ instanceId: "self", user: { id: "profile-1", name: "Ada" }, ts: 1 }];
 
     expect(
       resolveCurrentSelfUser({
@@ -43,25 +42,9 @@ describe("connection user profile helpers", () => {
     ).toEqual({ id: "profile-1", name: "Ada" });
   });
 
-  it("reads presence payloads and builds scoped cache-busted avatar URLs", () => {
-    const entries = [{ instanceId: "self", user: { id: "profile/1" } }];
+  it("reads presence payloads", () => {
+    const entries = [{ instanceId: "self", user: { id: "profile/1" }, ts: 1 }];
     expect(readPresenceEntries({ presence: entries })).toEqual(entries);
     expect(readPresenceEntries({ presence: null })).toBeUndefined();
-    expect(
-      userProfileAvatarUrl(
-        "wss://gateway.example.test/control",
-        "profile/1",
-        42,
-        "https://gateway.example.test/control/profile",
-      ),
-    ).toBe("https://gateway.example.test/api/users/profile%2F1/avatar?v=42");
-    expect(
-      userProfileAvatarUrl(
-        "wss://remote.example.test",
-        "profile-1",
-        42,
-        "https://gateway.example.test/control/profile",
-      ),
-    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=42");
   });
 });

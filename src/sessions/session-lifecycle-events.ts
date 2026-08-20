@@ -2,6 +2,7 @@
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 export type SessionLifecycleEvent = {
   sessionKey: string;
+  agentId?: string;
   reason: string;
   parentSessionKey?: string;
   label?: string;

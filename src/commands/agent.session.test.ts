@@ -112,6 +112,32 @@ describe("agent session resolution", () => {
     });
   });
 
+  it("finds a session-id-only target in another explicit agent store", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
+      const researchStore = path.join(home, "agents", "research", "sessions", "sessions.json");
+      const base = mockConfig(home, storePattern);
+      const cfg = {
+        ...base,
+        agents: {
+          ...base.agents,
+          ownership: "explicit",
+          entries: { ops: {}, research: {} },
+        },
+      } satisfies OpenClawConfig;
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "main", storePath: researchStore },
+        { sessionId: "research-session", updatedAt: Date.now() },
+      );
+
+      const resolution = resolveSession({ cfg, sessionId: "research-session" });
+
+      expect(resolution.sessionId).toBe("research-session");
+      expect(resolution.sessionKey).toBe("agent:research:main");
+      expect(resolution.storePath).toBe(researchStore);
+    });
+  });
+
   it("resolves duplicate cross-agent sessionIds deterministically", async () => {
     await withTempHome(async (home) => {
       const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");

@@ -72,7 +72,7 @@ export function memoryCoreWorkspaceStateKey(workspaceDir: string): string {
   return createHash("sha256").update(normalizeMemoryCoreWorkspaceKey(workspaceDir)).digest("hex");
 }
 
-export function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
+function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
   const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const itemKey = createHash("sha256").update(logicalKey).digest("hex");
   return `${workspaceKey}:${itemKey}`;

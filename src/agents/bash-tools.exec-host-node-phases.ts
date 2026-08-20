@@ -42,7 +42,7 @@ import {
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -253,12 +253,21 @@ export function formatNodeRunToolResult(params: {
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  const timedOut = payloadObj.timedOut === true;
+  // Failure must be visible in the text the model reads, matching the
+  // local/gateway host rendering — output alone reads as success.
+  const outcomeNote = timedOut
+    ? appendExecTimeoutRetryGuidance("Command timed out.", "overall-timeout")
+    : !success && exitCode !== null && exitCode !== 0
+      ? `(Command exited with code ${exitCode})`
+      : "";
+  const output = [stdout, stderr, errorText, outcomeNote].filter(Boolean).join("\n");
   return {
     content: [
       {
         type: "text",
         text: renderExecUpdateText({
-          tailText: stdout || stderr || errorText,
+          tailText: output,
           warnings: params.warnings ?? [],
         }),
       },
@@ -267,7 +276,8 @@ export function formatNodeRunToolResult(params: {
       status: success ? "completed" : "failed",
       exitCode,
       durationMs: Date.now() - params.startedAt,
-      aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+      aggregated: output,
+      ...(timedOut ? { timedOut: true } : {}),
       cwd: params.cwd,
     } satisfies ExecToolDetails,
   };
@@ -384,7 +394,6 @@ export function buildNodeSystemRunInvoke(params: {
     // the node program timer. Without this the Gateway falls back to a fixed 30s
     // pending-invoke timer and discards a later node result as `ignored`.
     timeoutMs: params.target.invokeDeadlineMs,
-    sessionKey: params.sessionKey,
     params: {
       command: params.command,
       rawCommand: params.rawCommand,
@@ -467,7 +476,6 @@ export async function prepareNodeSystemRun(params: {
     {
       nodeId: params.target.nodeId,
       command: "system.run.prepare",
-      sessionKey: params.request.sessionKey,
       params: {
         command: params.target.argv,
         rawCommand: params.request.command,
@@ -484,26 +492,14 @@ export async function prepareNodeSystemRun(params: {
   if (!prepared) {
     throw new Error("invalid system.run.prepare response");
   }
-  const {
-    agentId: _preparedAgentId,
-    sessionKey: _preparedSessionKey,
-    ...preparedPlan
-  } = prepared.plan;
-  // The node may normalize execution details, but it cannot redefine the
-  // Gateway-owned agent or session that requested preparation.
-  const plan: SystemRunApprovalPlan = {
-    ...preparedPlan,
-    agentId: params.request.agentId ?? null,
-    sessionKey: params.request.sessionKey ?? null,
-  };
   return {
-    plan,
-    argv: plan.argv,
-    rawCommand: plan.commandText,
-    transportRawCommand: plan.commandText,
-    cwd: plan.cwd ?? params.request.workdir,
-    agentId: params.request.agentId,
-    sessionKey: params.request.sessionKey,
+    plan: prepared.plan,
+    argv: prepared.plan.argv,
+    rawCommand: prepared.plan.commandText,
+    transportRawCommand: prepared.plan.commandText,
+    cwd: prepared.plan.cwd ?? params.request.workdir,
+    agentId: prepared.plan.agentId ?? params.request.agentId,
+    sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
     ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
     allowAlwaysCoverage: prepared.allowAlwaysCoverage,
   };

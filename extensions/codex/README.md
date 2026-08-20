@@ -28,6 +28,8 @@ Disabling or uninstalling the plugin leaves supervised Chats locked and unavaila
 
 These shell commands differ from the in-chat `/codex` runtime commands. In particular, `/codex sessions --host <node>` lists Codex CLI session files on one node, `/codex threads` uses the current conversation's App Server connection, and `/codex resume` or `/codex bind` changes that conversation's binding. There is no `/codex archive` runtime command.
 
+Native Codex plugin catalogs are discoverable with `/codex plugins available`, including repository marketplaces declared in `.agents/plugins/marketplace.json` in the bound workspace. An owner or `operator.admin` can install and authorize an exact plugin with `/codex plugins install <plugin>@<marketplace>`. The owner-scoped `codex_plugins` agent tool only reads marketplace metadata; installation and policy changes stay on authenticated `/codex` management commands. Explicitly installing a plugin trusts its skills, apps, MCP servers, and hooks.
+
 For a supervised branch, Codex App Server selects the snapshot fork's model and provider from its current native configuration. OpenClaw starts the canonical harness thread with exactly that returned pair. Codex persists the canonical thread's native selection, and later resumes preserve it because OpenClaw omits model and provider overrides. OpenClaw cannot substitute its outer runtime, model, or fallback. The returned initial pair can differ from the source's last recorded model.
 
 The visible-history mirror keeps at most 200 user or assistant messages, 512 KiB total, and 64 KiB per message. Image inputs become `[Image attachment]`; image data and local paths are not copied.

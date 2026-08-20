@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
-  createAutomaticSourceDeliveryContext,
   createNoQueuedDispatchResult,
   createNonTerminalToolWarningPayload,
   deliverDiscordReply,
@@ -17,9 +16,10 @@ import {
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
+  createAutomaticDraftContext,
   createBlockModeContext,
   createMockDraftStreamForTest,
-  expectFinalWithProgressReceipt,
+  expectFinalAnswerText,
   expectFreshFinalText,
   firstDispatchParams,
   firstMockArg,
@@ -31,7 +31,7 @@ import {
 
 registerDiscordProcessTestLifecycle();
 
-type AutomaticDeliveryOverrides = Parameters<typeof createAutomaticSourceDeliveryContext>[0];
+type AutomaticDeliveryOverrides = Parameters<typeof createAutomaticDraftContext>[0];
 type FinalReplyPayload = Parameters<DispatchInboundParams["dispatcher"]["sendFinalReply"]>[0];
 
 async function runFinalReplyScenario(
@@ -44,7 +44,7 @@ async function runFinalReplyScenario(
     return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
   });
 
-  const ctx = await createAutomaticSourceDeliveryContext({
+  const ctx = await createAutomaticDraftContext({
     discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     ...overrides,
   });
@@ -84,9 +84,9 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { maxLinesPerMessage: 120 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 120 },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -94,7 +94,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expectFinalWithProgressReceipt(fullAnswer, "🛠️ 1 tool call");
+    expectFinalAnswerText(fullAnswer);
   });
 
   it("clears partial drafts when fallback final delivery fails before completion", async () => {
@@ -110,7 +110,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 1 },
     });
 
@@ -256,7 +256,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     });
   });
 
-  it("does not flush draft previews for error finals before normal delivery", async () => {
+  it("retains draft previews after error finals are delivered", async () => {
     const draftStream = await runFinalReplyScenario({
       text: "Something failed",
       isError: true,
@@ -264,7 +264,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
@@ -278,7 +278,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -300,7 +300,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -320,7 +320,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -344,7 +344,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "off" } },
     });
 
@@ -367,7 +367,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
     });
 
@@ -399,7 +399,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: { streaming: { mode: "off" } },
     });
 
@@ -450,7 +450,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("shows the agent status above the tool lines in the default Discord progress draft", async () => {
+  it("shows the agent status above the tool lines in an opted-in Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -467,7 +467,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -481,7 +481,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenCalledWith(
       "Claiming my square footage. Tastefully, but with claws.\n\n🛠️ Exec\n• exec done",
     );
-    // No config, so the implicit label stays hidden under the status headline.
+    // With no label override, the implicit label stays hidden under the status headline.
     expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working/);
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(
@@ -508,7 +508,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: {
           mode: "progress",
@@ -522,7 +522,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "Checking private context before replying.\n\n🛠️ Exec",
     );
-    expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
+    expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
   });
 
@@ -542,7 +542,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       return createNoQueuedDispatchResult();
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext({
+    const ctx = await createAutomaticDraftContext({
       discordConfig: {
         streaming: { mode: "progress", progress: { label: false } },
       },

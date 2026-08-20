@@ -3,14 +3,14 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { upsertConversationIdentity } from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -46,7 +46,7 @@ export function resolveConversationRegistryScope(params: {
   return {
     agentId: params.agentId,
     ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
+      ? { storePath: resolveSessionStorePathCore(configuredStore, { agentId: params.agentId }) }
       : {}),
   };
 }
@@ -88,7 +88,7 @@ function mapConversationRow(row: {
       ? row.role
       : undefined;
   const currentEntry = row.current_entry_json
-    ? parseSqliteSessionEntryJson({ entry_json: row.current_entry_json })
+    ? parseSessionEntryJson({ entry_json: row.current_entry_json })
     : null;
   const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
   return {

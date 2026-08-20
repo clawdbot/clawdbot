@@ -935,18 +935,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
     }
 
     #if DEBUG
-    var hasGlobalMonitorForTesting: Bool {
-        self.globalMonitor != nil
-    }
-
-    var hasLocalMonitorForTesting: Bool {
-        self.localMonitor != nil
-    }
-
-    var hotkeyRegisteredForTesting: Bool {
-        self.hotkeyRegistered
-    }
-
     func handleSendAcceptedForTesting(openChat: Bool) {
         self.handleSendAccepted(openChat: openChat)
     }

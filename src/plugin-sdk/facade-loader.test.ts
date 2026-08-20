@@ -6,10 +6,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadFacadeModuleAtLocationSync,
+  loadBundledPluginPublicSurfaceModule,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
+  MissingPublicSurfaceError,
   resetFacadeLoaderStateForTest,
   setFacadeLoaderSourceTransformFactoryForTest,
 } from "./facade-loader.js";
@@ -26,6 +30,18 @@ type FacadeLoaderSourceTransformFactory = NonNullable<
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
+
+function captureThrownError(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected function to throw");
+}
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -163,11 +179,11 @@ function createCircularPluginFixture(prefix: string): TrustedBundledPluginFixtur
   fs.writeFileSync(
     path.join(pluginRoot, "facade.mjs"),
     [
-      `const loadBundledPluginPublicSurfaceModuleSync = globalThis.${FACADE_LOADER_GLOBAL};`,
-      `if (typeof loadBundledPluginPublicSurfaceModuleSync !== "function") {`,
+      `const loadBundledPluginPublicSurfaceModuleSyncCore = globalThis.${FACADE_LOADER_GLOBAL};`,
+      `if (typeof loadBundledPluginPublicSurfaceModuleSyncCore !== "function") {`,
       '  throw new Error("missing facade loader test loader");',
       "}",
-      `export const marker = loadBundledPluginPublicSurfaceModuleSync({ dirName: ${JSON.stringify(
+      `export const marker = loadBundledPluginPublicSurfaceModuleSyncCore({ dirName: ${JSON.stringify(
         pluginId,
       )}, artifactBasename: "api.js" }).marker;`,
       "",
@@ -246,14 +262,14 @@ describe("plugin-sdk facade loader", () => {
     });
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = overrideA.bundledPluginsDir;
-    const fromA = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+    const fromA = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
       dirName: pluginId,
       artifactBasename: "api.js",
     });
     expect(fromA.marker).toBe("override-a");
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = overrideB.bundledPluginsDir;
-    const fromB = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+    const fromB = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
       dirName: pluginId,
       artifactBasename: "api.js",
     });
@@ -267,7 +283,7 @@ describe("plugin-sdk facade loader", () => {
     });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
 
-    const loaded = loadBundledPluginPublicSurfaceModuleSync<{
+    const loaded = loadBundledPluginPublicSurfaceModuleSyncCore<{
       marker: string;
     }>({
       dirName: fixture.pluginId,
@@ -281,12 +297,57 @@ describe("plugin-sdk facade loader", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-    expect(() =>
-      loadBundledPluginPublicSurfaceModuleSync({
+    const error = captureThrownError(() =>
+      loadBundledPluginPublicSurfaceModuleSyncCore({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
-    ).toThrow("Unable to resolve bundled plugin public surface browser/browser-maintenance.js");
+    );
+
+    expect(error).toBeInstanceOf(MissingPublicSurfaceError);
+    expect(error.message).toBe(
+      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    );
+  });
+
+  it("throws typed errors for async missing bundled facades", async () => {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+    let rejection: unknown;
+    try {
+      await loadBundledPluginPublicSurfaceModule({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(MissingPublicSurfaceError);
+    expect(rejection).toHaveProperty(
+      "message",
+      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    );
+  });
+
+  it("open failures are not classified as MissingPublicSurfaceError", () => {
+    const tempRoot = createTempDirSync("openclaw-facade-loader-boundary-fail-");
+    const boundaryRoot = path.join(tempRoot, "plugin");
+    const outsidePath = path.join(tempRoot, "outside.js");
+    fs.mkdirSync(boundaryRoot, { recursive: true });
+    fs.writeFileSync(outsidePath, 'export const marker = "outside";\n', "utf8");
+
+    const error = captureThrownError(() =>
+      loadFacadeModuleAtLocationSync({
+        location: { modulePath: outsidePath, boundaryRoot },
+        trackedPluginId: "boundary-failure",
+      }),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(MissingPublicSurfaceError);
+    expect(error.message).toBe(`Unable to open bundled plugin public surface ${outsidePath}`);
   });
 
   it("shares loaded facade ids with facade-runtime", () => {
@@ -296,11 +357,11 @@ describe("plugin-sdk facade loader", () => {
     });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
 
-    const first = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+    const first = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
       dirName: fixture.pluginId,
       artifactBasename: "api.js",
     });
-    const second = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+    const second = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
       dirName: fixture.pluginId,
       artifactBasename: "api.js",
     });
@@ -309,6 +370,34 @@ describe("plugin-sdk facade loader", () => {
     expect(first.marker).toBe("identity-check");
     expect(listImportedBundledPluginFacadeIds()).toEqual([fixture.pluginId]);
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
+  });
+
+  it("reloads replaced facade artifacts and dependencies without erasing imported-plugin history", () => {
+    const pluginRoot = fs.realpathSync(createTempDirSync("openclaw-facade-replacement-"));
+    const modulePath = path.join(pluginRoot, "api.js");
+    const dependencyPath = path.join(pluginRoot, "dependency.js");
+    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+
+    const writeArtifact = (marker: string) => {
+      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
+    };
+    const loadArtifact = () =>
+      loadFacadeModuleAtLocationSync<{ marker: string }>({
+        location: { modulePath, boundaryRoot: pluginRoot },
+        trackedPluginId: "replacement-plugin",
+      }).marker;
+
+    writeArtifact("retired");
+    expect(loadArtifact()).toBe("retired");
+
+    writeArtifact("replacement");
+    expect(loadArtifact()).toBe("retired");
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(listImportedBundledPluginFacadeIds()).toContain("replacement-plugin");
+    expect(loadArtifact()).toBe("replacement");
   });
 
   it("uses native require for Windows dist facade loads", () => {
@@ -330,7 +419,7 @@ describe("plugin-sdk facade loader", () => {
     withMockedWindowsPlatform(() => {
       try {
         expect(
-          loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+          loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
             dirName: fixture.pluginId,
             artifactBasename: "api.js",
           }).marker,
@@ -346,9 +435,9 @@ describe("plugin-sdk facade loader", () => {
     const fixture = createCircularPluginFixture("openclaw-facade-loader-circular-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
     (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL] =
-      loadBundledPluginPublicSurfaceModuleSync;
+      loadBundledPluginPublicSurfaceModuleSyncCore;
 
-    const loaded = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+    const loaded = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
       dirName: fixture.pluginId,
       artifactBasename: "api.js",
     });
@@ -361,7 +450,7 @@ describe("plugin-sdk facade loader", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
 
     expect(() =>
-      loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+      loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
         dirName: fixture.pluginId,
         artifactBasename: "api.js",
       }),
@@ -370,7 +459,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     expect(() =>
-      loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+      loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
         dirName: fixture.pluginId,
         artifactBasename: "api.js",
       }),

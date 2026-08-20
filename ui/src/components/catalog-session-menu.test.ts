@@ -86,7 +86,7 @@ describe("catalog session menu", () => {
     const terminal = menu.querySelector<CatalogMenuItem>('wa-dropdown-item[value="terminal"]');
 
     expect(terminal?.disabled).toBe(true);
-    expect(terminal?.title).toBe("Terminal opening is unavailable for this thread.");
+    expect(terminal?.title).toBe("Terminal opening is unavailable for this session.");
     terminal?.click();
     expect(onAction).not.toHaveBeenCalled();
   });

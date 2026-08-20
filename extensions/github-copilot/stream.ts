@@ -4,7 +4,7 @@ import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
-  streamWithPayloadPatch,
+  createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
@@ -192,32 +192,29 @@ export function wrapCopilotAnthropicStream(
     return undefined;
   }
   const underlying = baseStreamFn;
+  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload }) =>
+    patchCopilotAnthropicPayload(payload),
+  );
   return (model, context, options) => {
     if (model.provider !== "github-copilot" || model.api !== "anthropic-messages") {
       return underlying(model, context, options);
     }
 
     const originalOnPayload = options?.onPayload;
-    return streamWithPayloadPatch(
-      underlying,
-      model,
-      context,
-      {
-        ...options,
-        headers: buildCopilotRequestHeaders(context, options?.headers),
-        onPayload: (payload, payloadModel) =>
-          patchOnPayloadResult(
-            originalOnPayload?.(payload, payloadModel),
-            (replacement) => {
-              if (replacement && typeof replacement === "object") {
-                patchCopilotAnthropicPayload(replacement as Record<string, unknown>);
-              }
-            },
-            payload,
-          ),
-      },
-      patchCopilotAnthropicPayload,
-    );
+    return payloadWrapper(model, context, {
+      ...options,
+      headers: buildCopilotRequestHeaders(context, options?.headers),
+      onPayload: (payload, payloadModel) =>
+        patchOnPayloadResult(
+          originalOnPayload?.(payload, payloadModel),
+          (replacement) => {
+            if (replacement && typeof replacement === "object") {
+              patchCopilotAnthropicPayload(replacement as Record<string, unknown>);
+            }
+          },
+          payload,
+        ),
+    });
   };
 }
 

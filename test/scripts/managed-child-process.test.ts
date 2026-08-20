@@ -10,7 +10,7 @@ import {
   runManagedCommand,
   signalExitCode,
   terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mjs";
+} from "../../scripts/lib/managed-child-process.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -194,6 +194,45 @@ describe("managed-child-process", () => {
     });
   });
 
+  it("signals the direct child when process-group ownership is disabled", () => {
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+
+    expect(
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "linux",
+        useProcessGroup: false,
+      }),
+    ).toEqual({ processTreeState: "signaled" });
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("reports process-group signal errors before falling back to the direct child", () => {
+    const originalKill = process.kill.bind(process);
+    const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+    const onProcessGroupSignalError = vi.fn();
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -12345 && signal === "SIGTERM") {
+        throw groupError;
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      expect(
+        terminateManagedChild(child, "SIGTERM", {
+          onProcessGroupSignalError,
+          platform: "linux",
+        }),
+      ).toEqual({ processTreeState: "signaled" });
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(onProcessGroupSignalError).toHaveBeenCalledWith(groupError);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("shares process signal listeners across parallel managed commands", async () => {
     const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
     const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
@@ -240,12 +279,12 @@ describe("managed-child-process", () => {
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-const descendant = spawn(process.execPath, [
+spawn(process.execPath, [
   "-e",
-  "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+  process.argv[3],
 ], { stdio: "ignore" });
 fs.writeFileSync(process.argv[2], String(process.pid));
-fs.writeFileSync(process.argv[3], String(descendant.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1_000);
 `,
@@ -386,7 +425,7 @@ setInterval(() => {}, 1_000);
   });
 
   posixIt("waits through transient indeterminate process-group state", async () => {
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     let childPid = 0;
     let injectedIndeterminate = false;
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
@@ -419,7 +458,7 @@ setInterval(() => {}, 1_000);
   });
 
   posixIt("accepts a process group that vanishes before its cleanup signal", async () => {
-    const originalKill = process.kill;
+    const originalKill = process.kill.bind(process);
     let childPid = 0;
     let injectedLiveGroup = false;
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
@@ -506,10 +545,12 @@ setInterval(() => {}, 1_000);
             "-e",
             `
 const { spawn } = require("node:child_process");
-const fs = require("node:fs");
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-child.unref();
-fs.writeFileSync(process.argv[1], String(child.pid));
+const child = spawn(process.execPath, [
+  "-e",
+  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.send('ready'); process.disconnect(); setInterval(() => {}, 1000)",
+  process.argv[1],
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+child.once("message", () => process.exit(0));
 `,
             descendantPidPath,
           ],
@@ -537,7 +578,7 @@ fs.writeFileSync(process.argv[1], String(child.pid));
       const childPidPath = path.join(dir, "child.pid");
       const descendantPidPath = path.join(dir, "descendant.pid");
       const runnerReadyPath = path.join(dir, "runner.ready");
-      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
+      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href;
 
       fs.writeFileSync(
         childPath,
@@ -545,12 +586,12 @@ fs.writeFileSync(process.argv[1], String(child.pid));
 	import { spawn } from "node:child_process";
 	import fs from "node:fs";
 
-	const descendant = spawn(process.execPath, [
+	spawn(process.execPath, [
 	  "-e",
-	  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+	  "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+	  process.argv[3],
 	], { stdio: "ignore" });
 	fs.writeFileSync(process.argv[2], String(process.pid));
-	fs.writeFileSync(process.argv[3], String(descendant.pid));
 	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
 	  process.on(signal, () => process.exit(0));
 	}

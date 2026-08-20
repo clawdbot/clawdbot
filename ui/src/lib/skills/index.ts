@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -10,7 +9,7 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-import { redactToolDetail } from "../browser-redact.ts";
+import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import {
   normalizeSkillApiKeyReplacement,
@@ -92,13 +91,13 @@ type SkillsState = {
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
-  clawhubDetailSlug: string | null;
+  clawhubDetailRef: string | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
-    acknowledgeSlug?: string;
+    acknowledgeRef?: string;
     acknowledgeVersion?: string;
     acknowledgeLabel?: string;
   } | null;
@@ -114,7 +113,7 @@ type SkillsState = {
 export type SkillOperation =
   | { kind: "refresh" }
   | { kind: "skill"; skillKey: string }
-  | { kind: "clawhub"; slug: string }
+  | { kind: "clawhub"; ref: string }
   | null;
 
 type ActiveSkillOperation = Exclude<SkillOperation, null>;
@@ -199,11 +198,6 @@ function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string 
   return skill ? skillCardCacheKey(skill) : undefined;
 }
 
-function skillsAgentParams(agentId: string | null | undefined): { agentId?: string } {
-  const normalized = agentId?.trim();
-  return normalized ? { agentId: normalized } : {};
-}
-
 function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { agentId?: string } {
   const agentId = state.skillsAgentId?.trim();
   return agentId ? { agentId } : {};
@@ -211,9 +205,9 @@ function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { ag
 
 export async function loadSkillStatusReport(
   client: GatewayBrowserClient,
-  agentId: string | null | undefined,
+  agentId: string,
 ): Promise<SkillStatusReport | undefined> {
-  return client.request<SkillStatusReport | undefined>("skills.status", skillsAgentParams(agentId));
+  return client.request<SkillStatusReport | undefined>("skills.status", { agentId });
 }
 
 type SkillsAgentScope = {
@@ -285,13 +279,15 @@ export function reconcileSkillsAgentId(
   state: SkillsState,
   agentsList: AgentsListResult | null | undefined,
 ) {
-  if (
-    agentsList &&
-    state.skillsAgentId &&
-    !agentsList.agents.some((agent) => agent.id === state.skillsAgentId)
-  ) {
-    setSkillsAgentId(state, null);
+  if (!agentsList) {
+    return;
   }
+  const selectedAgentId = agentsList.agents.some((agent) => agent.id === state.skillsAgentId)
+    ? state.skillsAgentId
+    : agentsList.agents.some((agent) => agent.id === agentsList.defaultId)
+      ? agentsList.defaultId
+      : null;
+  setSkillsAgentId(state, selectedAgentId);
 }
 
 export async function loadSkills(
@@ -302,8 +298,10 @@ export async function loadSkills(
   },
 ) {
   const client = state.client;
+  const agentId = state.skillsAgentId?.trim();
   if (
     !client ||
+    !agentId ||
     !state.connected ||
     state.skillsLoading ||
     (state.skillOperation && state.skillOperation !== options?.operation)
@@ -322,7 +320,7 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, state.skillsAgentId);
+    const res = await loadSkillStatusReport(client, agentId);
     if (!isCurrent()) {
       return;
     }
@@ -335,7 +333,7 @@ export async function loadSkills(
     if (!isCurrent()) {
       return;
     }
-    state.skillsError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillsError = formatUiError(err);
   } finally {
     // A transient disconnect invalidates the result, not this invocation's
     // loading ownership. Source/scope identity still protects newer loads.
@@ -448,7 +446,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.skillCardErrors = {
         ...state.skillCardErrors,
-        [skillKey]: formatErrorMessage(err, { redact: redactToolDetail }),
+        [skillKey]: formatUiError(err),
       };
     }
   } finally {
@@ -493,7 +491,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
       return;
     }
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.clawhubVerdictsError = formatUiError(err);
   } finally {
     if (isSkillsAgentScopeCurrent(state, agentScope)) {
       state.clawhubVerdictsLoading = false;
@@ -546,7 +544,7 @@ async function runSkillMutation(
     ) {
       return;
     }
-    const message = formatErrorMessage(err, { redact: redactToolDetail });
+    const message = formatUiError(err);
     state.skillsError = message;
     setSkillMessage(state, skillKey, {
       kind: "error",
@@ -633,18 +631,18 @@ export async function installSkill(
     });
     return {
       kind: "success",
-      message: result?.message ?? "Installed",
+      message: formatUiExternalText(result?.message, "Installed"),
     };
   });
 }
 
-export async function loadClawHubDetail(state: SkillsState, slug: string) {
+export async function loadClawHubDetail(state: SkillsState, ref: string) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
-  state.clawhubDetailSlug = slug;
+  state.clawhubDetailRef = ref;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
@@ -652,14 +650,14 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
     () =>
       state.connected &&
       state.client === client &&
-      slug === state.clawhubDetailSlug &&
+      ref === state.clawhubDetailRef &&
       isSkillsAgentScopeCurrent(state, agentScope),
-    () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
+    () => client.request<ClawHubSkillDetail>("skills.detail", { slug: ref }),
     (res) => {
       state.clawhubDetail = res ?? null;
     },
     (err) => {
-      state.clawhubDetailError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.clawhubDetailError = formatUiError(err);
     },
     () => {
       state.clawhubDetailLoading = false;
@@ -668,7 +666,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
 }
 
 export function closeClawHubDetail(state: SkillsState) {
-  state.clawhubDetailSlug = null;
+  state.clawhubDetailRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
   state.clawhubDetailLoading = false;
@@ -676,7 +674,7 @@ export function closeClawHubDetail(state: SkillsState) {
 
 export async function installFromClawHub(
   state: SkillsState,
-  slug: string,
+  ref: string,
   acknowledgeClawHubRisk = false,
   version?: string,
 ) {
@@ -685,14 +683,14 @@ export async function installFromClawHub(
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  const operation = { kind: "clawhub", slug } as const;
+  const operation = { kind: "clawhub", ref } as const;
   state.skillOperation = operation;
   state.clawhubInstallMessage = null;
   try {
     const result = await client.request<{ message?: string; warning?: string }>("skills.install", {
       ...stateSkillsAgentParams(state),
       source: "clawhub",
-      slug,
+      slug: ref,
       ...(version ? { version } : {}),
       ...(acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     });
@@ -711,7 +709,10 @@ export async function installFromClawHub(
     }
     state.clawhubInstallMessage = {
       kind: "success",
-      text: formatClawHubInstallMessage(result?.message ?? `Installed ${slug}`, result?.warning),
+      text: formatClawHubInstallMessage(
+        formatUiExternalText(result?.message, `Installed ${ref}`),
+        result?.warning ? formatUiExternalText(result.warning) : undefined,
+      ),
     };
   } catch (err) {
     if (
@@ -725,11 +726,8 @@ export async function installFromClawHub(
         kind: "error",
         text: needsAcknowledgement
           ? formatClawHubAcknowledgementMessage(trustDetails?.warning)
-          : formatClawHubInstallMessage(
-              formatErrorMessage(err, { redact: redactToolDetail }),
-              trustDetails?.warning,
-            ),
-        ...(needsAcknowledgement ? { acknowledgeSlug: slug } : {}),
+          : formatClawHubInstallMessage(formatUiError(err), trustDetails?.warning),
+        ...(needsAcknowledgement ? { acknowledgeRef: ref } : {}),
         ...(needsAcknowledgement && trustDetails?.version
           ? { acknowledgeVersion: trustDetails.version }
           : {}),

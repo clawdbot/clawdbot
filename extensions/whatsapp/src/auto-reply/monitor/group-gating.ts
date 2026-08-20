@@ -16,6 +16,7 @@ import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
+import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import {
@@ -109,7 +110,7 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.event.timestamp,
       id: params.msg.event.id,
       senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
-      ...(params.body === undefined && params.msg.payload.media
+      ...(params.msg.payload.media
         ? {
             media: [
               {
@@ -269,10 +270,15 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
       );
       return { shouldProcess: false, needsMentionText: true } as const;
     }
+    // Mention matching needs raw STT text, but deferred history is model-visible later.
+    const pendingHistoryBody =
+      params.mentionText === undefined
+        ? undefined
+        : formatWhatsAppAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,
-      params.mentionText,
+      pendingHistoryBody,
     );
   }
 

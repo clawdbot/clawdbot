@@ -15,7 +15,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import type { AgentExecutionAttribution } from "../agent-execution-attribution.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -30,6 +30,7 @@ import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
+import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
@@ -42,36 +43,34 @@ import {
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import { measureAgentStartup } from "../startup-timing.js";
 import {
-  hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
+  needsThinkHydration,
 } from "../thinking-runtime.js";
 import {
   createAgentAttemptLifecycleCallbacks,
   type AgentAttemptLifecycleState,
 } from "./attempt-callbacks.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { persistSessionEntry, resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
-
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
 export async function runEmbeddedAgentAttempt(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
   lifecycleGeneration: string;
-  onLifecycleGenerationChanged: (
-    lifecycleGeneration: string,
-    attribution?: AgentExecutionAttribution,
-  ) => void;
+  onLifecycleGenerationChanged: (lifecycleGeneration: string) => void;
   suppressVisibleSessionEffects: boolean;
   preserveUserFacingSessionModelState: boolean;
   modelSelection: EmbeddedModelSelection;
@@ -99,7 +98,6 @@ export async function runEmbeddedAgentAttempt(params: {
     timeoutMs,
     runTimeoutOverrideMs,
   } = params.prepared;
-  let executionAttribution = params.opts.executionAttribution;
   const { runContext, skillsSnapshot, resolvedVerboseLevel } = params.embeddedSessionState;
   const {
     defaultProvider,
@@ -122,8 +120,7 @@ export async function runEmbeddedAgentAttempt(params: {
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
   } = params.modelSelection;
-  let thinkingCatalog = params.modelSelection.thinkingCatalog;
-  let attemptedThinkingCatalogHydration = false;
+  const thinkingCatalog = params.modelSelection.thinkingCatalog;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -316,7 +313,7 @@ export async function runEmbeddedAgentAttempt(params: {
             }
             const nextSessionEntry = { ...sessionEntry };
             clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
-            sessionEntry = await persistSessionEntry({
+            sessionEntry = await persistAgentSession({
               sessionStore,
               sessionKey,
               storePath,
@@ -390,27 +387,22 @@ export async function runEmbeddedAgentAttempt(params: {
               provider: providerOverride,
               model: modelOverride,
             });
+          let candidateThinkingCatalog = thinkingCatalog;
           if (
             pluginsEnabled &&
             candidateConfiguredThinkLevel !== "off" &&
-            !attemptedThinkingCatalogHydration &&
-            !hasResolvedThinkingCatalogEntry({
-              catalog: thinkingCatalog,
-              provider: providerOverride,
-              model: modelOverride,
-            })
+            needsThinkHydration(thinkingCatalog, providerOverride, modelOverride, candidateRuntime)
           ) {
-            attemptedThinkingCatalogHydration = true;
-            const { loadPreparedModelCatalogSnapshot } =
+            const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
             const runtimeCatalog = normalizeThinkingCatalogProviders(
-              (
-                await loadPreparedModelCatalogSnapshot({
-                  config: cfg,
-                  agentId: sessionAgentId,
-                  workspaceDir,
-                })
-              ).entries,
+              await loadProviderScopedThinkingCatalog({
+                config: cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                workspaceDir,
+              }),
             );
             const allowedRuntimeCatalog = createModelVisibilityPolicy({
               cfg,
@@ -423,7 +415,7 @@ export async function runEmbeddedAgentAttempt(params: {
               ...modelManifestContext,
             }).allowedCatalog;
             if (allowedRuntimeCatalog.length > 0) {
-              thinkingCatalog = allowedRuntimeCatalog;
+              candidateThinkingCatalog = allowedRuntimeCatalog;
             }
           }
           const candidateRequestedThinkLevel =
@@ -432,7 +424,7 @@ export async function runEmbeddedAgentAttempt(params: {
               cfg,
               provider: providerOverride,
               model: modelOverride,
-              catalog: thinkingCatalog,
+              catalog: candidateThinkingCatalog,
               agentRuntime: candidateRuntime,
             });
           const candidateThinkLevel =
@@ -441,7 +433,7 @@ export async function runEmbeddedAgentAttempt(params: {
               provider: providerOverride,
               modelId: modelOverride,
               level: candidateRequestedThinkLevel,
-              catalog: thinkingCatalog,
+              catalog: candidateThinkingCatalog,
               agentId: sessionAgentId,
               sessionKey,
               sessionEntry: attemptSessionEntry,
@@ -449,8 +441,13 @@ export async function runEmbeddedAgentAttempt(params: {
             }) ?? candidateRequestedThinkLevel;
           effectiveTurnThinkLevel = candidateThinkLevel;
           return attemptExecutionRuntime.runAgentAttempt({
+            preparedRunAdmission: params.preparedRunAdmission,
             providerOverride,
             modelOverride,
+            ...prepareModelRunCapabilities(
+              [candidateThinkingCatalog, params.prepared.configuredThinkingCatalog],
+              [providerOverride, modelOverride, candidateRuntime],
+            ),
             configuredAuthProfileId,
             modelFallbacksOverride: effectiveFallbacksOverride,
             originalProvider: provider,
@@ -479,10 +476,7 @@ export async function runEmbeddedAgentAttempt(params: {
             runTimeoutOverrideMs,
             runId,
             lifecycleGeneration,
-            opts:
-              executionAttribution === params.opts.executionAttribution
-                ? params.opts
-                : { ...params.opts, executionAttribution },
+            opts: params.opts,
             runContext,
             spawnedBy,
             messageChannel,
@@ -494,6 +488,7 @@ export async function runEmbeddedAgentAttempt(params: {
             storePath: params.suppressVisibleSessionEffects ? undefined : storePath,
             pluginsEnabled,
             ...(manifestMetadataSnapshot ? { metadataSnapshot: manifestMetadataSnapshot } : {}),
+            pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             sessionHasHistory:
               !isNewSession ||
@@ -508,11 +503,9 @@ export async function runEmbeddedAgentAttempt(params: {
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
-            onLifecycleGenerationChanged: (nextLifecycleGeneration, nextAttribution) => {
+            onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
               lifecycleGeneration = nextLifecycleGeneration;
-              executionAttribution = nextAttribution ?? executionAttribution;
-              // Outer cleanup owns the run context, so publish before the attempt can reject.
-              params.onLifecycleGenerationChanged(nextLifecycleGeneration, nextAttribution);
+              params.onLifecycleGenerationChanged(nextLifecycleGeneration);
             },
             onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
             deferTerminalLifecycle: true,
@@ -705,5 +698,3 @@ export async function runEmbeddedAgentAttempt(params: {
     terminal,
   };
 }
-
-export type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;

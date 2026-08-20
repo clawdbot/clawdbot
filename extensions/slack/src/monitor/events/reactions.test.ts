@@ -1,4 +1,5 @@
 // Slack tests cover reactions plugin behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reactionQueueMock = vi.hoisted(() => vi.fn());
@@ -8,9 +9,13 @@ type SlackSystemEventTestOverrides =
   import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => reactionQueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
-type ReactionHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+type ReactionHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
 type ReactionRunInput = {
   handler?: "added" | "removed";
@@ -32,6 +37,18 @@ function buildReactionEvent(overrides?: { user?: string; channel?: string }) {
       ts: "123.456",
     },
     item_user: "UBOT",
+  };
+}
+
+function buildEnterpriseListenerArgs(teamId: string) {
+  return {
+    body: { api_app_id: "A_GRID", event_id: `Ev-reaction-${teamId}` },
+    context: {
+      isEnterpriseInstall: true,
+      enterpriseId: "E_GRID",
+      teamId,
+    } as AllMiddlewareArgs["context"],
+    client: { token: `listener-${teamId}` } as AllMiddlewareArgs["client"],
   };
 }
 
@@ -69,7 +86,7 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
   const handler = requireReactionHandler(handlers[handlerName], handlerName);
   await handler({
     event: (input.event ?? buildReactionEvent()) as Record<string, unknown>,
-    body: input.body ?? {},
+    body: input.body ?? { event_id: "Ev-reaction-default" },
   });
 }
 
@@ -227,7 +244,7 @@ describe("registerSlackReactionEvents", () => {
 
     expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
       sessionKey: "agent:main:main",
-      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup",
+      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup:Ev-reaction-default",
     });
   });
 
@@ -283,8 +300,10 @@ describe("registerSlackReactionEvents", () => {
   it("passes sender context when resolving reaction session keys", async () => {
     reactionQueueMock.mockClear();
     const harness = createSlackSystemEventTestHarness();
-    const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:main");
-    harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
+    const resolveSessionKey = vi
+      .fn()
+      .mockReturnValue({ agentId: "ops", sessionKey: "agent:ops:main" });
+    harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
     registerSlackReactionEvents({ ctx: harness.ctx });
     const handler = requireReactionHandler(
       harness.getHandler("reaction_added") as ReactionHandler | null,
@@ -301,5 +320,110 @@ describe("registerSlackReactionEvents", () => {
       channelType: "im",
       senderId: "U777",
     });
+  });
+
+  it("keeps enterprise reaction events isolated by listener workspace", async () => {
+    const harness = createSlackSystemEventTestHarness();
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
+    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
+    const resolveSessionKey = vi.fn(
+      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+        agentId: "main",
+        sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
+      }),
+    );
+    harness.ctx.resolveChannelName = resolveChannelName;
+    harness.ctx.resolveUserName = resolveUserName;
+    harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    for (const teamId of ["T111", "T222"]) {
+      await handler({
+        event: buildReactionEvent(),
+        ...buildEnterpriseListenerArgs(teamId),
+      });
+    }
+
+    expect(reactionQueueMock).toHaveBeenNthCalledWith(1, expect.any(String), {
+      sessionKey: "session:T111",
+      contextKey: "slack:reaction:T111:added:D1:123.456:U1:thumbsup:Ev-reaction-T111",
+    });
+    expect(reactionQueueMock).toHaveBeenNthCalledWith(2, expect.any(String), {
+      sessionKey: "session:T222",
+      contextKey: "slack:reaction:T222:added:D1:123.456:U1:thumbsup:Ev-reaction-T222",
+    });
+    expect(resolveChannelName).toHaveBeenCalledWith(
+      "D1",
+      expect.objectContaining({ teamId: "T111" }),
+    );
+    expect(resolveChannelName).toHaveBeenCalledWith(
+      "D1",
+      expect.objectContaining({ teamId: "T222" }),
+    );
+    expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T111" }));
+  });
+
+  it("allows an unscoped org user reaction policy across Enterprise workspaces", async () => {
+    const harness = createSlackSystemEventTestHarness({
+      dmPolicy: "open",
+      reactionMode: "allowlist",
+      reactionAllowlist: ["W01234567"],
+    });
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    for (const teamId of ["T111", "T222"]) {
+      await handler({
+        event: buildReactionEvent({ user: "W01234567" }),
+        ...buildEnterpriseListenerArgs(teamId),
+      });
+    }
+
+    expect(reactionQueueMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects enterprise reaction events without validated listener scope", async () => {
+    const trackEvent = vi.fn();
+    const harness = createSlackSystemEventTestHarness();
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    registerSlackReactionEvents({ ctx: harness.ctx, trackEvent });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    await handler({
+      event: buildReactionEvent(),
+      body: { api_app_id: "A_GRID" },
+      context: {
+        isEnterpriseInstall: true,
+        enterpriseId: "E_GRID",
+      } as AllMiddlewareArgs["context"],
+      client: { token: "listener" } as AllMiddlewareArgs["client"],
+    });
+
+    expect(trackEvent).not.toHaveBeenCalled();
+    expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 });

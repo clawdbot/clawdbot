@@ -5,10 +5,10 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
+  isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
@@ -37,6 +37,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
+  GatewayServiceLoadState,
   GatewayServiceManageArgs,
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
@@ -46,6 +47,7 @@ import type {
   GatewayServiceState,
 } from "./service-types.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
@@ -83,6 +85,8 @@ export type GatewayService = {
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
@@ -122,19 +126,10 @@ function collectGatewayServiceStartRepairIssues(
   expectedPort?: number,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
-  if (!state.loaded || !command) {
+  if (state.loadState.status !== "loaded" || !command) {
     return [];
   }
   const issues: GatewayServiceStartRepairIssue[] = [];
-  const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
-  if (serviceVersion && serviceVersion !== VERSION) {
-    // Version drift often means the service points at old package paths; require
-    // reinstall/repair before pretending restart succeeded.
-    issues.push({
-      code: "version-mismatch",
-      message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
-    });
-  }
   const servicePort =
     parseTcpPortFromArgs(command.programArguments) ??
     parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
@@ -181,6 +176,18 @@ export function formatGatewayServiceStartRepairIssues(
   return issues.map((issue) => issue.message).join("; ");
 }
 
+export async function readGatewayServiceLoadState(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs = {},
+): Promise<GatewayServiceLoadState> {
+  try {
+    const loaded = await service.isLoaded(args);
+    return { status: loaded ? "loaded" : "not-loaded" };
+  } catch (error) {
+    return { status: "unknown", detail: String(error) };
+  }
+}
+
 export async function readGatewayServiceState(
   service: GatewayService,
   args: ReadGatewayServiceStateArgs = {},
@@ -194,8 +201,8 @@ export async function readGatewayServiceState(
   // Propagate the status read deadline so a wedged service manager fails soft
   // instead of hanging both probes. readCommand parses local files and needs no
   // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
-  const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
+  const [loadState, runtime] = await Promise.all([
+    readGatewayServiceLoadState(service, { env, timeoutMs: args.timeoutMs }),
     service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
       (error: unknown) =>
         ({
@@ -206,7 +213,7 @@ export async function readGatewayServiceState(
   ]);
   return {
     installed: command !== null,
-    loaded,
+    loadState,
     running: runtime?.status === "running",
     env,
     command,
@@ -224,14 +231,17 @@ export async function startGatewayService(
     { env: args.env },
     expectedPort,
   );
-  if (!state.loaded && !state.installed) {
+  if (state.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed: ${state.loadState.detail}`);
+  }
+  if (state.loadState.status === "not-loaded" && !state.installed) {
     return {
       outcome: "missing-install",
       state,
     };
   }
 
-  if (state.loaded && state.running) {
+  if (state.loadState.status === "loaded" && state.running) {
     return {
       outcome: "already-running",
       state,
@@ -262,6 +272,9 @@ export async function startGatewayService(
     throw err;
   }
 
+  if (nextState.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed after start: ${nextState.loadState.detail}`);
+  }
   const runtime = nextState.runtime;
   const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
   const newFailedExit =
@@ -347,6 +360,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
+    isEnabled: isLaunchAgentEnabled,
     readCommand: readLaunchAgentProgramArguments,
     readRuntime: readLaunchAgentRuntime,
   },
@@ -361,6 +375,8 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    hasInstalledDefinition: async ({ env }) =>
+      (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },

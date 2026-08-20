@@ -1,3 +1,4 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   floatToPcm16,
@@ -214,13 +215,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         this.cancelOutputForBargeIn();
       }
       const abortController = this.audioAppendAbortController;
-      // Live microphone frames become stale once the Gateway falls behind, so drop new
-      // frames at the ownership cap instead of growing a latency queue.
-      if (
-        !abortController ||
-        abortController.signal.aborted ||
-        this.pendingAudioAppends.size >= MAX_PENDING_AUDIO_APPENDS
-      ) {
+      // Live microphone frames become stale once the Gateway falls behind, so fail at
+      // the ownership cap instead of silently dropping speech or growing a latency queue.
+      if (!abortController || abortController.signal.aborted) {
+        return;
+      }
+      if (this.pendingAudioAppends.size >= MAX_PENDING_AUDIO_APPENDS) {
+        this.failAudioAppend("Realtime Talk audio input fell behind");
         return;
       }
       const pcm = floatToPcm16(samples);
@@ -237,15 +238,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
             timeoutMs: AUDIO_APPEND_TIMEOUT_MS,
           },
         )
-        .catch((error: unknown) => {
-          if (!this.closed && !abortController.signal.aborted) {
-            this.ctx.callbacks.onStatus?.(
-              "error",
-              error instanceof Error ? error.message : String(error),
-            );
-            this.stop();
-          }
-        });
+        .catch((error: unknown) => this.failAudioAppend(error));
       this.pendingAudioAppends.add(request);
       void request.finally(() => {
         this.pendingAudioAppends.delete(request);
@@ -257,6 +250,14 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.audioAppendAbortController?.abort();
     this.audioAppendAbortController = null;
     this.pendingAudioAppends.clear();
+  }
+
+  private failAudioAppend(error: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    this.ctx.callbacks.onStatus?.("error", formatUiError(error));
+    this.stop();
   }
 
   private currentStartupError(): Error | null {
@@ -272,7 +273,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       return;
     }
     if (event.type === "error") {
-      this.lastRelayError = event.message ?? "Realtime relay failed";
+      this.lastRelayError = event.message ? formatUiError(event.message) : "Realtime relay failed";
     }
     if (event.type === "close") {
       this.startupError = new Error(
@@ -359,7 +360,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           }
           return;
         case "error":
-          this.lastRelayError = event.message ?? "Realtime relay failed";
+          this.lastRelayError = event.message
+            ? formatUiError(event.message)
+            : "Realtime relay failed";
           this.ctx.callbacks.onStatus?.("error", this.lastRelayError);
           return;
         case "close":
@@ -602,7 +605,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (this.closed) {
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     this.lastRelayError = message;
     this.ctx.callbacks.onStatus?.("error", message);
   }

@@ -27,6 +27,19 @@ function makeAttempt(
   };
 }
 
+function makeCliUsageAssistant(stopReason: "aborted" | "error" | "stop", text = "legacy reply") {
+  return {
+    role: "assistant",
+    api: "cli",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    content: [{ type: "text", text }],
+    usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+    stopReason,
+    timestamp: 1,
+  };
+}
+
 function makePromptState(options: { waitForPersistence?: () => Promise<void> } = {}) {
   const activePrompt = { persisted: false, internal: false };
   const state = {
@@ -178,7 +191,9 @@ describe("normalizeEmbeddedRunAttempt", () => {
     });
     attempt.toolMetas = [{ toolName: "read", isError: false }];
 
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+    const input = makeNormalizationInput(attempt, state);
+    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+    const result = await normalizeEmbeddedRunAttempt(input);
 
     expect(result.action).toBe("retry");
     if (result.action !== "retry") {
@@ -237,5 +252,94 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected clean attempt to proceed, got ${clean.action}`);
     }
     expect(clean.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
+  });
+
+  it("writes canonical assistant abort lifecycle metadata", async () => {
+    const state = makePromptState();
+    const assistant = makeCliUsageAssistant("aborted", "");
+    const setTerminalLifecycleMeta = vi.fn();
+    const attempt = makeAttempt();
+    attempt.lastAssistant = assistant as never;
+    attempt.currentAttemptAssistant = assistant as never;
+    attempt.setTerminalLifecycleMeta = setTerminalLifecycleMeta;
+
+    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+
+    expect(result.action).toBe("proceed");
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
+    }
+    result.setTerminalLifecycleMeta({ replayInvalid: false, livenessState: "blocked" });
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
+      replayInvalid: false,
+      livenessState: "blocked",
+      stopReason: "aborted",
+      aborted: true,
+    });
+  });
+
+  it("does not promote historical CLI usage without context provenance", async () => {
+    const state = makePromptState();
+    const legacyAssistant = makeCliUsageAssistant("error");
+    const attempt = makeAttempt();
+    attempt.messagesSnapshot = [legacyAssistant] as never;
+    attempt.lastAssistant = legacyAssistant as never;
+
+    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
+
+    expect(result.action).toBe("proceed");
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
+  });
+
+  it("keeps the unavailable sentinel across a retry instead of reviving prior usage", async () => {
+    const state = makePromptState();
+    const legacyAssistant = makeCliUsageAssistant("stop");
+    const attempt = makeAttempt({
+      route: "compact_only",
+      handled: true,
+      truncatedCount: 0,
+    });
+    attempt.messagesSnapshot = [legacyAssistant] as never;
+    attempt.lastAssistant = legacyAssistant as never;
+    attempt.currentAttemptAssistant = legacyAssistant as never;
+    const input = makeNormalizationInput(attempt, state);
+    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+
+    const result = await normalizeEmbeddedRunAttempt(input);
+
+    expect(result.action).toBe("retry");
+    if (result.action !== "retry") {
+      throw new Error(`expected retry, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
+  });
+
+  it("keeps newer carried usage over an older transcript fallback", async () => {
+    const state = makePromptState();
+    const historicalAssistant = makeCliUsageAssistant("stop", "historical reply");
+    const attempt = makeAttempt({
+      route: "compact_only",
+      handled: true,
+      truncatedCount: 0,
+    });
+    attempt.messagesSnapshot = [historicalAssistant] as never;
+    attempt.lastAssistant = historicalAssistant as never;
+    const input = makeNormalizationInput(attempt, state);
+    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+
+    const result = await normalizeEmbeddedRunAttempt(input);
+
+    expect(result.action).toBe("retry");
+    if (result.action !== "retry") {
+      throw new Error(`expected retry, got ${result.action}`);
+    }
+    expect(result.lastRunPromptUsage).toEqual({
+      input: 42_000,
+      output: 1_000,
+      total: 43_000,
+    });
   });
 });

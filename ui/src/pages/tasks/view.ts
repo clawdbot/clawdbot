@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -24,6 +25,7 @@ type TasksProps = {
   agentId: string;
   mainKey: string;
   connected: boolean;
+  canCopy: boolean;
   canCancel: boolean;
   loading: boolean;
   error: string | null;
@@ -56,14 +58,7 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
     class="session-link"
     href=${href}
     @click=${(event: MouseEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
+      if (!shouldHandleNavigationClick(event)) {
         return;
       }
       event.preventDefault();
@@ -121,36 +116,34 @@ function renderTask(task: TaskSummary, props: TasksProps) {
               ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
             </button>`
           : nothing}
-        ${retainedResult && props.canCancel
+        ${retainedResult && props.canCopy
+          ? html`<button
+              class="btn"
+              type="button"
+              ?disabled=${cancelling || !props.connected}
+              @click=${() => props.onCopyResult(task.taskId)}
+            >
+              ${t("tasksPage.copyResult")}
+            </button>`
+          : nothing}
+        ${recoverableDelivery && props.canCancel
           ? html`
               <button
                 class="btn"
                 type="button"
                 ?disabled=${cancelling || !props.connected}
-                @click=${() => props.onCopyResult(task.taskId)}
+                @click=${() => props.onRetry(task.taskId)}
               >
-                ${t("tasksPage.copyResult")}
+                ${t("tasksPage.retryDelivery")}
               </button>
-              ${recoverableDelivery
-                ? html`
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onRetry(task.taskId)}
-                    >
-                      ${t("tasksPage.retryDelivery")}
-                    </button>
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onDismiss(task.taskId)}
-                    >
-                      ${t("tasksPage.dismissDelivery")}
-                    </button>
-                  `
-                : nothing}
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onDismiss(task.taskId)}
+              >
+                ${t("tasksPage.dismissDelivery")}
+              </button>
             `
           : nothing}
       </div>

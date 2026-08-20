@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -43,6 +44,13 @@ vi.mock("./models-config.js", async () => {
 const installRunEmbeddedMocks = () => {
   // Install the runner mocks before importing runEmbeddedAgent so the e2e path
   // exercises fallback orchestration without live model/provider calls.
+  vi.doMock("../plugins/runtime.js", () => ({
+    getActivePluginRegistry: () => null,
+    requireActivePluginRegistry: () => ({}),
+  }));
+  vi.doMock("./harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+  }));
   installEmbeddedRunnerBaseE2eMocks();
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
@@ -62,14 +70,22 @@ const installRunEmbeddedMocks = () => {
   });
 };
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type TestRunEmbeddedAgent = (
+  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunEmbeddedAgent>;
+let runEmbeddedAgent: TestRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
+let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
+  runEmbeddedAgent = wrapRunWithTestAdmission(
+    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+  );
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
+  ({ runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js"));
 });
 
 beforeEach(() => {
@@ -201,16 +217,6 @@ async function readUsageStats(agentDir: string) {
   return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
-function expectFailureCount(
-  usageStats: Record<string, Record<string, unknown> | undefined>,
-  profileId: string,
-  reason: AuthProfileFailureReason,
-  expected: number,
-) {
-  const failureCounts = usageStats[profileId]?.failureCounts as Record<string, unknown> | undefined;
-  expect(failureCounts?.[reason]).toBe(expected);
-}
-
 async function writeMultiProfileAuthStore(
   agentDir: string,
   options?: { openAiProfileCount?: 2 | 3 },
@@ -280,6 +286,62 @@ async function runEmbeddedFallback(params: {
         runId: params.runId,
         abortSignal: params.abortSignal,
         enqueue: async (task) => await task(),
+      }),
+  });
+}
+
+async function runEmbeddedEntryFallback(params: {
+  agentDir: string;
+  workspaceDir: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  const cfg = makeConfig();
+  const sessionId = `session:${params.runId}`;
+  return await runEmbeddedAgentEntry({
+    selection: {
+      cfg,
+      provider: "openai",
+      model: "mock-1",
+      agentDir: params.agentDir,
+      manifestPlugins: [],
+    },
+    identity: {
+      runId: params.runId,
+      agentId: "test",
+      sessionId,
+      sessionKey: params.sessionKey,
+    },
+    harness: {
+      workspaceDir: params.workspaceDir,
+      sessionKey: params.sessionKey,
+      preparation: { kind: "direct" },
+      resolveRuntimeOverride: () => undefined,
+      resolveContextEngineHost: (provider, model) => ({
+        id: `embedded-e2e:${provider}/${model}`,
+        label: "embedded runner e2e",
+        capabilities: [],
+      }),
+    },
+    behavior: { kind: "maintenance" },
+    sessionOverride: { kind: "preserve" },
+    runCandidate: (provider, model, options) =>
+      runEmbeddedAgent({
+        sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: cfg,
+        prompt: "hello",
+        provider,
+        model,
+        authProfileIdSource: "auto",
+        isFinalFallbackAttempt: options.isFinalFallbackAttempt,
+        timeoutMs: 5_000,
+        runId: params.runId,
+        enqueue: async (task) => await task(),
+        contextEngineLogicalTurnLease: options.contextEngineLogicalTurnLease,
+        onContextEngineTurnCandidate: options.onContextEngineTurnCandidate,
       }),
   });
 }
@@ -425,6 +487,50 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it("carries failed outer candidates into the winning execution trace", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedEntryFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:execution-trace-fallback",
+        runId: "run:execution-trace-fallback",
+      });
+
+      expect(result.result.meta.executionTrace).toMatchObject({
+        winnerProvider: "groq",
+        winnerModel: "mock-2",
+        fallbackUsed: true,
+        runner: "embedded",
+      });
+      expect(result.result.meta.executionTrace?.attempts).toEqual([
+        expect.objectContaining({
+          provider: "openai",
+          model: "mock-1",
+          result: "candidate_failed",
+          reason: "overloaded",
+        }),
+        expect.objectContaining({
+          provider: "groq",
+          model: "mock-2",
+          result: "success",
+        }),
+      ]);
+      expect(result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
+        requested: { provider: "openai", model: "mock-1" },
+        effective: { provider: "groq", model: "mock-2" },
+        rerouted: true,
+      });
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        requested: { provider: "openai", model: "mock-1" },
+        effective: { provider: "groq", model: "mock-2" },
+        rerouted: true,
+      });
+    });
+  });
+
   it("keeps tool summary on incomplete side-effect terminal results", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -543,7 +649,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
+  it("falls back after overloaded primary failure without poisoning profile health", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -561,8 +667,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expectFailureCount(usageStats, "openai:p1", "overloaded", 1);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.failureCounts?.overloaded).toBeUndefined();
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder();
@@ -619,7 +725,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     }
   });
 
-  it("keeps direct embedded-run lane suspension outside the outer fallback loop", async () => {
+  it("keeps direct embedded-run session suspension outside the outer fallback loop", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       const sessionId = "session:direct-embedded-suspension";
@@ -645,9 +751,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         }),
       ).rejects.toThrow();
 
-      expect(suspendSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({ laneId: "direct-lane" }),
-      );
+      expect(suspendSessionMock).toHaveBeenCalledOnce();
+      expect(suspendSessionMock.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
     });
   });
 
@@ -750,7 +855,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("persists overloaded cooldown across turns while still allowing one probe and fallback", async () => {
+  it("keeps overloaded failures provider-scoped across turns while continuing fallback", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -781,14 +886,14 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
 
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expectFailureCount(usageStats, "openai:p1", "overloaded", 2);
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.failureCounts?.overloaded).toBeUndefined();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
-  it("keeps bare service-unavailable failures in the timeout lane without persisting cooldown", async () => {
+  it("classifies bare service-unavailable failures as overloaded without cooling the profile", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryErrorThenFallbackSuccess("LLM error: service unavailable");
@@ -801,7 +906,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       });
 
       expect(result.provider).toBe("groq");
-      expect(result.attempts[0]?.reason).toBe("timeout");
+      expect(result.attempts[0]?.reason).toBe("overloaded");
 
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();

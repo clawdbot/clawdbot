@@ -1,11 +1,12 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
-import { OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
+import { normalizeOllamaCloudModelId, OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
   buildDefaultOllamaCloudModelDefinition,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isReasoningModelHeuristic,
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -77,22 +78,45 @@ export function orderPreferredOllamaModelIds(modelIds: Iterable<string>): string
   return ordered;
 }
 
-export function selectAppGuidedOllamaModelId(
+function selectAppGuidedOllamaModelId(
   models: Iterable<{
     id: string;
     contextWindow?: number;
     supportsTools?: boolean;
+    reasoning?: boolean;
+    size?: number;
   }>,
 ): string | undefined {
-  const eligibleIds = [...models]
-    .filter(
-      (model) =>
-        model.supportsTools === true &&
-        model.contextWindow !== undefined &&
-        model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
-    )
-    .map((model) => model.id);
-  return orderPreferredOllamaModelIds(eligibleIds)[0];
+  const eligible = [...models].filter(
+    (model) =>
+      model.supportsTools === true &&
+      model.contextWindow !== undefined &&
+      model.contextWindow >= OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS,
+  );
+  const nonReasoning = eligible.filter((model) => model.reasoning !== true);
+  const pool = nonReasoning.length > 0 ? nonReasoning : eligible;
+  const measuredSizes = pool
+    .map((model) => model.size)
+    .filter((size): size is number => typeof size === "number" && size > 0);
+  const smallestSize = measuredSizes.length > 0 ? Math.min(...measuredSizes) : undefined;
+  const fastest =
+    smallestSize === undefined ? pool : pool.filter((model) => model.size === smallestSize);
+  return orderPreferredOllamaModelIds(fastest.map((model) => model.id))[0];
+}
+
+export function selectAppGuidedOllamaModelFromDiscovery(
+  models: Iterable<OllamaModelWithContext>,
+): string | undefined {
+  return selectAppGuidedOllamaModelId(
+    [...models].map((model) => ({
+      id: model.name,
+      contextWindow: model.contextWindow,
+      supportsTools: model.capabilities?.includes("tools") === true,
+      reasoning:
+        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
+      size: model.size,
+    })),
+  );
 }
 
 export function buildOllamaModelsConfig(
@@ -102,8 +126,13 @@ export function buildOllamaModelsConfig(
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    const defaultModel = defaultModels.find((model) => model.id === name);
-    if (defaultModel && !discovered) {
+    // Cloud suggestions arrive suffixed (`kimi-k3:cloud`); the default table is keyed bare.
+    // Match through the suffix for context/capabilities, but keep the requested id: the
+    // suffixed spelling is what gets written into config.
+    const defaultModel = defaultModels.find(
+      (model) => model.id === normalizeOllamaCloudModelId(name),
+    );
+    if (defaultModel && !discovered && defaultModel.id === name) {
       return buildDefaultOllamaCloudModelDefinition(defaultModel);
     }
     const capabilities =
@@ -158,7 +187,9 @@ export async function discoverOllamaModelsForSetup(params: {
   inspectTools?: boolean;
   signal?: AbortSignal;
 }) {
-  const { reachable, models } = await fetchOllamaModels(params.baseUrl);
+  const { reachable, models } = await fetchOllamaModels(params.baseUrl, {
+    signal: params.signal,
+  });
   const firstModels = models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT);
   const inspection: { inspected: OllamaModelWithContext[]; inspectionFailures: string[] } =
     !reachable
@@ -166,7 +197,9 @@ export async function discoverOllamaModelsForSetup(params: {
       : params.inspectTools
         ? await inspectOllamaModelsForSetup(params.baseUrl, firstModels, params.signal)
         : {
-            inspected: await enrichOllamaModelsWithContext(params.baseUrl, firstModels),
+            inspected: await enrichOllamaModelsWithContext(params.baseUrl, firstModels, {
+              signal: params.signal,
+            }),
             inspectionFailures: [],
           };
   if (

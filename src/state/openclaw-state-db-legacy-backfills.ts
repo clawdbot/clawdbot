@@ -1,8 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
@@ -295,6 +299,20 @@ export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
   `);
 }
 
+/** Canonicalize the shipped suspension reason before runtime hydrates subagent state. */
+export function repairLegacySubagentSuspensionReasons(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs")) {
+    return;
+  }
+  // v2026.6.34 persisted retry-limit; remove this backfill after its 7-day retention window.
+  db.exec(`
+    UPDATE subagent_runs
+    SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'permanent_failure')
+    WHERE json_valid(payload_json)
+      AND json_extract(payload_json, '$.delivery.suspendedReason') = 'retry-limit';
+  `);
+}
+
 export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   if (
     !tableExists(db, "acp_replay_events") ||
@@ -359,14 +377,7 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(value) ?? null;
 }
 
 function textField(record: Record<string, unknown>, key: string): string | null {
@@ -375,15 +386,11 @@ function textField(record: Record<string, unknown>, key: string): string | null 
 }
 
 function numberField(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(record[key]) ?? null;
 }
 
 function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-  const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  return asNullableRecord(record[key]);
 }
 
 function jsonField(value: unknown): string | null {
@@ -652,11 +659,12 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
   ) {
     return;
   }
+  compactLegacyDeliveryQueueFailures(db);
   const rows = db
     .prepare(
       `SELECT queue_name, id, entry_json
          FROM delivery_queue_entries
-        WHERE status <> 'completed'
+        WHERE status = 'pending'
           AND (retry_count = 0
             OR last_attempt_at IS NULL
             OR last_error IS NULL
@@ -709,11 +717,11 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
       metadataStringField(entry, "accountId") ??
         (route ? metadataStringField(route, "accountId") : null) ??
         (deliveryContext ? metadataStringField(deliveryContext, "accountId") : null),
-      numberField(entry, "retryCount") ?? 0,
-      numberField(entry, "lastAttemptAt"),
+      asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
+      asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
       metadataStringField(entry, "lastError"),
       metadataStringField(entry, "recoveryState"),
-      numberField(entry, "platformSendStartedAt"),
+      asSafeIntegerInRange(entry.platformSendStartedAt, { min: 0 }) ?? null,
       row.queue_name,
       row.id,
     );

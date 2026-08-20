@@ -39,6 +39,7 @@ export async function executeStatusScanFromOverview(params: {
   ]);
 
   return buildStatusScanResult({
+    env: params.overview.env ?? {},
     cfg: params.overview.cfg,
     sourceConfig: params.overview.sourceConfig,
     secretDiagnostics: params.overview.secretDiagnostics,

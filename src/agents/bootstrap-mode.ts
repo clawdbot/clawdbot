@@ -1,10 +1,10 @@
 // Bootstrap mode resolver for deciding whether a run gets full, limited, or no
 // workspace bootstrap files.
 export type BootstrapMode = "full" | "limited" | "none";
-export type BootstrapContextRunKind = "default" | "heartbeat" | "cron" | "commitment-only";
+export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 export function isHeartbeatLifecycleRunKind(runKind: BootstrapContextRunKind | undefined): boolean {
-  return runKind === "heartbeat" || runKind === "commitment-only";
+  return runKind === "heartbeat";
 }
 
 /** Resolve the bootstrap mode for one agent run. */

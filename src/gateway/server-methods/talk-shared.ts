@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -33,7 +32,6 @@ import {
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import type { TalkHandoffTurnResult } from "../talk-handoff.js";
 
 /** Resolve the Talk session mode, defaulting managed-room transports to stt-tts. */
 export function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
@@ -128,14 +126,6 @@ export function broadcastTalkRoomEvents(
       { dropIfSlow: true },
     );
   }
-}
-
-type TalkHandoffFailureReason = Extract<TalkHandoffTurnResult, { ok: false }>["reason"];
-
-export function talkHandoffErrorCode(reason: TalkHandoffFailureReason) {
-  return reason === "invalid_token" || reason === "no_active_turn" || reason === "stale_turn"
-    ? ErrorCodes.INVALID_REQUEST
-    : ErrorCodes.UNAVAILABLE;
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {

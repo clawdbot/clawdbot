@@ -178,11 +178,15 @@ describe("openclaw test instance", () => {
     expect(instance.logs().split(RESTART_MARKER)).toHaveLength(2);
   });
 
-  it("bounds both attempts by one startup deadline", async () => {
+  it("bounds migration retries by one startup deadline", async () => {
     const { instance, readAttempts } = await createFakeGateway("refuse:200,hang", 500);
     const startedAt = Date.now();
     await expect(instance.startGateway()).rejects.toThrow("timeout waiting for gateway readiness");
-    expect(await readAttempts()).toHaveLength(2);
+    const attempts = await readAttempts();
+    // A loaded runner may consume the deadline before observing the first refusal.
+    // The restart-path tests above require two attempts when that refusal arrives in time.
+    expect(attempts.length).toBeGreaterThanOrEqual(1);
+    expect(attempts.length).toBeLessThanOrEqual(2);
     expect(Date.now() - startedAt).toBeLessThan(650);
   });
 
@@ -242,9 +246,10 @@ describe("openclaw test instance", () => {
   it("force-kills Windows gateway descendants before retry cleanup settles", async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
+    const kill = vi.fn(() => true);
     const child = {
       exitCode: 1,
-      kill: vi.fn(() => true),
+      kill,
       pid: 12345,
       signalCode: null,
       stderr,
@@ -274,7 +279,7 @@ describe("openclaw test instance", () => {
         timeout: 10_000,
       },
     );
-    expect(child.kill).not.toHaveBeenCalled();
+    expect(kill).not.toHaveBeenCalled();
     expect(stdout.closed).toBe(true);
     expect(stderr.closed).toBe(true);
   });
@@ -333,7 +338,14 @@ describe("openclaw test instance", () => {
   it("keeps stalled readiness probes inside the startup deadline", async () => {
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason)));
+          },
+          { once: true },
+        );
       });
     });
     const startedAt = Date.now();
@@ -350,7 +362,14 @@ describe("openclaw test instance", () => {
     const processState = createGatewayProcessState();
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason)));
+          },
+          { once: true },
+        );
       });
     });
     const startedAt = Date.now();

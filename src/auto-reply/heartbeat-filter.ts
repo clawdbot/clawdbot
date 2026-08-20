@@ -269,9 +269,13 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       hasNonTextContent = true;
       continue;
     }
-    // Provider thinking is not user-visible output; it must not keep a
+    // Provider thinking/reasoning is not user-visible output; it must not keep a
     // no-op heartbeat acknowledgement in future model request history.
-    if (block.type === "thinking" || block.type === "redacted_thinking") {
+    if (
+      block.type === "thinking" ||
+      block.type === "reasoning" ||
+      block.type === "redacted_thinking"
+    ) {
       continue;
     }
     if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {

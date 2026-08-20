@@ -1,15 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeTalkSection } from "../config/talk.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
-import {
-  buildRealtimeVoiceAgentControlSpeechMessage,
-  shouldAutoControlRealtimeVoiceAgentText,
-} from "../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -18,7 +11,10 @@ import {
 import { createRealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import type { TalkEventInput } from "../talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
-import { registerChatAbortController } from "./chat-abort.js";
+import {
+  createTalkClientAgentConsultRunner,
+  createTalkRealtimeRunControlOwner,
+} from "./talk-client-gateway-control.js";
 import {
   buildAlreadyDeliveredToolResult,
   scheduleForcedAgentConsult,
@@ -122,65 +118,77 @@ export function createTalkRealtimeRelaySession(
     const relay = relayRef.current;
     return relay && relaySessions.get(relay.id) === relay ? relay : undefined;
   };
-  let consultAgentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
+  const bridgeRef: { current?: ReturnType<typeof harness.createBridge> } = {};
   const relaySessionKey = params.sessionKey?.trim();
   const relayAgentId = relaySessionKey
     ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
+    : undefined;
+  const consultRunner = relaySessionKey
+    ? createTalkClientAgentConsultRunner({
+        config: params.cfg ?? params.context.getRuntimeConfig(),
+        context: params.context,
+        agentId:
+          relayAgentId ??
+          resolveTalkSessionAgentId(
+            params.cfg ?? params.context.getRuntimeConfig(),
+            relaySessionKey,
+          ),
+        sessionKey: relaySessionKey,
+        ownerConnId: params.connId,
+        authority: params.consultAuthority,
+        getVoiceSessionId: () => relaySessionId,
+        initialItems: [],
+        runIdPrefix: "talk-realtime-relay-consult",
+        surface: "a gateway-relay Talk session",
+        registerRun: ({ runId }) =>
+          registerTalkRealtimeRelayAgentRun({
+            relaySessionId,
+            connId: params.connId,
+            sessionKey: relaySessionKey,
+            runId,
+          }),
+      })
     : undefined;
   const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
     if (!getActiveRelay()) {
       throw new Error("Realtime gateway-relay session is closed");
     }
-    const runtimeConfig = params.cfg ?? params.context.getRuntimeConfig();
-    const sessionKey = relaySessionKey;
-    if (!sessionKey) {
+    if (!consultRunner) {
       throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
     }
-    const agentId = relayAgentId ?? resolveTalkSessionAgentId(runtimeConfig, sessionKey);
-    consultAgentRuntime ??= createPluginRuntime().agent;
-    const talkConfig = normalizeTalkSection(runtimeConfig.talk);
-    return await consultRealtimeVoiceAgent({
-      cfg: runtimeConfig,
-      agentRuntime: consultAgentRuntime,
-      logger: params.context.logGateway,
-      agentId,
-      sessionKey,
-      messageProvider: "webchat",
-      lane: "talk",
-      runIdPrefix: "talk-realtime-relay-consult",
-      args: { question: prompt },
-      transcript: [],
-      surface: "a gateway-relay Talk session",
-      userLabel: "User",
-      questionSourceLabel: "user",
-      thinkLevel: talkConfig?.consultThinkingLevel,
-      fastMode: talkConfig?.consultFastMode,
-      abortSignal: signal,
-      onRunStarted: ({ runId, sessionId, timeoutMs }) => {
-        registerTalkRealtimeRelayAgentRun({
-          relaySessionId,
-          connId: params.connId,
-          sessionKey,
-          runId,
-        });
-        const registration = registerChatAbortController({
-          chatAbortControllers: params.context.chatAbortControllers,
-          runId,
-          sessionId,
-          sessionKey,
-          agentId,
-          timeoutMs,
-          ownerConnId: params.connId,
-          controlUiVisible: false,
-          kind: "chat-send",
-        });
-        return {
-          abortSignal: registration.controller.signal,
-          cleanup: registration.cleanup,
-        };
-      },
-    });
+    return await consultRunner.runPrompt({ prompt, signal });
   };
+  const runControl = createTalkRealtimeRunControlOwner({
+    hasActiveRun: () => {
+      const relay = getActiveRelay();
+      return Boolean(relay && pruneInactiveRelayAgentRuns(relay) > 0);
+    },
+    execute: async (args) => {
+      const relay = getActiveRelay();
+      if (!relay || !args || typeof args !== "object" || Array.isArray(args)) {
+        throw new Error("Realtime relay control session is closed");
+      }
+      const text = (args as { text?: unknown }).text;
+      if (typeof text !== "string") {
+        throw new Error("Realtime relay control text is required");
+      }
+      return await steerTalkRealtimeRelayAgentRun({
+        relaySessionId,
+        connId: params.connId,
+        text,
+      });
+    },
+    speak: (message) => bridgeRef.current?.sendUserMessage?.(message),
+    warn: (message) => {
+      if (!getActiveRelay()) {
+        return;
+      }
+      emit(
+        { relaySessionId, type: "error", message },
+        { type: "session.error", payload: { message }, final: true },
+      );
+    },
+  });
   // The generic harness should stay transport-neutral. Wrap only this relay provider
   // invocation so provider-owned delegations cannot acquire the host runner elsewhere.
   const relayProvider = {
@@ -188,13 +196,13 @@ export function createTalkRealtimeRelaySession(
     createBridge: (request: Parameters<typeof params.provider.createBridge>[0]) =>
       params.provider.createBridge({
         ...request,
-        ...(relayAgentId ? { agentId: relayAgentId } : {}),
         runAgentConsult,
       }),
   };
   const bridge = harness.createBridge({
     provider: relayProvider,
     cfg: params.cfg,
+    agentId: relayAgentId,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
@@ -308,27 +316,42 @@ export function createTalkRealtimeRelaySession(
       ) {
         currentOutputItemId = event.itemId ?? currentOutputItemId;
         currentOutputResponseId = event.responseId ?? currentOutputResponseId;
+      }
+    },
+    onResponseDone: (outcome) => {
+      const relay = getActiveRelay();
+      if (!relay) {
         return;
       }
-      if (
-        event.type === "response.audio.done" ||
-        event.type === "response.output_audio.done" ||
-        event.type === "conversation.output_audio.done" ||
-        event.type === "response.done" ||
-        event.type === "response.cancelled"
-      ) {
-        emit({
-          relaySessionId,
-          type: "audioDone",
-          ...((event.itemId ?? currentOutputItemId)
-            ? { itemId: event.itemId ?? currentOutputItemId }
-            : {}),
-          ...((event.responseId ?? currentOutputResponseId)
-            ? { responseId: event.responseId ?? currentOutputResponseId }
-            : {}),
+      const terminalTalkEvent = harness.talk.recentEvents.at(-1);
+      broadcastToOwner(params.context, params.connId, {
+        relaySessionId,
+        type: "audioDone",
+        ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
+        ...((outcome.responseId ?? currentOutputResponseId)
+          ? { responseId: outcome.responseId ?? currentOutputResponseId }
+          : {}),
+        ...(terminalTalkEvent &&
+        (terminalTalkEvent.type === "turn.ended" || terminalTalkEvent.type === "turn.cancelled")
+          ? { talkEvent: terminalTalkEvent }
+          : {}),
+      });
+      currentOutputItemId = undefined;
+      currentOutputResponseId = undefined;
+      if (outcome.status === "failed" || outcome.status === "incomplete") {
+        const issue = realtimeRelayIssue({
+          message: outcome.message,
+          provider: params.provider.id,
+          model: params.model,
+          phase: "response",
         });
-        currentOutputItemId = undefined;
-        currentOutputResponseId = undefined;
+        const errorTalkEvent = harness.talk.recentEvents.findLast(
+          (event) => event.type === "session.error" && event.payload === outcome,
+        );
+        broadcastToOwner(params.context, params.connId, {
+          ...relayIssuePayload(relaySessionId, issue),
+          ...(errorTalkEvent ? { talkEvent: errorTalkEvent } : {}),
+        });
       }
     },
     onTranscript: (role, text, final) => {
@@ -363,38 +386,7 @@ export function createTalkRealtimeRelaySession(
         if (isRelayAssistantEchoTranscript(relay, question)) {
           return;
         }
-        if (
-          pruneInactiveRelayAgentRuns(relay) > 0 &&
-          shouldAutoControlRealtimeVoiceAgentText(question)
-        ) {
-          // While an agent consult is active, short user utterances like "stop"
-          // steer the chat run instead of becoming a new consult.
-          void steerTalkRealtimeRelayAgentRun({
-            relaySessionId,
-            connId: params.connId,
-            text: question,
-          })
-            .then((result) => {
-              if (!getActiveRelay()) {
-                return;
-              }
-              if (result.speak && !result.suppress && result.message.trim()) {
-                bridge.sendUserMessage(buildRealtimeVoiceAgentControlSpeechMessage(result.message));
-              }
-            })
-            .catch((error: unknown) => {
-              if (!getActiveRelay()) {
-                return;
-              }
-              emit(
-                { relaySessionId, type: "error", message: formatErrorMessage(error) },
-                {
-                  type: "session.error",
-                  payload: { message: formatErrorMessage(error) },
-                  final: true,
-                },
-              );
-            });
+        if (runControl.handleSpoken(question)) {
           return;
         }
         if (forceAgentConsultOnFinalTranscript) {
@@ -491,6 +483,7 @@ export function createTalkRealtimeRelaySession(
       });
     },
     onClose: (reason) => {
+      void runControl.close();
       const active = relaySessions.get(relaySessionId);
       if (!active || active !== relayRef.current) {
         if (!relayRef.current) {
@@ -523,6 +516,7 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
+  bridgeRef.current = bridge;
   const earlyTerminal = constructionTerminal.current;
   if (earlyTerminal) {
     harness.close();

@@ -344,10 +344,27 @@ describe("node host invoke", () => {
     fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
   });
 
-  it("returns a redacted exec approvals snapshot", async () => {
+  it.each([
+    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
+    {
+      label: "when resolved defaults are not requested",
+      params: { includeResolvedDefaults: false },
+      resolvedDefaults: undefined,
+    },
+    {
+      label: "with resolved defaults when requested",
+      params: { includeResolvedDefaults: true },
+      resolvedDefaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    },
+  ])("returns a redacted exec approvals snapshot $label", async ({ params, resolvedDefaults }) => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
-    const result = await invokeExecApprovals("system.execApprovals.get");
+    const result = await invokeExecApprovals("system.execApprovals.get", params);
     const payload = JSON.parse(result.payloadJSON ?? "{}") as ExecApprovalsSnapshot;
     expect(payload).toEqual({
       path: "/tmp/exec-approvals.json",
@@ -357,6 +374,7 @@ describe("node host invoke", () => {
         version: 1,
         socket: { path: "/tmp/exec-approvals.sock" },
       },
+      ...(resolvedDefaults ? { resolvedDefaults } : {}),
     });
   });
 
@@ -633,7 +651,7 @@ describe("node host invoke", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "keeps prepared allow-always coverage incomplete when any planned command is prompt-only",
+    "fails closed when a prepared command contains an unsafe shell pipeline",
     async () => {
       const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
       const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -652,15 +670,19 @@ describe("node host invoke", () => {
         skillBins,
       );
 
-      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
-      const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
-        allowAlwaysCoverage?: {
-          complete?: boolean;
-          patterns?: Array<{ pattern?: string }>;
-        };
-      };
-      expect(payload.allowAlwaysCoverage?.complete).toBe(false);
-      expect(payload.allowAlwaysCoverage?.patterns?.length).toBeGreaterThan(0);
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: "invoke-prepare-partial",
+          nodeId: "node-1",
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          },
+        }),
+      );
     },
   );
 
@@ -793,11 +815,10 @@ describe("node host invoke", () => {
             id: "invoke-suppress-notify-prepare",
             nodeId: "node-1",
             command: "system.run.prepare",
-            sessionKey: "agent:main:main",
             paramsJSON: JSON.stringify({
               command: [process.execPath, scriptPath],
               cwd: tempHome,
-              sessionKey: "agent:forged:prepare",
+              sessionKey: "agent:main:main",
             }),
           },
           { request } as unknown as GatewayClient,
@@ -817,16 +838,12 @@ describe("node host invoke", () => {
             id: "invoke-suppress-notify",
             nodeId: "node-1",
             command: "system.run",
-            sessionKey: "agent:main:main",
             paramsJSON: JSON.stringify({
               command: prepared.plan?.argv,
               rawCommand: prepared.plan?.commandText,
               cwd: prepared.plan?.cwd,
-              sessionKey: "agent:forged:run",
-              systemRunPlan: {
-                ...prepared.plan,
-                sessionKey: "agent:forged:plan",
-              },
+              sessionKey: "agent:main:main",
+              systemRunPlan: prepared.plan,
               approved: true,
               approvalDecision: "allow-once",
               suppressNotifyOnExit: true,
@@ -842,7 +859,6 @@ describe("node host invoke", () => {
             (params as { event?: string } | undefined)?.event === "exec.finished",
         )?.[1] as { payloadJSON?: string | null } | undefined;
         expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-          sessionKey: "agent:main:main",
           suppressNotifyOnExit: true,
         });
       });
@@ -917,58 +933,5 @@ describe("node host invoke", () => {
       autoAllowSkills: false,
       allowlistRules: [],
     });
-  });
-
-  it("clears nested prepare correlation when the Gateway envelope is unattributed", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-unattributed-prepare",
-        nodeId: "node-1",
-        command: "system.run.prepare",
-        sessionKey: null,
-        paramsJSON: JSON.stringify({
-          command: ["echo", "ok"],
-          sessionKey: "agent:forged:prepare",
-        }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
-      payloadJSON?: string;
-    };
-    const payload = JSON.parse(result.payloadJSON ?? "{}") as {
-      plan?: { sessionKey?: string | null };
-    };
-    expect(payload.plan?.sessionKey).toBeNull();
-  });
-
-  it("preserves nested prepare correlation from a legacy Gateway", async () => {
-    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-
-    await handleInvoke(
-      {
-        id: "invoke-legacy-prepare",
-        nodeId: "node-1",
-        command: "system.run.prepare",
-        paramsJSON: JSON.stringify({
-          command: ["echo", "ok"],
-          sessionKey: "agent:legacy:prepare",
-        }),
-      },
-      { request } as unknown as GatewayClient,
-      { current: async () => [] },
-    );
-
-    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
-      payloadJSON?: string;
-    };
-    const payload = JSON.parse(result.payloadJSON ?? "{}") as {
-      plan?: { sessionKey?: string | null };
-    };
-    expect(payload.plan?.sessionKey).toBe("agent:legacy:prepare");
   });
 });

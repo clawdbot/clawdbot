@@ -20,7 +20,7 @@ vi.mock("./agent-model-discovery.js", () => ({
 
 vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
 
-import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
+import { appendPrioritizedDynamicLiveModels } from "./test-helpers/live-model-dynamic-candidates.js";
 
 const REGISTRY = { find: () => undefined } as never;
 const DYNAMIC_PROVIDER = "dynamic-test-provider";

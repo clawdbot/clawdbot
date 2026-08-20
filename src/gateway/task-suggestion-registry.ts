@@ -31,9 +31,9 @@ function planTaskSuggestionEvictions(
   let projectedCount = suggestions.size + 1;
   let projectedBytes = retainedSuggestionBytes + suggestionBytes + 1;
   const planned: Array<[string, TaskSuggestionRecord]> = [];
-  // Accepted replay is best effort: protect it behind pending work, but never
-  // let completed entries permanently prevent new suggestions from starting.
-  for (const status of ["dismissed", "pending", "accepted"] as const) {
+  // Accepted replay is best-effort and evicted before unseen pending work;
+  // completed entries must not displace suggestions awaiting operator action.
+  for (const status of ["dismissed", "accepted", "pending"] as const) {
     for (const [taskId, record] of suggestions) {
       if (
         projectedCount <= MAX_TASK_SUGGESTIONS &&
@@ -61,9 +61,9 @@ export function createTaskSuggestion(
 ): CreateTaskSuggestionResult {
   const suggestion: TaskSuggestion = {
     id: `task_${randomUUID()}`,
-    title: params.title,
-    prompt: params.prompt,
-    tldr: params.tldr,
+    title: params.title.trim(),
+    prompt: params.prompt.trim(),
+    tldr: params.tldr.trim(),
     cwd: params.cwd,
     sessionKey: params.sessionKey,
     ...(params.agentId ? { agentId: params.agentId } : {}),

@@ -24,5 +24,10 @@ export type MainRestartRecoveryState = {
     /** Run identity for claims that have crossed the actual agent-run boundary. */
     runIdsByClaimId?: Record<string, string>;
   };
-  tombstone?: { reason: string };
+  tombstone?: {
+    reason: string;
+    /** Durable successor returned when an explicit rollover request is retried. */
+    recoveredSessionId?: string;
+    recoveredSessionKey?: string;
+  };
 };

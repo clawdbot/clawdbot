@@ -83,9 +83,6 @@ describe("createSlackDraftStream", () => {
   it("uses the enterprise event client for draft writes", async () => {
     const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
     const eventScope = {
-      apiAppId: "A_TEST",
-      enterpriseId: "E_TEST",
-      isEnterpriseInstall: true as const,
       teamId: "T_TEST",
       client,
     };
@@ -100,7 +97,7 @@ describe("createSlackDraftStream", () => {
     expect(send).toHaveBeenCalledWith(
       "channel:C123",
       "hello",
-      expect.objectContaining({ client, enterpriseEventScope: eventScope }),
+      expect.objectContaining({ eventScope }),
     );
     expect(edit).toHaveBeenCalledWith(
       "C123",
@@ -197,6 +194,124 @@ describe("createSlackDraftStream", () => {
 
     expect(send).toHaveBeenCalledTimes(2);
     expect(edit).toHaveBeenCalledTimes(0);
+    expect(stream.messageId()).toBe("333.444");
+  });
+
+  it("drops a posted preview detached by forceNewMessage", async () => {
+    const { stream, remove } = createDraftStreamHarness();
+
+    stream.update("working");
+    await stream.flush();
+    stream.forceNewMessage();
+    await stream.dropDetachedMessages();
+    await stream.dropDetachedMessages();
+
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith("C123", "111.222", {
+      token: "xoxb-test",
+      accountId: undefined,
+    });
+  });
+
+  it("drains previews detached during an in-flight removal", async () => {
+    const accountId = "detach-during-drop";
+    let finishFirstRemove: (() => void) | undefined;
+    const firstRemove = new Promise<void>((resolve) => {
+      finishFirstRemove = resolve;
+    });
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
+      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const remove = vi
+      .fn<DraftRemoveFn>()
+      .mockImplementationOnce(async () => await firstRemove)
+      .mockResolvedValueOnce(undefined);
+    const { stream } = createDraftStreamHarness({
+      accountId,
+      threadTs: "100.000",
+      send,
+      remove,
+    });
+
+    stream.update("_first card_");
+    await stream.flush();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.200",
+      userId: "U_OWNER",
+    });
+
+    const dropping = stream.dropDetachedMessages();
+    await vi.waitFor(() => {
+      expect(remove).toHaveBeenCalledOnce();
+    });
+
+    stream.update("_second card_");
+    await stream.flush();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.400",
+      userId: "U_OWNER",
+    });
+
+    finishFirstRemove?.();
+    await dropping;
+
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenNthCalledWith(1, "C123", "100.100", {
+      token: "xoxb-test",
+      accountId,
+    });
+    expect(remove).toHaveBeenNthCalledWith(2, "C123", "100.300", {
+      token: "xoxb-test",
+      accountId,
+    });
+  });
+
+  it("does not drop a finalized preview after forceNewMessage", async () => {
+    const { stream, remove } = createDraftStreamHarness();
+
+    stream.update("finished");
+    await stream.flush();
+    await stream.seal();
+    await expect(stream.finalizeMessage("111.222", async () => {})).resolves.toBe(true);
+    stream.forceNewMessage();
+    await stream.dropDetachedMessages();
+
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("does not issue wire calls when no detached preview exists", async () => {
+    const { stream, send, edit, remove } = createDraftStreamHarness();
+
+    await stream.dropDetachedMessages();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(edit).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("rearms updates after sealing and finalizing the previous message", async () => {
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockResolvedValueOnce(slackDraftSendResult("111.222"))
+      .mockResolvedValueOnce(slackDraftSendResult("333.444"));
+    const { stream } = createDraftStreamHarness({ send });
+
+    stream.update("first card");
+    await stream.flush();
+    await stream.seal();
+    await expect(stream.finalizeMessage("111.222", async () => {})).resolves.toBe(true);
+    stream.forceNewMessage();
+    stream.update("second card");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(2);
     expect(stream.messageId()).toBe("333.444");
   });
 
@@ -353,9 +468,6 @@ describe("createSlackDraftStream", () => {
   it("keeps simultaneous Enterprise Grid conversations isolated by workspace", async () => {
     const accountId = "enterprise-grid";
     const eventScope = {
-      apiAppId: "A_TEST",
-      enterpriseId: "E_TEST",
-      isEnterpriseInstall: true as const,
       teamId: "T_FIRST",
       client: {} as NonNullable<DraftStreamParams["eventScope"]>["client"],
     };

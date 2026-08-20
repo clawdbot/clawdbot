@@ -1,6 +1,6 @@
 // Xai doctor contract repairs plugin-owned model configuration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isLegacyXaiBuiltinModel } from "./model-definitions.js";
 
 type LegacyConfigRule = {
