@@ -347,8 +347,13 @@ describe("chat header session menu", () => {
 
     select(menu, "open-command-palette");
     expect(onOpenCommandPalette).toHaveBeenCalledOnce();
+    const dropdown = menu.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
+    if (dropdown) {
+      dropdown.open = true;
+    }
     select(menu, "status:access");
     expect(showAccess).toHaveBeenCalledOnce();
+    expect(dropdown?.open).toBe(false);
 
     select(menu, "compact:open-view");
     await menu.updateComplete;

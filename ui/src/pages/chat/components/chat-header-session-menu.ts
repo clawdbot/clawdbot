@@ -43,6 +43,9 @@ export type HeaderMenuStatusAction = {
 const EMPTY_SETTINGS = {} as UiSettings;
 
 type CompactMenuView = "root" | "open-in" | "panels" | "layout" | "assign-owner" | "view";
+type MenuSelectEvent = CustomEvent<{ item: { value?: string } }> & {
+  currentTarget: HTMLElement & { open: boolean };
+};
 
 const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
   "compact:back": "root",
@@ -88,7 +91,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     return this.actionDisabledReasons[kind] ?? nothing;
   }
 
-  private readonly handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
+  private readonly handleSelect = (event: MenuSelectEvent) => {
     const value = event.detail.item.value;
     if (!value) {
       return;
@@ -107,9 +110,13 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       return;
     }
     if (value.startsWith("status:")) {
-      this.statusActions
-        .find((action) => action.id === value.slice("status:".length))
-        ?.onActivate();
+      const action = this.statusActions.find(
+        (candidate) => candidate.id === value.slice("status:".length),
+      );
+      if (action) {
+        event.currentTarget.open = false;
+        action.onActivate();
+      }
       return;
     }
     if (value.startsWith("quick:")) {
@@ -159,7 +166,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     ) {
       if (!this.actionDisabled(value, value === "fork" && this.forkDisabled)) {
         if (value === "continue-in-terminal") {
-          (event.currentTarget as HTMLElement & { open: boolean }).open = false;
+          event.currentTarget.open = false;
         }
         this.onAction({ kind: value });
       }

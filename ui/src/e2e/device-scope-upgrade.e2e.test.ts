@@ -198,6 +198,10 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       await mobile.page.waitForTimeout(500);
       await status.click();
       await mobile.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await mobile.page
+        .locator(".chat-header-session-menu--compact wa-dropdown-item")
+        .first()
+        .waitFor({ state: "hidden" });
       await captureProof(mobile.page, "mobile-access-details.png");
       await mobile.page.waitForTimeout(700);
       await mobile.page.getByRole("button", { name: "Collapse limited access banner" }).click();
