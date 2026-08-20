@@ -39,6 +39,7 @@ import {
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
   ensureSessionEntrySync,
+  listSessionChildEntriesReadOnly,
   listSessionEntriesCore,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
@@ -974,12 +975,25 @@ describe("session accessor seam", () => {
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
-  it("does not parse unrelated blobs across canonical candidate and transcript reads", async () => {
+  it("does not parse unrelated blobs across focused child, candidate, and transcript reads", async () => {
     const sessionKey = "agent:main:focused-session";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "focused-session", updatedAt: 42 },
     );
+    for (const [childSessionKey, lineage] of [
+      ["agent:main:focused-both-child", { spawnedBy: sessionKey }],
+      ["agent:main:focused-parent-child", { parentSessionKey: sessionKey }],
+      [
+        "agent:main:focused-spawned-child",
+        { parentSessionKey: "agent:main:other-parent", spawnedBy: sessionKey },
+      ],
+    ] as const) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        { ...lineage, sessionId: childSessionKey, updatedAt: 43 },
+      );
+    }
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       "focused session database path",
@@ -994,6 +1008,16 @@ describe("session accessor seam", () => {
 
     const parse = vi.spyOn(JSON, "parse");
     try {
+      expect(
+        listSessionChildEntriesReadOnly({ agentId: "main", sessionKey, storePath }).map(
+          (child) => child.sessionKey,
+        ),
+      ).toEqual([
+        "agent:main:focused-both-child",
+        "agent:main:focused-parent-child",
+        "agent:main:focused-spawned-child",
+      ]);
+      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
       expect(
         resolveSessionEntrySelection({ agentId: "main", sessionKey, storePath }),
       ).toMatchObject({
