@@ -185,7 +185,7 @@ describe("imessage targets", () => {
   it.each(["7d5297154d5f436d83dbbdf03fcc8fd", "7d5297154d5f436d83dbbdf03fcc8fdg"])(
     "keeps non-hex or wrong-length value %s on the handle path",
     (value) => {
-      expect(normalizeIMessageHandle(value)).not.toMatch(/^chat_identifier:/);
+      expect(normalizeIMessageHandle(value)).toBe(value);
       expect(parseIMessageTarget(value)).toEqual({ kind: "handle", to: value, service: "auto" });
     },
   );

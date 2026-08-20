@@ -95,6 +95,29 @@ function requireMessageSendMedia(
 }
 
 describe("imessagePlugin contracts", () => {
+  it("rejects unqualified provider identifiers during target resolution", async () => {
+    const resolveTarget = imessagePlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error("Expected iMessage target resolver");
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: {} as OpenClawConfig,
+        input: "C0AG22RN7L3",
+        normalized: "+02273",
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      resolveTarget({
+        cfg: {} as OpenClawConfig,
+        input: "auto:Alice Smith",
+        normalized: "auto:AliceSmith",
+      }),
+    ).resolves.toMatchObject({ kind: "user", to: "auto:AliceSmith" });
+  });
+
   it("declares durable final delivery capabilities", () => {
     expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
       text: true,
