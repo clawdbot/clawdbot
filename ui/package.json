@@ -53,6 +53,7 @@
     "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
+    "pako": "3.0.1",
     "playwright": "1.62.1",
     "vite": "8.1.5",
     "vitest": "4.1.10"

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 348351,
-  "reason": "cumulative Control UI startup growth since #126474 (automation condition triggers, persistent Settings approvals, sidebar row fixes)",
+  "startupJsGzipBytes": 344531,
+  "reason": "canonical cross-runtime gzip sidecars",
   "updatedAt": "2026-08-20"
 }
