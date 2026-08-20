@@ -162,6 +162,26 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError(failureCode, `${failureLabel}: ${detail}`);
   };
 
+  const preserveIndeterminateProvisionCleanup = (
+    record: WorkerEnvironmentRecord,
+    error: ReturnType<typeof WorkerProviderError.cleanupIndeterminate>,
+  ): never => {
+    // Split the durable diagnostic budget so neither the allocation failure nor its cleanup
+    // failure can erase the other before restart reconciliation.
+    const provisionDetail = boundedError(error.provisionError, 480);
+    const cleanupDetail = boundedError(error.cleanupError, 480);
+    const detail = `${provisionDetail}; provider teardown pending: ${cleanupDetail}`;
+    store.adoptProvisionCleanupFailure({
+      environmentId: record.environmentId,
+      leaseId: error.leaseId,
+      lastError: detail,
+    });
+    throw serviceError(
+      "provider_failure",
+      `Worker provider operation failed; teardown is pending: ${detail}`,
+    );
+  };
+
   const finishNodeProvisioning = createWorkerNodeProvisioning({
     store,
     tunnels,
@@ -244,6 +264,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         ),
       );
     } catch (error) {
+      if (WorkerProviderError.isCleanupIndeterminate(error)) {
+        return preserveIndeterminateProvisionCleanup(record, error);
+      }
       const detail = boundedError(error);
       if (
         error instanceof WorkerProviderError ||

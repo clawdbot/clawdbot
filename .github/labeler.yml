@@ -253,7 +253,6 @@
       - any-glob-to-any-file:
           - "apps/linux/**"
           - "docs/platforms/linux.md"
-          - "extensions/linux-canvas/**"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:

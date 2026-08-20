@@ -123,6 +123,10 @@ export abstract class MemoryManagerSyncBase {
     timeoutMs: number;
   };
   protected readonly sources: Set<MemorySource> = new Set();
+  protected readonly sourceInspections = new Map<
+    MemorySource,
+    { eligible: number | null; issues: string[] }
+  >();
   protected providerKey: string | null = null;
   protected abstract readonly vector: {
     enabled: boolean;

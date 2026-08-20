@@ -219,38 +219,46 @@ export function tryResolveLegacyCompatibilityAgentId(cfg: OpenClawConfig): strin
     : tryResolveDefaultAgentId(cfg);
 }
 
-/** Resolves the configured owner for ambient system work and explicit consults. */
-export function tryResolveSystemAgentTargetAgentId(
+/** Resolves the owner for ambient system work and explicit requests. */
+export function tryResolveAmbientOwnerAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
 ): string | undefined {
-  const configuredAgentId =
+  const explicitAgentId =
     normalizeOptionalString(requestedAgentId) ??
     normalizeOptionalString(cfg.agents?.defaults?.systemAgent?.agentId);
-  return configuredAgentId ? normalizeAgentId(configuredAgentId) : tryResolveSoleAgentId(cfg);
+  // The documented system-agent owner is explicit config, so it precedes a stripped legacy marker.
+  return explicitAgentId
+    ? normalizeAgentId(explicitAgentId)
+    : tryResolveLegacyCompatibilityAgentId(cfg);
 }
 
-export function resolveSystemAgentTargetAgentId(
+/** Ambient owner for surfaces that must fail loudly rather than act on the wrong agent. */
+export function resolveAmbientOwnerAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
   context?: AgentSelectionContext,
 ): string {
-  const resolvedAgentId = tryResolveSystemAgentTargetAgentId(cfg, requestedAgentId);
-  if (resolvedAgentId) {
-    return resolvedAgentId;
-  }
-  return normalizeAgentId(
-    resolveSoleAgentId(
-      cfg,
-      context ?? {
-        surface: "system-agent consult routing",
-        hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
-      },
-    ),
-  );
+  return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
-/** @deprecated Use resolveSoleAgentId; accepts raw shipped markers only for input compatibility. */
+/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+export function resolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+  context?: AgentSelectionContext,
+): string {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
+  }
+  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
+}
+
+/**
+ * @deprecated Ambient system work uses resolveAmbientOwnerAgentId so the configured
+ * system agent is honored; explicit-selection surfaces use resolveSoleAgentId. This
+ * accepts raw shipped markers only for input compatibility.
+ */
 export function resolveDefaultAgentId(
   cfg: OpenClawConfig,
   context?: AgentSelectionContext,
@@ -421,9 +429,5 @@ export function resolveDefaultAgentDir(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return resolveAgentDir(
-    cfg,
-    tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
-    env,
-  );
+  return resolveAgentDir(cfg, resolveAmbientOwnerAgentId(cfg), env);
 }

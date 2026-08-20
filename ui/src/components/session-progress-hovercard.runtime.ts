@@ -2,6 +2,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -19,6 +20,7 @@ import { createPortaledHovercard, PortaledHovercardController } from "./portaled
 import { renderSessionHovercard } from "./session-hovercard.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
+  SESSION_MENU_OPEN_EVENT,
   sessionProgressHoverPlacementForTarget,
   sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
@@ -98,6 +100,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.addEventListener("focusin", this.handleFocusIn);
     this.addEventListener("focusout", this.handleFocusOut);
     this.addEventListener("keydown", this.handleKeyDown);
+    this.addEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.connect();
     this.connectStore();
   }
@@ -108,6 +111,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.removeEventListener("focusin", this.handleFocusIn);
     this.removeEventListener("focusout", this.handleFocusOut);
     this.removeEventListener("keydown", this.handleKeyDown);
+    this.removeEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.disconnect();
     this.disconnectStore();
     this.close();
@@ -208,6 +212,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
   };
 
+  private readonly handleSessionMenuOpen = (event: Event) => {
+    if (sessionProgressHoverTargetFromEvent(event) === this.activeTarget) {
+      this.close();
+    }
+  };
+
   private activate(target: HTMLElement, trigger: HTMLElement, delay: number): void {
     const sessionKey = target.dataset.sessionKey;
     if (!sessionKey || (target === this.activeTarget && sessionKey === this.activeSessionKey)) {
@@ -293,6 +303,22 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (currentProgressCard !== undefined) {
       this.lastProgressCard = currentProgressCard;
     }
+    const gateway = this.applicationGateway;
+    const channelAvatarAuth = {
+      authTokens: gateway
+        ? resolveControlUiAuthCandidates({
+            hello: gateway.snapshot.hello,
+            settings: { token: gateway.connection.token },
+            password: gateway.connection.password,
+          })
+        : [],
+      authReady: Boolean(
+        gateway &&
+        (gateway.snapshot.hello ||
+          gateway.connection.token.trim() ||
+          gateway.connection.password.trim()),
+      ),
+    };
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
       pullRequests: pullRequests
@@ -300,6 +326,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
         : null,
       row: sidebarRow
         ? {
+            channelAvatarUrl: sidebarRow.channelAvatarUrl,
             label: sidebarRow.label,
             lastMessagePreview: sidebarRow.lastMessagePreview,
             owner: sidebarRow.owner?.actor ?? sidebarRow.createdActor,
@@ -321,6 +348,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     render(
       renderSessionHovercard({
         row: sidebarRow,
+        channelAvatarAuth,
         pullRequests,
         progressCard: this.lastProgressCard,
       }),

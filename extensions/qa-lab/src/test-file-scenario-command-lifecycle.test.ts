@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -29,6 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+import { isProcessAlive, waitForDead, waitForPidFile } from "./process-wait.test-helper.js";
 import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
@@ -60,38 +61,6 @@ function runCommand(timeoutMs?: number) {
     env: { OPENCLAW_QA_REF: "test" },
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
-}
-
-function isProcessRunning(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForPidFile(filePath: string, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const value = await readFile(filePath, "utf8").catch(() => "");
-    if (/^[1-9]\d*$/u.test(value.trim())) {
-      return Number(value.trim());
-    }
-    await sleep(10);
-  }
-  throw new Error(`timed out waiting for pid file ${filePath}`);
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessRunning(pid)) {
-      return;
-    }
-    await sleep(10);
-  }
-  throw new Error(`timed out waiting for process ${pid} to exit`);
 }
 
 describe.skipIf(process.platform === "win32")("qa scenario command real POSIX lifecycle", () => {
@@ -153,9 +122,9 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       if (descendantPid === undefined) {
         throw new Error("scenario command descendant did not expose its pid");
       }
-      await waitForProcessExit(descendantPid);
+      await waitForDead(descendantPid);
     } finally {
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
       await rm(root, { force: true, recursive: true });
@@ -197,12 +166,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       expect(result.exitCode).toBe(1);
       expect(result.failureMessage).toBe("stdio-drain-timeout");
       expect(result.stdout).toContain("escaped descendant output");
-      expect(isProcessRunning(descendantPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
     } finally {
       // A true setsid descendant is outside the original PGID by design.
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
-        await waitForProcessExit(descendantPid).catch(() => undefined);
+        await waitForDead(descendantPid).catch(() => undefined);
       }
       await rm(root, { force: true, recursive: true });
     }
@@ -257,7 +226,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       { cwd: process.cwd(), env: process.env, stdio: "ignore" },
     );
     try {
-      descendantPid = await waitForPidFile(descendantPidPath, 10_000);
+      descendantPid = await waitForPidFile(descendantPidPath);
       controller.kill("SIGTERM");
       const [exitCode, signal] = await new Promise<[number | null, NodeJS.Signals | null]>(
         (resolve) => {
@@ -267,12 +236,12 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
 
       expect(exitCode).toBeNull();
       expect(signal).toBe("SIGTERM");
-      await waitForProcessExit(descendantPid);
+      await waitForDead(descendantPid);
     } finally {
       if (controller.exitCode === null && controller.signalCode === null) {
         controller.kill("SIGKILL");
       }
-      if (descendantPid && isProcessRunning(descendantPid)) {
+      if (descendantPid && isProcessAlive(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
       await rm(root, { force: true, recursive: true });

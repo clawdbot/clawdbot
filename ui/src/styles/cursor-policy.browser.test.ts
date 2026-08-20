@@ -44,7 +44,6 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "text", selector: "#plain-text-input" },
   { expected: "text", selector: ".chat-pane__session-title-button" },
   { expected: "grab", selector: ".sidebar-session-group-drag-handle" },
-  { expected: "col-resize", selector: ".sw-queue-resizer" },
   { expected: "zoom-in", selector: ".chat-message-image-button" },
   { expected: "not-allowed", selector: ".btn--ghost:disabled" },
   { expected: "not-allowed", selector: "#disabled-new-tab-button" },
@@ -91,7 +90,6 @@ function fixtureDocument(): string {
       <button class="chat-pane__session-title-button" type="button">Session title</button>
       <button class="chat-message-image-button" type="button">Image</button>
       <div class="sidebar-session-group-drag-handle"></div>
-      <div class="sw-queue-resizer"></div>
       <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>
       <div class="chat-text"><a class="markdown-file-link">src/index.ts</a></div>

@@ -444,7 +444,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconRequests.set(pluginId, request);
     void fetchPluginIconBlobUrl({
       pluginId,
-      basePath: this.context.basePath,
+      resourceBasePath: this.context.resourceBasePath,
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       auth: {
         hello: this.context.gateway.snapshot.hello,

@@ -94,6 +94,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
               .presented=${presented}
+              .visuallyPresented=${presented}
               .active=${active}
               .draft=${draft}
               .focusComposer=${options.draftFocus.shouldFocusPane(

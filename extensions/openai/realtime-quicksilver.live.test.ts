@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readCodexCliCredentialsCached,
+  resolveOpenAICodexAuthIdentity,
+} from "openclaw/plugin-sdk/provider-auth";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
@@ -184,7 +186,7 @@ async function resolveLiveOAuthProfile(): Promise<
     return undefined;
   }
   const accountId =
-    credential.accountId ?? resolveCodexAuthIdentity({ accessToken: credential.access }).accountId;
+    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
   return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
 }
 

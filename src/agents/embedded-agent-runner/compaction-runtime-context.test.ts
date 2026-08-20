@@ -67,25 +67,41 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
     ).toBe("high");
   });
 
-  it("inherits the session level and otherwise defaults to off", () => {
+  it("defaults compaction to low without inheriting the session level", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         provider: "demo",
         modelId: "demo-model",
         inheritedLevel: "medium",
       }),
-    ).toBe("medium");
+    ).toBe("low");
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         provider: "demo",
         modelId: "demo-model",
       }),
-    ).toBe("off");
+    ).toBe("low");
+  });
+
+  it("inherits the session level only when explicitly configured", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        } as unknown as OpenClawConfig,
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "medium",
+      }),
+    ).toBe("medium");
   });
 
   it("preserves thinking when the resolved Ollama model reports reasoning support", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        },
         provider: "ollama",
         modelId: "qwen3.5:4b",
         inheritedLevel: "high",

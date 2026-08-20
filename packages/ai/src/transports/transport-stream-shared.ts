@@ -8,6 +8,7 @@ import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
 type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
@@ -27,6 +28,8 @@ export type WritableTransportStream = Pick<
 >;
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE =
+  "Provider completed tool call with malformed JSON arguments";
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
@@ -56,6 +59,32 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
     }
   }
   return {};
+}
+
+/** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
+export function parseTerminalToolCallArguments(
+  value: unknown,
+  errorMessage = MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
+): Record<string, unknown> {
+  const parsed = parseJsonObjectPreservingUnsafeIntegers(value);
+  if (!parsed) {
+    throw new Error(errorMessage);
+  }
+  return parsed;
+}
+
+/** Validate a complete sibling set before mutating any call into executable state. */
+export function finalizeTerminalToolCallArguments<T extends { arguments: Record<string, unknown> }>(
+  calls: readonly T[],
+  readArguments: (call: T) => unknown,
+  errorMessage?: string,
+): void {
+  const validated = calls.map(
+    (call) => [call, parseTerminalToolCallArguments(readArguments(call), errorMessage)] as const,
+  );
+  for (const [call, argumentsValue] of validated) {
+    call.arguments = argumentsValue;
+  }
 }
 
 export function mergeTransportHeaders(

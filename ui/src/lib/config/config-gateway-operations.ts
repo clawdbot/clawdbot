@@ -18,10 +18,47 @@ import {
   isCurrentConfigConnection,
   isCurrentRequest,
   nextRequestVersion,
+  resolveEditableSnapshotConfig,
   type ConfigGatewayClient,
   type LoadConfigOptions,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
+
+function comparableSnapshotRaw(snapshot: RuntimeConfigState["configSnapshot"]): string | null {
+  if (typeof snapshot?.raw === "string") {
+    return snapshot.raw;
+  }
+  const editable = resolveEditableSnapshotConfig(snapshot);
+  return editable ? serializeConfigForm(editable) : null;
+}
+
+export async function refreshDraft(
+  state: RuntimeConfigState,
+  refreshConnectionState: () => Promise<boolean>,
+  publish: () => void,
+  reconcileAppliedRefresh: () => void,
+): Promise<void> {
+  const previousRaw =
+    state.configFormMode === "form" && state.configFormDirty
+      ? comparableSnapshotRaw(state.configSnapshot)
+      : null;
+  const client = state.client;
+  const epoch = currentConfigConnectionEpoch(state);
+  const loaded = await refreshConnectionState();
+  if (
+    loaded &&
+    client &&
+    isCurrentConfigConnection(state, client, epoch) &&
+    previousRaw !== null &&
+    comparableSnapshotRaw(state.configSnapshot) === previousRaw
+  ) {
+    // Upgrade/restart may replace the public revision token without changing
+    // the redacted base. A changed or unavailable base must still conflict.
+    state.configDraftBaseHash = state.configSnapshot?.hash ?? state.configDraftBaseHash;
+    publish();
+  }
+  reconcileAppliedRefresh();
+}
 
 function readAckHash(ack: unknown): string | null {
   const hash = (ack as { hash?: unknown } | null | undefined)?.hash;

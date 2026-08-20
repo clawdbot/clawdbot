@@ -5,6 +5,7 @@ import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-crede
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type {
@@ -29,6 +30,7 @@ import {
   resolveLogicalVisibleModelCatalog,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   createModelVisibilityPolicy,
@@ -373,6 +375,7 @@ async function buildPublicModelsListEntries(params: {
   catalog: ModelCatalogEntry[];
   cfg: OpenClawConfig;
   agentId: string;
+  configuredEntriesByKey: ReturnType<typeof resolveConfiguredModelEntries>["byKey"];
   evaluateEntry(entry: ModelCatalogEntry): Promise<ModelAuthAvailabilityEvaluation>;
   includeInput?: boolean;
   preserveUnknownAvailability?: boolean;
@@ -380,6 +383,13 @@ async function buildPublicModelsListEntries(params: {
 }): Promise<ModelsListEntryWithCapabilities[]> {
   return Promise.all(
     params.catalog.map(async (entry): Promise<ModelsListEntryWithCapabilities> => {
+      const configuredEntry = params.configuredEntriesByKey.get(modelKey(entry.provider, entry.id));
+      const alias = configuredEntry?.aliases.at(-1);
+      const publicEntry = configuredEntry?.aliasDisabled
+        ? { ...entry, alias: undefined }
+        : alias && alias !== entry.alias
+          ? { ...entry, alias }
+          : entry;
       const evaluation = await params.evaluateEntry(entry);
       const syntheticLocalAvailable =
         evaluation.availability === undefined &&
@@ -406,7 +416,8 @@ async function buildPublicModelsListEntries(params: {
             })
           : undefined;
       return {
-        ...buildPublicModelProjection(entry),
+        ...buildPublicModelProjection(publicEntry),
+        ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
         ...(agentRuntime ? { agentRuntime } : {}),
         ...thinkingProfile,
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
@@ -599,6 +610,13 @@ export async function buildModelsListResult(
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })
     : undefined;
+  const configuredEntriesByKey = resolveConfiguredModelEntries({
+    cfg,
+    agentId,
+    defaultModel,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins: metadataSnapshot.plugins,
+  }).byKey;
   if (view === "provider-config") {
     const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
     const authoredEntries = buildProviderConfigModelCatalogForBrowse({
@@ -633,6 +651,7 @@ export async function buildModelsListResult(
         catalog: inventory,
         cfg,
         agentId,
+        configuredEntriesByKey,
         evaluateEntry: inventoryProjector.evaluateEntry,
         includeInput: true,
         preserveUnknownAvailability: true,
@@ -700,6 +719,7 @@ export async function buildModelsListResult(
       catalog: models,
       cfg,
       agentId,
+      configuredEntriesByKey,
       evaluateEntry,
       ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
     }),

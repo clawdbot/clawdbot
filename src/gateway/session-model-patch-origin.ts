@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { createAgentPatchedSessionModelFallback } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -12,6 +12,14 @@ export function withAgentSessionModelPatchOrigin<T>(run: () => T): T {
 
 export function isAgentSessionModelPatchOrigin(): boolean {
   return agentSessionModelPatch.getStore() === true;
+}
+
+export function updateAgentModelFallbackThinking(
+  fallback: NonNullable<SessionEntry["modelFallback"]>,
+  entry: Pick<SessionEntry, "thinkingLevel" | "thinkingLevelSelection">,
+): void {
+  fallback.prevThinkingLevel = entry.thinkingLevel;
+  fallback.prevThinkingLevelSelection = entry.thinkingLevelSelection;
 }
 
 export function snapshotAgentModelFallback(

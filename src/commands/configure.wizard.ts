@@ -763,7 +763,7 @@ export async function runConfigureWizard(
         await provisionWorkspace();
       },
       model: async () => {
-        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
+        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter, resolveSetupTarget());
       },
       web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);

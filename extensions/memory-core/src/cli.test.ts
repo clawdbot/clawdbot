@@ -1368,6 +1368,7 @@ describe("memory cli", () => {
         cfg: {},
         agentId: "main",
         purpose: "cli",
+        inspectSources: true,
       });
       expectLogged(log, "Memory index updated (main): 1 file indexed.");
       expect(close).toHaveBeenCalled();
@@ -1383,7 +1384,20 @@ describe("memory cli", () => {
       probeVectorAvailability: vi.fn(async () => true),
       probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
       sync,
-      status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"] }),
+      status: () =>
+        makeMemoryStatus({
+          workspaceDir,
+          sources: ["memory"],
+          sourceCounts: [
+            {
+              source: "memory",
+              files: 0,
+              chunks: 0,
+              eligible: 0,
+              issues: ["no eligible memory files found"],
+            },
+          ],
+        }),
       close,
     });
 
@@ -1405,7 +1419,20 @@ describe("memory cli", () => {
     const sync = vi.fn(async () => {});
     mockManager({
       sync,
-      status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"] }),
+      status: () =>
+        makeMemoryStatus({
+          workspaceDir,
+          sources: ["memory"],
+          sourceCounts: [
+            {
+              source: "memory",
+              files: 0,
+              chunks: 0,
+              eligible: 0,
+              issues: ["no eligible memory files found"],
+            },
+          ],
+        }),
       close,
     });
 
@@ -1439,6 +1466,7 @@ describe("memory cli", () => {
         cfg: {},
         agentId: "main",
         purpose: "cli",
+        inspectSources: true,
       });
       expect(close).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith("Memory index updated (main): 1 file indexed.");

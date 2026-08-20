@@ -4,7 +4,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 
 type ModelsListEntry = Pick<
   ModelChoice,
-  "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning"
+  "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning" | "tags"
 > & { available?: boolean; supportsTools?: boolean };
 
 /** Keeps concrete route, auth, cost, and provider parameters out of public model rows. */

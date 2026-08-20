@@ -174,6 +174,64 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
+  it("keeps attachment-only referenced messages as typed reply context", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(Buffer.from("image"), { headers: { "content-type": "image/png" } }),
+    );
+    const ctx = await createBaseContext({
+      cfg: {
+        channels: { discord: { contextVisibility: "all" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-attachment-reply",
+        channelId: "c1",
+        content: "<@bot> what is this?",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: { type: 0, message_id: "m-attachment-only", channel_id: "c1" },
+        referencedMessage: {
+          id: "m-attachment-only",
+          channelId: "c1",
+          content: "",
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-only",
+              url: "https://cdn.discordapp.com/attachments/1/attachment-only.png",
+              content_type: "image/png",
+              filename: "attachment-only.png",
+            },
+          ],
+          author: {
+            id: "U2",
+            username: "bob",
+            discriminator: "0",
+            globalName: "Bob",
+          },
+        },
+      },
+      baseText: "<@bot> what is this?",
+      messageText: "<@bot> what is this?",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(dispatchCtx.ReplyToId).toBe("m-attachment-only");
+    expect(dispatchCtx.ReplyToSender).toBe("bob");
+    expect(dispatchCtx.ReplyToBody).toBeUndefined();
+    expect(dispatchCtx.media).toEqual([
+      expect.objectContaining({
+        contentType: "image/png",
+        messageId: "m-attachment-only",
+      }),
+    ]);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("does not inject the bot's previous message body when users reply to it", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");

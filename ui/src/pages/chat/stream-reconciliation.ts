@@ -136,8 +136,13 @@ function buildAssistantStreamMessage(
   };
 }
 
-function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {
+function streamFallbackMetadata(message: unknown): Record<string, unknown> | null {
   const metadata = asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
+  return metadata;
+}
+
+function unkeyedStreamFallbackMetadata(message: unknown): Record<string, unknown> | null {
+  const metadata = streamFallbackMetadata(message);
   return metadata && !normalizeOptionalString(metadata.itemId) ? metadata : null;
 }
 
@@ -168,14 +173,24 @@ export function appendTerminalAssistantMessage(messages: unknown[], message: unk
   let terminalCursor = 0;
   for (let index = interval.start; index < interval.end; index += 1) {
     const existing = messages[index];
-    const fallback = unkeyedStreamFallbackMetadata(existing);
+    const fallback = streamFallbackMetadata(existing);
     if (!fallback) {
+      continue;
+    }
+    const visibleText = extractText(existing)?.trim();
+    if (normalizeOptionalString(fallback.itemId)) {
+      // Keyed stream segments normally represent commentary and must remain
+      // beside the final answer. When a keyed segment is the exact final
+      // answer, though, retaining both renders the streamed and persisted
+      // copies as duplicate assistant messages.
+      if (visibleText && visibleText === terminalText) {
+        removedIndexes.add(index);
+      }
       continue;
     }
     if (fallback.source === "current") {
       currentFallbackIndexes.push(index);
     }
-    const visibleText = extractText(existing)?.trim();
     if (!visibleText) {
       continue;
     }

@@ -529,18 +529,23 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-unit-support", 32],
 ]);
 
-// Hybrid-specific Blacksmith observations from 31949756966, plus the
-// gateway-core-3 139.5s spike in 31938297538 that must stay singleton.
-// agents-core-models: 56.3s median (n=6, p90 58.6s) across 260 compact jobs on
-// 2026-08-16 against a 36s scaled estimate. It was the dominant term in the
-// only bin measuring >=1.25x its prediction (compact-large-19, 122s vs 88s).
+// Hybrid-specific Blacksmith observations, plus the gateway-core-3 139.5s spike
+// in 31938297538 that must stay singleton.
 // Sum a shard's per-config Duration lines before taking a median; pooling them
-// reads as a large over-prediction that is not there.
+// reads as a large over-prediction that is not there. Normalize each run by its
+// own VM speed (median of every shard's duration over that shard's cross-run
+// median) before comparing, or a slow draw looks like a hint miss.
+// Values below are VM-normalized medians over runs 32316204633, 32317242374,
+// 32318250756, and 32320063231 (2026-08-20). Across 100 groups the GitHub hints
+// run 0.64x on Blacksmith, so only the ones that overshoot are pinned here:
+// leaving these low packs partners onto the tallest bins, which set the wall.
 const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
-  ["agentic-agents-core-models", 56],
-  ["agentic-commands-doctor", 64],
+  ["agentic-agents-core-models", 81],
+  ["agentic-cli-process", 110],
+  ["agentic-commands-doctor", 83],
   ["agentic-gateway-core-3", 140],
-  ["core-runtime-cron-service", 80],
+  ["core-runtime-cron-service", 108],
+  ["core-runtime-infra-process", 35],
 ]);
 
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured

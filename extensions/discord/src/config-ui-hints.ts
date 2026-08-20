@@ -309,7 +309,7 @@ export const discordChannelConfigUiHints = {
   },
   activities: {
     label: "Discord Activities",
-    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+    help: "Enable the Discord Activity presenter for the core show_widget tool on this account. Activity routes and the launch handler remain disabled when this block is absent.",
   },
   "activities.clientSecret": {
     label: "Discord Activities Client Secret",

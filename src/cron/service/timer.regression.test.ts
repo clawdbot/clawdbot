@@ -2925,13 +2925,16 @@ describe("cron service timer regressions", () => {
   it("auto-disables a recurring job on its tenth consecutive run failure", () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: Array<() => void> = [];
+    const enqueueSystemEvent = vi.fn();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: "/tmp/cron-consecutive-failure-threshold.json",
       log: noopLogger,
       nowMs: () => startedAt,
-      enqueueSystemEvent: vi.fn(),
+      enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     const job = createIsolatedRegressionJob({
@@ -2942,6 +2945,7 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "fail" },
       state: { consecutiveErrors: 8 },
     });
+    job.failureAlert = { after: 10, cooldownMs: 0 };
 
     applyJobResult(
       state,
@@ -2973,6 +2977,9 @@ describe("cron service timer regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
+    deferredNotifications[0]?.();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
   it("resets the auto-disable streak after a successful recurring run", () => {
@@ -3023,7 +3030,7 @@ describe("cron service timer regressions", () => {
   it.each([
     { name: "stale schedule", opts: { scheduleOwnership: "stale" as const } },
     { name: "forced run", opts: { scheduleMode: "preserve" as const } },
-  ])("does not auto-disable after a $name failure", ({ opts }) => {
+  ])("does not auto-disable but still alerts after a $name failure", ({ opts }) => {
     const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
     const deferredNotifications: Array<() => void> = [];
     const state = createCronServiceState({
@@ -3054,7 +3061,7 @@ describe("cron service timer regressions", () => {
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(10);
     expect(job.state.autoDisabled).toBeUndefined();
-    expect(deferredNotifications).toHaveLength(0);
+    expect(deferredNotifications).toHaveLength(1);
   });
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
@@ -8,7 +9,6 @@ import { icons } from "../../components/icons.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
@@ -43,6 +43,7 @@ import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -57,7 +58,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       password: gateway.connection.password,
     });
     return {
-      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      routeUrl: buildControlUiResourcePath(
+        "workspaceIcon",
+        this.context.resourceBasePath,
+        sessionKey,
+      ),
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
@@ -70,6 +75,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     catalog: boolean,
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
+    sidebarLayout?: SidebarLayout,
   ) {
     const board = this.resolveBoardView();
     const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
@@ -191,13 +197,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = this.state?.sidebarLayout.open === true;
-    const toggleSidePanel = () => {
-      const state = this.state;
-      if (state) {
-        this.setChatSidePanelOpen(!sidePanelOpen);
-      }
-    };
+    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
     >

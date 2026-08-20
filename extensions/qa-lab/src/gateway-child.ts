@@ -51,6 +51,7 @@ import {
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
+import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import {
   createQaGatewayProcessBoundaryController,
   type QaGatewayVerifiedProcessIdentity,
@@ -100,21 +101,6 @@ function createQaGatewayEmptyTransport() {
     requiredPluginIds: [] as const,
     createGatewayConfig: () => ({}),
   } satisfies Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
-}
-
-async function getFreePort() {
-  return await new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", (error) => reject(error));
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("failed to allocate port"));
-        return;
-      }
-      server.close((error) => (error ? reject(error) : resolve(address.port)));
-    });
-  });
 }
 
 function appendQaGatewayTempRoot(details: string, tempRoot: string) {
@@ -261,6 +247,7 @@ export async function startQaGatewayChild(params: {
     ReturnType<typeof createQaGatewayProcessBoundaryController>
   > | null = null;
   let rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
+  let gatewayPortReservation: Awaited<ReturnType<typeof reserveQaGatewayPort>> | null = null;
   let stagedBundledPluginsRoot: string | null = null;
   const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
   // The startup owner must release its temp root even when launcher or staging
@@ -514,7 +501,8 @@ export async function startQaGatewayChild(params: {
     };
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       if (!reuseStartupLaunchState) {
-        gatewayPort = await getFreePort();
+        gatewayPortReservation = await reserveQaGatewayPort(net.createServer());
+        gatewayPort = gatewayPortReservation.port;
         baseUrl = `http://127.0.0.1:${gatewayPort}`;
         wsUrl = `ws://127.0.0.1:${gatewayPort}`;
         cfg = await buildStagedGatewayConfig(gatewayPort);
@@ -603,6 +591,10 @@ export async function startQaGatewayChild(params: {
       reuseStartupLaunchState = false;
 
       const attemptLogMark = output.mark();
+      // Hold the selected port through plugin/config staging so parallel QA workers
+      // cannot satisfy readiness against one another. Release only for the child bind.
+      await gatewayPortReservation?.release();
+      gatewayPortReservation = null;
       const spawnedAttempt = await spawnGatewayProcess(env);
       const attemptChild = spawnedAttempt.child;
       child = attemptChild;
@@ -1027,6 +1019,13 @@ export async function startQaGatewayChild(params: {
     };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
+    if (gatewayPortReservation) {
+      try {
+        await gatewayPortReservation.release();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
     await rpcClient?.stop().catch(() => {});
     let processStopped = child === null;
     if (child) {

@@ -423,7 +423,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "reset",
   "resetScope",
   "nonInteractive",
-  "classic",
+  "agentName",
   "tui",
   "skipUi",
 ]);

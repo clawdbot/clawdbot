@@ -249,6 +249,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onRevealWorkspaceFile?: (path: string) => void;
     onChatScroll?: (event: Event) => void;
     basePath?: string;
+    resourceBasePath?: string;
     composerControls?: TemplateResult | typeof nothing;
     permissionPicker?: ChatPermissionPickerProps;
     replyTarget?: ChatReplyTarget | null;
@@ -275,6 +276,13 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onOpenSessionDiff?: () => void;
     onExpandPullRequests?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
+    githubPublicationBusy?: boolean;
+    githubPublicationResult?:
+      | import("../../../../packages/gateway-protocol/src/index.js").SessionGitHubPublicationResult
+      | null;
+    githubPublicationError?: string | null;
+    githubPublicationGuidance?: string;
+    onPublishPullRequest?: () => void;
   };
 
 export function renderChat(props: ChatProps) {
@@ -332,6 +340,7 @@ export function renderChat(props: ChatProps) {
       userName: props.userName,
       userAvatar: props.userAvatar,
       basePath: props.basePath,
+      resourceBasePath: props.resourceBasePath,
       fullMessageAgentId: props.fullMessageAgentId,
       loadFullAssistantMessage: props.loadFullAssistantMessage,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
@@ -570,6 +579,11 @@ export function renderChat(props: ChatProps) {
                     onExpand: () => props.onExpandPullRequests?.(),
                     onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
                     onOpenSessionDiff: props.onOpenSessionDiff,
+                    publicationBusy: props.githubPublicationBusy === true,
+                    publicationResult: props.githubPublicationResult,
+                    publicationError: props.githubPublicationError,
+                    publicationGuidance: props.githubPublicationGuidance,
+                    onPublish: props.onPublishPullRequest,
                   })}
                   ${renderChatSessionSuggestions({
                     suggestions: props.sessionSuggestions ?? [],

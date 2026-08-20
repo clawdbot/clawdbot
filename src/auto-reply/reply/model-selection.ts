@@ -2,8 +2,6 @@
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
-  resolveAgentDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -190,17 +188,14 @@ export async function createModelSelectionState(params: {
     defaultProvider,
     defaultModel,
   } = params;
-  const catalogAgentId = params.agentId ?? resolveDefaultAgentId(cfg);
-  const catalogScope = {
-    config: cfg,
-    agentId: catalogAgentId,
-    agentDir: resolveAgentDir(cfg, catalogAgentId),
-  };
   const loadRuntimeCatalogSnapshot = async (): Promise<ModelCatalogSnapshot> =>
     params.preparedModelCatalog ??
     (await (
       await loadPreparedModelCatalogRuntime()
-    ).loadPreparedModelCatalogSnapshot(catalogScope));
+    ).loadPreparedModelCatalogSnapshot({
+      config: cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    }));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
   const { manifestPlugins } = runtimeModelNormalization;
 

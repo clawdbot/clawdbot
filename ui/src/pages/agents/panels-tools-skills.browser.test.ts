@@ -22,8 +22,9 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     connected: false,
     agentId: "main",
     config: null,
-    supported: true,
+    statusReadable: true,
     configurable: false,
+    authorizable: false,
     clientRevision: 0,
   });
   return {
@@ -186,13 +187,23 @@ describe("agents tools panel (browser)", () => {
   it("renders the GitHub identity section with settings rows only", async () => {
     const container = document.createElement("div");
     const params = createBaseParams();
+    const nativeIdentity = {
+      source: "system-detected" as const,
+      credentialKind: "native" as const,
+      credentialState: "available" as const,
+      account: { login: "octocat" },
+      gitAuthor: { name: null, email: null },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable" as const,
+      oauthScopes: [],
+      repositoryGrants: "unknown" as const,
+    };
     params.githubIdentity.status = {
       agentId: "main",
-      source: "system-detected",
-      credentialState: "available",
-      account: { login: "octocat", avatarUrl: "https://example.test/a.png" },
-      gitAuthor: { name: null, email: null },
-      evidence: "github-api",
+      selectedScope: "system",
+      selected: { scope: "system", configured: false, identity: nativeIdentity },
+      effective: nativeIdentity,
     };
     render(renderAgentTools(params), container);
     await Promise.resolve();
@@ -208,7 +219,7 @@ describe("agents tools panel (browser)", () => {
     // markup or nested callouts, per ui/docs/design-system/settings-design.md.
     expect(section.querySelector(".form-grid")).toBeNull();
     expect(section.querySelector(".callout")).toBeNull();
-    expect(section.querySelector(".settings-group .settings-account__avatar")).not.toBeNull();
+    expect(section.querySelector(".settings-group .settings-account__avatar")).toBeNull();
     expect(section.textContent).toContain("@octocat");
     expect(section.querySelector(".settings-status")?.textContent?.trim()).toBe("Verified");
     // Raw wire enums never render; friendly labels replace them.
@@ -219,7 +230,129 @@ describe("agents tools panel (browser)", () => {
     );
     expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("Not set");
     expect(section.querySelector(".settings-segmented")).not.toBeNull();
-    expect(section.querySelector(".settings-secret input")).not.toBeNull();
+    expect(section.querySelector(".settings-secret input")).toBeNull();
+    expect(section.textContent).toContain("Disconnected");
+  });
+
+  it("renders only the pinned device link and one-time code while authorization is active", async () => {
+    const container = document.createElement("div");
+    const client = { request: vi.fn() } as never;
+    const githubIdentity = new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "not used",
+      }),
+    });
+    githubIdentity.sync({
+      client,
+      connected: true,
+      agentId: "main",
+      config: {},
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+    githubIdentity.authorization = {
+      phase: "code",
+      requestId: "github-device-11111111111111111111111111111111",
+      userCode: "ABCD-1234",
+      verificationUri: "https://github.com/login/device",
+      expiresInMs: 900_000,
+      pollAfterMs: 5_000,
+      displayExpiresAtMs: 1_900_000_000_000,
+    };
+
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("ABCD-1234");
+    const link = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://github.com/login/device"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Open github.com/login/device");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
+    expect(container.querySelector(".settings-secret input")).toBeNull();
+    expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
+    expect(container.querySelector(".settings-segmented")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps complete effective facts when This Agent inherits System", async () => {
+    const container = document.createElement("div");
+    const params = createBaseParams();
+    const effective = {
+      source: "system-configured" as const,
+      credentialKind: "managed-oauth" as const,
+      credentialState: "available" as const,
+      account: { login: "system-user" },
+      gitAuthor: { name: "System Author", email: "system@example.com" },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: 1_900_000_000_000,
+      refreshState: "available" as const,
+      oauthScopes: ["repo", "workflow"],
+      repositoryGrants: "unknown" as const,
+    };
+    params.githubIdentity.scope = "agent";
+    params.githubIdentity.status = {
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective,
+    };
+
+    render(renderAgentTools(params), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("@system-user");
+    expect(container.textContent).toContain("System Author · system@example.com");
+    expect(container.textContent).toContain("Managed GitHub authorization");
+    expect(container.textContent).toContain("repo, workflow");
+    expect(container.textContent).toContain("This scope inherits the effective identity");
+  });
+
+  it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
+    const container = document.createElement("div");
+    const client = { request: vi.fn() } as never;
+    const githubIdentity = new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "not used",
+      }),
+    });
+    githubIdentity.sync({
+      client,
+      connected: true,
+      agentId: "main",
+      config: {},
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    expect(container.querySelector(".settings-secret input")).toBeNull();
+    expect(container.textContent).toContain("Use a PAT instead");
+
+    githubIdentity.showPatFallback();
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    expect(container.querySelector(".settings-secret input")).not.toBeNull();
+    expect(container.textContent).not.toContain("Connect GitHub");
+
+    githubIdentity.busy = true;
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Cancel",
+    );
+    expect(cancel?.disabled).toBe(true);
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {

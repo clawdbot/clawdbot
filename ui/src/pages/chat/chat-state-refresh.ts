@@ -14,7 +14,10 @@ import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
-import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
+import {
+  flushChatQueueAfterIdleSessionReconciliation,
+  refreshCurrentChatSessionList,
+} from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { loadModels } from "./models.ts";
@@ -194,6 +197,10 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     if (ownsRequest()) {
       host.chatModelCatalog = models;
       host.chatModelCatalogError = null;
+      // Full model discovery can complete after the session projection used at mount time.
+      // Refresh through the normal session owner so thinking/context metadata converges without
+      // letting the UI guess which provider- or runtime-specific levels are valid.
+      await refreshCurrentChatSessionList(host).catch(() => undefined);
     }
   } catch (error) {
     if (ownsRequest()) {

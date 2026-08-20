@@ -322,6 +322,7 @@ describe("scanStatus", () => {
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
+      inspectSources: true,
     });
   });
 

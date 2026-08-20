@@ -126,6 +126,7 @@ export const en = {
       complete: "Migration complete. Run `openclaw doctor` next.",
       continuing: "Migration complete. Continuing setup.",
       importFrom: "Import from {source}",
+      importFromAnotherAgent: "Import from another agent",
       includeCredentials: "Import supported auth credentials too?",
       previewTitle: "Migration preview",
       setupModelSeparately: "Set up a model separately",

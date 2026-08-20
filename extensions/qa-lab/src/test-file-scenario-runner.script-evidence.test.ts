@@ -301,6 +301,84 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it.each([
+    { producerStatus: "pass" as const, terminal: "exit" as const },
+    { producerStatus: "blocked" as const, terminal: "timeout" as const },
+    { producerStatus: "skipped" as const, terminal: "exit" as const },
+  ])(
+    "makes a real $terminal failure override colliding $producerStatus producer evidence",
+    async ({ producerStatus, terminal }) => {
+      const commandName = path.basename(process.execPath);
+      const tempRoot = await makeTempRepo(`qa-script-terminal-${terminal}-${producerStatus}-`);
+      const outputDir = path.join(tempRoot, "out");
+      const scriptPath = path.join(tempRoot, "terminal-evidence-producer.mjs");
+      const producerEvidence = buildScriptProducerEvidence({
+        additionalEntries: buildScriptProducerEvidence({
+          producerId: "producer-diagnostic",
+          status: "pass",
+        }).entries,
+        artifacts: [{ kind: "log", path: "producer.log" }],
+        producerId: "scenario-script",
+        status: producerStatus,
+      });
+      await fs.writeFile(
+        scriptPath,
+        [
+          "import fs from 'node:fs/promises';",
+          "import path from 'node:path';",
+          "const artifactBase = process.argv[process.argv.indexOf('--artifact-base') + 1];",
+          "const runRoot = path.join(artifactBase, 'run-1');",
+          "await fs.mkdir(runRoot, { recursive: true });",
+          "await fs.writeFile(path.join(runRoot, 'producer.log'), 'producer evidence\\n');",
+          `await fs.writeFile(path.join(runRoot, 'qa-evidence.json'), ${JSON.stringify(JSON.stringify(producerEvidence))});`,
+          "await fs.writeFile(path.join(artifactBase, 'latest-run.json'), JSON.stringify({ qaEvidence: 'run-1/qa-evidence.json' }));",
+          terminal === "timeout" ? "setInterval(() => {}, 1_000);" : "process.exitCode = 7;",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = await runQaTestFileScenarios({
+        repoRoot: process.cwd(),
+        outputDir,
+        ...QA_TEST_RUNNER_DEFAULTS,
+        scenarios: [makeTestFileScenario("script", scriptPath)],
+        commandTimeoutMs: 1_000,
+      });
+
+      expect(result.results[0]).toMatchObject({
+        failureMessage:
+          terminal === "timeout"
+            ? expect.stringContaining("timed out after 1000ms")
+            : `${commandName} exited with 7`,
+        status: "fail",
+      });
+      expect(result.evidence.entries).toHaveLength(2);
+      expect(
+        result.evidence.entries.find((entry) => entry.test.id === "scenario-script"),
+      ).toMatchObject({
+        coverage: [
+          { id: "qa.coverage", role: "primary" },
+          { id: "qa.reporting", role: "secondary" },
+        ],
+        execution: {
+          artifacts: [{ kind: "log", path: expect.stringContaining("producer.log") }],
+          runner: "evidence-producer-script",
+        },
+        result: {
+          failure: {
+            reason: `${commandName} ${
+              terminal === "timeout" ? "timed out after 1000ms" : "exited with 7"
+            }`,
+          },
+          status: "fail",
+        },
+      });
+      expect(
+        result.evidence.entries.find((entry) => entry.test.id === "producer-diagnostic"),
+      ).toMatchObject({ result: { status: "pass" } });
+    },
+  );
+
   it("fails script scenario results when imported producer evidence fails", async () => {
     const repoRoot = await makeTempRepo("qa-script-producer-fail-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-producer-fail");
@@ -470,6 +548,70 @@ describe("qa test file scenario runner", () => {
       },
     });
   });
+
+  it.each([
+    {
+      name: "blocked plus skipped without a pass",
+      statuses: ["blocked", "skipped"] as const,
+      allowBlockedEvidence: true,
+      expectedStatus: "blocked",
+    },
+    {
+      name: "all skipped",
+      statuses: ["skipped"] as const,
+      allowBlockedEvidence: false,
+      expectedStatus: "skipped",
+    },
+    {
+      name: "pass plus skipped",
+      statuses: ["pass", "skipped"] as const,
+      allowBlockedEvidence: false,
+      expectedStatus: "skipped",
+    },
+    {
+      name: "allowed blocked plus pass plus skipped",
+      statuses: ["blocked", "pass", "skipped"] as const,
+      allowBlockedEvidence: true,
+      expectedStatus: "skipped",
+    },
+  ])(
+    "keeps $name producer precedence",
+    async ({ statuses, allowBlockedEvidence, expectedStatus }) => {
+      const repoRoot = await makeTempRepo("qa-script-producer-skipped-");
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-skipped");
+      const [firstStatus, ...additionalStatuses] = statuses;
+      const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+      if (scenario.execution.kind !== "script") {
+        throw new Error("expected script scenario");
+      }
+      scenario.execution.allowBlockedEvidence = allowBlockedEvidence;
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        ...QA_TEST_RUNNER_DEFAULTS,
+        scenarios: [scenario],
+        runCommand: async () => {
+          await writeScriptProducerEvidence({
+            additionalEntries: additionalStatuses.flatMap(
+              (status, index) =>
+                buildScriptProducerEvidence({
+                  producerId: `script-producer.web-ui.additional-${index}`,
+                  status,
+                }).entries,
+            ),
+            outputDir,
+            status: firstStatus,
+          });
+          return { exitCode: 0, stdout: "script completed\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: expectedStatus });
+      expect(
+        result.results[0]?.producerEvidence?.entries.map((entry) => entry.result.status),
+      ).toEqual(statuses);
+    },
+  );
 
   it("carries the suite profile into merged producer evidence", async () => {
     const repoRoot = await makeTempRepo("qa-script-profile-");

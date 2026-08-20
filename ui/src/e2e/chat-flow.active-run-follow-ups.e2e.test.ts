@@ -408,6 +408,36 @@ suite.define(() => {
     }
   });
 
+  it("routes /redirect through one interrupt-mode chat.send", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("/redirect start over cleanly");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const request = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(request.params)).toMatchObject({
+        message: "start over cleanly",
+        queueMode: "interrupt",
+        sessionKey: "main",
+        idempotencyKey: expect.any(String),
+      });
+      await page.getByText("Redirected.").waitFor({ timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("steers a restored queued message when only the session row reports the active run", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

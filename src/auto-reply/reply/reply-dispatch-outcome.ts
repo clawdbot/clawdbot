@@ -8,6 +8,17 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-before-deliver"
   | "failed-deliver";
 
+export class ReplyDispatchDeliveryError extends Error {
+  constructor(readonly outcome: ReplyDispatchDeliveryOutcome) {
+    super("queued reply delivery failed");
+    this.name = "ReplyDispatchDeliveryError";
+  }
+}
+
+export function isReplyDispatchDeliveryError(error: unknown): error is ReplyDispatchDeliveryError {
+  return error instanceof ReplyDispatchDeliveryError;
+}
+
 export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {
   return outcome !== "delivered" && outcome !== "failed-deliver";
 }

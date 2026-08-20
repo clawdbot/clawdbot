@@ -25,7 +25,15 @@ describe("qa confidence report", () => {
   async function writeJson(relativePath: string, payload: unknown) {
     const filePath = path.join(tempRoot, relativePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const value =
+      relativePath.endsWith("qa-suite-summary.json") &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      !("run" in payload)
+        ? { run: { status: "completed" }, ...payload }
+        : payload;
+    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     return filePath;
   }
 
@@ -108,12 +116,13 @@ describe("qa confidence report", () => {
       ],
     };
     for (const [runStatus, expectedPass, expectedLaneStatus, expectedDetails] of [
+      ["missing", false, "unknown", "missing run.status"],
       ["running", false, "unknown", "still running"],
       ["completed", true, "pass", "counts.failed=0"],
       ["paused", false, "unknown", "unsupported run.status=paused"],
     ] as const) {
       await writeJson("suite/qa-suite-summary.json", {
-        run: { status: runStatus },
+        run: runStatus === "missing" ? {} : { status: runStatus },
         counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
         scenarios: [{ name: "completed prefix", status: "pass" }],
       });

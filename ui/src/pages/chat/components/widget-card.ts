@@ -463,6 +463,8 @@ function handleWidgetExportAction(
     .then((result) => {
       if (result === "rerender-required") {
         showToast({ message: t("chat.toolCards.widgetExportRerender") });
+      } else if (result === "html") {
+        showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
       } else if (value === "copy") {
         showToast({ message: t("common.copied") });
       }
@@ -473,7 +475,8 @@ function handleWidgetExportAction(
 }
 
 function renderWidgetActions(preview: ToolPreview, hasRawDetails: boolean) {
-  if (preview.mcpApp || !isInternalCanvasEntryUrl(preview.url)) {
+  const canExportImage = !preview.mcpApp && isInternalCanvasEntryUrl(preview.url);
+  if (!canExportImage && !hasRawDetails) {
     return nothing;
   }
   return html`
@@ -493,14 +496,22 @@ function renderWidgetActions(preview: ToolPreview, hasRawDetails: boolean) {
       >
         ${icons.moreHorizontal}
       </button>
-      <wa-dropdown-item class="session-menu__item" value="copy">
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copyImage}</span>
-        <span class="session-menu__text">${t("chat.toolCards.copyAsImage")}</span>
-      </wa-dropdown-item>
-      <wa-dropdown-item class="session-menu__item" value="download">
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.download}</span>
-        <span class="session-menu__text">${t("chat.toolCards.downloadAsImage")}</span>
-      </wa-dropdown-item>
+      ${canExportImage
+        ? html`
+            <wa-dropdown-item class="session-menu__item" value="copy">
+              <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                >${icons.copyImage}</span
+              >
+              <span class="session-menu__text">${t("chat.toolCards.copyAsImage")}</span>
+            </wa-dropdown-item>
+            <wa-dropdown-item class="session-menu__item" value="download">
+              <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                >${icons.download}</span
+              >
+              <span class="session-menu__text">${t("chat.toolCards.downloadAsImage")}</span>
+            </wa-dropdown-item>
+          `
+        : nothing}
       ${hasRawDetails
         ? html`<wa-dropdown-item class="session-menu__item" value="raw-details">
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.fileText}</span>

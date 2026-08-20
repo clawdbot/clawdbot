@@ -22,15 +22,14 @@ import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
-  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
-  CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX,
-  CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
-  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
-  CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX,
+  parseControlUiUserAvatarPath,
+  parseControlUiResourcePath,
+  type ControlUiResourceRoute,
 } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
   isControlUiApprovalDocumentPath,
+  isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -70,7 +69,6 @@ import {
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
-import { canonicalizeUserProfileAvatarPath } from "./user-profiles-http-path.js";
 import {
   handleNodeWorkerBundleTransferHttpRequest,
   type NodeWorkerBundleTransferHttpCallback,
@@ -325,6 +323,17 @@ export function createGatewayHttpServer(opts: {
           agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
           root: controlUiRoot,
         });
+      const handleStandaloneControlUiRequest = async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        if (await handleControlUiRequest()) {
+          return true;
+        }
+        respondNotFound(res);
+        return true;
+      };
       const requestStages: GatewayHttpRequestStage[] = [
         {
           run: () =>
@@ -434,16 +443,16 @@ export function createGatewayHttpServer(opts: {
       addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
         (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
       );
-      const userProfileAvatarPath = canonicalizeUserProfileAvatarPath(
+      const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
         controlUiRouteBasePath,
       );
-      addAdmittedStage(userProfileAvatarPath !== undefined, async () =>
+      addAdmittedStage(userProfileAvatarRoute.matched, async () =>
         (await getUserProfilesHttpModule()).handleUserProfileAvatarHttpRequest(
           req,
           res,
-          userProfileAvatarPath ?? scopedRequestPath,
-          routeAuth,
+          scopedRequestPath,
+          { ...routeAuth, basePath: controlUiRouteBasePath },
         ),
       );
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
@@ -460,24 +469,15 @@ export function createGatewayHttpServer(opts: {
             config: openAiChatCompletionsConfig,
           }),
       );
-      addRequestStage(
-        isControlUiApprovalDocumentPath({
-          basePath: controlUiBasePath,
-          pathname: scopedRequestPath,
-        }),
-        async () => {
-          if (!controlUiEnabled) {
-            respondNotFound(res);
-            return true;
-          }
-          const handled = await handleControlUiRequest();
-          if (handled) {
-            return true;
-          }
-          respondNotFound(res);
-          return true;
-        },
-      );
+      const approvalDocument = isControlUiApprovalDocumentPath({
+        basePath: controlUiBasePath,
+        pathname: scopedRequestPath,
+      });
+      const focusDocument = isControlUiFocusDocumentPath({
+        basePath: controlUiBasePath,
+        pathname: scopedRequestPath,
+      });
+      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
@@ -581,6 +581,8 @@ export function createGatewayHttpServer(opts: {
         );
       }
 
+      addRequestStage(focusDocument, handleStandaloneControlUiRequest);
+
       addRequestStage(
         scopedRequestPath.startsWith("/api/chat/media/outgoing/") ||
           (controlUiRouteBasePath.length > 0 &&
@@ -594,11 +596,16 @@ export function createGatewayHttpServer(opts: {
       );
       addRequestStage(
         controlUiEnabled &&
-          [
-            CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
-            CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
-            CONTROL_UI_LINK_FAVICON_PATH_PREFIX,
-          ].some((prefix) => scopedRequestPath.startsWith(`${controlUiRouteBasePath}${prefix}/`)),
+          (
+            [
+              "pluginIcon",
+              "catalogIcon",
+              "linkFavicon",
+            ] as const satisfies readonly ControlUiResourceRoute[]
+          ).some(
+            (route) =>
+              parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath).matched,
+          ),
         async () =>
           (await getPluginIconHttpModule()).handlePluginIconHttpRequest(
             req,
@@ -608,9 +615,8 @@ export function createGatewayHttpServer(opts: {
       );
       addRequestStage(
         controlUiEnabled &&
-          scopedRequestPath.startsWith(
-            `${controlUiRouteBasePath}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/`,
-          ),
+          parseControlUiResourcePath("workspaceIcon", scopedRequestPath, controlUiRouteBasePath)
+            .matched,
         async () =>
           (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
             req,
@@ -620,9 +626,8 @@ export function createGatewayHttpServer(opts: {
       );
       addRequestStage(
         controlUiEnabled &&
-          scopedRequestPath.startsWith(
-            `${controlUiRouteBasePath}${CONTROL_UI_CHANNEL_AVATAR_PATH_PREFIX}/`,
-          ),
+          parseControlUiResourcePath("channelAvatar", scopedRequestPath, controlUiRouteBasePath)
+            .matched,
         async () =>
           (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest(
             req,

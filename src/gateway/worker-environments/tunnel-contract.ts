@@ -57,6 +57,7 @@ export type WorkerWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
+  gitAuthor?: { name?: string; email?: string };
 };
 
 export type WorkerWorkspaceSyncResult = {

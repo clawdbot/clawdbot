@@ -22,7 +22,6 @@ import {
   markAuthProfileSuccess,
   promoteAuthProfileInOrder,
   removeAuthProfilesAcrossOwnerStores,
-  removeAuthProfilesWithLock,
   removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
   upsertAuthProfileWithLock,
@@ -1426,7 +1425,7 @@ describe("promoteAuthProfileInOrder", () => {
     );
   });
 
-  it("removes selected profiles while preserving unrelated provider credentials", async () => {
+  it("narrows provider removal to selected profiles", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });
       saveAuthProfileStore(
@@ -1456,8 +1455,9 @@ describe("promoteAuthProfileInOrder", () => {
         agentDir,
       );
 
-      await removeAuthProfilesWithLock({
+      await removeProviderAuthProfilesWithLock({
         agentDir,
+        provider: "openrouter",
         profileIds: ["openrouter:oauth"],
       });
 

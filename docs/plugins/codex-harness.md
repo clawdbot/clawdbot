@@ -89,10 +89,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0`. The plugin ships and manages `@openai/codex`
-  `0.147.0` by default, so a `codex` command on `PATH` does not affect normal
-  startup. Explicit custom, remote, and macOS desktop-owned app-servers must
-  report the same exact stable `0.147.0` version.
+- Codex app-server `0.147.0` or newer. The plugin still ships and manages the
+  exact `@openai/codex` `0.147.0` artifact, so a `codex` command on `PATH` does
+  not affect normal startup. Explicit custom, remote, and macOS desktop-owned
+  app-servers must report valid SemVer at or above that managed baseline.
+  Newer versions initialize with a warning; acceptance permits an attempt and
+  is not readiness or capability proof.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -1353,11 +1355,12 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use exactly stable Codex `0.147.0`. Older or
-newer versions, prereleases, build-suffixed versions, and unversioned servers
-are rejected because OpenClaw validates generated schemas and runtime contracts
-against the Codex version it ships. Update or remove custom, remote, or desktop
-binary overrides that select another version.
+**The app-server is rejected:** use Codex `0.147.0` or newer. OpenClaw rejects
+older, malformed, and unversioned servers. Same-version prereleases such as
+`0.147.0-alpha.2` remain below the stable minimum; build metadata such as
+`0.147.0+desktop` does not affect precedence. A newer external version is
+permitted to initialize rather than treated as proof of compatibility, so
+startup and capability operations can still fail with their normal diagnostics.
 
 **`/codex status` cannot connect:** check that the `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is

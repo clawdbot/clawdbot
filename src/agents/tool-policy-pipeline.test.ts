@@ -123,10 +123,10 @@ describe("tool-policy-pipeline", () => {
   });
 
   test.each([
-    { expected: ["exec", "show_widget"], policy: { deny: ["canvas"] } },
-    { expected: ["canvas"], policy: { allow: ["canvas"] } },
+    { expected: ["exec"], policy: { deny: ["canvas"] } },
+    { expected: ["canvas", "show_widget"], policy: { allow: ["canvas"] } },
   ])(
-    "does not apply the Canvas core alias to Discord-owned show_widget ($policy)",
+    "applies the Canvas family uniformly even when stale metadata claims show_widget ($policy)",
     ({ expected, policy }) => {
       const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
       const filtered = applyToolPolicyPipeline({

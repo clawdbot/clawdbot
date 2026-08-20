@@ -86,7 +86,22 @@ describe("worker placement dispatch", () => {
   });
 
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
-    const harness = createTestHarness();
+    const publicationOrder: string[] = [];
+    const prepareAcceptedWorkspacePublication = vi.fn(async (claim) => {
+      expect(
+        placementStore
+          .listPendingWorkspaceResults()
+          .find((pending) => pending.claimId === claim.claimId)?.workspaceAcceptedAtMs,
+      ).toBeNull();
+      publicationOrder.push("prepare");
+    });
+    const publishAcceptedWorkspace = vi.fn(async () => {
+      publicationOrder.push("publish");
+    });
+    const harness = createTestHarness({
+      prepareAcceptedWorkspacePublication,
+      publishAcceptedWorkspace,
+    });
     const active = harness.placements.seedActive(2);
     harness.markEnvironmentOwnerEpoch(2);
     if (active.state !== "active") {
@@ -163,6 +178,9 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
+    expect(prepareAcceptedWorkspacePublication).toHaveBeenCalledWith(claim);
+    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
+    expect(publicationOrder).toEqual(["prepare", "publish"]);
     expect(harness.placements.current()).toMatchObject({
       state: "active",
       turnClaim: null,
@@ -341,7 +359,8 @@ describe("worker placement dispatch", () => {
   });
 
   it("reclaims an accepted pending result after a post-destroy gateway restart", async () => {
-    const harness = createTestHarness();
+    const publishAcceptedWorkspace = vi.fn(async () => undefined);
+    const harness = createTestHarness({ publishAcceptedWorkspace });
     const active = harness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
@@ -372,6 +391,7 @@ describe("worker placement dispatch", () => {
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
+    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
   });
 

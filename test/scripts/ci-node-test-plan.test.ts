@@ -335,10 +335,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       {
         name: "hybrid",
         pullRequest: hybridPullRequestCompact,
-        pullRequestJobs: 55,
+        pullRequestJobs: 56,
         pullRequestMax: 140,
         push: hybridCompact,
-        pushJobs: 47,
+        pushJobs: 48,
         pushMax: 140,
       },
     ]) {
@@ -355,7 +355,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         `${profile.name} pull-request max`,
       ).toBe(profile.pullRequestMax);
     }
-    expect(hybridCompact.filter((shard) => !shard.requiresDist)).toHaveLength(46);
+    expect(hybridCompact.filter((shard) => !shard.requiresDist)).toHaveLength(47);
     expect(githubCompact.length - hybridCompact.length).toBeGreaterThanOrEqual(20);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(96);
     // Nondist expanded-profile lanes stay under the 150-second body ceiling;

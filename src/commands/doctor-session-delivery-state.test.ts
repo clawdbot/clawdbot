@@ -1,17 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { repairCanonicalSessionDeliveryStates } from "./doctor-session-delivery-state.js";
-import { writeValidatedDoctorSessionEntryJson } from "./doctor-session-entry-rewrite.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 
 const tempDirs = createTempDirTracker();
@@ -84,6 +82,49 @@ function readEntryValidity(env: NodeJS.ProcessEnv, sessionKey: string): number {
 }
 
 describe("doctor canonical session delivery state", () => {
+  it("rewrites dense delivery migrations in bounded transactions without changing payloads", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-density-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const payload = "delivery-payload-".repeat(128);
+    for (let index = 0; index < 130; index += 1) {
+      insertSessionRow(env, `agent:main:delivery-density-${String(index).padStart(3, "0")}`, {
+        sessionId: `delivery-density-session-${index}`,
+        updatedAt: index + 1,
+        lastChannel: "discord",
+        lastTo: `channel-${index}`,
+        payload,
+      });
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const originalExec = database.db.exec.bind(database.db);
+    let writeTransactions = 0;
+    vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+      if (sql === "BEGIN IMMEDIATE") {
+        writeTransactions += 1;
+      }
+      return originalExec(sql);
+    });
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 130,
+      repaired: 130,
+      scannedStores: 1,
+    });
+    expect(writeTransactions).toBeGreaterThanOrEqual(3);
+    expect(
+      database.db
+        .prepare("SELECT count(*) AS count FROM session_nodes WHERE entry_valid <> 1")
+        .get(),
+    ).toEqual({ count: 0 });
+    for (const index of [0, 65, 129]) {
+      const sessionKey = `agent:main:delivery-density-${String(index).padStart(3, "0")}`;
+      expect(JSON.parse(readEntryJson(env, sessionKey))).toMatchObject({
+        delivery: { context: { to: `channel-${index}` } },
+        payload,
+      });
+    }
+  });
+
   it("warns and skips an unmigrated agent database", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-legacy-schema-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -215,42 +256,6 @@ describe("doctor canonical session delivery state", () => {
       delivery: { context: { accountId: "current-bot" } },
     });
     expect(repaired).not.toHaveProperty("lastAccountId");
-  });
-
-  it("discards a Doctor session cache publication when its owner transaction rolls back", () => {
-    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-cache-rollback-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sessionKey = "agent:main:delivery-cache-rollback";
-    insertSessionRow(env, sessionKey, {
-      sessionId: "delivery-cache-rollback-session",
-      updatedAt: 10,
-      label: "committed",
-    });
-    const originalJson = readEntryJson(env, sessionKey);
-    const cached = listSessionEntriesCore({ agentId: "main", env, clone: false })[0]?.entry;
-    expect(cached?.label).toBe("committed");
-
-    expect(() =>
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          writeValidatedDoctorSessionEntryJson(
-            database,
-            {
-              current_session_id: "delivery-cache-rollback-session",
-              entry_json: originalJson,
-              session_key: sessionKey,
-              updated_at: 10,
-            },
-            JSON.stringify({ ...cached, label: "uncommitted" }),
-          );
-          throw new Error("roll back Doctor session rewrite");
-        },
-        { agentId: "main", env },
-      ),
-    ).toThrow("roll back Doctor session rewrite");
-
-    expect(readEntryJson(env, sessionKey)).toBe(originalJson);
-    expect(listSessionEntriesCore({ agentId: "main", env, clone: false })[0]?.entry).toBe(cached);
   });
 
   it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", () => {

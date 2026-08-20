@@ -10,6 +10,7 @@ import {
   resolveCompatibleAgentRuntimeForProvider,
   resolveSessionRuntimeOverrideForProvider,
 } from "../agents/session-runtime-compat.js";
+import { updateSessionThinkingLevelSelection } from "../agents/session-thinking-level-selection.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
@@ -27,7 +28,7 @@ import {
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
   sessionModelOverrideChangesApplied,
 } from "../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -269,6 +270,12 @@ export async function applySessionModelSelection(
       };
     }
   }
+  updateSessionThinkingLevelSelection(nextEntry, {
+    provider: request.provider,
+    model: request.model,
+    agentRuntime: thinkingRuntime,
+    level: nextEntry.thinkingLevel,
+  });
 
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();

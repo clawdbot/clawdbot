@@ -146,6 +146,9 @@ describe("method scope resolution", () => {
     ["secrets.store.delete", ["operator.admin"]],
     ["tools.github.status", ["operator.read"]],
     ["tools.github.configure", ["operator.admin"]],
+    ["tools.github.authorize.start", ["operator.admin"]],
+    ["tools.github.authorize.poll", ["operator.admin"]],
+    ["tools.github.authorize.cancel", ["operator.admin"]],
     ["config.schema", ["operator.read"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -437,6 +440,12 @@ describe("method scope resolution", () => {
       "profile dispatch",
       "sessions.dispatch",
       { key: "agent:main:thread", profileId: "development" },
+      "operator.admin",
+    ],
+    [
+      "configured-default dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread" },
       "operator.admin",
     ],
     [

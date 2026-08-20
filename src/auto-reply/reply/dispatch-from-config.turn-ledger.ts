@@ -6,9 +6,9 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../reply-payload.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
+import { ReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import {
   captureReplyDispatchDeliveryOutcome,
-  isReplyDispatchProvenInvisible,
   type ReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
@@ -58,8 +58,8 @@ export async function requireQueuedReplyDelivery(params: {
     return;
   }
   const settledOutcome = await runWithDispatchAbortSignal(params.abortSignal, () => outcome);
-  if (isReplyDispatchProvenInvisible(settledOutcome)) {
-    throw new Error("queued reply delivery failed");
+  if (settledOutcome !== "delivered") {
+    throw new ReplyDispatchDeliveryError(settledOutcome);
   }
 }
 

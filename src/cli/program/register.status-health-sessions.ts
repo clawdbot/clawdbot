@@ -5,16 +5,9 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { TASK_FLOW_STATUSES } from "../../tasks/task-flow-registry.types.js";
-import { TASK_RUNTIMES, TASK_STATUSES } from "../../tasks/task-registry.types.js";
-import {
-  TASK_SYSTEM_AUDIT_CODES,
-  TASK_SYSTEM_AUDIT_SEVERITIES,
-  type TaskSystemAuditCode,
-  type TaskSystemAuditSeverity,
-} from "../../tasks/task-system-audit.types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
+import { registerTasksCommand } from "./register.tasks.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -62,14 +55,6 @@ function rejectUnsupportedSessionsParentOptions(
   defaultRuntime.exit(1);
   return true;
 }
-
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
-const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
 
 function addSessionsListOptions(command: Command): Command {
   return command
@@ -219,16 +204,6 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
   const parsed = parseStrictPositiveInteger(timeout);
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
-    defaultRuntime.exit(1);
-    return null;
-  }
-  return parsed;
-}
-
-function parseTasksAuditLimit(limit: unknown): number | null | undefined {
-  const parsed = parseStrictPositiveInteger(limit);
-  if (limit !== undefined && parsed === undefined) {
-    defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
     defaultRuntime.exit(1);
     return null;
   }
@@ -595,227 +570,5 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  const tasksCmd = program
-    .command("tasks")
-    .description("Inspect durable background tasks and TaskFlow state")
-    .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", `Filter by kind (${TASK_RUNTIMES.join(", ")})`)
-    .option("--status <name>", `Filter by status (${TASK_STATUSES.join(", ")})`)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksListCommand } = await loadTasksCommands();
-        await tasksListCommand(
-          {
-            json: Boolean(opts.json),
-            runtime: opts.runtime as string | undefined,
-            status: opts.status as string | undefined,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-  tasksCmd.enablePositionalOptions();
-
-  tasksCmd
-    .command("list")
-    .description("List tracked background tasks")
-    .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", `Filter by kind (${TASK_RUNTIMES.join(", ")})`)
-    .option("--status <name>", `Filter by status (${TASK_STATUSES.join(", ")})`)
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | {
-            json?: boolean;
-            runtime?: string;
-            status?: string;
-          }
-        | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksListCommand } = await loadTasksCommands();
-        await tasksListCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
-            status: (opts.status as string | undefined) ?? parentOpts?.status,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("audit")
-    .description("Show stale or broken background tasks and TaskFlows")
-    .option("--json", "Output as JSON", false)
-    .option("--severity <level>", `Filter by severity (${TASK_SYSTEM_AUDIT_SEVERITIES.join(", ")})`)
-    .option("--code <name>", `Filter by finding code (${TASK_SYSTEM_AUDIT_CODES.join(", ")})`)
-    .option("--limit <n>", "Limit displayed findings")
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      const limit = parseTasksAuditLimit(opts.limit);
-      if (limit === null) {
-        return;
-      }
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksAuditCommand } = await loadTasksCommands();
-        await tasksAuditCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            severity: opts.severity as TaskSystemAuditSeverity | undefined,
-            code: opts.code as TaskSystemAuditCode | undefined,
-            limit,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("maintenance")
-    .description("Preview or apply tasks and TaskFlow maintenance")
-    .option("--json", "Output as JSON", false)
-    .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksMaintenanceCommand } = await loadTasksCommands();
-        await tasksMaintenanceCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            apply: Boolean(opts.apply),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("show")
-    .description("Show one background task by task id, run id, or session key")
-    .argument("<lookup>", "Task id, run id, or session key")
-    .option("--json", "Output as JSON", false)
-    .action(async (lookup, opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksShowCommand } = await loadTasksCommands();
-        await tasksShowCommand(
-          {
-            lookup,
-            json: Boolean(opts.json || parentOpts?.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("notify")
-    .description("Set task notify policy")
-    .argument("<lookup>", "Task id, run id, or session key")
-    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
-    .action(async (lookup, notify) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksNotifyCommand } = await loadTasksCommands();
-        await tasksNotifyCommand(
-          {
-            lookup,
-            notify: notify as "done_only" | "state_changes" | "silent",
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("cancel")
-    .description("Cancel a running background task")
-    .argument("<lookup>", "Task id, run id, or session key")
-    .action(async (lookup) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksCancelCommand } = await loadTasksCommands();
-        await tasksCancelCommand(
-          {
-            lookup,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("retry <lookups...>")
-    .description("Retry delivery for up to 10 blocked subagent completions")
-    .action(async (lookups: string[]) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksRetryCommand } = await loadTasksCommands();
-        await tasksRetryCommand({ lookups }, defaultRuntime);
-      });
-    });
-
-  tasksCmd
-    .command("dismiss <lookups...>")
-    .description("Dismiss delivery for up to 10 blocked subagent completions")
-    .action(async (lookups: string[]) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksDismissCommand } = await loadTasksCommands();
-        await tasksDismissCommand({ lookups }, defaultRuntime);
-      });
-    });
-
-  const tasksFlowCmd = tasksCmd
-    .command("flow")
-    .description("Inspect durable TaskFlow state under tasks");
-
-  tasksFlowCmd
-    .command("list")
-    .description("List tracked TaskFlows")
-    .option("--json", "Output as JSON", false)
-    .option("--status <name>", `Filter by status (${TASK_FLOW_STATUSES.join(", ")})`)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsListCommand } = await loadFlowsCommands();
-        await flowsListCommand(
-          {
-            json: Boolean(opts.json),
-            status: opts.status as string | undefined,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksFlowCmd
-    .command("show")
-    .description("Show one TaskFlow by flow id or owner key")
-    .argument("<lookup>", "Flow id or owner key")
-    .option("--json", "Output as JSON", false)
-    .action(async (lookup, opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsShowCommand } = await loadFlowsCommands();
-        await flowsShowCommand(
-          {
-            lookup,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksFlowCmd
-    .command("cancel")
-    .description("Cancel a running TaskFlow")
-    .argument("<lookup>", "Flow id or owner key")
-    .action(async (lookup) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsCancelCommand } = await loadFlowsCommands();
-        await flowsCancelCommand(
-          {
-            lookup,
-          },
-          defaultRuntime,
-        );
-      });
-    });
+  registerTasksCommand(program);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

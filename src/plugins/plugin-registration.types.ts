@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { Command } from "commander";
+import type { MessageReceipt } from "../channels/message/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   DiagnosticEventPrivateData,
@@ -11,6 +12,7 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBridgeContract } from "../infra/diagnostic-trace-propagation.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { PluginLogger } from "./logger-types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
@@ -68,33 +70,60 @@ export type OpenClawPluginHostedMediaResolver = (
   mediaUrl: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
 
-export type WidgetPresenterTarget = "node_panel";
-
-type WidgetPresenterSessionContext = {
+export type WidgetPresenterContext = Readonly<{
+  messageChannel?: string;
+  accountId?: string;
+  deliveryContext?: Readonly<DeliveryContext>;
+  nativeChannelId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
   sessionKey?: string;
-};
+}>;
+
+export type WidgetPresenterDocument = Readonly<{
+  kind: "html";
+  html: string;
+  hostedUrl?: string;
+}>;
 
 export type WidgetPresentationError =
   | { code: "no_eligible_node"; message: string }
-  | { code: "node_error"; message: string; nodeId?: string };
+  | { code: "node_error"; message: string; nodeId?: string }
+  | { code: "unavailable"; message: string }
+  | { code: "presentation_error"; message: string };
 
-export type WidgetPresentationSuccess = {
-  nodeId: string;
-  nodeName?: string;
-};
+export type WidgetPresentationSuccess =
+  | { kind: "node"; nodeId: string; nodeName?: string }
+  | { kind: "message"; receipt: MessageReceipt };
 
-export type WidgetPresenter = {
-  target: WidgetPresenterTarget;
+type WidgetPresenterBase = {
   description: string;
   availability: (
-    sessionContext: WidgetPresenterSessionContext,
+    context: WidgetPresenterContext,
   ) => Promise<Result<{ available: true }, WidgetPresentationError>>;
   present: (params: {
-    documentUrlPath: string;
+    document: WidgetPresenterDocument;
     title: string;
-    sessionContext: WidgetPresenterSessionContext;
+    context: WidgetPresenterContext;
   }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
 };
+
+export type WidgetPresenter = WidgetPresenterBase &
+  (
+    | {
+        target: "node_panel";
+        match?: never;
+        capabilities?: never;
+      }
+    | {
+        target: "current_channel";
+        match: (context: WidgetPresenterContext) => boolean;
+        capabilities: Readonly<{
+          sourceKinds: readonly string[];
+          maxSourceBytes?: number;
+        }>;
+      }
+  );
 
 export type OpenClawPluginCliContext = {
   /**
@@ -297,7 +326,6 @@ export type OpenClawGatewayDiscoveryAdvertiseContext = {
   gatewayTlsEnabled: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable: boolean;
-  canvasPort?: number;
   tailnetDns?: string;
   sshPort?: number;
   cliPath?: string;

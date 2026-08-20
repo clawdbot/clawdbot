@@ -63,6 +63,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
@@ -724,15 +725,8 @@ class SessionsPage extends OpenClawLightDomElement {
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
-      // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
-      // instead of cascading one force-delete confirm per session.
       if (result.preservedWorktrees.length > 0) {
-        window.alert(
-          t("sessionsView.deletePreservedWorktrees", {
-            count: String(result.preservedWorktrees.length),
-            branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
-          }),
-        );
+        window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       }
       if (result.deleted.length > 0) {
         const deleted = new Set(result.deleted);

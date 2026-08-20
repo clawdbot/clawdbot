@@ -371,6 +371,8 @@ export type SessionsSpawnToolsConfig = {
 export type GitHubToolIdentityConfig = {
   /** Opaque generated directory version for atomic credential rotation. */
   profileId: string;
+  /** OAuth generations retain a separate rotating refresh credential. */
+  kind?: "oauth";
   /** Optional process-local author identity for commits made by local tools. */
   gitAuthor?: {
     name?: string;
