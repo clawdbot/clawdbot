@@ -427,11 +427,10 @@ describe("DraftSubmissionFlow", () => {
     {
       scenario: "the Gateway client changes",
       retire: ({ context }: ReturnType<typeof createDraftFixture>) => {
-        context.gateway.snapshot.client = {
-          recoveryScope: "replacement-principal",
-          recoveryScopeReady: true,
-          request: vi.fn(async () => ({})),
-        } as NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+        const client = context.gateway.snapshot.client;
+        if (client) {
+          context.gateway.snapshot.client = new Proxy(client, {});
+        }
       },
     },
   ])("never retries a committed session after $scenario", async ({ retire }) => {
@@ -445,7 +444,7 @@ describe("DraftSubmissionFlow", () => {
     vi.mocked(context.sessions.createResult)
       .mockResolvedValueOnce({ key: "agent:main:dashboard:old", initialRun: { status: "idle" } })
       .mockImplementationOnce(async (params) => ({
-        key: `agent:${String(params.agentId)}:dashboard:new`,
+        key: `agent:${params?.agentId ?? fixture.place.agentId}:dashboard:new`,
         initialRun: { status: "idle" },
       }));
     vi.mocked(context.navigateAndWait)
