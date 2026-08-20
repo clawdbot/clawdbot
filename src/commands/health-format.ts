@@ -6,6 +6,10 @@ import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import {
+  formatDurationCompact,
+  formatDurationHuman,
+} from "../infra/format-time/format-duration.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
@@ -259,3 +263,105 @@ export const formatHealthChannelLines = (
   }
   return lines;
 };
+
+export function formatHealthDurationParts(ms: number): string {
+  if (!Number.isFinite(ms)) {
+    return "unknown";
+  }
+  if (ms < 1000) {
+    return `${Math.max(0, Math.round(ms))}ms`;
+  }
+  const units: Array<{ label: string; size: number }> = [
+    { label: "w", size: 7 * 24 * 60 * 60 * 1000 },
+    { label: "d", size: 24 * 60 * 60 * 1000 },
+    { label: "h", size: 60 * 60 * 1000 },
+    { label: "m", size: 60 * 1000 },
+    { label: "s", size: 1000 },
+  ];
+  let remaining = Math.max(0, Math.floor(ms));
+  const parts: string[] = [];
+  for (const unit of units) {
+    const value = Math.floor(remaining / unit.size);
+    if (value > 0) {
+      parts.push(`${value}${unit.label}`);
+      remaining -= value * unit.size;
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : "0s";
+}
+
+export function formatEventLoopHealthLine(summary: HealthSummary): string | null {
+  const eventLoop = summary.eventLoop;
+  if (!eventLoop) {
+    return null;
+  }
+  const state = eventLoop.degraded ? "degraded" : "ok";
+  const degradedFor =
+    eventLoop.degraded && eventLoop.degradedSinceMs != null
+      ? ` for ${formatDurationCompact(eventLoop.degradedSinceMs) ?? "0s"}`
+      : "";
+  const reasons = eventLoop.reasons.length > 0 ? ` reasons=${eventLoop.reasons.join(",")}` : "";
+  return `Gateway event loop: ${state}${degradedFor}${reasons} max=${Math.round(
+    eventLoop.delayMaxMs,
+  )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
+    eventLoop.cpuCoreRatio
+  }`;
+}
+
+/** Formats context engine quarantine state for text health output. */
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+/** Formats dead-lettered and pressured delivery queue entries for text health output. */
+export function formatDeliveryQueueHealthLine(
+  summary: HealthSummary,
+  now = Date.now(),
+): string | null {
+  const failed = summary.deliveryQueues?.failed ?? [];
+  const ingressFailed = summary.deliveryQueues?.ingressFailed ?? [];
+  const ingressPressure = summary.deliveryQueues?.ingressPressure ?? [];
+  const warnings: string[] = [];
+  const deadLetterCounts = [
+    ...failed.map((queue) => `${queue.queueName}: ${queue.count}`),
+    ...ingressFailed.map(
+      (queue) => `inbound ${queue.channelId}/${queue.accountId}: ${queue.count}`,
+    ),
+  ].join(", ");
+  const oldest = [...failed, ...ingressFailed]
+    .map((queue) => queue.oldestFailedAt)
+    .filter((value): value is number => typeof value === "number");
+  const oldestNote =
+    oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
+  if (deadLetterCounts) {
+    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
+  }
+  if (ingressPressure.length > 0) {
+    const pressureCounts = ingressPressure
+      .map(
+        (queue) =>
+          `inbound ${queue.channelId}/${queue.accountId}: ${queue.laneCount} pressured ${
+            queue.laneCount === 1 ? "lane" : "lanes"
+          }, ${queue.pendingCount} pending, ${queue.claimedCount} claimed, ${queue.blockedCount} blocked`,
+      )
+      .join(", ");
+    const oldestPressure = Math.min(...ingressPressure.map((queue) => queue.oldestReceivedAt));
+    warnings.push(
+      `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
+    );
+  }
+  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
+}
+
+/** Formats config hot-reload watcher degradation for text health output. */
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}

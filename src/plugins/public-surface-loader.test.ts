@@ -301,6 +301,39 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
+  it("refreshes same-path native public artifact exports with plugin metadata", async () => {
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=same-path-native-artifact-refresh");
+    const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
+    const pluginRoot = path.join(tempRoot, "installed-plugin");
+    const modulePath = path.join(pluginRoot, "provider-policy-api.cjs");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
+    const replaceArtifact = (marker: string) => {
+      const replacementPath = `${modulePath}.next`;
+      fs.writeFileSync(
+        replacementPath,
+        `module.exports = { marker: ${JSON.stringify(marker)} };\n`,
+      );
+      fs.renameSync(replacementPath, modulePath);
+    };
+    const loadArtifact = () =>
+      publicSurfaceLoader.loadPluginPublicArtifactModuleSync<{ marker: string }>({
+        pluginRoot,
+        artifactBasename: "provider-policy-api.cjs",
+      }).marker;
+
+    replaceArtifact("before-update");
+    expect(loadArtifact()).toBe("before-update");
+
+    replaceArtifact("after-update");
+    clearPluginMetadataLifecycleCaches();
+
+    expect(loadArtifact()).toBe("after-update");
+  });
+
   it.runIf(process.platform !== "win32")(
     "allows hardlinked bundled public artifacts under the trusted bundled root",
     async () => {

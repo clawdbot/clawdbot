@@ -8,6 +8,7 @@ import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginModuleLoaderCache,
@@ -26,6 +27,7 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const publicSurfaceModuleCache = new Map<string, unknown>();
+const publicSurfaceModuleRoots = new Map<string, string>();
 const sourceArtifactRequire = createRequire(import.meta.url);
 type PublicSurfaceLocation = {
   modulePath: string;
@@ -36,6 +38,12 @@ const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   publicSurfaceLocationCache.clear();
+  moduleLoaders.clear();
+  for (const [modulePath, boundaryRoot] of publicSurfaceModuleRoots) {
+    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: boundaryRoot });
+  }
+  publicSurfaceModuleCache.clear();
+  publicSurfaceModuleRoots.clear();
 });
 
 function isSourceArtifactPath(modulePath: string): boolean {
@@ -160,6 +168,8 @@ function loadValidatedPublicSurfaceModule(params: {
   const sentinel: Record<string, unknown> = {};
   publicSurfaceModuleCache.set(params.modulePath, sentinel);
   publicSurfaceModuleCache.set(validatedPath, sentinel);
+  publicSurfaceModuleRoots.set(params.modulePath, params.boundaryRoot);
+  publicSurfaceModuleRoots.set(validatedPath, params.boundaryRoot);
   try {
     const loaded = loadPublicSurfaceModule(validatedPath) as object;
     Object.assign(sentinel, loaded);
@@ -167,6 +177,8 @@ function loadValidatedPublicSurfaceModule(params: {
   } catch (error) {
     publicSurfaceModuleCache.delete(params.modulePath);
     publicSurfaceModuleCache.delete(validatedPath);
+    publicSurfaceModuleRoots.delete(params.modulePath);
+    publicSurfaceModuleRoots.delete(validatedPath);
     throw error;
   }
 }
