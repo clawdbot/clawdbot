@@ -310,7 +310,9 @@ describe("memory runtime handles", () => {
     const second = await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
 
     expect(second.manager).toBe(first.manager);
-    expect(first.manager?.readFile).toBe(first.manager?.readFile);
+    expect(Reflect.get(second.manager ?? {}, "readFile")).toBe(
+      Reflect.get(first.manager ?? {}, "readFile"),
+    );
     await expect(first.manager?.readFile({ relPath: "memory/missing.md" })).resolves.toEqual({
       status: "not_found",
       text: "",
