@@ -8515,7 +8515,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Dispatch and await trusted Telegram QA",
     );
     const identityStep = telegramWorkflow.jobs.trusted_identity.steps.find(
-      (step: WorkflowStep) => step.name === "Verify dispatched-main identity",
+      (step: WorkflowStep) => step.name === "Verify dispatched workflow identity",
     );
     const provenanceSteps = [
       telegramWorkflow.jobs.build_candidate.steps.find(

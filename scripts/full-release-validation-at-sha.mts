@@ -22,6 +22,7 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
 export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
+const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
@@ -31,6 +32,7 @@ const GH_READ_OPTIONS = {
 const RELEASE_BRANCH_PATTERN =
   /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
 const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
+const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
@@ -223,6 +225,14 @@ export function parseArgs(argv: string[]) {
   ) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
   }
+  if (
+    RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    !SHA_PATTERN.test(args.workflowSha.toLowerCase())
+  ) {
+    throw new Error(
+      "release-branch validation requires --workflow-sha with an explicit full Tooling SHA",
+    );
+  }
   return args;
 }
 
@@ -245,12 +255,31 @@ export function resolveRemoteTargetRefSha(
   return executeGit(["ls-remote", "--tags", "origin", tagRef]).split(/\s+/u)[0] ?? "";
 }
 
-function verifyTargetRef(targetRef: string, targetSha: string) {
+export function verifyTargetRef(
+  targetRef: string,
+  targetSha: string,
+  resolveRemoteSha: (ref: string) => string = resolveRemoteTargetRefSha,
+  isAncestor: (ancestor: string, descendant: string) => boolean = (ancestor, descendant) =>
+    runStatus("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+      stdio: ["ignore", "ignore", "ignore"],
+    }).status === 0,
+) {
   if (!targetRef) {
     return targetSha;
   }
-  const remoteSha = resolveRemoteTargetRefSha(targetRef);
-  if (remoteSha !== targetSha) {
+  const remoteSha = resolveRemoteSha(targetRef);
+  if (!remoteSha) {
+    throw new Error(`Target ref ${targetRef} does not resolve to a commit`);
+  }
+  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+    if (!isAncestor(targetSha, remoteSha)) {
+      throw new Error(
+        `Target SHA ${targetSha} is not reachable from release branch ${targetRef} at ${remoteSha}`,
+      );
+    }
+    return targetRef;
+  }
+  if (remoteSha.toLowerCase() !== targetSha.toLowerCase()) {
     throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
   }
   return targetRef;
@@ -375,10 +404,31 @@ function readWorkflowRun(parentRunId: string, workflowSha: string) {
   return workflowRun;
 }
 
+function readActiveParentJobs(parentRunId: string) {
+  const response: unknown = JSON.parse(
+    execGhRead(
+      ["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}/jobs?per_page=100`],
+      GH_READ_OPTIONS,
+    ),
+  );
+  if (!isJsonRecord(response) || !Array.isArray(response.jobs)) {
+    throw new Error(`Full Release Validation run ${parentRunId} returned invalid jobs`);
+  }
+  return response.jobs
+    .filter((job) => isJsonRecord(job) && job.status !== "completed")
+    .map((job) => ({
+      name: isJsonRecord(job) ? stringValue(job.name, "<unnamed>") : "<unnamed>",
+      status: isJsonRecord(job) ? stringValue(job.status, "pending") : "pending",
+      url: isJsonRecord(job) ? stringValue(job.html_url) : "",
+    }));
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
-  const deadline = Date.now() + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
+  const startedAt = Date.now();
+  const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
+  let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -407,6 +457,24 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       throw new Error(
         `Full Release Validation concluded ${stringValue(suite.conclusion, "unknown").toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
+    }
+    const now = Date.now();
+    if (now >= nextProgressAt) {
+      const elapsedMinutes = Math.floor((now - startedAt) / 60_000);
+      try {
+        const activeJobs = readActiveParentJobs(parentRunId);
+        console.log(
+          `Parent run progress after ${elapsedMinutes}m: ${activeJobs.length} active job(s)`,
+        );
+        for (const job of activeJobs) {
+          console.log(`- ${job.name}: ${job.status}${job.url ? ` ${job.url}` : ""}`);
+        }
+      } catch (error) {
+        console.warn(
+          `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      nextProgressAt += FULL_RELEASE_PROGRESS_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -562,6 +630,9 @@ function main() {
 
   console.log(`Validation SHA: ${targetSha}`);
   console.log(`Tooling SHA: ${workflowSha}`);
+  console.log(
+    `Frozen validation tuple: candidate=${targetSha} tooling=${workflowSha} rerun_group=${args.inputs.rerun_group}`,
+  );
   console.log(`Temporary target ref: ${targetBranch}`);
   console.log(`Temporary workflow ref: ${branch}`);
 

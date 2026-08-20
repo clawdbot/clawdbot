@@ -83,17 +83,18 @@ function runIdentityVerification(params: {
   oidcJobWorkflowSha?: string;
   oidcWorkflowSha?: string;
   targetContextRef?: string;
+  workflowBranch?: string;
   workflowSha?: string;
 }) {
   const repository = "openclaw/openclaw";
-  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main`;
+  const workflowBranch = params.workflowBranch ?? "main";
+  const workflowRefName = `refs/heads/${workflowBranch}`;
+  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@${workflowRefName}`;
   const invocation = params.invocation ?? "dispatch";
   const workflowRef =
     invocation === "dispatch"
       ? trustedWorkflowRef
-      : `${repository}/.github/workflows/openclaw-release-checks.yml@refs/heads/release-ci/test`;
-  const workflowRefName =
-    invocation === "dispatch" ? "refs/heads/main" : "refs/heads/release-ci/test";
+      : `${repository}/.github/workflows/openclaw-release-checks.yml@${workflowRefName}`;
   const workdir = tempDirs.make("openclaw-telegram-identity-");
   const fakeBin = join(workdir, "bin");
   const githubOutput = join(workdir, "github-output");
@@ -128,7 +129,7 @@ function runIdentityVerification(params: {
   );
   return spawnSync(
     "bash",
-    ["-c", requireRun("trusted_identity", "Verify dispatched-main identity")],
+    ["-c", requireRun("trusted_identity", "Verify dispatched workflow identity")],
     {
       cwd: workdir,
       encoding: "utf8",
@@ -371,7 +372,7 @@ describe("release Telegram QA workflow", () => {
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 5,
     });
-    expect(step("trusted_identity", "Verify dispatched-main identity").id).toBe("identity");
+    expect(step("trusted_identity", "Verify dispatched workflow identity").id).toBe("identity");
 
     const candidateBuild = requireRun(
       "build_candidate",
@@ -388,6 +389,14 @@ describe("release Telegram QA workflow", () => {
     expect(requireRun("run_telegram", "Build trusted QA harness").trim()).toBe(
       "pnpm build qaRuntime",
     );
+    const extractCandidate = step("run_telegram", "Verify attestation and bounded extract");
+    expect(extractCandidate.env?.CALLED_WORKFLOW_REF).toBe(
+      "${{ needs.trusted_identity.outputs.workflow_ref }}",
+    );
+    expect(extractCandidate.run).toContain(
+      '--cert-identity "https://github.com/${CALLED_WORKFLOW_REF}"',
+    );
+    expect(extractCandidate.run).not.toContain("openclaw-release-telegram-qa.yml@refs/heads/main");
 
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
@@ -413,6 +422,20 @@ describe("release Telegram QA workflow", () => {
   it("accepts only the resolved trusted workflow identity", () => {
     const trustedSha = "b".repeat(40);
     expect(runIdentityVerification({ expectedTrustedWorkflowSha: trustedSha }).status).toBe(0);
+    const releaseCiBranch = `release-ci/${trustedSha.slice(0, 12)}-1787215404735`;
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: releaseCiBranch,
+      }).status,
+    ).toBe(0);
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        invocation: "reusable",
+        workflowBranch: releaseCiBranch,
+      }).status,
+    ).toBe(0);
     for (const targetContextRef of [
       "release/2026.7.1",
       "extended-stable/2026.7.33",
@@ -438,6 +461,18 @@ describe("release Telegram QA workflow", () => {
         oidcJobWorkflowSha: "c".repeat(40),
       }).stderr,
     ).toContain("OIDC job_workflow_sha mismatch");
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: "release-ci/not-canonical",
+      }).stderr,
+    ).toContain("must be exact main or canonical SHA-bound release-ci");
+    expect(
+      runIdentityVerification({
+        expectedTrustedWorkflowSha: trustedSha,
+        workflowBranch: `release-ci/${"c".repeat(12)}-1787215404735`,
+      }).stderr,
+    ).toContain("release-ci ref does not match the authorized tooling SHA");
   });
 
   it("accepts trusted release provenance and rejects same-repository PR heads", () => {

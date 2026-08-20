@@ -13,6 +13,7 @@ import {
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
+  verifyTargetRef,
 } from "../../scripts/full-release-validation-at-sha.mts";
 
 const SCRIPT_PATH = resolve("scripts/full-release-validation-at-sha.mjs");
@@ -166,7 +167,7 @@ describe("full-release-validation-at-sha", () => {
         "--sha",
         "abc123",
         "--workflow-sha",
-        "origin/main",
+        "a".repeat(40),
         "--target-ref",
         "release/2026.7.1",
         "--keep-branch",
@@ -187,7 +188,7 @@ describe("full-release-validation-at-sha", () => {
       },
       sha: "abc123",
       targetRef: "release/2026.7.1",
-      workflowSha: "origin/main",
+      workflowSha: "a".repeat(40),
     });
   });
 
@@ -224,14 +225,21 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("accepts only canonical release branch or tag context", () => {
-    expect(parseArgs(["--target-ref", "extended-stable/2026.6.33"]).targetRef).toBe(
-      "extended-stable/2026.6.33",
-    );
+    expect(
+      parseArgs(["--target-ref", "extended-stable/2026.6.33", "--workflow-sha", "a".repeat(40)])
+        .targetRef,
+    ).toBe("extended-stable/2026.6.33");
     expect(parseArgs(["--target-ref", "v2026.7.1-beta.5"]).targetRef).toBe("v2026.7.1-beta.5");
     expect(parseArgs(["--target-ref", "v2026.7.1"]).targetRef).toBe("v2026.7.1");
     expect(() => parseArgs(["--target-ref", "feature/not-release"])).toThrow(
       "canonical OpenClaw release branch or tag",
     );
+    expect(() => parseArgs(["--target-ref", "release/2026.7.1"])).toThrow(
+      "requires --workflow-sha with an explicit full Tooling SHA",
+    );
+    expect(() =>
+      parseArgs(["--target-ref", "release/2026.7.1", "--workflow-sha", "origin/main"]),
+    ).toThrow("explicit full Tooling SHA");
   });
 
   it("resolves annotated release tags through their peeled commit", () => {
@@ -257,6 +265,43 @@ describe("full-release-validation-at-sha", () => {
       ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1^{}"],
       ["ls-remote", "--tags", "origin", "refs/tags/v2026.7.1"],
     ]);
+  });
+
+  it("accepts frozen release candidates that remain ancestors while tags stay exact", () => {
+    const candidateSha = "a".repeat(40);
+    const branchTipSha = "b".repeat(40);
+    expect(
+      verifyTargetRef(
+        "release/2026.7.1",
+        candidateSha,
+        () => branchTipSha,
+        (ancestor, descendant) => ancestor === candidateSha && descendant === branchTipSha,
+      ),
+    ).toBe("release/2026.7.1");
+    expect(() =>
+      verifyTargetRef(
+        "release/2026.7.1",
+        candidateSha,
+        () => branchTipSha,
+        () => false,
+      ),
+    ).toThrow("is not reachable from release branch");
+    expect(
+      verifyTargetRef(
+        "v2026.7.1-beta.5",
+        candidateSha,
+        () => candidateSha,
+        () => false,
+      ),
+    ).toBe("v2026.7.1-beta.5");
+    expect(() =>
+      verifyTargetRef(
+        "v2026.7.1-beta.5",
+        candidateSha,
+        () => branchTipSha,
+        () => true,
+      ),
+    ).toThrow("does not resolve");
   });
 
   it("allows exact-target reuse to be disabled for a forced fresh run", () => {
@@ -308,11 +353,13 @@ describe("full-release-validation-at-sha", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(720);
     expect(FULL_RELEASE_WAIT_POLL_INTERVAL_MS).toBe(45_000);
+    expect(source).toContain("const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;");
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
     expect(source).toContain("return suite;");
-    expect(source).toContain("Date.now() + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000");
+    expect(source).toContain("startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000");
     expect(source).toContain("const remainingMs = deadline - Date.now();");
     expect(source).toContain("Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs)");
+    expect(source).toContain("Parent run progress after ${elapsedMinutes}m");
     expect(source).toContain(
       "Timed out after ${FULL_RELEASE_WAIT_TIMEOUT_MINUTES} minutes waiting for Full Release Validation",
     );
@@ -322,7 +369,7 @@ describe("full-release-validation-at-sha", () => {
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");
-    expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(3);
+    expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(4);
     expect(source).toContain('const dispatchOutput = run("gh", dispatchArgs');
   });
 
@@ -396,7 +443,7 @@ describe("full-release-validation-at-sha", () => {
   it("pushes an exact target ref, dispatches it, prints the run URL, and cleans both refs", () => {
     const fixture = createDispatchFixture();
     try {
-      const result = fixture.run();
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
       expect(result.status, result.stderr).toBe(0);
       const gitCalls = fixture.readCalls(fixture.gitCallsPath);
       const ghCalls = fixture.readCalls(fixture.ghCallsPath);
@@ -452,6 +499,9 @@ describe("full-release-validation-at-sha", () => {
       expect(result.stdout).toContain(`Validation SHA: ${fixture.targetSha}`);
       expect(result.stdout).toContain(`Tooling SHA: ${fixture.workflowSha}`);
       expect(result.stdout).toContain(
+        `Frozen validation tuple: candidate=${fixture.targetSha} tooling=${fixture.workflowSha} rerun_group=all`,
+      );
+      expect(result.stdout).toContain(
         "Parent run: https://github.com/openclaw/openclaw/actions/runs/123",
       );
       expect(result.stdout.indexOf("Parent run:")).toBeLessThan(
@@ -492,7 +542,7 @@ describe("full-release-validation-at-sha", () => {
   it("keeps both temporary refs with --keep-branch", () => {
     const fixture = createDispatchFixture();
     try {
-      const result = fixture.run(["--keep-branch"]);
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha, "--keep-branch"]);
       expect(result.status, result.stderr).toBe(0);
       const gitCalls = fixture.readCalls(fixture.gitCallsPath);
       expect(
@@ -524,7 +574,15 @@ describe("full-release-validation-at-sha", () => {
       const missingSha = "f".repeat(40);
       const result = spawnSync(
         process.execPath,
-        [SCRIPT_PATH, "--sha", missingSha, "--target-ref", fixture.releaseRef],
+        [
+          SCRIPT_PATH,
+          "--sha",
+          missingSha,
+          "--target-ref",
+          fixture.releaseRef,
+          "--workflow-sha",
+          fixture.workflowSha,
+        ],
         {
           cwd: fixture.checkout,
           encoding: "utf8",

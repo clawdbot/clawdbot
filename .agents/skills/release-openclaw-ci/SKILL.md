@@ -16,7 +16,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Hold the release scope once a release branch or Code SHA exists. Validate and
   ship that exact release; do not turn moving `main` into a second work queue.
 - Record every active validation run as the immutable tuple **Validation SHA +
-  Tooling SHA**. Validation SHA maps to the Code SHA for product validation or
+  Tooling SHA + rerun group**. Validation SHA maps to the Code SHA for product validation or
   the Release SHA for changelog-only validation; it is not a third release
   identity. A branch or temporary ref is context and transport.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
@@ -161,9 +161,11 @@ Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
   satisfy a newer `main`-only check.
 
 ```bash
+TOOLING_SHA="<exact-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 For regular `release/*` validation, never raw-dispatch the workflow without
@@ -176,9 +178,14 @@ release-branch CI passes `target_ref` + `release_candidate_ref`; never
 ci.yml fallback below is a different dispatch and does use
 `release_gate=true`.)
 
+The release branch may advance after the Code SHA is frozen. The helper accepts
+that frozen SHA only while it remains an ancestor of the canonical release
+branch; tags remain exact. Always pass the previously recorded full Tooling SHA
+for release-branch runs. Never replace it with a fresh `main` lookup.
+
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
-release/YYYY.M.PATCH`. Its canonical `release-ci/*` ref keeps evidence reuse
+release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Its canonical `release-ci/*` ref keeps evidence reuse
 enabled after proving the workflow commit is still on trusted `main` lineage.
 Pass `-f reuse_evidence=false` only when the operator intentionally needs a
 fresh full run.

@@ -176,6 +176,10 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  concurrency?: {
+    group?: string;
+    "cancel-in-progress"?: boolean | string;
+  };
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
@@ -2273,6 +2277,12 @@ describe("package acceptance workflow", () => {
     );
     expect(readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8")).toContain(
       "format('NPM Telegram Beta E2E {0}', inputs.dispatch_id)",
+    );
+    expect(readWorkflow(PLUGIN_PRERELEASE_WORKFLOW).concurrency?.group).toBe(
+      "plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}",
+    );
+    expect(readWorkflow(RELEASE_CHECKS_WORKFLOW).concurrency?.group).toBe(
+      "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}",
     );
   });
 
@@ -4854,6 +4864,7 @@ describe("package artifact reuse", () => {
     });
     expectTextToIncludeAll(targetSummaryStep.run, [
       "Validation SHA:",
+      "Frozen tuple:",
       "Package Acceptance Telegram E2E deferred:",
       "Package Telegram E2E: deferred by \\`skip_package_telegram_e2e\\`",
     ]);
@@ -4902,6 +4913,7 @@ describe("package artifact reuse", () => {
       ".display_title == env.DISPATCH_RUN_NAME and .head_branch == env.CHILD_WORKFLOW_REF",
       "The dispatch was not retried to avoid creating a duplicate child.",
       'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
+      "Still waiting on ${workflow} after ${elapsed_minutes}m:",
       '-f harness_ref="$TARGET_SHA"',
       'args=(-f package_spec="$PACKAGE_SPEC"',
       'args+=(-f scenario="$SCENARIO")',
@@ -5540,13 +5552,17 @@ describe("package artifact reuse", () => {
     const telegramDispatch = workflowStep(telegramCaller, "Dispatch and await trusted Telegram QA");
     expect(telegramDispatch.run).toContain('workflow="openclaw-release-telegram-qa.yml"');
     expect(telegramDispatch.run).toContain('--repo "$GITHUB_REPOSITORY"');
-    expect(telegramDispatch.run).toContain("--ref main");
+    expect(telegramDispatch.env).toMatchObject({
+      PARENT_WORKFLOW_REF: "${{ github.ref_name }}",
+      PARENT_WORKFLOW_SHA: "${{ github.sha }}",
+    });
+    expect(telegramDispatch.run).toContain('--ref "$PARENT_WORKFLOW_REF"');
     expect(telegramDispatch.run).toContain(
-      '-f expected_trusted_workflow_sha="$expected_trusted_workflow_sha"',
+      '-f expected_trusted_workflow_sha="$PARENT_WORKFLOW_SHA"',
     );
-    expect(telegramDispatch.run).toContain(
-      '[[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]',
-    );
+    expect(telegramDispatch.run).toContain('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
+    expect(telegramDispatch.run).not.toContain("commits/main");
+    expect(telegramDispatch.run).not.toContain("dispatch_attempt");
     expect(telegramCaller["continue-on-error"]).toBeUndefined();
     expect(telegramCaller["timeout-minutes"]).toBe(210);
 

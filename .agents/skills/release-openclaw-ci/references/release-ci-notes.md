@@ -28,6 +28,10 @@
 - Preserve successful exact-tuple evidence when the documented finalization
   rules allow reuse. Narrow evidence does not become publish authorization by
   itself, and there is no standalone rerunnable finalizer today.
+- Once a release branch run records its Validation SHA, Tooling SHA, and rerun
+  group, later `main` or release-branch movement does not replace any tuple
+  member. The frozen candidate may remain behind the release branch only while
+  it is still an ancestor; release tags remain exact.
 - Leave bad secrets unset. A 401 candidate from 1Password should not overwrite GitHub.
 - Make the final release evidence note durable: parent URL, child run URLs, SHA, command proof, and gaps.
 

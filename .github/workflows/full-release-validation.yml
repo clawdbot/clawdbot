@@ -230,6 +230,7 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Validation SHA: \`${TARGET_SHA}\`"
             echo "- Tooling SHA: \`${TOOLING_SHA}\`"
+            echo "- Frozen tuple: \`${TARGET_SHA} / ${TOOLING_SHA} / ${RERUN_GROUP}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
@@ -633,7 +634,7 @@ jobs:
             local workflow="$1"
             local dispatch_run_name="$2"
             shift 2
-            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id
+            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id started_epoch elapsed_seconds elapsed_minutes
 
             encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
             current_workflow_sha="$(
@@ -722,6 +723,7 @@ jobs:
             fi
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+            started_epoch="$(date +%s)"
 
             fail_fast_failed_jobs() {
               if [[ "$FAIL_FAST" != "true" ]]; then
@@ -792,9 +794,9 @@ jobs:
               poll_count=$((poll_count + 1))
               if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
-              fi
-              if (( poll_count % 10 == 0 )); then
-                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                elapsed_seconds=$(( $(date +%s) - started_epoch ))
+                elapsed_minutes=$(( elapsed_seconds / 60 ))
+                echo "Still waiting on ${workflow} after ${elapsed_minutes}m: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: (.url // .html_url)}' || true
               fi
               sleep 60
