@@ -1,6 +1,8 @@
 // Regression: the chat transcript must repaint after a dashboard -> split face
 // switch re-stamps it into the sidebar region (issue: virtualizer stayed
 // detached until an unrelated re-render, painting a blank pane).
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,6 +20,7 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-split-transcript";
+const proofDir = path.resolve(".artifacts/control-ui-e2e/dashboard-side-chat-tabs");
 
 let browser: Browser;
 let controlUi: ControlUiE2eServer;
@@ -214,6 +217,71 @@ describeControlUiE2e("Board split transcript restore", () => {
     await expectSidePanelTabs(page, expectedTabLabels);
     expect(await sidePanel.locator('[data-panel-slot="chat"]').count()).toBe(1);
     expect(await gateway.getRequests("board.update")).toEqual([]);
+  }, 120_000);
+
+  it("activates Side chat from a split dashboard panel", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { width: 1400, height: 900 },
+      ...(recordProof
+        ? { recordVideo: { dir: proofDir, size: { width: 1400, height: 900 } } }
+        : {}),
+    });
+    contexts.add(context);
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey,
+      featureMethods: [
+        "board.get",
+        "board.update",
+        "chat.history",
+        "chat.metadata",
+        "chat.startup",
+        "sessions.companion.ask",
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot("right"),
+        "board.update": boardSnapshot("right", 2),
+      },
+      historyMessages: [
+        { role: "user", content: "Keep the dashboard visible while I open a side chat." },
+        { role: "assistant", content: "The board chat is currently active." },
+      ],
+    });
+
+    try {
+      await showDashboard(page);
+      const sidePanel = page.locator(".side-panel");
+      await sidePanel.waitFor();
+      await openChatSidePanelType(page, "Side chat");
+      await expectSidePanelTabs(page, ["Board chat", "Side chat"]);
+      if (recordProof) {
+        await page.screenshot({ path: path.join(proofDir, "01-side-chat-added.png") });
+      }
+
+      await sidePanel.locator("wa-tab").filter({ hasText: "Side chat" }).click();
+      await sidePanel.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
+      await expect
+        .poll(() =>
+          sidePanel
+            .locator('[data-panel-slot="chat"]')
+            .evaluate((panel) => panel.hasAttribute("hidden")),
+        )
+        .toBe(true);
+      if (recordProof) {
+        await page.screenshot({ path: path.join(proofDir, "02-side-chat-active.png") });
+      }
+    } finally {
+      const video = page.video();
+      await context.close();
+      contexts.delete(context);
+      if (recordProof && video) {
+        await video.saveAs(path.join(proofDir, "dashboard-side-chat-tabs.webm"));
+      }
+    }
   }, 120_000);
 
   it("closes and reopens sole projected Board chat from either close control", async () => {

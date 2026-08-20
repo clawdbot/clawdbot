@@ -202,7 +202,14 @@ export function resolveSidebarLayoutForBoard(params: {
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
-  layout = { ...openSlot(layout, "chat"), open: !explicitlyClosed };
+  const selectedPanelId = layout.columns[0]?.activePanelId;
+  layout = openSlot(layout, "chat");
+  // Board projection must guarantee the chat tab exists without stealing the
+  // user's selected side-panel tab on every render.
+  if (selectedPanelId) {
+    layout = activatePanel(layout, selectedPanelId);
+  }
+  layout = { ...layout, open: !explicitlyClosed };
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 
