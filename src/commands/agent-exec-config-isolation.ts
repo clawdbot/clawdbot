@@ -1,15 +1,17 @@
-import type { AgentConfig } from "../config/types.agents.js";
+import type { AgentConfig, AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-function stripInheritedAgentLocation<T extends Pick<AgentConfig, "agentDir" | "runtime">>(
-  entry: T,
-): T {
+function stripInheritedAgentLocation(entry: AgentConfig): AgentConfig;
+function stripInheritedAgentLocation(entry: AgentEntryConfig): AgentEntryConfig;
+function stripInheritedAgentLocation(
+  entry: AgentConfig | AgentEntryConfig,
+): AgentConfig | AgentEntryConfig {
   const { agentDir: _agentDir, runtime, ...rest } = entry;
   if (runtime?.type !== "acp" || runtime.acp?.cwd === undefined) {
-    return { ...rest, ...(runtime ? { runtime } : {}) } as T;
+    return { ...rest, ...(runtime ? { runtime } : {}) };
   }
   const { cwd: _cwd, ...acp } = runtime.acp;
-  return { ...rest, runtime: { ...runtime, acp } } as T;
+  return { ...rest, runtime: { ...runtime, acp } };
 }
 
 /** Drops persistent locations that an isolated one-shot run cannot own. */
@@ -39,5 +41,5 @@ export function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConf
   return {
     ...withoutSessionStore,
     agents: { ...agents, ...roster },
-  } as OpenClawConfig;
+  };
 }
