@@ -120,10 +120,6 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   },
 }));
 
-vi.mock("../../agents/prepared-model-runtime.facts.js", () => ({
-  isPreparedModelCatalogFull: () => false,
-}));
-
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
 }));

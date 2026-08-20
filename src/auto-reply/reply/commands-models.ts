@@ -12,10 +12,7 @@ import {
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import {
-  loadPreparedModelCatalogSnapshotForBrowse,
-  modelCatalogBrowseRequiresFullDiscovery,
-} from "../../agents/model-catalog-browse.js";
+import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
@@ -38,7 +35,6 @@ import {
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
-import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.facts.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -172,34 +168,17 @@ export async function buildModelsProviderData(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
-  const browseView = options.view ?? "default";
-  const requiresFullDiscovery =
-    browseView !== "all" &&
-    modelCatalogBrowseRequiresFullDiscovery({
-      cfg,
-      agentId,
-      view: browseView,
-    });
-  const loadSnapshot = (readOnly: boolean) =>
-    loadPreparedModelCatalogSnapshot({
-      config: cfg,
-      readOnly,
-      ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
-      ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
-    });
   const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     agentId,
-    view: browseView,
-    loadCatalog: async ({ readOnly }) => {
-      if (!readOnly && requiresFullDiscovery) {
-        const prepared = await loadSnapshot(true);
-        if (isPreparedModelCatalogFull(prepared)) {
-          return prepared;
-        }
-      }
-      return loadSnapshot(readOnly);
-    },
+    view: options.view ?? "default",
+    loadCatalog: ({ readOnly }) =>
+      loadPreparedModelCatalogSnapshot({
+        config: cfg,
+        readOnly,
+        ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+        ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
+      }),
   });
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
