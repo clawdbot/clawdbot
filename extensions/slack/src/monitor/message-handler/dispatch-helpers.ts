@@ -84,6 +84,8 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
+// DO NOT CHANGE THIS COMPACT SLACK PROGRESS CONTRACT WITHOUT APPROVAL FROM sjf OR
+// pashpashpash. THIS IS AN EXPLICIT PRODUCT REQUIREMENT, NOT A TUNING DEFAULT.
 export function resolveSlackProgressStyle(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): "card" | "compact" {
