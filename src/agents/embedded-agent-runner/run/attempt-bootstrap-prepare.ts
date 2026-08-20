@@ -169,7 +169,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
             .map((stage) => `${stage.name}:${stage.durationMs.toFixed(1)}ms`)
             .join(",")
         : "none";
-    log.debug(
+    log.warn(
       `[trace:embedded-run] bootstrap-context substages: runId=${attempt.runId} sessionId=${attempt.sessionId} totalMs=${bootstrapContextTotalMs.toFixed(1)} substages=${substages}`,
     );
   }
