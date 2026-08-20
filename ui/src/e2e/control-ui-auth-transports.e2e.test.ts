@@ -408,7 +408,13 @@ async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
     allowUsers: [trustedProxyUser],
     deviceAutoApprove: {
       enabled: true,
-      scopes: ["operator.approvals", "operator.questions", "operator.read", "operator.write"],
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.write",
+      ],
     },
     requiredHeaders: ["x-forwarded-proto"],
     userHeader: "x-forwarded-user",
