@@ -15,7 +15,6 @@ import {
   registerMemoryPromptSupplement,
   registerTestMemoryPromptBuilder,
   resolveMemoryFlushPlan,
-  resolveMemoryWriteProvenancePlan,
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -45,7 +44,6 @@ function createMemoryFlushPlan(relativePath: string) {
 
 function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
-  expect(resolveMemoryWriteProvenancePlan()).toBeNull();
   expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toStrictEqual(
     [],
   );
@@ -108,31 +106,6 @@ describe("memory plugin state", () => {
       "Use custom memory tools.",
       "",
     ]);
-  });
-
-  it("exposes write provenance independently of flush planning", () => {
-    const writeProvenance = {
-      recordWriteProvenance: vi.fn(async () => undefined),
-    };
-    registerMemoryCapability("memory-core", { writeProvenance });
-
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(resolveMemoryWriteProvenancePlan()).toBe(writeProvenance);
-  });
-
-  it("preserves write provenance registered through a flush plan", () => {
-    const recordWriteProvenance = vi.fn(async () => undefined);
-    const cfg = {};
-    const flushPlanResolver = vi.fn(() => ({
-      ...createMemoryFlushPlan("memory/legacy.md"),
-      recordWriteProvenance,
-    }));
-    registerMemoryCapability("memory-core", { flushPlanResolver });
-
-    expect(resolveMemoryWriteProvenancePlan({ cfg, nowMs: 123 })).toEqual(
-      expect.objectContaining({ recordWriteProvenance }),
-    );
-    expect(flushPlanResolver).toHaveBeenCalledWith({ cfg, nowMs: 123 });
   });
 
   it("lists active public memory artifacts in deterministic order", async () => {

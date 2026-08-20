@@ -15,7 +15,7 @@ import {
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
-import { buildMemoryFlushPlan, buildMemoryWriteProvenancePlan } from "./src/flush-plan.js";
+import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import {
   buildMemoryPromptSection,
   MEMORY_GET_TOOL_CONTRACT,
@@ -250,7 +250,6 @@ export default definePluginEntry({
         return context ? buildMemoryPromptSection({ ...params, sources: context.sources }) : [];
       },
       flushPlanResolver: buildMemoryFlushPlan,
-      writeProvenance: buildMemoryWriteProvenancePlan(),
       runtime: memoryRuntime,
       publicArtifacts: {
         async listArtifacts(params) {

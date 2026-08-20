@@ -228,19 +228,7 @@ export type MemoryPromptPreparationRegistration = {
   prepare: MemoryPromptSectionPreparer;
 };
 
-export type MemoryWriteProvenancePlan = {
-  recordWriteProvenance?: (params: {
-    workspaceDir: string;
-    relativePath: string;
-    contentBefore: string;
-    contentAfter: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }) => Promise<(() => Promise<void>) | void>;
-  clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
-};
-
-export type MemoryFlushPlan = MemoryWriteProvenancePlan & {
+export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
@@ -313,7 +301,6 @@ export type MemoryPluginPublicArtifactsProvider = {
 export type MemoryPluginCapability = {
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
-  writeProvenance?: MemoryWriteProvenancePlan;
   runtime?: MemoryPluginRuntime;
   publicArtifacts?: MemoryPluginPublicArtifactsProvider;
   /** Local deterministic recall tool required by provider-owned direct lookup. */

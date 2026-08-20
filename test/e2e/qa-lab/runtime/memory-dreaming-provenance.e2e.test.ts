@@ -99,7 +99,7 @@ function configureMemoryProof(cfg: OpenClawConfig): OpenClawConfig {
     plugins: {
       ...cfg.plugins,
       allow: [...new Set([...(cfg.plugins?.allow ?? []), "memory-core"])],
-      slots: { ...cfg.plugins?.slots, memory: "memory-core" },
+      slots: { ...cfg.plugins?.slots, memory: "none" },
       entries: {
         ...cfg.plugins?.entries,
         "memory-core": {
@@ -125,7 +125,7 @@ function configureMemoryProof(cfg: OpenClawConfig): OpenClawConfig {
 
 describe("memory provenance through a real Gateway", () => {
   test(
-    "keeps post-upgrade restricted session memory out of a tool-free dream while grandfathering legacy notes",
+    "carries restricted session memory across enabling a memory provider",
     { timeout: 180_000 },
     async () => {
       mock = await startQaMockOpenAiServer();
@@ -178,6 +178,25 @@ describe("memory provenance through a real Gateway", () => {
       expect(await fs.readFile(path.join(memoryDir, capturedFile), "utf8")).toContain(
         RESTRICTED_MARKER,
       );
+
+      await gateway.restartAfterStateMutation(async ({ configPath }) => {
+        const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+        await fs.writeFile(
+          configPath,
+          `${JSON.stringify(
+            {
+              ...config,
+              plugins: {
+                ...config.plugins,
+                slots: { ...config.plugins?.slots, memory: "memory-core" },
+              },
+            } satisfies OpenClawConfig,
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+      });
 
       const cursorResult = (await fetch(`${mock.baseUrl}/debug/request-cursor`).then((response) =>
         response.json(),

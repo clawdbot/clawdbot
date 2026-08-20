@@ -2,11 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { recordMemoryArtifactWriteProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { describe, expect, it } from "vitest";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
-} from "../dreaming-state.js";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
@@ -79,11 +76,13 @@ describe("memory path provenance", () => {
     try {
       const absolutePath = path.join(workspaceDir, "MEMORY.md");
       await fs.writeFile(absolutePath, "network-authored memory", "utf8");
-      await writeMemoryCoreWorkspaceEntry({
-        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      await recordMemoryArtifactWriteProvenance({
         workspaceDir,
-        key: "MEMORY.md",
-        value: { originClass: "untrusted" },
+        relativePath: "MEMORY.md",
+        contentBefore: "",
+        contentAfter: "network-authored memory",
+        originClass: "untrusted",
+        observedAt: 1,
       });
 
       await expect(

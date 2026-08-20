@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
@@ -35,7 +36,6 @@ import {
 import { formatErrorMessage } from "./dreaming-shared.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
   normalizeMemoryCoreWorkspaceKey,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
@@ -771,12 +771,12 @@ async function collectDailyIngestionBatches(params: {
   ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
-  const provenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: params.workspaceDir });
-  const provenanceByPath = new Map(provenanceEntries.map((entry) => [entry.key, entry.value]));
+  const provenanceEntries = await listMemoryArtifactProvenance({
+    workspaceDir: params.workspaceDir,
+  });
+  const provenanceByPath = new Map(
+    provenanceEntries.map((entry) => [entry.relativePath, entry.provenance]),
+  );
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((err: unknown) => {
@@ -949,12 +949,12 @@ export async function seedHistoricalDailyMemorySignals(params: {
       skippedPaths: [],
     };
   }
-  const provenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: params.workspaceDir });
-  const provenanceByPath = new Map(provenanceEntries.map((entry) => [entry.key, entry.value]));
+  const provenanceEntries = await listMemoryArtifactProvenance({
+    workspaceDir: params.workspaceDir,
+  });
+  const provenanceByPath = new Map(
+    provenanceEntries.map((entry) => [entry.relativePath, entry.provenance]),
+  );
 
   const resolved = normalizedPaths
     .map((filePath) => {

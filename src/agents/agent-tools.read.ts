@@ -634,6 +634,7 @@ function resolveToolPathAgainstWorkspaceRoot(params: {
 type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
+  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   containerWorkdir?: string;
   sandbox?: {
     root: string;
@@ -756,14 +757,35 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      await appendMemoryFlushContent({
+      const contentBefore = await readOptionalUtf8File({
         absolutePath: allowedAbsolutePath,
-        root: options.root,
         relativePath: options.relativePath,
-        content,
         sandbox: options.sandbox,
         signal,
       });
+      const separator =
+        contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
+          ? "\n"
+          : "";
+      const commit = () =>
+        appendMemoryFlushContent({
+          absolutePath: allowedAbsolutePath,
+          root: options.root,
+          relativePath: options.relativePath,
+          content,
+          sandbox: options.sandbox,
+          signal,
+        });
+      if (options.memoryWriteProvenance?.classifies(allowedAbsolutePath)) {
+        await options.memoryWriteProvenance.write({
+          absolutePath: allowedAbsolutePath,
+          contentBefore,
+          contentAfter: `${contentBefore}${separator}${content}`,
+          commit,
+        });
+      } else {
+        await commit();
+      }
       // This wrapper inherits the write tool's output schema, so report only
       // the authoritative `changed`; deriving `created` before append is racy.
       return {

@@ -1,10 +1,10 @@
 // Memory Core tests cover short term promotion plugin behavior.
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { recordMemoryArtifactWriteProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -17,14 +17,12 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 
 import {
   configureMemoryCoreDreamingState,
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
   memoryCoreWorkspaceStateKey,
   openMemoryCoreStateStore,
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { deleteShortTermLockEntryIfCurrent } from "./short-term-promotion-store.js";
 import {
@@ -2141,15 +2139,13 @@ describe("short-term promotion", () => {
       });
       expect(ranked[0]?.provenance?.originClass).toBe("agent");
 
-      await writeMemoryCoreWorkspaceEntry({
-        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      await recordMemoryArtifactWriteProvenance({
         workspaceDir,
-        key: relativePath,
-        value: {
-          fileHash: createHash("sha256").update(`${snippet}\n`).digest("hex"),
-          originClass: "untrusted" as const,
-          observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
-        },
+        relativePath,
+        contentBefore: "",
+        contentAfter: `${snippet}\n`,
+        originClass: "untrusted",
+        observedAt: Date.parse("2026-04-01T12:05:00.000Z"),
       });
 
       const applied = await applyShortTermPromotions({

@@ -6,10 +6,7 @@ import type {
   MemoryEntryProvenance,
   MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  readMemoryCoreWorkspaceEntry,
-} from "../dreaming-state.js";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 type MemoryPathClassification = {
   curatedRoot: boolean;
@@ -52,10 +49,9 @@ export async function resolveMemoryPathClassification(params: {
     curatedRoot || (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
   const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
   const recorded = isWorkspaceMemory
-    ? await readMemoryCoreWorkspaceEntry<{ originClass?: unknown }>({
-        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+    ? await readMemoryArtifactProvenance({
         workspaceDir: params.workspaceDir,
-        key: normalizedRelativePath,
+        relativePath: normalizedRelativePath,
       })
     : undefined;
   if (recorded?.originClass === "untrusted") {

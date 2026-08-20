@@ -41,17 +41,17 @@ const loggerMocks = vi.hoisted(() => ({
 }));
 
 const memoryProvenanceMocks = vi.hoisted(() => ({
-  recordWriteProvenance: vi.fn().mockResolvedValue(undefined),
+  recordMemoryArtifactWriteProvenance: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
 
-vi.mock("../../../plugins/memory-state.js", () => ({
-  resolveMemoryWriteProvenancePlan: () => ({
-    recordWriteProvenance: memoryProvenanceMocks.recordWriteProvenance,
-  }),
+vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
+  normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
+  recordMemoryArtifactWriteProvenance: memoryProvenanceMocks.recordMemoryArtifactWriteProvenance,
+  clearMemoryArtifactProvenance: vi.fn(),
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -412,7 +412,7 @@ describe("session-memory hook", () => {
       expectedOrigin: "untrusted",
     },
   ] as const)("records $name provenance before committing the file", async (testCase) => {
-    memoryProvenanceMocks.recordWriteProvenance.mockClear();
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockClear();
     let observedWrite:
       | {
           workspaceDir: string;
@@ -422,11 +422,13 @@ describe("session-memory hook", () => {
           originClass: "agent" | "untrusted";
         }
       | undefined;
-    memoryProvenanceMocks.recordWriteProvenance.mockImplementationOnce(async (write) => {
-      observedWrite = write;
-      await expectPathMissing(path.join(write.workspaceDir, write.relativePath));
-      return undefined;
-    });
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockImplementationOnce(
+      async (write) => {
+        observedWrite = write;
+        await expectPathMissing(path.join(write.workspaceDir, write.relativePath));
+        return undefined;
+      },
+    );
     const sessionContent = [
       {
         type: "message",
@@ -448,11 +450,17 @@ describe("session-memory hook", () => {
       .map((entry) => JSON.stringify(entry))
       .join("\n");
 
-    const { tempDir, files, memoryContent } = await runNewWithPreviousSession({ sessionContent });
+    const { tempDir, files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (workspace) => ({
+        agents: { defaults: { workspace } },
+        plugins: { slots: { memory: "none" } },
+      }),
+    });
     const filename = expectDefined(files[0], "session memory file");
 
     expect(files).toHaveLength(1);
-    expect(memoryProvenanceMocks.recordWriteProvenance).toHaveBeenCalledOnce();
+    expect(memoryProvenanceMocks.recordMemoryArtifactWriteProvenance).toHaveBeenCalledOnce();
     expect(observedWrite).toMatchObject({
       workspaceDir: tempDir,
       relativePath: `memory/${filename}`,
@@ -463,7 +471,7 @@ describe("session-memory hook", () => {
   });
 
   it("does not commit session memory when provenance recording fails", async () => {
-    memoryProvenanceMocks.recordWriteProvenance.mockRejectedValueOnce(
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockRejectedValueOnce(
       new Error("provenance unavailable"),
     );
     const sessionContent = [

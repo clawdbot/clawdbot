@@ -16,7 +16,6 @@ import type {
   MemoryPromptSectionParams,
   MemoryPromptSectionPreparer,
   MemoryPromptSupplementRegistration,
-  MemoryWriteProvenancePlan,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
 import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
@@ -34,7 +33,6 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
-  MemoryWriteProvenancePlan,
   PreparedMemoryPromptSection,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
@@ -51,7 +49,6 @@ export function resolveMemoryCapabilityRegistration(
       Boolean(registration.capability.publicArtifacts) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
-      !registration.capability.writeProvenance &&
       !registration.capability.runtime;
     effective = {
       pluginId: registration.pluginId,
@@ -258,20 +255,6 @@ export function resolveMemoryFlushPlan(params: {
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
-}
-export function resolveMemoryWriteProvenancePlan(
-  params: {
-    cfg?: OpenClawConfig;
-    nowMs?: number;
-  } = {},
-): MemoryWriteProvenancePlan | null {
-  const capability = getMemoryCapability()?.capability;
-  if (!capability) {
-    return null;
-  }
-  // MemoryFlushPlan shipped with these callbacks before write provenance became
-  // independent of compaction. Preserve that SDK contract until a versioned transition.
-  return capability.writeProvenance ?? capability.flushPlanResolver?.(params) ?? null;
 }
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;

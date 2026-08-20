@@ -27,7 +27,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { resolveMemoryWriteProvenancePlan } from "../../../plugins/memory-state.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -390,25 +389,17 @@ async function saveSessionMemoryNow(
     const provenanceObserver = createMemoryWriteProvenanceObserver({
       mutationRoot: workspaceDir,
       workspaceDir,
-      plan: resolveMemoryWriteProvenancePlan({ cfg, nowMs: now.getTime() }) ?? {},
       resolveOriginClass: () =>
         transcript.status === "available" ? transcript.originClass : "agent",
       now: () => now.getTime(),
     });
     const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    if (provenanceObserver) {
-      await provenanceObserver.write({
-        absolutePath: memoryFilePath,
-        contentBefore: "",
-        contentAfter: entry,
-        commit,
-      });
-    } else {
-      if (transcript.status === "available" && transcript.originClass === "untrusted") {
-        throw new Error("Session memory provenance recording is unavailable");
-      }
-      await commit();
-    }
+    await provenanceObserver.write({
+      absolutePath: memoryFilePath,
+      contentBefore: "",
+      contentAfter: entry,
+      commit,
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

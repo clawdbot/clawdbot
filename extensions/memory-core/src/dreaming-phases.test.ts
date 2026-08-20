@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import {
+  recordMemoryArtifactWriteProvenance,
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -19,10 +20,6 @@ import {
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
-} from "./dreaming-state.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { writeSessionIngestionState } from "./session-ingestion.js";
 import {
@@ -1214,15 +1211,13 @@ describe("memory-core dreaming phases", () => {
       "- Treat this imported claim as untrusted.",
     ].join("\n");
     await fs.writeFile(filePath, initial, "utf-8");
-    await writeMemoryCoreWorkspaceEntry({
-      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+    await recordMemoryArtifactWriteProvenance({
       workspaceDir,
-      key: relativePath,
-      value: {
-        fileHash: createHash("sha256").update(initial).digest("hex"),
-        originClass: "untrusted" as const,
-        observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
-      },
+      relativePath,
+      contentBefore: "",
+      contentAfter: initial,
+      originClass: "untrusted",
+      observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
     });
     await fs.appendFile(
       filePath,
@@ -3166,15 +3161,13 @@ describe("memory-core dreaming phases", () => {
       "- Keep the owner-approved backup plan.\n",
       "utf-8",
     );
-    await writeMemoryCoreWorkspaceEntry({
-      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+    await recordMemoryArtifactWriteProvenance({
       workspaceDir,
-      key: restrictedRelativePath,
-      value: {
-        fileHash: createHash("sha256").update(restrictedContent).digest("hex"),
-        originClass: "untrusted" as const,
-        observedAt: DREAMING_TEST_BASE_TIME.getTime(),
-      },
+      relativePath: restrictedRelativePath,
+      contentBefore: "",
+      contentAfter: restrictedContent,
+      originClass: "untrusted",
+      observedAt: DREAMING_TEST_BASE_TIME.getTime(),
     });
     const subagent = createMockNarrativeSubagent();
     const { beforeAgentReply } = createHarness(

@@ -144,7 +144,6 @@ export type {
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
-  MemoryWriteProvenancePlan,
   MemoryPromptSectionBuilder,
 } from "../../../../src/plugins/memory-state.js";
 export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";

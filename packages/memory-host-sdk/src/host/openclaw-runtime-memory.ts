@@ -26,7 +26,6 @@ export type {
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
-  MemoryWriteProvenancePlan,
   MemoryPromptSectionBuilder,
   OpenClawPluginApi,
 } from "./openclaw-runtime.js";
