@@ -7232,6 +7232,36 @@ describe("update-cli", () => {
     expect(doctorCommand).not.toHaveBeenCalled();
   });
 
+  it("shows the matching-version probe failure when a JSON package update restart stays unhealthy", async () => {
+    setupNpmUpdatedRootRefresh();
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    restartHealthTestControl.snapshot = {
+      runtime: { status: "running", pid: 4242 },
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        hints: [],
+      },
+      healthy: false,
+      staleGatewayPids: [],
+      gatewayVersion: "2026.4.24",
+      expectedVersion: "2026.4.24",
+      probeError: "timeout",
+      waitOutcome: "timeout",
+      elapsedMs: 60_000,
+    };
+
+    await updateCommand({ yes: true, json: true, timeout: "123" });
+
+    const diagnostics = getErrorOutput();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(diagnostics).toContain("Gateway probe failed: timeout");
+    expect(diagnostics).toContain("Port 18789 is already in use.");
+    expect(diagnostics).not.toContain("Gateway version mismatch");
+  });
+
   it("skips the post-refresh restart script when LaunchAgent already serves the expected package version", async () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     serviceLoaded.mockResolvedValue(true);
