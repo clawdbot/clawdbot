@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import { NVIDIA_DEFAULT_ASR_MODEL, isNvidiaHostedAsrBaseUrl } from "./nvidia-speech-config.js";
+import { NVIDIA_AUTO_ASR_MODEL, isNvidiaHostedAsrBaseUrl } from "./nvidia-speech-config.js";
 
 export const nvidiaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "nvidia",
   capabilities: ["audio"],
-  defaultModels: { audio: NVIDIA_DEFAULT_ASR_MODEL },
+  defaultModels: { audio: NVIDIA_AUTO_ASR_MODEL },
   autoPriority: { audio: 55 },
   resolveAuth: ({ effectiveBaseUrl, providerConfig }) => {
     const configuredBaseUrl = effectiveBaseUrl ?? providerConfig?.baseUrl;

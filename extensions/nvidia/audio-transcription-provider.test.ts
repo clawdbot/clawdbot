@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { nvidiaMediaUnderstandingProvider } from "./audio-transcription-provider.js";
 
 describe("NVIDIA audio transcription provider", () => {
+  it("defers the hosted ASR model choice to the speech catalog", () => {
+    expect(nvidiaMediaUnderstandingProvider.defaultModels).toEqual({ audio: "auto" });
+  });
+
   it("uses normal credential resolution for hosted ASR", () => {
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({

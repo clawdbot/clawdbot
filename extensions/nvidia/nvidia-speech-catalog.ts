@@ -85,6 +85,22 @@ export async function resolveNvidiaSpeechCatalogModel(params: {
   modality: NvidiaSpeechModality;
 }): Promise<NvidiaSpeechCatalogModel | undefined> {
   const catalog = await loadNvidiaSpeechCatalog();
+  return findCatalogModel(catalog, params);
+}
+
+export async function resolveNvidiaSpeechCatalogDefault(params: {
+  modality: NvidiaSpeechModality;
+  key: string;
+}): Promise<NvidiaSpeechCatalogModel | undefined> {
+  const catalog = await loadNvidiaSpeechCatalog();
+  const id = catalog?.defaults[params.modality]?.[params.key];
+  return id ? findCatalogModel(catalog, { id, modality: params.modality }) : undefined;
+}
+
+function findCatalogModel(
+  catalog: NvidiaSpeechCatalog | undefined,
+  params: { id: string; modality: NvidiaSpeechModality },
+): NvidiaSpeechCatalogModel | undefined {
   return catalog?.models.find(
     (model) =>
       model.id === params.id && model.modality === params.modality && model.status !== "deprecated",

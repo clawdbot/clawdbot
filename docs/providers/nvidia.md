@@ -83,7 +83,10 @@ Nemotron realtime transcription for Talk and Voice Call.
 
 ### Speech to text
 
-Inbound audio uses the hosted Parakeet CTC 1.1B HTTP endpoint by default.
+Inbound audio uses the model referenced by `defaults.asr.english` in NVIDIA's
+validated speech model catalog. If the catalog cannot be fetched, OpenClaw falls
+back to the compiled Parakeet CTC 1.1B endpoint. Set `model` only when you want to
+pin a specific catalog model or configure a custom/self-hosted endpoint.
 Provider-specific ASR options are passed through `providerOptions.nvidia`; word
 boosting accepts a JSON array or a comma-separated string. To use another ASR
 NIM such as Parakeet TDT, configure its OpenClaw model reference and an
@@ -101,7 +104,6 @@ system-installed FFmpeg binary before upload.
       models: [
         {
           provider: "nvidia",
-          model: "nvidia/parakeet-ctc-1.1b-asr",
           capabilities: ["audio"],
           providerOptions: {
             nvidia: {

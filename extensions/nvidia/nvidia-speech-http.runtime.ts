@@ -21,12 +21,13 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  NVIDIA_CATALOG_ASR_MODEL_ID,
   NVIDIA_CATALOG_TTS_MODEL_ID,
+  resolveNvidiaSpeechCatalogDefault,
   resolveNvidiaSpeechCatalogModel,
 } from "./nvidia-speech-catalog.js";
 import {
   NVIDIA_ASR_BASE_URL,
+  NVIDIA_AUTO_ASR_MODEL,
   NVIDIA_DEFAULT_ASR_MODEL,
   isNvidiaHostedAsrBaseUrl,
   isNvidiaHostedTtsBaseUrl,
@@ -212,8 +213,10 @@ async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEn
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
   const customBaseUrl =
     requestBaseUrl && !isNvidiaHostedAsrBaseUrl(requestBaseUrl) ? requestBaseUrl : undefined;
+  const requestedModel = req.model?.trim();
+  const useCatalogDefault = !requestedModel || requestedModel === NVIDIA_AUTO_ASR_MODEL;
   if (customBaseUrl) {
-    const model = req.model?.trim() || NVIDIA_DEFAULT_ASR_MODEL;
+    const model = useCatalogDefault ? NVIDIA_DEFAULT_ASR_MODEL : requestedModel;
     return {
       baseUrl: customBaseUrl,
       model,
@@ -223,17 +226,20 @@ async function resolveAsrEndpoint(req: AudioTranscriptionRequest): Promise<AsrEn
       modelPath: normalizeNvidiaSpeechModelPath(req.query?.modelPath),
     };
   }
-  if (req.model && req.model !== NVIDIA_DEFAULT_ASR_MODEL) {
-    throw new Error(`NVIDIA ASR model ${req.model} requires an explicit HTTP base URL`);
+  const catalogModel = useCatalogDefault
+    ? await resolveNvidiaSpeechCatalogDefault({ modality: "asr", key: "english" })
+    : await resolveNvidiaSpeechCatalogModel({ id: requestedModel, modality: "asr" });
+  if (!catalogModel && !useCatalogDefault && requestedModel !== NVIDIA_DEFAULT_ASR_MODEL) {
+    throw new Error(`NVIDIA ASR model ${requestedModel} requires an explicit HTTP base URL`);
   }
-  const catalogModel = await resolveNvidiaSpeechCatalogModel({
-    id: NVIDIA_CATALOG_ASR_MODEL_ID,
-    modality: "asr",
-  });
+  if (catalogModel && catalogModel.cloud.transport !== "http") {
+    throw new Error(`NVIDIA ASR model ${catalogModel.id} is not available over HTTP`);
+  }
   const cloud = catalogModel?.cloud.transport === "http" ? catalogModel.cloud : undefined;
+  const model = catalogModel?.id ?? NVIDIA_DEFAULT_ASR_MODEL;
   return {
     baseUrl: cloud?.baseUrl ?? NVIDIA_ASR_BASE_URL,
-    model: NVIDIA_DEFAULT_ASR_MODEL,
+    model,
     hosted: true,
     defaultLanguage: cloud?.defaultLanguage ?? "en-US",
     routeStyle: "fixed-model",

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   postMultipartRequest: vi.fn(),
   postTranscriptionRequest: vi.fn(),
+  resolveNvidiaSpeechCatalogDefault: vi.fn(),
   resolveNvidiaSpeechCatalogModel: vi.fn(),
   transcodeAudioBufferToOpus: vi.fn(async (_params: { timeoutMs: number }) =>
     Buffer.from("transcoded-opus"),
@@ -25,6 +26,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
 vi.mock("./nvidia-speech-catalog.js", () => ({
   NVIDIA_CATALOG_ASR_MODEL_ID: "nvidia/parakeet-ctc-1.1b-asr",
   NVIDIA_CATALOG_TTS_MODEL_ID: "nvidia/magpie-tts-multilingual",
+  resolveNvidiaSpeechCatalogDefault: mocks.resolveNvidiaSpeechCatalogDefault,
   resolveNvidiaSpeechCatalogModel: mocks.resolveNvidiaSpeechCatalogModel,
 }));
 
@@ -97,6 +99,7 @@ function okJson(text: string) {
 describe("NVIDIA speech HTTP runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveNvidiaSpeechCatalogDefault.mockResolvedValue(undefined);
     mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue(undefined);
   });
 
@@ -136,9 +139,9 @@ describe("NVIDIA speech HTTP runtime", () => {
     expect(form.get("model")).toBeNull();
   });
 
-  it("uses the validated catalog endpoint and default language for hosted ASR", async () => {
-    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue({
-      id: "nvidia/parakeet-ctc-1.1b-asr",
+  it("uses the catalog-selected English model, endpoint, and language for hosted ASR", async () => {
+    mocks.resolveNvidiaSpeechCatalogDefault.mockResolvedValue({
+      id: "nvidia/parakeet-new-english-asr",
       modality: "asr",
       status: "active",
       cloud: {
@@ -149,13 +152,44 @@ describe("NVIDIA speech HTTP runtime", () => {
     });
     mocks.postTranscriptionRequest.mockResolvedValue(okJson("catalog transcript"));
 
-    await transcribeNvidiaAudio(transcriptionRequest());
+    const result = await transcribeNvidiaAudio(transcriptionRequest());
 
+    expect(result.model).toBe("nvidia/parakeet-new-english-asr");
     const request = mocks.postTranscriptionRequest.mock.calls[0]?.[0];
     expect(request.url).toBe(
       "https://aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.invocation.api.nvcf.nvidia.com/v1/audio/transcriptions",
     );
     expect((request.body as FormData).get("language")).toBe("en-GB");
+    expect(mocks.resolveNvidiaSpeechCatalogDefault).toHaveBeenCalledWith({
+      modality: "asr",
+      key: "english",
+    });
+    expect(mocks.resolveNvidiaSpeechCatalogModel).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit hosted ASR model pin", async () => {
+    mocks.resolveNvidiaSpeechCatalogModel.mockResolvedValue({
+      id: "nvidia/pinned-asr",
+      modality: "asr",
+      status: "active",
+      cloud: {
+        transport: "http",
+        baseUrl: "https://cccccccc-cccc-4ccc-8ccc-cccccccccccc.invocation.api.nvcf.nvidia.com",
+        defaultLanguage: "en-US",
+      },
+    });
+    mocks.postTranscriptionRequest.mockResolvedValue(okJson("pinned transcript"));
+
+    const result = await transcribeNvidiaAudio(
+      transcriptionRequest({ model: "nvidia/pinned-asr" }),
+    );
+
+    expect(result.model).toBe("nvidia/pinned-asr");
+    expect(mocks.resolveNvidiaSpeechCatalogModel).toHaveBeenCalledWith({
+      id: "nvidia/pinned-asr",
+      modality: "asr",
+    });
+    expect(mocks.resolveNvidiaSpeechCatalogDefault).not.toHaveBeenCalled();
   });
 
   it("uses an explicitly configured HTTP model and base URL", async () => {

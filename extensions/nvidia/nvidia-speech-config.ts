@@ -11,6 +11,7 @@ const NVIDIA_TTS_BASE_URL =
   "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com";
 
 export const NVIDIA_DEFAULT_ASR_MODEL = "nvidia/parakeet-ctc-1.1b-asr";
+export const NVIDIA_AUTO_ASR_MODEL = "auto";
 export const NVIDIA_DEFAULT_TTS_MODEL = "magpie-tts-multilingual";
 export const NVIDIA_DEFAULT_VOICE = "Magpie-Multilingual.EN-US.Aria";
 export const NVIDIA_DEFAULT_LANGUAGE = "en-US";

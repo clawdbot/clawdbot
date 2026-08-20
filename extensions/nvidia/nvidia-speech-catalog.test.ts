@@ -14,6 +14,7 @@ import {
   NVIDIA_CATALOG_TTS_MODEL_ID,
   NVIDIA_SPEECH_CATALOG_URL,
   resetNvidiaSpeechCatalogCacheForTests,
+  resolveNvidiaSpeechCatalogDefault,
   resolveNvidiaSpeechCatalogModel,
 } from "./nvidia-speech-catalog.js";
 
@@ -110,9 +111,14 @@ describe("NVIDIA speech catalog", () => {
       id: NVIDIA_CATALOG_TTS_MODEL_ID,
       modality: "tts",
     });
+    const defaultAsr = await resolveNvidiaSpeechCatalogDefault({
+      modality: "asr",
+      key: "english",
+    });
 
     expect(asr?.cloud).toMatchObject({ transport: "http", functionId: ASR_FUNCTION_ID });
     expect(tts?.cloud).toMatchObject({ transport: "http", functionId: TTS_FUNCTION_ID });
+    expect(defaultAsr?.id).toBe(NVIDIA_CATALOG_ASR_MODEL_ID);
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({

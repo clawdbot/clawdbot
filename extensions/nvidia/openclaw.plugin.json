@@ -268,7 +268,7 @@
     "nvidia": {
       "capabilities": ["audio"],
       "defaultModels": {
-        "audio": "nvidia/parakeet-ctc-1.1b-asr"
+        "audio": "auto"
       },
       "autoPriority": {
         "audio": 55
