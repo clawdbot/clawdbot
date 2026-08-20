@@ -1,11 +1,13 @@
 // Gateway session-history projection state.
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
+import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -37,6 +39,7 @@ type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
   turnBoundaryPending: boolean;
+  streamErrorFallbackPending: boolean;
 };
 
 type InlineSessionHistoryAppend = {
@@ -81,7 +84,7 @@ export function resolveSessionHistoryTailReadOptions(limit: number): {
   };
 }
 
-function resolveCursorSeq(cursor: string | undefined): number | undefined {
+export function resolveCursorSeq(cursor: string | undefined): number | undefined {
   if (!cursor) {
     return undefined;
   }
@@ -142,7 +145,26 @@ function paginateSessionMessages(
       endExclusive = messages.length;
     }
   }
-  const start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  // Projection can interleave several rows from the same transcript records.
+  // Close the page over their seq groups because the public cursor cannot split one.
+  const pageSeqs = new Set(
+    messages.slice(start, endExclusive).map(resolveMessageSeq).filter(Boolean),
+  );
+  const gapSeqs = new Set<number>();
+  for (let index = start - 1; index >= 0; index--) {
+    const seq = resolveMessageSeq(messages[index]);
+    if (seq === undefined) {
+      continue;
+    }
+    gapSeqs.add(seq);
+    if (!pageSeqs.has(seq)) {
+      continue;
+    }
+    start = index;
+    gapSeqs.forEach((gapSeq) => pageSeqs.add(gapSeq));
+    gapSeqs.clear();
+  }
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = resolveMessageSeq(paginatedMessages[0]);
   return buildPaginatedSessionHistory({
@@ -163,22 +185,22 @@ export function buildSessionHistorySnapshot(params: {
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    resolveCurrentUserProfileDisplay,
   });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
+  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
   if (
     !params.cursor &&
     typeof params.totalRawMessages === "number" &&
-    params.totalRawMessages > params.rawMessages.length &&
-    history.messages.length > 0
+    params.totalRawMessages > params.rawMessages.length
   ) {
-    const firstSeq = resolveMessageSeq(history.messages[0]);
+    const firstSeq = resolveMessageSeq(history.messages[0] ?? rawHistoryMessages[0]);
     history.hasMore = true;
     if (typeof firstSeq === "number") {
       history.nextCursor = String(firstSeq);
     }
   }
-  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   return {
     history,
     rawTranscriptSeq:
@@ -186,6 +208,7 @@ export function buildSessionHistorySnapshot(params: {
       resolveMessageSeq(rawHistoryMessages.at(-1)) ??
       rawHistoryMessages.length,
     turnBoundaryPending: projected.turnBoundaryPending,
+    streamErrorFallbackPending: projected.streamErrorFallbackPending,
   };
 }
 
@@ -198,6 +221,7 @@ export class SessionHistorySseState {
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
   private turnBoundaryPending: boolean;
+  private streamErrorFallbackPending: boolean;
   private transcriptPath: string | undefined;
 
   static fromRawSnapshot(params: {
@@ -248,11 +272,27 @@ export class SessionHistorySseState {
     this.sentHistory = snapshot.history;
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
+    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
   }
 
   snapshot(): PaginatedSessionHistory {
     return this.sentHistory;
+  }
+
+  retainRecentMessages(maxMessages: number): PaginatedSessionHistory {
+    if (this.sentHistory.messages.length <= maxMessages) {
+      return this.snapshot();
+    }
+
+    const messages = this.sentHistory.messages.slice(-maxMessages);
+    const firstSeq = resolveMessageSeq(messages[0]);
+    this.sentHistory = buildPaginatedSessionHistory({
+      messages,
+      hasMore: true,
+      ...(firstSeq !== undefined ? { nextCursor: String(firstSeq) } : {}),
+    });
+    return this.snapshot();
   }
 
   appendInlineMessage(update: {
@@ -282,16 +322,39 @@ export class SessionHistorySseState {
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
+      streamErrorFallbackPending: this.streamErrorFallbackPending,
     });
     this.turnBoundaryPending = nextProjection.turnBoundaryPending;
+    this.streamErrorFallbackPending = nextProjection.streamErrorFallbackPending;
+    if (nextProjection.streamErrorFallbackRepaired) {
+      // Keep only the pending bit here: retaining raw transcript context would
+      // undo the bounded SSE memory contract. The caller rereads canonical
+      // history so full projection can remove the already-emitted placeholder.
+      return { shouldRefresh: true };
+    }
     // Projection can split, drop, or rewrite raw transcript messages. When one
     // raw append changes multiple visible rows, callers must refresh instead of
     // emitting a misleading single SSE item.
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
         maxChars: this.maxChars,
+        resolveCurrentUserProfileDisplay,
       }),
     );
+    const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
+    if (
+      projectedMessages.length > this.sentHistory.messages.length &&
+      !isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
+    ) {
+      // A current-profile change can rewrite an already-emitted row while this
+      // append adds only one tail item. Refresh the full history so the client
+      // does not retain a stale prefix beside the newly revisioned message.
+      this.sentHistory = buildPaginatedSessionHistory({
+        messages: projectedMessages,
+        hasMore: false,
+      });
+      return { shouldRefresh: true };
+    }
     if (projectedMessages.length > this.sentHistory.messages.length) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
       if (hadPendingTurnBoundary && !this.turnBoundaryPending && addedMessages[0]) {
@@ -368,6 +431,7 @@ export class SessionHistorySseState {
     const snapshot = this.buildSnapshot(rawSnapshot);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
+    this.streamErrorFallbackPending = snapshot.streamErrorFallbackPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(rawSnapshot.transcriptPath);
     this.sentHistory = snapshot.history;
     return snapshot.history;

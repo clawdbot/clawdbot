@@ -224,6 +224,20 @@ describe("executeAgentTurn: session state", () => {
     expect(followupRun.run.model).toBe("gpt-5.4");
     expect(followupRun.run.authProfileId).toBe("profile-c");
     expect(followupRun.run.authProfileIdSource).toBe("auto");
+    expect(state.runEmbeddedAgentEntryMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        selection: expect.objectContaining({ userLockedAuthProfileId: "profile-b" }),
+      }),
+      expect.any(Function),
+    );
+    expect(state.runEmbeddedAgentEntryMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        selection: expect.objectContaining({ userLockedAuthProfileId: undefined }),
+      }),
+      expect.any(Function),
+    );
   });
 
   it("does not roll back newer override changes after a failed fallback candidate", async () => {

@@ -3,15 +3,12 @@ import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   postJsonRequest,
   readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
-  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -22,7 +19,7 @@ import type {
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 import {
   fetchOpenRouterVideoGet,
   resolveOpenRouterVideoUrl,
@@ -274,8 +271,17 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
   return body;
 }
 
-function isTerminalFailure(status: string | undefined): boolean {
-  return status === "failed" || status === "cancelled" || status === "expired";
+function resolveVideoJobState(status: string | undefined): "active" | "completed" | "failure" {
+  if (status === "completed") {
+    return "completed";
+  }
+  if (status === "failed" || status === "cancelled" || status === "expired") {
+    return "failure";
+  }
+  if (status && ["queued", "pending", "in_progress", "processing", "running"].includes(status)) {
+    return "active";
+  }
+  throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
 }
 
 async function fetchOpenRouterJson(params: {
@@ -325,17 +331,11 @@ async function pollOpenRouterVideo(params: {
       auditContext: "openrouter-video-status",
     });
     const status = normalizeOptionalString(payload.status);
-    if (
-      !status ||
-      (!["queued", "pending", "processing", "running", "completed"].includes(status) &&
-        !isTerminalFailure(status))
-    ) {
-      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-    }
-    if (status === "completed") {
+    const state = resolveVideoJobState(status);
+    if (state === "completed") {
       return payload;
     }
-    if (isTerminalFailure(status)) {
+    if (state === "failure") {
       throw new Error(
         normalizeOptionalString(payload.error) ?? `OpenRouter video generation ${status}`,
       );
@@ -422,8 +422,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({ provider: "openrouter", agentDir }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     resolveModelCapabilities: resolveOpenRouterVideoModelCapabilities,
     capabilities: {
       providerOptions: {
@@ -461,34 +460,14 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
         throw new Error("OpenRouter video generation does not support video reference inputs.");
       }
 
-      const auth = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("OpenRouter API key missing");
-      }
-
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg?.models?.providers?.openrouter?.request,
-          ),
-          provider: "openrouter",
+        await resolveOpenRouterGenerationRequestContext({
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
           capability: "video",
-          transport: "http",
+          jsonContentType: true,
         });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
@@ -517,21 +496,15 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           throw new Error("OpenRouter video generation response missing job details");
         }
         const submittedStatus = normalizeOptionalString(submitted.status);
-        if (
-          submittedStatus &&
-          !["queued", "pending", "processing", "running", "completed"].includes(submittedStatus) &&
-          !isTerminalFailure(submittedStatus)
-        ) {
-          throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-        }
-        if (isTerminalFailure(submittedStatus)) {
+        const submittedState = submittedStatus ? resolveVideoJobState(submittedStatus) : "active";
+        if (submittedState === "failure") {
           throw new Error(
             normalizeOptionalString(submitted.error) ??
               `OpenRouter video generation ${submittedStatus}`,
           );
         }
         const completed =
-          submittedStatus === "completed"
+          submittedState === "completed"
             ? submitted
             : await pollOpenRouterVideo({
                 pollingUrl,

@@ -12,7 +12,7 @@ vi.mock("../../config/config.js", () => {
   return {
     getRuntimeConfig: vi.fn(() => ({
       agents: {
-        list: [{ id: "main" }, { id: "opus" }],
+        list: [{ id: "main", default: true }, { id: "opus" }],
       },
       session: {},
     })),
@@ -23,7 +23,12 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
+    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {},
+    })),
   };
 });
 
@@ -33,6 +38,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   );
   return {
     ...actual,
+    resolveExistingUsageSessionFile: vi.fn(actual.resolveExistingUsageSessionFile),
     discoverAllSessions: vi.fn(async (params?: { agentId?: string }) => {
       if (params?.agentId === "main") {
         return [
@@ -100,13 +106,17 @@ import {
   loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
+  resolveExistingUsageSessionFile,
 } from "../../infra/session-cost-usage.js";
-import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
+import {
+  loadCombinedSessionStoreForGatewayCore,
+  loadGatewaySessionEntryReadOnly,
+} from "../session-utils.js";
 import { testApi, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
   agents: {
-    list: [{ id: "main" }, { id: "opus" }],
+    list: [{ id: "main", default: true }, { id: "opus" }],
   },
   session: {},
 };
@@ -127,7 +137,10 @@ async function runSessionsUsage(
   return respond;
 }
 
-async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
+async function runSessionsUsageTimeseries(
+  params: Record<string, unknown>,
+  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
+) {
   const respond = vi.fn();
   await expectDefined(
     usageHandlers["sessions.usage.timeseries"],
@@ -135,12 +148,15 @@ async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
   )({
     respond,
     params,
-    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+    context: { getRuntimeConfig: () => config },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
   return respond;
 }
 
-async function runSessionsUsageLogs(params: Record<string, unknown>) {
+async function runSessionsUsageLogs(
+  params: Record<string, unknown>,
+  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
+) {
   const respond = vi.fn();
   await expectDefined(
     usageHandlers["sessions.usage.logs"],
@@ -148,7 +164,7 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   )({
     respond,
     params,
-    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+    context: { getRuntimeConfig: () => config },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
   return respond;
 }
@@ -182,6 +198,29 @@ function expectSuccessfulSessionsUsage(
   return result.sessions;
 }
 
+function mockStoredSession(
+  key: string,
+  sessionId: string,
+  options: { resolution?: "valid" | "missing" } = {},
+) {
+  const entry = { sessionId, updatedAt: 1_000 };
+  const storePath = "/tmp/agents/opus/agent/openclaw-agent.sqlite";
+  vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
+    cfg: TEST_RUNTIME_CONFIG,
+    agentId: "opus",
+    canonicalKey: key,
+    entry,
+    legacyKey: undefined,
+    store: { [key]: entry },
+    storeKeys: [key],
+    storePath,
+  });
+  vi.mocked(resolveExistingUsageSessionFile).mockReturnValueOnce(
+    options.resolution === "missing" ? undefined : `sqlite:opus:${sessionId}:${storePath}`,
+  );
+  return entry;
+}
+
 async function withUsageState(
   run: (writeSessionFile: (fileName: string) => string) => Promise<void>,
 ) {
@@ -213,7 +252,7 @@ describe("sessions.usage", () => {
   it("defaults list-style usage queries without agentId to the default agent", async () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+    expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
       { agentId: "main" },
     );
@@ -231,7 +270,7 @@ describe("sessions.usage", () => {
   it("uses explicit all-agent scope for list-style usage queries", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentScope: "all" });
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+    expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
       {},
     );
@@ -270,7 +309,7 @@ describe("sessions.usage", () => {
   it("uses the requested agent for list-style usage queries", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" });
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+    expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
       { agentId: "opus" },
     );
@@ -458,7 +497,7 @@ describe("sessions.usage", () => {
   it("discovers usage for requested disk-only agents not listed in config", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "codex" });
 
-    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+    expect(vi.mocked(loadCombinedSessionStoreForGatewayCore)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
       { agentId: "codex" },
     );
@@ -476,7 +515,8 @@ describe("sessions.usage", () => {
   });
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
-    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+    vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      durableTargets: [],
       storePath: "(multiple)",
       store: {
         "agent:main:s-opus": {
@@ -504,9 +544,11 @@ describe("sessions.usage", () => {
 
   it("uses the requested agent for legacy specific session keys", async () => {
     await withUsageState(async (writeSessionFile) => {
-      const sessionFile = writeSessionFile("main.jsonl");
+      writeSessionFile("main.jsonl");
+      mockStoredSession("agent:opus:main", "main");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           "agent:opus:main": {
@@ -532,7 +574,7 @@ describe("sessions.usage", () => {
           agentId: "opus",
           sessions: expect.arrayContaining([
             expect.objectContaining({
-              sessionFile: fs.realpathSync(sessionFile),
+              sessionFile: expect.stringMatching(/^sqlite:/),
               sessionId: "main",
             }),
           ]),
@@ -550,7 +592,8 @@ describe("sessions.usage", () => {
     };
 
     await withUsageState(async (writeSessionFile) => {
-      const sessionFile = writeSessionFile("current.jsonl");
+      writeSessionFile("current.jsonl");
+      mockStoredSession("global", "current");
 
       const sessionEntry = {
         sessionId: "current",
@@ -558,7 +601,8 @@ describe("sessions.usage", () => {
         label: "Opus global",
         updatedAt: 999,
       };
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           global: sessionEntry,
@@ -583,7 +627,7 @@ describe("sessions.usage", () => {
           agentId: "opus",
           sessions: expect.arrayContaining([
             expect.objectContaining({
-              sessionFile: fs.realpathSync(sessionFile),
+              sessionFile: expect.stringMatching(/^sqlite:/),
               sessionId: "current",
             }),
           ]),
@@ -596,7 +640,8 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           "agent:main:shared": {
@@ -637,10 +682,12 @@ describe("sessions.usage", () => {
 
     await withUsageState(async (writeSessionFile) => {
       writeSessionFile("s-opus.jsonl");
+      mockStoredSession(storeKey, "s-opus");
 
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           [storeKey]: {
@@ -672,8 +719,10 @@ describe("sessions.usage", () => {
     await withUsageState(async (writeSessionFile) => {
       writeSessionFile("current.jsonl");
       writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
+      mockStoredSession(storeKey, "current");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           [storeKey]: {
@@ -750,8 +799,10 @@ describe("sessions.usage", () => {
 
     await withUsageState(async (writeSessionFile) => {
       writeSessionFile("run-dup.jsonl");
+      mockStoredSession(preferredKey, "run-dup");
 
-      vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        durableTargets: [],
         storePath: "(multiple)",
         store: {
           [preferredKey]: {
@@ -774,6 +825,13 @@ describe("sessions.usage", () => {
       const sessions = expectSuccessfulSessionsUsage(respond);
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.key).toBe(preferredKey);
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ sessionFile: expect.stringMatching(/^sqlite:/) }),
+          ]),
+        }),
+      );
     });
   });
 
@@ -789,26 +847,73 @@ describe("sessions.usage", () => {
     expect(error?.message).toContain("Invalid session reference");
   });
 
-  it("passes parsed agentId into sessions.usage.timeseries", async () => {
-    await runSessionsUsageTimeseries({
-      key: "agent:opus:s-opus",
-    });
+  it("passes a canonical SQLite target into sessions.usage.timeseries", async () => {
+    mockStoredSession("agent:opus:s-opus", "s-opus");
+    await runSessionsUsageTimeseries({ key: "agent:opus:s-opus" });
 
-    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalled();
-    expect(
-      (mockArg(vi.mocked(loadSessionUsageTimeSeries), 0, 0) as { agentId?: string }).agentId,
-    ).toBe("opus");
+    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "opus", sessionFile: expect.stringMatching(/^sqlite:/) }),
+    );
   });
 
-  it("passes parsed agentId into sessions.usage.logs", async () => {
-    await runSessionsUsageLogs({
-      key: "agent:opus:s-opus",
+  it("passes a canonical SQLite target into sessions.usage.logs", async () => {
+    mockStoredSession("agent:opus:s-opus", "s-opus");
+    await runSessionsUsageLogs({ key: "agent:opus:s-opus" });
+
+    expect(vi.mocked(loadSessionLogs)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "opus", sessionFile: expect.stringMatching(/^sqlite:/) }),
+    );
+  });
+
+  it("loads bare-key usage details through the persisted fixed-store owner", async () => {
+    const config: OpenClawConfig = {
+      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "ops" }, { id: "research" }],
+        defaults: { sessionStore: { agentId: "ops" } },
+      },
+    };
+    const entry = { sessionId: "s-ops", updatedAt: 1_000 };
+    vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
+      cfg: config,
+      agentId: "ops",
+      canonicalKey: "global",
+      entry,
+      legacyKey: undefined,
+      store: { global: entry },
+      storeKeys: ["global"],
+      storePath: "/tmp/shared-sessions.sqlite",
     });
 
-    expect(vi.mocked(loadSessionLogs)).toHaveBeenCalled();
-    expect((mockArg(vi.mocked(loadSessionLogs), 0, 0) as { agentId?: string }).agentId).toBe(
-      "opus",
+    const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
+
+    expect(mockArg(respond, 0, 0)).toBe(true);
+    expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
+      agentId: "ops",
+    });
+    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops" }),
     );
+  });
+
+  it("preserves JSONL detail lookup for storeless sessions", async () => {
+    await withUsageState(async (writeSessionFile) => {
+      const sessionFile = writeSessionFile("storeless.jsonl");
+      const canonicalSessionFile = fs.realpathSync(sessionFile);
+      await runSessionsUsageTimeseries({ key: "agent:opus:storeless" });
+      expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionFile: canonicalSessionFile, sessionEntry: undefined }),
+      );
+    });
+  });
+
+  it("fails closed when a canonical stored target no longer matches", async () => {
+    const key = "agent:opus:stale";
+    mockStoredSession(key, "stale", { resolution: "missing" });
+    const respond = await runSessionsUsageTimeseries({ key });
+    expect(mockArg(respond, 0, 0)).toBe(false);
+    expect(vi.mocked(loadSessionUsageTimeSeries)).not.toHaveBeenCalled();
   });
 
   it("rejects traversal-style keys in timeseries/log lookups", async () => {

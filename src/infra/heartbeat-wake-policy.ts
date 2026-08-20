@@ -45,22 +45,43 @@ export function resolveHeartbeatWakePayloadFlags(params: {
       source === "hook" ||
       source === "acp-spawn" ||
       source === "session-state" ||
+      source === "background-task" ||
+      source === "background-task-blocked" ||
       reason === "wake",
   };
 }
 
-export function isTargetedImmediateSystemEventWake(params: {
+type TargetedImmediateWakeParams = {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  agentId?: string;
   sessionKey?: string;
-}): boolean {
-  return (
-    params.source === "notifications-event" &&
-    params.intent === "immediate" &&
-    params.reason?.trim() === "wake" &&
-    normalizeOptionalString(params.sessionKey) !== undefined
-  );
+};
+
+export function isTargetedImmediateUnscheduledWake(params: TargetedImmediateWakeParams): boolean {
+  if (params.intent !== "immediate") {
+    return false;
+  }
+  const hasSessionTarget = normalizeOptionalString(params.sessionKey) !== undefined;
+  const hasTarget = hasSessionTarget || normalizeOptionalString(params.agentId) !== undefined;
+  if (!hasTarget) {
+    return false;
+  }
+
+  // These sources queue targeted events that would otherwise sit unread for a
+  // configured agent without a recurring heartbeat schedule.
+  switch (params.source) {
+    case "notifications-event":
+      return hasSessionTarget && params.reason?.trim() === "wake";
+    case "hook":
+      return params.reason?.trim().startsWith("hook:") ?? false;
+    case "background-task":
+    case "background-task-blocked":
+      return true;
+    default:
+      return false;
+  }
 }
 
 export function isConfiguredHeartbeatAgent(cfg: OpenClawConfig, agentId: string): boolean {

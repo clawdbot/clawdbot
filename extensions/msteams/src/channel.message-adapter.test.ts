@@ -126,12 +126,14 @@ describe("msteams channel message adapter", () => {
     };
 
     const proveMedia = async () => {
+      const mediaAccess = { localRoots: ["/tmp"], workspaceDir: "/tmp" };
       mocks.sendMedia.mockClear();
       const result = await sendMedia({
         cfg,
         to: "conversation:abc",
         text: "photo",
         mediaUrl: "file:///tmp/photo.png",
+        mediaAccess,
         mediaLocalRoots: ["/tmp"],
         accountId: "default",
       });
@@ -140,9 +142,11 @@ describe("msteams channel message adapter", () => {
         to: "conversation:abc",
         text: "photo",
         mediaUrl: "file:///tmp/photo.png",
+        mediaAccess,
         mediaLocalRoots: ["/tmp"],
         accountId: "default",
       });
+      expect(mocks.sendMedia.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
       expect(result.receipt.platformMessageIds).toEqual(["msg-media-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
@@ -154,11 +158,13 @@ describe("msteams channel message adapter", () => {
           blocks: [{ type: "text" as const, text: "card body" }],
         },
       };
+      const mediaAccess = { localRoots: ["/tmp"], workspaceDir: "/tmp" };
       const result = await sendPayload({
         cfg,
         to: "conversation:abc",
         text: "",
         payload,
+        mediaAccess,
         accountId: "default",
       });
       expect(mocks.sendPayload).toHaveBeenLastCalledWith({
@@ -166,8 +172,10 @@ describe("msteams channel message adapter", () => {
         to: "conversation:abc",
         text: "",
         payload,
+        mediaAccess,
         accountId: "default",
       });
+      expect(mocks.sendPayload.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
       expect(result.receipt.platformMessageIds).toEqual(["msg-payload-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("card");
     };
@@ -223,6 +231,41 @@ describe("msteams channel message adapter", () => {
           expect(adapter.live?.capabilities?.nativeStreaming).toBe(true);
         },
       },
+    });
+  });
+
+  it("exposes the resolved conversation for message-tool route reconciliation", async () => {
+    const adapter = requireMSTeamsMessageAdapter();
+    const sendText = requireTextSender(adapter);
+    const extractToolSendResult = msteamsPlugin.actions?.extractToolSendResult;
+    if (!extractToolSendResult) {
+      throw new Error("Expected msteams tool send result extractor");
+    }
+
+    const delivery = await sendText({
+      cfg,
+      to: "team-aad/19:channel@thread.tacv2",
+      text: "threaded",
+      threadId: "thread-root",
+      accountId: "default",
+    });
+
+    expect(
+      extractToolSendResult({
+        result: {
+          details: {
+            result: {
+              receipt: delivery.receipt,
+            },
+          },
+        },
+        send: {
+          to: "team-aad/19:channel@thread.tacv2",
+          threadId: "thread-root",
+        },
+      }),
+    ).toEqual({
+      to: "conversation:conv-1",
     });
   });
 });

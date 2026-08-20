@@ -6,22 +6,29 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { normalizeToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
-import type { GatewayRequestOptions } from "./server-methods/types.js";
+import type {
+  GatewayAgentRunTaskOwner,
+  GatewayRequestOptions,
+  TrustedAgentToolCaller,
+} from "./server-methods/types.js";
 
 export function createSyntheticPluginRuntimeClient(params?: {
   allowModelOverride?: boolean;
-  agentRunTracking?: "plugin_subagent";
+  agentToolCaller?: TrustedAgentToolCaller;
+  agentRunTracking?: GatewayAgentRunTaskOwner;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
+  pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  delegatedToolPolicyHandoff?: boolean;
+  delegatedToolPolicyHandoffId?: string;
   sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
 }): NonNullable<GatewayRequestOptions["client"]> {
@@ -45,6 +52,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
     internal: {
       syntheticClient: true,
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
+      ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
@@ -56,11 +64,14 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.pluginSubagentRequester
+        ? { pluginSubagentRequester: params.pluginSubagentRequester }
+        : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
         : {}),
-      ...(params?.delegatedToolPolicyHandoff === true
-        ? { delegatedToolPolicyHandoff: true as const }
+      ...(params?.delegatedToolPolicyHandoffId
+        ? { delegatedToolPolicyHandoffId: params.delegatedToolPolicyHandoffId }
         : {}),
     },
   };
@@ -87,7 +98,9 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
   toolsAlsoAllow?: string[];
 }): RuntimePluginToolGrant | undefined {
   const requested = uniqueStrings(
-    (params.toolsAlsoAllow ?? []).map((entry) => normalizeToolName(entry.trim())).filter(Boolean),
+    (params.toolsAlsoAllow ?? [])
+      .map((entry) => normalizeToolPolicyName(entry.trim()))
+      .filter(Boolean),
   );
   if (requested.length === 0) {
     return undefined;
@@ -105,7 +118,7 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
       (registry?.tools ?? [])
         .filter((registration) =>
           [...registration.names, ...(registration.declaredNames ?? [])].some(
-            (registeredName) => normalizeToolName(registeredName) === toolName,
+            (registeredName) => normalizeToolPolicyName(registeredName) === toolName,
           ),
         )
         .map((registration) => registration.pluginId),

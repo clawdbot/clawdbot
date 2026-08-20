@@ -25,6 +25,12 @@ export function logClawUpdatePlanSummary(plan: ClawUpdatePlan, runtime: RuntimeE
     );
     runtime.log(redactSensitiveText(`      effect: ${JSON.stringify(change.effect)}`));
   }
+  if (plan.readiness.requirements.length > 0) {
+    runtime.log(`Setup requirements (${plan.readiness.requirements.length}):`);
+    for (const requirement of plan.readiness.requirements) {
+      runtime.log(redactSensitiveText(`  - ${JSON.stringify(requirement)}`));
+    }
+  }
   if (plan.blockers.length > 0) {
     runtime.error(
       plan.blockers

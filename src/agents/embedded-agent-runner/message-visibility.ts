@@ -1,8 +1,10 @@
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../auto-reply/tokens.js";
+import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
 
 type AgentPayloadLike = {
   text?: unknown;
@@ -22,10 +24,6 @@ type PayloadVisibilityOptions = {
   includeReasoningPayloads?: boolean;
   includeSilentReplyPayloads?: boolean;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some(hasNonEmptyString);
@@ -182,6 +180,33 @@ export function readTerminalSourceReplyDeliveryMirror(
 export function isMeaningfulTranscriptMessage(message: unknown): boolean {
   const role = getTranscriptMessageRole(message);
   return Boolean(role && role !== "system");
+}
+
+/** Recognizes persisted progress without mistaking an ordinary assistant answer for completion. */
+export function isIntermediateAssistantTranscriptMessage(message: unknown): boolean {
+  if (
+    !message ||
+    typeof message !== "object" ||
+    getTranscriptMessageRole(message) !== "assistant"
+  ) {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  if (record.stopReason !== undefined && record.stopReason !== "stop") {
+    return false;
+  }
+  const phase = resolveAssistantMessagePhase(message);
+  if (phase !== undefined) {
+    return phase === "commentary";
+  }
+  const fallback = record.openclawStreamFallback;
+  if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) {
+    return false;
+  }
+  const { itemId, source } = fallback as { itemId?: unknown; source?: unknown };
+  // Keyed segments are durable progress items; unkeyed/current fallbacks can
+  // become the final answer and must never bypass restart completion checks.
+  return source === "segment" && typeof itemId === "string" && itemId.trim().length > 0;
 }
 
 /** Returns whether a stopped assistant turn contains only reasoning and a silent marker. */

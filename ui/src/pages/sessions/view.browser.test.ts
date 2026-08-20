@@ -29,6 +29,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/sessions.css",
   ];
@@ -38,7 +39,7 @@ function readUiCss(): string {
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
   const overviewTiles = [
-    ["3", "Threads"],
+    ["3", "Sessions"],
     ["1", "Live"],
     ["1", "Unread"],
     ["123k", "Tokens"],
@@ -80,9 +81,7 @@ function sessionsTableHtml() {
                               : index === 6
                                 ? "session-actions-col"
                                 : ""
-                      }">${
-                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
-                      }</th>`,
+                      }">${index === 6 ? `<span class="sr-only">${header}</span>` : header}</th>`,
                   )
                   .join("")}
               </tr>
@@ -128,7 +127,7 @@ function sessionsTableHtml() {
                       <span class="settings-count session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button class="icon-btn" aria-label="Open thread menu" aria-haspopup="menu">
+                    <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
                       <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /></svg>
                     </button>
                   </div>
@@ -139,7 +138,7 @@ function sessionsTableHtml() {
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
-                        <div class="session-details-panel__eyebrow">Thread details</div>
+                        <div class="session-details-panel__eyebrow">Session details</div>
                         <div class="session-details-panel__title">agent:main:main</div>
                       </div>
                       <div class="session-details-panel__badges">
@@ -196,6 +195,18 @@ function sessionsTableHtml() {
               </tr>
             </tbody>
           </table>
+        </div>
+        <div class="data-table-pagination">
+          <div class="data-table-pagination__info">1-25 of 30 rows</div>
+          <div class="data-table-pagination__controls">
+            <select class="data-table-pagination__size" aria-label="Rows per page">
+              <option value="10">10 per page</option>
+              <option value="25" selected>25 per page</option>
+              <option value="50">50 per page</option>
+            </select>
+            <button>Previous</button>
+            <button>Next</button>
+          </div>
         </div>
       </div>
     </div>
@@ -299,6 +310,17 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.hasDetails).toBe(true);
       expect(metrics.actionsVisible).toBe(true);
       expect(metrics.statusVisible).toBe(true);
+    } finally {
+      await closeFixture(fixture);
+    }
+  });
+
+  it("exposes the page-size selector by its localized accessible name", async () => {
+    const fixture = await openFixture(context, 1440, 900);
+    try {
+      const pageSize = fixture.page.getByRole("combobox", { name: "Rows per page" });
+      await pageSize.waitFor();
+      expect(await pageSize.inputValue()).toBe("25");
     } finally {
       await closeFixture(fixture);
     }

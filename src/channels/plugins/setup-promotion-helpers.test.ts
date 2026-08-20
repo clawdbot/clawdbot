@@ -59,6 +59,17 @@ describe("setup promotion helpers", () => {
     expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
+  it("resolves bundled promotion from a channel-owned setup contract", () => {
+    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
+    getBundledChannelSetupPluginMock.mockReturnValue({
+      setupContract: { singleAccountKeysToMove: ["signalNumber"] },
+    });
+
+    expect(resolveBundledChannelSetupPromotionSurface("signal")).toEqual({
+      singleAccountKeysToMove: ["signalNumber"],
+    });
+  });
+
   it("keeps static single-account migration keys cheap", () => {
     const keys = resolveSingleAccountKeysToMove({
       channelKey: "demo",
@@ -166,6 +177,20 @@ describe("setup promotion helpers", () => {
     expect(keys).toEqual(["callerKey"]);
     expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
     expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers loaded channel-owned promotion declarations over legacy setup", () => {
+    getLoadedChannelPluginMock.mockReturnValue({
+      setupContract: { singleAccountKeysToMove: ["signalNumber"] },
+      setup: { singleAccountKeysToMove: ["legacyKey"] },
+    });
+
+    expect(
+      resolveSingleAccountKeysToMove({
+        channelKey: "signal",
+        channel: { signalNumber: "+15551234567", legacyKey: true },
+      }),
+    ).toEqual(["signalNumber"]);
   });
 
   it("unions the setup generic tier with plugin-declared keys", () => {

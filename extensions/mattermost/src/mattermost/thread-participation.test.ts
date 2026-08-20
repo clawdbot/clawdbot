@@ -49,6 +49,7 @@ describe("mattermost thread participation", () => {
   afterEach(() => {
     threadParticipationMemory.clear();
     resetPluginStateStoreForTests();
+    vi.restoreAllMocks();
   });
 
   it("remembers a thread the bot replied in", async () => {
@@ -85,10 +86,13 @@ describe("mattermost thread participation", () => {
     ).resolves.toBe(false);
   });
 
-  it("recovers participation from the persistent store after the in-memory cache is lost", async () => {
+  it("restores participation after a restart without extending its original expiry", async () => {
+    const repliedAt = 1_711_406_400_000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(repliedAt);
     recordMattermostThreadParticipation("acct", "chan", "root-1");
     await flush();
-    // Simulate a restart: in-memory cache cleared, persistent SQLite store intact.
+    now.mockReturnValue(repliedAt + 7 * 24 * 60 * 60 * 1000 - 1000);
+    // Simulate a restart near expiry: memory is lost, but the SQLite row is still valid.
     threadParticipationMemory.clear();
     await expect(
       hasMattermostThreadParticipationWithPersistence({
@@ -97,6 +101,15 @@ describe("mattermost thread participation", () => {
         threadRootId: "root-1",
       }),
     ).resolves.toBe(true);
+
+    now.mockReturnValue(repliedAt + 7 * 24 * 60 * 60 * 1000 + 1000);
+    await expect(
+      hasMattermostThreadParticipationWithPersistence({
+        accountId: "acct",
+        channelId: "chan",
+        threadRootId: "root-1",
+      }),
+    ).resolves.toBe(false);
   });
 
   it("degrades to in-memory only when the persistent store fails", async () => {

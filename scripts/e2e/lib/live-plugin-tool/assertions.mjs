@@ -2,24 +2,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "../../../lib/record-shared.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 const agentTurnTimeoutSeconds = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS",
@@ -62,10 +52,6 @@ function agentOutputPath() {
 
 function agentErrorPath() {
   return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
-}
-
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readNonEmptyString(value) {
@@ -245,12 +231,12 @@ function resultLinksToolCall(call, result, targetCallCount) {
   return targetCallCount === 1;
 }
 
-function createToolEvidenceTracker(toolName, expected) {
+function createToolEvidenceTracker(toolNames, expected) {
   const calls = [];
   return {
     recordMessage(message) {
       for (const call of extractTranscriptToolCalls(message)) {
-        if (call.tool === toolName) {
+        if (toolNames.includes(call.tool)) {
           calls.push(call);
         }
       }
@@ -279,8 +265,8 @@ function transcriptMessageFromLine(line) {
   }
 }
 
-function scanFileForToolEvidence(file, toolName, expected) {
-  const tracker = createToolEvidenceTracker(toolName, expected);
+function scanFileForToolEvidence(file, toolNames, expected) {
+  const tracker = createToolEvidenceTracker(toolNames, expected);
   let stat;
   try {
     stat = fs.statSync(file);
@@ -325,7 +311,7 @@ function scanFileForToolEvidence(file, toolName, expected) {
   return false;
 }
 
-function scanSessionTranscripts(sessionsDir, toolName, expected) {
+function scanSessionTranscripts(sessionsDir, toolNames, expected) {
   const checkedFiles = [];
   let filesChecked = 0;
   let stat;
@@ -364,7 +350,7 @@ function scanSessionTranscripts(sessionsDir, toolName, expected) {
         if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
           checkedFiles.push(path.relative(sessionsDir, entryPath));
         }
-        if (scanFileForToolEvidence(entryPath, toolName, expected)) {
+        if (scanFileForToolEvidence(entryPath, toolNames, expected)) {
           return { checkedFiles, filesChecked, found: true, missingDir: false };
         }
       }
@@ -375,7 +361,7 @@ function scanSessionTranscripts(sessionsDir, toolName, expected) {
   return { checkedFiles, filesChecked, found: false, missingDir: false };
 }
 
-function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected) {
+function scanSqliteSessionTranscript(databasePath, sessionId, toolNames, expected) {
   if (!fs.existsSync(databasePath)) {
     return { eventsChecked: 0, found: false };
   }
@@ -394,7 +380,7 @@ function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected
       throw new Error(`session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} SQLite events`);
     }
 
-    const tracker = createToolEvidenceTracker(toolName, expected);
+    const tracker = createToolEvidenceTracker(toolNames, expected);
     for (const row of rows) {
       if (typeof row.event_json !== "string") {
         continue;
@@ -648,15 +634,18 @@ function assertAgentTurn() {
     );
   }
   const agentStateDir = path.join(stateDir(), "agents", "main");
+  // Code Mode exposes plugin tools behind exec/wait, so the durable transcript can
+  // record the outer exec call while the run summary names the nested plugin tool.
+  const transcriptToolNames = [toolName, "exec", "wait"];
   const sqliteScan = scanSqliteSessionTranscript(
     path.join(agentStateDir, "agent", "openclaw-agent.sqlite"),
     LIVE_PLUGIN_TOOL_SESSION_ID,
-    toolName,
+    transcriptToolNames,
     expected,
   );
   const fileScan = sqliteScan.found
     ? { checkedFiles: [], filesChecked: 0, found: false, missingDir: false }
-    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), toolName, expected);
+    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), transcriptToolNames, expected);
   if (!sqliteScan.found && !fileScan.found) {
     const checkedFiles =
       fileScan.checkedFiles.length > 0 ? fileScan.checkedFiles.join(", ") : "<none>";

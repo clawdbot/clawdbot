@@ -190,7 +190,6 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "AWS_SHARED_CREDENTIALS_FILE",
   "AWS_WEB_IDENTITY_TOKEN_FILE",
   "BUZZ_RELAY_URL",
-  "SLACK_FORWARDER_URL",
   "SMS_ALLOWED_USERS",
   "SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION",
   "SMS_PUBLIC_WEBHOOK_URL",
@@ -229,7 +228,6 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
   "OPENCLAW_",
-  "OPENCLAW_CLAWHUB_",
   "OPENCLAW_DISABLE_",
   "OPENCLAW_SKIP_",
   "OPENCLAW_UPDATE_",

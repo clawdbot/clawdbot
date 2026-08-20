@@ -1,11 +1,41 @@
 import { z } from "zod";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
+  READ_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+} from "../gateway/operator-scopes.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
-  TailscaleServiceNameSchema,
+  validateHttpOrigin,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+const OperatorScopeSchema = z.enum([
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  QUESTIONS_SCOPE,
+  PAIRING_SCOPE,
+  TALK_SCOPE,
+  TALK_SECRETS_SCOPE,
+]);
+const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function validateGatewayPublicOrigin(value: string): boolean {
+  if (!validateHttpOrigin(value)) {
+    return false;
+  }
+  const url = new URL(value);
+  return url.protocol === "https:" || GATEWAY_HTTP_LOOPBACK_HOSTS.has(url.hostname);
+}
 
 export const GatewayConfigSchema = z
   .strictObject({
@@ -21,6 +51,14 @@ export const GatewayConfigSchema = z
       ])
       .optional(),
     customBindHost: z.string().optional(),
+    publicOrigin: z
+      .string()
+      .url()
+      .refine(
+        validateGatewayPublicOrigin,
+        "gateway.publicOrigin must be a bare HTTPS origin; HTTP is allowed only for localhost, 127.0.0.1, or [::1]",
+      )
+      .optional(),
     controlUi: z
       .strictObject({
         // Shipped legacy input. Doctor removes it after recording migration state.
@@ -28,14 +66,23 @@ export const GatewayConfigSchema = z
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),
+        github: z
+          .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
+          .optional(),
         toolTitles: z.boolean().optional(),
         sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
+        automaticallyFetchFavicons: z.boolean().optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
+      })
+      .optional(),
+    cliAgents: z
+      .strictObject({
+        enabled: z.boolean().optional(),
       })
       .optional(),
     terminal: z
@@ -58,6 +105,7 @@ export const GatewayConfigSchema = z
         token: SecretInputSchema.optional().register(sensitive),
         password: SecretInputSchema.optional().register(sensitive),
         allowTailscale: z.boolean().optional(),
+        identityScopes: z.record(z.string().min(1), z.array(OperatorScopeSchema)).optional(),
         rateLimit: z
           .strictObject({
             maxAttempts: z.number().optional(),
@@ -93,8 +141,6 @@ export const GatewayConfigSchema = z
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
-        resetOnExit: z.boolean().optional(),
-        serviceName: TailscaleServiceNameSchema.optional(),
         preserveFunnel: z.boolean().optional(),
       })
       .optional(),
@@ -194,6 +240,7 @@ export const GatewayConfigSchema = z
           .optional(),
         pairing: z
           .strictObject({
+            autoApproveLocal: z.boolean().optional(),
             autoApproveCidrs: z.array(z.string()).optional(),
             sshVerify: z
               .union([

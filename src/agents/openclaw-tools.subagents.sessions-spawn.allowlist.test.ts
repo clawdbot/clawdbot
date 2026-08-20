@@ -4,15 +4,15 @@ import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
-} from "./subagent-spawn.test-helpers.js";
+} from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
 
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
 function resolveAgentConfigFromList(cfg: Record<string, unknown>, agentId: string) {
   const agents = (cfg.agents as { list?: Array<Record<string, unknown>> } | undefined)?.list;
@@ -65,7 +65,7 @@ async function spawn(params: {
       ...(params.sandbox ? { sandbox: params.sandbox } : {}),
     },
     {
-      agentSessionKey: params.requesterSessionKey ?? "main",
+      agentSessionKey: params.requesterSessionKey ?? "agent:main:main",
       agentChannel: params.requesterChannel ?? "mobilechat",
     },
   );
@@ -150,24 +150,16 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     expectStatus(result, "accepted");
   });
 
-  it("rejects unconfigured agent ids when allowlist contains *", async () => {
+  it.each([
+    { name: "rejects unconfigured agent ids when allowlist contains *", allowAgents: ["*"] },
+    {
+      name: "rejects explicit unconfigured agent ids when allowlist also contains *",
+      allowAgents: ["*", "beta"],
+    },
+  ])("$name", async ({ allowAgents }) => {
     setConfig({
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const result = await spawn({ agentId: "beta" });
-    expectStatus(result, "forbidden");
-    expect(result.error ?? "").toBe(
-      'agentId "beta" is not in the configured agent registry (allowed: main)',
-    );
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects explicit unconfigured agent ids when allowlist also contains *", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*", "beta"] } }],
+        list: [{ id: "main", subagents: { allowAgents } }],
       },
     });
     const result = await spawn({ agentId: "beta" });
@@ -256,40 +248,37 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     expectStatus(result, "accepted");
   });
 
-  it("rejects malformed agentId strings before any gateway work", async () => {
+  it.each([
+    {
+      name: "rejects malformed agentId strings before any gateway work",
+      agentId: "Agent not found: xyz",
+      extraAgents: [{ id: "research" }],
+      mentionsAgentsList: true,
+    },
+    {
+      name: "rejects agentId containing path separators",
+      agentId: "../../../etc/passwd",
+      extraAgents: [],
+      mentionsAgentsList: false,
+    },
+    {
+      name: "rejects agentId exceeding 64 characters",
+      agentId: "a".repeat(65),
+      extraAgents: [],
+      mentionsAgentsList: false,
+    },
+  ])("$name", async (row) => {
     setConfig({
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "research" }],
+        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, ...row.extraAgents],
       },
     });
-    const result = await spawn({ agentId: "Agent not found: xyz" });
+    const result = await spawn({ agentId: row.agentId });
     expectStatus(result, "error");
     expect(result.error ?? "").toContain("Invalid agentId");
-    expect(result.error ?? "").toContain("agents_list");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects agentId containing path separators", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const result = await spawn({ agentId: "../../../etc/passwd" });
-    expectStatus(result, "error");
-    expect(result.error ?? "").toContain("Invalid agentId");
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects agentId exceeding 64 characters", async () => {
-    setConfig({
-      agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
-      },
-    });
-    const result = await spawn({ agentId: "a".repeat(65) });
-    expectStatus(result, "error");
-    expect(result.error ?? "").toContain("Invalid agentId");
+    if (row.mentionsAgentsList) {
+      expect(result.error ?? "").toContain("agents_list");
+    }
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 

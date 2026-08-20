@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { BoardValidationError } from "./board-layout.js";
-import { InMemoryBoardStore } from "./board-store.js";
+import type { BoardStore } from "./board-store.js";
+import { createTestBoardStore } from "./board-store.test-support.js";
 
-function putHtml(store: InMemoryBoardStore, sessionKey: string, name: string, html = "<p>one</p>") {
+function putHtml(store: BoardStore, sessionKey: string, name: string, html = "<p>one</p>") {
   return store.putWidget({ sessionKey, name, content: { kind: "html", html } });
 }
 
-describe("in-memory board store", () => {
+describe("board store", () => {
   it("creates the implicit main tab and bumps board and widget revisions", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     const first = putHtml(store, "agent:main:main", "status");
     const second = putHtml(store, "agent:main:main", "status", "<p>two</p>");
     expect(first).toMatchObject({
@@ -21,15 +22,18 @@ describe("in-memory board store", () => {
   });
 
   it("returns immutable snapshots and lists only existing boards", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     putHtml(store, "session-b", "b");
     putHtml(store, "session-a", "a");
     const snapshot = store.getSnapshot("session-a");
     snapshot.tabs[0]!.title = "Changed";
     expect(store.getSnapshot("session-a").tabs[0]!.title).toBe("Main");
-    expect(store.listSessionsWithBoards()).toEqual(["session-a", "session-b"]);
+    expect(store.listSessionsWithBoards()).toEqual([
+      "agent:main:session-a",
+      "agent:main:session-b",
+    ]);
     expect(store.getSnapshot("missing")).toEqual({
-      sessionKey: "missing",
+      sessionKey: "agent:main:missing",
       revision: 0,
       tabs: [],
       widgets: [],
@@ -37,7 +41,7 @@ describe("in-memory board store", () => {
   });
 
   it("stores HTML bytes with digest and keeps MCP descriptors non-HTML", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     putHtml(store, "session", "html", "<main>ok</main>");
     store.putWidget({
       sessionKey: "session",
@@ -74,7 +78,7 @@ describe("in-memory board store", () => {
   });
 
   it("transitions declared widgets through pending grants", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     const pending = store.putWidget({
       sessionKey: "session",
       name: "networked",
@@ -92,14 +96,14 @@ describe("in-memory board store", () => {
   });
 
   it("survives reset/new boundaries", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     putHtml(store, "session", "status");
     // Session reset has no BoardStore call; the stable session key remains authoritative.
     expect(store.getSnapshot("session").widgets).toHaveLength(1);
   });
 
   it("rejects stale grant revisions and accepts the current revision", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     const pending = store.putWidget({
       sessionKey: "session",
       name: "networked",
@@ -123,7 +127,7 @@ describe("in-memory board store", () => {
   });
 
   it("enforces the board widget count and UTF-8 HTML byte limits", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     for (let index = 0; index < 48; index += 1) {
       putHtml(store, "session", `widget-${index}`, "ok");
     }
@@ -135,13 +139,13 @@ describe("in-memory board store", () => {
       expect(error).toMatchObject({ code: "invalid_operation" });
       expect((error as Error).message).toContain("more than 48 widgets");
     }
-    expect(() =>
-      putHtml(new InMemoryBoardStore(), "session", "large", "é".repeat(131_073)),
-    ).toThrow("262144 UTF-8 bytes");
+    expect(() => putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073))).toThrow(
+      "262144 UTF-8 bytes",
+    );
   });
 
   it("bumps once per applyOps transaction and removes widget bytes", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     putHtml(store, "session", "status");
     const snapshot = store.applyOps("session", [
       { kind: "widget_resize", name: "status", sizeW: 3, sizeH: 3 },
@@ -153,7 +157,7 @@ describe("in-memory board store", () => {
   });
 
   it("preserves position on content updates and honors explicit after placement", () => {
-    const store = new InMemoryBoardStore();
+    const store = createTestBoardStore();
     putHtml(store, "session", "first");
     putHtml(store, "session", "second");
     putHtml(store, "session", "third");

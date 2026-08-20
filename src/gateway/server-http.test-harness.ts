@@ -183,6 +183,7 @@ export async function sendRequest(
     method?: string;
     remoteAddress?: string;
     host?: string;
+    headers?: Record<string, string>;
   },
 ): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();
@@ -221,7 +222,7 @@ export function createHooksHandler(
     } as unknown as ReturnType<typeof createSubsystemLogger>,
     getClientIpConfig: options.getClientIpConfig,
     dispatchWakeHook: options.dispatchWakeHook ?? (() => {}),
-    dispatchAgentHook: options.dispatchAgentHook ?? (() => "run-1"),
+    dispatchAgentHook: options.dispatchAgentHook ?? (() => ({ ok: true, runId: "run-1" })),
   });
 }
 

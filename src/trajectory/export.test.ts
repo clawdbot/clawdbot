@@ -82,6 +82,24 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
   return events.map((event) => event.type);
 }
 
+function runtimeAttemptEvents(
+  rows: ReadonlyArray<readonly [type: string, runId: string, data?: Record<string, unknown>]>,
+): TrajectoryEvent[] {
+  return rows.map(([type, runId, data], index) => ({
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    traceId: "session-1",
+    source: "runtime",
+    type,
+    ts: "2026-04-22T08:00:00.000Z",
+    seq: index + 1,
+    sourceSeq: index + 1,
+    sessionId: "session-1",
+    runId,
+    ...(data ? { data } : {}),
+  }));
+}
+
 function writeSimpleSessionFile(
   sessionFile: string,
   params: { userEntryTimestamp?: string | number; userMessage?: Message } = {},
@@ -112,6 +130,32 @@ function writeSimpleSessionFile(
     `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf8",
   );
+}
+
+async function exportRuntimeArtifacts(
+  runtimeEvents: readonly TrajectoryEvent[],
+): Promise<Record<string, unknown> | undefined> {
+  const tmpDir = makeTempDir();
+  const sessionFile = path.join(tmpDir, "session.jsonl");
+  const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+  const outputDir = path.join(tmpDir, "bundle");
+  writeSimpleSessionFile(sessionFile);
+  fs.writeFileSync(
+    runtimeFile,
+    `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    "utf8",
+  );
+  await exportTrajectoryBundle({
+    outputDir,
+    sessionFile,
+    sessionId: "session-1",
+    workspaceDir: tmpDir,
+    runtimeFile,
+  });
+  const artifactsFile = path.join(outputDir, "artifacts.json");
+  return fs.existsSync(artifactsFile)
+    ? (JSON.parse(fs.readFileSync(artifactsFile, "utf8")) as Record<string, unknown>)
+    : undefined;
 }
 
 function writeToolCallOnlySessionFile(sessionFile: string): void {
@@ -502,6 +546,43 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
   });
 
+  it("keeps runtime timestamp validation on the Date.parse string contract", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    writeSimpleSessionFile(sessionFile);
+    const runtimeEvents: TrajectoryEvent[] = [
+      { ts: "2026", type: "date-compatible" },
+      { ts: "999999", type: "numeric-milliseconds-only" },
+    ].map(({ ts, type }, index) => ({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      traceId: "session-1",
+      source: "runtime",
+      type,
+      ts,
+      seq: index + 1,
+      sourceSeq: index + 1,
+      sessionId: "session-1",
+    }));
+    fs.writeFileSync(
+      runtimeFile,
+      `${runtimeEvents.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+      runtimeFile,
+    });
+
+    expect(eventTypes(bundle.events)).toContain("date-compatible");
+    expect(eventTypes(bundle.events)).not.toContain("numeric-milliseconds-only");
+  });
+
   it("rejects an incomplete target that conflicts with a legacy marker", async () => {
     const tmpDir = makeTempDir();
 
@@ -551,6 +632,7 @@ describe("exportTrajectoryBundle", () => {
         reason: "trajectory-event-size-limit",
         usage,
         promptCache,
+        stopReason: "stop_sequence",
         droppedFields: ["messagesSnapshot"],
       },
     };
@@ -566,9 +648,120 @@ describe("exportTrajectoryBundle", () => {
 
     const artifacts = JSON.parse(
       fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8"),
-    ) as { usage?: unknown; promptCache?: unknown };
+    ) as { usage?: unknown; promptCache?: unknown; stopReason?: unknown };
     expect(artifacts.usage).toEqual(usage);
     expect(artifacts.promptCache).toEqual(promptCache);
+    expect(artifacts.stopReason).toBe("stop_sequence");
+  });
+
+  const staleCompletion = {
+    usage: { totalTokens: 10 },
+    assistantTexts: ["stale completion"],
+    stopReason: "length",
+  };
+  const currentCompletion = {
+    usage: { totalTokens: 2 },
+    assistantTexts: ["current completion"],
+  };
+  const staleArtifacts = {
+    finalStatus: "error",
+    stopReason: "length",
+    itemLifecycle: { startedCount: 9, completedCount: 1, activeCount: 8 },
+    lastToolError: { message: "stale tool failure" },
+  };
+
+  it.each([
+    {
+      name: "successive attempts that reuse a run id",
+      runtimeEvents: runtimeAttemptEvents([
+        ["session.started", "shared-run"],
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error" }],
+        ["session.started", "shared-run"],
+        ["model.completed", "shared-run", currentCompletion],
+        ["session.ended", "shared-run", { status: "success" }],
+      ]),
+    },
+    {
+      name: "distinct run ids with a delayed older terminal after newer completion",
+      runtimeEvents: runtimeAttemptEvents([
+        ["session.started", "old-run"],
+        ["model.completed", "old-run", staleCompletion],
+        ["trace.artifacts", "old-run", staleArtifacts],
+        ["session.ended", "old-run", { status: "error" }],
+        ["session.started", "new-run"],
+        ["model.completed", "new-run", currentCompletion],
+        ["session.ended", "new-run", { status: "success" }],
+        ["session.ended", "old-run", { status: "error" }],
+      ]),
+    },
+  ])("scopes artifacts to $name", async ({ runtimeEvents }) => {
+    const artifacts = await exportRuntimeArtifacts(runtimeEvents);
+    expect(artifacts).toMatchObject({
+      finalStatus: "success",
+      usage: { totalTokens: 2 },
+      assistantTexts: ["current completion"],
+    });
+    expect(artifacts).not.toHaveProperty("stopReason");
+    expect(artifacts).not.toHaveProperty("itemLifecycle");
+    expect(artifacts).not.toHaveProperty("lastToolError");
+  });
+
+  it.each([
+    {
+      name: "timed tail with a delayed older same-run terminal",
+      runtimeEvents: runtimeAttemptEvents([
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error", startedAt: 100 }],
+        ["model.completed", "shared-run", currentCompletion],
+        [
+          "session.ended",
+          "shared-run",
+          { status: "interrupted", stopReason: "aborted", startedAt: 200 },
+        ],
+        ["session.ended", "shared-run", { status: "error", stopReason: "length", startedAt: 100 }],
+      ]),
+      expectedUsage: true,
+    },
+    {
+      name: "timestamp-free tail with reused run id and stale artifacts",
+      runtimeEvents: runtimeAttemptEvents([
+        ["model.completed", "shared-run", staleCompletion],
+        ["trace.artifacts", "shared-run", staleArtifacts],
+        ["session.ended", "shared-run", { status: "error", stopReason: "length" }],
+        ["session.ended", "shared-run", { status: "interrupted", stopReason: "aborted" }],
+      ]),
+      expectedUsage: false,
+    },
+  ])("exports $name", async ({ runtimeEvents, expectedUsage }) => {
+    const artifacts = await exportRuntimeArtifacts(runtimeEvents);
+
+    expect(artifacts).toMatchObject({ finalStatus: "interrupted", stopReason: "aborted" });
+    if (expectedUsage) {
+      expect(artifacts).toMatchObject({
+        usage: { totalTokens: 2 },
+        assistantTexts: ["current completion"],
+      });
+    } else {
+      expect(artifacts).not.toHaveProperty("usage");
+    }
+    expect(artifacts).not.toHaveProperty("itemLifecycle");
+  });
+
+  it("omits artifacts when the newest attempt has only started", async () => {
+    const artifacts = await exportRuntimeArtifacts(
+      runtimeAttemptEvents([
+        ["session.started", "old-run"],
+        ["model.completed", "old-run", staleCompletion],
+        ["trace.artifacts", "old-run", staleArtifacts],
+        ["session.ended", "old-run", { status: "error" }],
+        ["session.started", "new-run"],
+      ]),
+    );
+
+    expect(artifacts).toBeUndefined();
   });
 
   it("preserves numeric transcript timestamps", async () => {
@@ -1907,6 +2100,7 @@ describe("exportTrajectoryBundle", () => {
           finalStatus: "success",
           terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
+          stopReason: "stop_sequence",
           finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
           finalPromptTextOriginalLength: 12_345,
           itemLifecycle: {
@@ -1991,6 +2185,7 @@ describe("exportTrajectoryBundle", () => {
     expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
     expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
     expect(JSON.parse(artifacts).finalPromptTextOriginalLength).toBe(12_345);
+    expect(JSON.parse(artifacts).stopReason).toBe("stop_sequence");
     expect(artifacts).toContain("non_deliverable_terminal_turn");
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");

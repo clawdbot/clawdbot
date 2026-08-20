@@ -16,6 +16,7 @@ const groupConfigSchema = buildGroupEntrySchema()
 const zalouserAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   markdown: MarkdownConfigSchema,
   profile: z.string().optional(),
   dangerouslyAllowNameMatching: z.boolean().optional(),

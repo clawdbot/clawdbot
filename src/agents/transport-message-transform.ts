@@ -71,6 +71,7 @@ export function transformTransportMessages(
   options?: {
     normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
   },
 ): Context["messages"] {
   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
@@ -189,5 +190,6 @@ export function transformTransportMessages(
   return repairToolUseResultPairing(replayable, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
+    preserveUnframedToolResults: options?.preserveUnframedToolResults,
   }).messages as Context["messages"];
 }

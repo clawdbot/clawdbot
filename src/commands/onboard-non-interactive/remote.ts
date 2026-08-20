@@ -71,7 +71,6 @@ export async function runNonInteractiveRemoteSetup(params: {
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await commitNonInteractiveOnboardConfig({
     nextConfig,
-    baseConfig,
     baseHash,
     reset: opts.reset,
   });

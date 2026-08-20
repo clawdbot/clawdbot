@@ -92,23 +92,11 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set<string>();
-  for (const alias of command.textAliases) {
-    const lowered = normalizeOptionalLowercaseString(alias);
-    if (lowered) {
-      existing.add(lowered);
-    }
-  }
+  const existing = new Set(command.textAliases.map((alias) => alias.toLowerCase()));
   for (const alias of aliases) {
     const trimmed = alias.trim();
-    if (!trimmed) {
-      continue;
-    }
     const lowered = normalizeOptionalLowercaseString(trimmed);
-    if (!lowered) {
-      continue;
-    }
-    if (existing.has(lowered)) {
+    if (!lowered || existing.has(lowered)) {
       continue;
     }
     existing.add(lowered);
@@ -167,6 +155,55 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
+type BuiltinCommandArgument = NonNullable<ChatCommandDefinition["args"]>[number];
+type BuiltinCommandArgumentOptions = Omit<
+  BuiltinCommandArgument,
+  "name" | "description" | "type"
+> & { type?: BuiltinCommandArgument["type"] };
+type BuiltinCommandOptions = Omit<
+  DefineChatCommandInput,
+  "key" | "description" | "category" | "tier" | "nativeName" | "textAlias"
+> & { nativeName?: string | false };
+type BuiltinCommandDescriptor = readonly [
+  key: string,
+  description: string,
+  category: CommandCategory,
+  tier: CommandTier,
+  options?: BuiltinCommandOptions,
+];
+
+function defineBuiltinCommand(...definition: BuiltinCommandDescriptor): BuiltinCommandDescriptor {
+  return definition;
+}
+
+function defineCommandArgument(
+  name: string,
+  description: string,
+  options: BuiltinCommandArgumentOptions = {},
+): BuiltinCommandArgument {
+  return { name, description, type: "string", ...options };
+}
+
+function defineBuiltinChatCommand([
+  key,
+  description,
+  category,
+  tier,
+  options = {},
+]: BuiltinCommandDescriptor): ChatCommandDefinition {
+  const { nativeName = key, textAliases, ...fields } = options;
+  return defineChatCommand({
+    key,
+    nativeName: nativeName === false ? undefined : nativeName,
+    description,
+    textAlias: textAliases ? undefined : `/${key}`,
+    textAliases,
+    category,
+    tier,
+    ...fields,
+  });
+}
+
 /** Builds the built-in command list with context-aware thinking choices. */
 export function buildBuiltinChatCommands(
   params: { listThinkingLevels?: ListThinkingLevels } = {},
@@ -177,262 +214,149 @@ export function buildBuiltinChatCommands(
     const levels = configuredThinkingLevels(provider, model, catalog, agentRuntime);
     return ["default", ...levels.filter((level) => level !== "default")];
   };
-  const commands: ChatCommandDefinition[] = [
-    defineChatCommand({
-      key: "help",
-      nativeName: "help",
-      description: "Show available commands.",
-      textAlias: "/help",
-      category: "status",
-      tier: "essential",
-    }),
-    defineChatCommand({
-      key: "commands",
-      nativeName: "commands",
-      description: "List all slash commands.",
-      textAlias: "/commands",
-      category: "status",
-      tier: "power",
-    }),
-    defineChatCommand({
-      key: "tools",
-      nativeName: "tools",
-      description: "List available runtime tools.",
-      textAlias: "/tools",
-      category: "status",
+  const definitions: BuiltinCommandDescriptor[] = [
+    defineBuiltinCommand("help", "Show available commands.", "status", "essential"),
+    defineBuiltinCommand("commands", "List all slash commands.", "status", "power"),
+    defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
       args: [
-        {
-          name: "mode",
-          description: "compact or verbose",
-          type: "string",
-          choices: ["compact", "verbose"],
-        },
+        defineCommandArgument("mode", "compact or verbose", { choices: ["compact", "verbose"] }),
       ],
       argsMenu: "auto",
-      tier: "standard",
     }),
-    defineChatCommand({
-      key: "skill",
-      nativeName: "skill",
-      description: "Run a skill by name.",
-      textAlias: "/skill",
-      category: "tools",
-      tier: "standard",
+    defineBuiltinCommand("skill", "Run a skill by name.", "tools", "standard", {
       args: [
-        {
-          name: "name",
-          description: "Skill name",
-          type: "string",
-          required: true,
-        },
-        {
-          name: "input",
-          description: "Skill input",
-          type: "string",
-          captureRemaining: true,
-        },
+        defineCommandArgument("name", "Skill name", { required: true }),
+        defineCommandArgument("input", "Skill input", { captureRemaining: true }),
       ],
     }),
-    defineChatCommand({
-      key: "learn",
-      nativeName: "learn",
-      description: "Draft a reusable skill from recent work or named sources.",
-      textAlias: "/learn",
-      category: "tools",
-      tier: "standard",
-      acceptsArgs: true,
-      args: [
-        {
-          name: "request",
-          description: "Sources and requirements for the skill draft",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "loop",
-      nativeName: "loop",
-      description: "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]",
-      textAlias: "/loop",
-      category: "tools",
-      tier: "standard",
-      args: [
-        {
-          name: "spec",
-          description: "[interval] prompt, or status/stop",
-          type: "string",
-          required: false,
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "status",
-      nativeName: "status",
-      description: "Show current status.",
-      textAlias: "/status",
-      category: "status",
-      tier: "essential",
+    defineBuiltinCommand(
+      "learn",
+      "Draft a reusable skill from recent work or named sources.",
+      "tools",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("request", "Sources and requirements for the skill draft", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
+      "loop",
+      "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]",
+      "tools",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("spec", "[interval] prompt, or status/stop", {
+            required: false,
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
     }),
-    defineChatCommand({
-      key: "goal",
-      nativeName: "goal",
-      description: "Show or control the current goal.",
-      textAlias: "/goal",
-      category: "status",
-      tier: "standard",
-      acceptsArgs: true,
+    defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       args: [
-        {
-          name: "action",
-          description: "status, start, edit, pause, resume, complete, block, clear",
-          type: "string",
-          choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
-        },
-        {
-          name: "text",
-          description: "Goal objective or note",
-          type: "string",
-          captureRemaining: true,
-        },
+        defineCommandArgument(
+          "action",
+          "status, start, edit, pause, resume, complete, block, clear",
+          {
+            choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
+          },
+        ),
+        defineCommandArgument("text", "Goal objective or note", { captureRemaining: true }),
       ],
     }),
-    defineChatCommand({
-      key: "diagnostics",
-      nativeName: "diagnostics",
-      description: "Explain Gateway diagnostics and Codex feedback upload options.",
-      textAlias: "/diagnostics",
-      acceptsArgs: true,
-      category: "status",
-      tier: "standard",
-      args: [
-        {
-          name: "note",
-          description: "Optional note for Codex feedback upload",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "login",
-      nativeName: "login",
+    defineBuiltinCommand(
+      "diagnostics",
+      "Explain Gateway diagnostics and Codex feedback upload options.",
+      "status",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("note", "Optional note for Codex feedback upload", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand("login", "Pair Codex login.", "management", "standard", {
       nativeProviders: ["discord", "slack", "telegram"],
-      description: "Pair Codex login.",
-      textAlias: "/login",
-      category: "management",
-      tier: "standard",
       args: [
-        {
-          name: "provider",
-          description: "Provider to pair",
-          type: "string",
-          choices: ["codex", "openai"],
-        },
+        defineCommandArgument("provider", "Provider to pair", { choices: ["codex", "openai"] }),
       ],
     }),
-    defineChatCommand({
-      key: "openclaw",
-      description: "Run the OpenClaw setup and repair helper.",
-      textAlias: "/openclaw",
+    defineBuiltinCommand(
+      "openclaw",
+      "Run the OpenClaw setup and repair helper.",
+      "management",
+      "essential",
+      {
+        nativeName: false,
+        acceptsArgs: true,
+      },
+    ),
+    defineBuiltinCommand("tasks", "List background tasks for this session.", "status", "standard"),
+    defineBuiltinCommand("allowlist", "List/add/remove allowlist entries.", "management", "power", {
+      nativeName: false,
       acceptsArgs: true,
-      scope: "text",
-      category: "management",
-      tier: "essential",
     }),
-    defineChatCommand({
-      key: "tasks",
-      nativeName: "tasks",
-      description: "List background tasks for this session.",
-      textAlias: "/tasks",
-      category: "status",
-      tier: "standard",
-    }),
-    defineChatCommand({
-      key: "allowlist",
-      description: "List/add/remove allowlist entries.",
-      textAlias: "/allowlist",
+    defineBuiltinCommand("approve", "Approve or deny exec requests.", "management", "power", {
       acceptsArgs: true,
-      scope: "text",
-      category: "management",
-      tier: "power",
     }),
-    defineChatCommand({
-      key: "approve",
-      nativeName: "approve",
-      description: "Approve or deny exec requests.",
-      textAlias: "/approve",
-      acceptsArgs: true,
-      category: "management",
-      tier: "power",
-    }),
-    defineChatCommand({
-      key: "context",
-      nativeName: "context",
-      description: "Explain how context is built and used.",
-      textAlias: "/context",
-      acceptsArgs: true,
-      category: "status",
-      tier: "standard",
-    }),
-    defineChatCommand({
-      key: "btw",
-      nativeName: "btw",
-      nativeAliases: ["side"],
-      description: "Ask a side question without changing future session context.",
-      textAliases: ["/btw", "/side"],
-      acceptsArgs: true,
-      category: "tools",
-      tier: "standard",
-    }),
-    defineChatCommand({
-      key: "export-session",
-      nativeName: "export-session",
-      description: "Export current session to an owner-only HTML file in the workspace.",
-      textAliases: ["/export-session", "/export"],
-      acceptsArgs: true,
-      category: "status",
-      tier: "essential",
+    defineBuiltinCommand(
+      "context",
+      "Explain how context is built and used.",
+      "status",
+      "standard",
+      { acceptsArgs: true },
+    ),
+    defineBuiltinCommand(
+      "btw",
+      "Ask a side question without changing future session context.",
+      "tools",
+      "standard",
+      {
+        nativeAliases: ["side"],
+        textAliases: ["/btw", "/side"],
+        acceptsArgs: true,
+      },
+    ),
+    defineBuiltinCommand(
+      "export-session",
+      "Export current session to an owner-only HTML file in the workspace.",
+      "status",
+      "essential",
+      {
+        textAliases: ["/export-session", "/export"],
+        args: [
+          defineCommandArgument("path", "Output path inside workspace (default: workspace)", {
+            required: false,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
+      "export-trajectory",
+      "Export a JSONL trajectory bundle for the active session.",
+      "status",
+      "essential",
+      {
+        textAliases: ["/export-trajectory", "/trajectory"],
+        args: [
+          defineCommandArgument("path", "Output directory (default: workspace)", {
+            required: false,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand("tts", "Control text-to-speech (TTS).", "media", "standard", {
       args: [
-        {
-          name: "path",
-          description: "Output path inside workspace (default: workspace)",
-          type: "string",
-          required: false,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "export-trajectory",
-      nativeName: "export-trajectory",
-      description: "Export a JSONL trajectory bundle for the active session.",
-      textAliases: ["/export-trajectory", "/trajectory"],
-      acceptsArgs: true,
-      category: "status",
-      tier: "essential",
-      args: [
-        {
-          name: "path",
-          description: "Output directory (default: workspace)",
-          type: "string",
-          required: false,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "tts",
-      nativeName: "tts",
-      description: "Control text-to-speech (TTS).",
-      textAlias: "/tts",
-      category: "media",
-      tier: "standard",
-      args: [
-        {
-          name: "action",
-          description: "TTS action",
-          type: "string",
+        defineCommandArgument("action", "TTS action", {
           choices: [
             { value: "on", label: "On" },
             { value: "off", label: "Off" },
@@ -443,13 +367,8 @@ export function buildBuiltinChatCommands(
             { value: "audio", label: "Audio" },
             { value: "help", label: "Help" },
           ],
-        },
-        {
-          name: "value",
-          description: "Provider, limit, or text",
-          type: "string",
-          captureRemaining: true,
-        },
+        }),
+        defineCommandArgument("value", "Provider, limit, or text", { captureRemaining: true }),
       ],
       argsMenu: {
         arg: "action",
@@ -465,77 +384,41 @@ export function buildBuiltinChatCommands(
           "• Help – Show usage guide",
       },
     }),
-    defineChatCommand({
-      key: "whoami",
-      nativeName: "whoami",
-      description: "Show your sender id.",
-      textAlias: "/whoami",
-      category: "status",
-      tier: "power",
-    }),
-    defineChatCommand({
-      key: "session",
-      nativeName: "session",
-      description: "Manage session-level settings (for example /session idle).",
-      textAlias: "/session",
-      category: "session",
-      tier: "power",
+    defineBuiltinCommand("whoami", "Show your sender id.", "status", "power"),
+    defineBuiltinCommand(
+      "session",
+      "Manage session-level settings (for example /session idle).",
+      "session",
+      "power",
+      {
+        args: [
+          defineCommandArgument("action", "idle | max-age", { choices: ["idle", "max-age"] }),
+          defineCommandArgument("value", "Duration (24h, 90m) or off", { captureRemaining: true }),
+        ],
+        argsMenu: "auto",
+      },
+    ),
+    defineBuiltinCommand(
+      "subagents",
+      "Inspect subagent runs for this session.",
+      "management",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("action", "list | log | info", {
+            choices: ["list", "log", "info"],
+          }),
+          defineCommandArgument("target", "Run id, index, or session key"),
+          defineCommandArgument("value", "Additional input (limit/message)", {
+            captureRemaining: true,
+          }),
+        ],
+        argsMenu: "auto",
+      },
+    ),
+    defineBuiltinCommand("acp", "Manage ACP sessions and runtime options.", "management", "power", {
       args: [
-        {
-          name: "action",
-          description: "idle | max-age",
-          type: "string",
-          choices: ["idle", "max-age"],
-        },
-        {
-          name: "value",
-          description: "Duration (24h, 90m) or off",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
-      key: "subagents",
-      nativeName: "subagents",
-      description: "Inspect subagent runs for this session.",
-      textAlias: "/subagents",
-      category: "management",
-      tier: "standard",
-      args: [
-        {
-          name: "action",
-          description: "list | log | info",
-          type: "string",
-          choices: ["list", "log", "info"],
-        },
-        {
-          name: "target",
-          description: "Run id, index, or session key",
-          type: "string",
-        },
-        {
-          name: "value",
-          description: "Additional input (limit/message)",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-      argsMenu: "auto",
-    }),
-    defineChatCommand({
-      key: "acp",
-      nativeName: "acp",
-      description: "Manage ACP sessions and runtime options.",
-      textAlias: "/acp",
-      category: "management",
-      tier: "power",
-      args: [
-        {
-          name: "action",
-          description: "Action to run",
-          type: "string",
+        defineCommandArgument("action", "Action to run", {
           preferAutocomplete: true,
           choices: [
             "spawn",
@@ -555,356 +438,158 @@ export function buildBuiltinChatCommands(
             "install",
             "help",
           ],
-        },
-        {
-          name: "value",
-          description: "Action arguments",
-          type: "string",
-          captureRemaining: true,
-        },
+        }),
+        defineCommandArgument("value", "Action arguments", { captureRemaining: true }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "focus",
-      nativeName: "focus",
-      description:
-        "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
-      textAlias: "/focus",
-      category: "management",
-      tier: "power",
+    defineBuiltinCommand(
+      "focus",
+      "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
+      "management",
+      "power",
+      {
+        args: [
+          defineCommandArgument("target", "Subagent label/index or session key/id/label", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
+      "unfocus",
+      "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
+      "management",
+      "power",
+    ),
+    defineBuiltinCommand(
+      "agents",
+      "List thread-bound agents for this session.",
+      "management",
+      "standard",
+    ),
+    defineBuiltinCommand(
+      "steer",
+      "Send guidance to the active run in this session.",
+      "management",
+      "standard",
+      {
+        args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
+      },
+    ),
+    defineBuiltinCommand("config", "Show or set config values.", "management", "power", {
       args: [
-        {
-          name: "target",
-          description: "Subagent label/index or session key/id/label",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "unfocus",
-      nativeName: "unfocus",
-      description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
-      textAlias: "/unfocus",
-      category: "management",
-      tier: "power",
-    }),
-    defineChatCommand({
-      key: "agents",
-      nativeName: "agents",
-      description: "List thread-bound agents for this session.",
-      textAlias: "/agents",
-      category: "management",
-      tier: "standard",
-    }),
-    defineChatCommand({
-      key: "steer",
-      nativeName: "steer",
-      description: "Send guidance to the active run in this session.",
-      textAlias: "/steer",
-      category: "management",
-      tier: "standard",
-      args: [
-        {
-          name: "message",
-          description: "Steering message",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "config",
-      nativeName: "config",
-      description: "Show or set config values.",
-      textAlias: "/config",
-      category: "management",
-      tier: "power",
-      args: [
-        {
-          name: "action",
-          description: "show | get | set | unset",
-          type: "string",
+        defineCommandArgument("action", "show | get | set | unset", {
           choices: ["show", "get", "set", "unset"],
-        },
-        {
-          name: "path",
-          description: "Config path",
-          type: "string",
-        },
-        {
-          name: "value",
-          description: "Value for set",
-          type: "string",
-          captureRemaining: true,
-        },
+        }),
+        defineCommandArgument("path", "Config path"),
+        defineCommandArgument("value", "Value for set", { captureRemaining: true }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.config,
     }),
-    defineChatCommand({
-      key: "mcp",
-      nativeName: "mcp",
-      description: "Show or set OpenClaw MCP servers.",
-      textAlias: "/mcp",
-      category: "management",
-      tier: "power",
+    defineBuiltinCommand("mcp", "Show or set OpenClaw MCP servers.", "management", "power", {
       args: [
-        {
-          name: "action",
-          description: "show | get | set | unset",
-          type: "string",
+        defineCommandArgument("action", "show | get | set | unset", {
           choices: ["show", "get", "set", "unset"],
-        },
-        {
-          name: "path",
-          description: "MCP server name",
-          type: "string",
-        },
-        {
-          name: "value",
-          description: "JSON config for set",
-          type: "string",
-          captureRemaining: true,
-        },
+        }),
+        defineCommandArgument("path", "MCP server name"),
+        defineCommandArgument("value", "JSON config for set", { captureRemaining: true }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.mcp,
     }),
-    defineChatCommand({
-      key: "plugins",
-      nativeName: "plugins",
-      description: "List, show, enable, or disable plugins.",
-      textAliases: ["/plugins", "/plugin"],
-      category: "management",
-      tier: "power",
+    defineBuiltinCommand(
+      "plugins",
+      "List, show, enable, or disable plugins.",
+      "management",
+      "power",
+      {
+        textAliases: ["/plugins", "/plugin"],
+        args: [
+          defineCommandArgument("action", "list | show | get | enable | disable", {
+            choices: ["list", "show", "get", "enable", "disable"],
+          }),
+          defineCommandArgument("path", "Plugin id or name"),
+        ],
+        argsParsing: "none",
+        formatArgs: COMMAND_ARG_FORMATTERS.plugins,
+      },
+    ),
+    defineBuiltinCommand("debug", "Set runtime debug overrides.", "management", "power", {
       args: [
-        {
-          name: "action",
-          description: "list | show | get | enable | disable",
-          type: "string",
-          choices: ["list", "show", "get", "enable", "disable"],
-        },
-        {
-          name: "path",
-          description: "Plugin id or name",
-          type: "string",
-        },
-      ],
-      argsParsing: "none",
-      formatArgs: COMMAND_ARG_FORMATTERS.plugins,
-    }),
-    defineChatCommand({
-      key: "debug",
-      nativeName: "debug",
-      description: "Set runtime debug overrides.",
-      textAlias: "/debug",
-      category: "management",
-      tier: "power",
-      args: [
-        {
-          name: "action",
-          description: "show | reset | set | unset",
-          type: "string",
+        defineCommandArgument("action", "show | reset | set | unset", {
           choices: ["show", "reset", "set", "unset"],
-        },
-        {
-          name: "path",
-          description: "Debug path",
-          type: "string",
-        },
-        {
-          name: "value",
-          description: "Value for set",
-          type: "string",
-          captureRemaining: true,
-        },
+        }),
+        defineCommandArgument("path", "Debug path"),
+        defineCommandArgument("value", "Value for set", { captureRemaining: true }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.debug,
     }),
-    defineChatCommand({
-      key: "usage",
-      nativeName: "usage",
-      description: "Usage footer or cost summary.",
-      textAlias: "/usage",
-      category: "options",
-      tier: "standard",
+    defineBuiltinCommand("usage", "Usage footer or cost summary.", "options", "standard", {
       args: [
-        {
-          name: "mode",
-          description: "off, tokens, full, or cost",
-          type: "string",
+        defineCommandArgument("mode", "off, tokens, full, or cost", {
           choices: ["off", "tokens", "full", "cost"],
-        },
+        }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "stop",
-      nativeName: "stop",
-      description: "Stop the current run.",
-      textAlias: "/stop",
-      category: "session",
-      tier: "essential",
-    }),
-    defineChatCommand({
-      key: "restart",
-      nativeName: "restart",
-      description: "Restart OpenClaw.",
-      textAlias: "/restart",
-      category: "tools",
-      tier: "power",
-    }),
-    defineChatCommand({
-      key: "activation",
-      nativeName: "activation",
-      description: "Set group activation mode.",
-      textAlias: "/activation",
-      category: "management",
-      tier: "power",
+    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential"),
+    defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
+    defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
-        {
-          name: "mode",
-          description: "mention or always",
-          type: "string",
-          choices: ["mention", "always"],
-        },
+        defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "send",
-      nativeName: "send",
-      description: "Set send policy.",
-      textAlias: "/send",
-      category: "management",
-      tier: "power",
+    defineBuiltinCommand("send", "Set send policy.", "management", "power", {
       args: [
-        {
-          name: "mode",
-          description: "on, off, or inherit",
-          type: "string",
+        defineCommandArgument("mode", "on, off, or inherit", {
           choices: ["on", "off", "inherit"],
-        },
+        }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "reset",
-      nativeName: "reset",
-      description: "Reset the current session.",
-      textAlias: "/reset",
+    defineBuiltinCommand("reset", "Reset the current session.", "session", "essential", {
       acceptsArgs: true,
-      category: "session",
-      tier: "essential",
     }),
-    defineChatCommand({
-      key: "new",
-      nativeName: "new",
-      description: "Start a new session.",
-      textAlias: "/new",
+    defineBuiltinCommand("new", "Start a new session.", "session", "essential", {
       acceptsArgs: true,
-      category: "session",
-      tier: "essential",
     }),
-    defineChatCommand({
-      key: "name",
-      nativeName: "name",
-      description: "Name or rename the current session.",
-      textAlias: "/name",
-      acceptsArgs: true,
-      category: "session",
-      tier: "standard",
+    defineBuiltinCommand("name", "Name or rename the current session.", "session", "standard", {
       args: [
-        {
-          name: "title",
-          description: "New session name (omit to see a suggestion)",
-          type: "string",
+        defineCommandArgument("title", "New session name (omit to see a suggestion)", {
           captureRemaining: true,
-        },
+        }),
       ],
     }),
-    defineChatCommand({
-      key: "compact",
-      nativeName: "compact",
-      description: "Compact the session context.",
-      textAlias: "/compact",
-      category: "session",
-      tier: "essential",
+    defineBuiltinCommand("compact", "Compact the session context.", "session", "essential", {
       args: [
-        {
-          name: "instructions",
-          description: "Extra compaction instructions",
-          type: "string",
+        defineCommandArgument("instructions", "Extra compaction instructions", {
           captureRemaining: true,
-        },
+        }),
       ],
     }),
-    defineChatCommand({
-      key: "think",
-      nativeName: "think",
-      description: "Set thinking level.",
-      textAlias: "/think",
-      category: "options",
-      tier: "essential",
+    defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
       args: [
-        {
-          name: "level",
-          description: "Thinking level",
-          type: "string",
+        defineCommandArgument("level", "Thinking level", {
           choices: ({ provider, model, catalog, agentRuntime }) =>
             listThinkingLevelChoices(provider, model, catalog, agentRuntime),
-        },
+        }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "verbose",
-      nativeName: "verbose",
-      description: "Toggle verbose mode.",
-      textAlias: "/verbose",
-      category: "options",
-      tier: "standard",
-      args: [
-        {
-          name: "mode",
-          description: "on, off, or full",
-          type: "string",
-          choices: ["on", "off", "full"],
-        },
-      ],
+    defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
+      args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
     }),
-    defineChatCommand({
-      key: "trace",
-      nativeName: "trace",
-      description: "Toggle plugin trace lines.",
-      textAlias: "/trace",
-      category: "options",
-      tier: "power",
-      args: [
-        {
-          name: "mode",
-          description: "on, off, or raw",
-          type: "string",
-          choices: ["on", "off", "raw"],
-        },
-      ],
+    defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
+      args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "fast",
-      nativeName: "fast",
-      description: "Toggle fast mode.",
-      textAlias: "/fast",
-      category: "options",
-      tier: "standard",
+    defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
       args: [
-        {
-          name: "mode",
-          description: "on, off, auto, default, or status",
-          type: "string",
+        defineCommandArgument("mode", "on, off, auto, default, or status", {
           choices: ({ cfg, provider, model }) => [
             "on",
             "off",
@@ -917,155 +602,70 @@ export function buildBuiltinChatCommands(
             "default",
             "status",
           ],
-        },
+        }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "reasoning",
-      nativeName: "reasoning",
-      description: "Toggle reasoning visibility.",
-      textAlias: "/reasoning",
-      category: "options",
-      tier: "standard",
+    defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
       args: [
-        {
-          name: "mode",
-          description: "on, off, or stream",
-          type: "string",
-          choices: ["on", "off", "stream"],
-        },
+        defineCommandArgument("mode", "on, off, or stream", { choices: ["on", "off", "stream"] }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "elevated",
-      nativeName: "elevated",
-      description: "Toggle elevated mode.",
-      textAlias: "/elevated",
-      category: "options",
-      tier: "power",
+    defineBuiltinCommand("elevated", "Toggle elevated mode.", "options", "power", {
       args: [
-        {
-          name: "mode",
-          description: "on, off, ask, or full",
-          type: "string",
+        defineCommandArgument("mode", "on, off, ask, or full", {
           choices: ["on", "off", "ask", "full"],
-        },
+        }),
       ],
       argsMenu: "auto",
     }),
-    defineChatCommand({
-      key: "exec",
-      nativeName: "exec",
-      description: "Set exec defaults for this session.",
-      textAlias: "/exec",
-      category: "options",
-      tier: "power",
+    defineBuiltinCommand("exec", "Set exec defaults for this session.", "options", "power", {
       args: [
-        {
-          name: "host",
-          description: "sandbox, gateway, or node",
-          type: "string",
+        defineCommandArgument("host", "sandbox, gateway, or node", {
           choices: ["sandbox", "gateway", "node"],
-        },
-        {
-          name: "security",
-          description: "deny, allowlist, or full",
-          type: "string",
+        }),
+        defineCommandArgument("security", "deny, allowlist, or full", {
           choices: ["deny", "allowlist", "full"],
-        },
-        {
-          name: "ask",
-          description: "off, on-miss, or always",
-          type: "string",
+        }),
+        defineCommandArgument("ask", "off, on-miss, or always", {
           choices: ["off", "on-miss", "always"],
-        },
-        {
-          name: "node",
-          description: "Node id or name",
-          type: "string",
-        },
+        }),
+        defineCommandArgument("node", "Node id or name"),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.exec,
     }),
-    defineChatCommand({
-      key: "model",
-      nativeName: "model",
-      description: "Show or set the model.",
-      textAlias: "/model",
-      category: "options",
-      tier: "essential",
-      args: [
-        {
-          name: "model",
-          description: "Model id (provider/model or id)",
-          type: "string",
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "models",
-      nativeName: "models",
-      description: "List model providers/models.",
-      textAlias: "/models",
-      tier: "standard",
-      argsParsing: "none",
+    defineBuiltinCommand(
+      "model",
+      "Show or set the model; direct owner/admin selections request a default update.",
+      "options",
+      "essential",
+      {
+        args: [defineCommandArgument("model", "Model id; add -s to change only this session")],
+      },
+    ),
+    defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
       acceptsArgs: true,
-      category: "options",
     }),
-    defineChatCommand({
-      key: "queue",
-      nativeName: "queue",
-      description: "Adjust queue settings.",
-      textAlias: "/queue",
-      category: "options",
-      tier: "power",
+    defineBuiltinCommand("queue", "Adjust queue settings.", "options", "power", {
       args: [
-        {
-          name: "mode",
-          description: "queue mode",
-          type: "string",
+        defineCommandArgument("mode", "queue mode", {
           choices: ["steer", "followup", "collect", "interrupt"],
-        },
-        {
-          name: "debounce",
-          description: "debounce duration (e.g. 500ms, 2s)",
-          type: "string",
-        },
-        {
-          name: "cap",
-          description: "queue cap",
-          type: "number",
-        },
-        {
-          name: "drop",
-          description: "drop policy",
-          type: "string",
-          choices: ["old", "new", "summarize"],
-        },
+        }),
+        defineCommandArgument("debounce", "debounce duration (e.g. 500ms, 2s)"),
+        defineCommandArgument("cap", "queue cap", { type: "number" }),
+        defineCommandArgument("drop", "drop policy", { choices: ["old", "new", "summarize"] }),
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
-    defineChatCommand({
-      key: "bash",
-      description: "Run host shell commands (host-only).",
-      textAlias: "/bash",
-      scope: "text",
-      category: "tools",
-      tier: "power",
-      args: [
-        {
-          name: "command",
-          description: "Shell command",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
+    defineBuiltinCommand("bash", "Run host shell commands (host-only).", "tools", "power", {
+      nativeName: false,
+      args: [defineCommandArgument("command", "Shell command", { captureRemaining: true })],
     }),
   ];
+  const commands = definitions.map(defineBuiltinChatCommand);
 
   registerAlias(commands, "whoami", "/id");
   registerAlias(commands, "think", "/thinking", "/t");
@@ -1076,4 +676,3 @@ export function buildBuiltinChatCommands(
   assertCommandRegistry(commands);
   return commands;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

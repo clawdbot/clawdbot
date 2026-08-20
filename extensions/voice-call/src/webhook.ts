@@ -23,6 +23,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../api.js";
+import type { OpenClawPluginApi } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
@@ -30,7 +31,6 @@ import {
   resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
 } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
@@ -44,11 +44,14 @@ import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
+import {
+  StreamDisconnectGrace,
+  type StreamDisconnectLifecycle,
+} from "./webhook/stream-disconnect-grace.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
 const MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY = "__voice_call_no_remote__";
-const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 
 type Logger = {
   info: (message: string) => void;
@@ -179,20 +182,20 @@ export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
   private listeningUrl: string | null = null;
   private startPromise: Promise<string> | null = null;
+  private stopPromise: Promise<void> | null = null;
   private config: VoiceCallConfig;
   private manager: CallManager;
   private provider: VoiceCallProvider;
-  private coreConfig: CoreConfig | null;
+  private coreConfig: OpenClawConfig | null;
   private fullConfig: OpenClawConfig | null;
-  private agentRuntime: CoreAgentDeps | null;
+  private agentRuntime: OpenClawPluginApi["runtime"]["agent"] | null;
   private logger: Logger;
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
   /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
-  /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
-  private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly streamDisconnectGrace: StreamDisconnectGrace;
   /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
   private replayResponses = new Map<string, CachedWebhookResponse>();
@@ -202,9 +205,9 @@ export class VoiceCallWebhookServer {
     config: VoiceCallConfig,
     manager: CallManager,
     provider: VoiceCallProvider,
-    coreConfig?: CoreConfig,
+    coreConfig?: OpenClawConfig,
     fullConfig?: OpenClawConfig,
-    agentRuntime?: CoreAgentDeps,
+    agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: Logger,
   ) {
     this.config = normalizeVoiceCallConfig(config);
@@ -230,6 +233,27 @@ export class VoiceCallWebhookServer {
       error: (msg: string) => rawLogger.error(`[voice-call] ${msg}`),
       debug: rawDebug ? (msg: string) => rawDebug(`[voice-call] ${msg}`) : undefined,
     };
+    this.streamDisconnectGrace = new StreamDisconnectGrace(({ providerCallId }) => {
+      const call = this.manager.getCallByProviderCallId(providerCallId);
+      if (!call) {
+        return;
+      }
+      this.logger.info(
+        `Call finalization requested reason=stream-disconnect-grace-expired callId=${call.callId} providerCallId=${providerCallId}`,
+      );
+      void this.manager
+        .endCall(call.callId)
+        .then((result) => {
+          if (!result.success) {
+            this.logger.warn(
+              `Failed to auto-end call ${call.callId}: ${result.error ?? "unknown error"}`,
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(`Failed to auto-end call ${call.callId}: ${String(err)}`);
+        });
+    });
   }
 
   /**
@@ -254,13 +278,8 @@ export class VoiceCallWebhookServer {
     this.realtimeHandler = handler;
   }
 
-  private clearPendingDisconnectHangup(providerCallId: string): void {
-    const existing = this.pendingDisconnectHangups.get(providerCallId);
-    if (!existing) {
-      return;
-    }
-    clearTimeout(existing);
-    this.pendingDisconnectHangups.delete(providerCallId);
+  getStreamDisconnectLifecycle(): StreamDisconnectLifecycle {
+    return this.streamDisconnectGrace;
   }
 
   private resolveMediaStreamClientIp(request: http.IncomingMessage): string | undefined {
@@ -430,7 +449,7 @@ export class VoiceCallWebhookServer {
       },
       onConnect: (callId, streamSid) => {
         this.logger.info(`Media stream connected: ${callId} -> ${streamSid}`);
-        this.clearPendingDisconnectHangup(callId);
+        this.streamDisconnectGrace.connect(callId, streamSid);
 
         // Register stream with provider for TTS routing
         if (this.provider.name === "twilio") {
@@ -448,30 +467,7 @@ export class VoiceCallWebhookServer {
           (this.provider as TwilioProvider).unregisterCallStream(callId, streamSid);
         }
 
-        this.clearPendingDisconnectHangup(callId);
-        const timer = setTimeout(() => {
-          this.pendingDisconnectHangups.delete(callId);
-          const disconnectedCall = this.manager.getCallByProviderCallId(callId);
-          if (!disconnectedCall) {
-            return;
-          }
-
-          if (this.provider.name === "twilio") {
-            const twilio = this.provider as TwilioProvider;
-            if (twilio.hasRegisteredStream(callId)) {
-              return;
-            }
-          }
-
-          this.logger.info(
-            `Auto-ending call ${disconnectedCall.callId} after stream disconnect grace`,
-          );
-          void this.manager.endCall(disconnectedCall.callId).catch((err: unknown) => {
-            this.logger.warn(`Failed to auto-end call ${disconnectedCall.callId}: ${String(err)}`);
-          });
-        }, STREAM_DISCONNECT_HANGUP_GRACE_MS);
-        timer.unref?.();
-        this.pendingDisconnectHangups.set(callId, timer);
+        this.streamDisconnectGrace.disconnect(callId, streamSid);
       },
     };
 
@@ -484,6 +480,10 @@ export class VoiceCallWebhookServer {
    * Idempotent: returns immediately if the server is already listening.
    */
   async start(): Promise<string> {
+    if (this.stopPromise) {
+      await this.stopPromise;
+    }
+
     const { port, bind, path: webhookPath } = this.config.serve;
     const streamPath = this.config.streaming.streamPath;
 
@@ -561,30 +561,56 @@ export class VoiceCallWebhookServer {
   /**
    * Stop the webhook server.
    */
-  async stop(): Promise<void> {
-    for (const timer of this.pendingDisconnectHangups.values()) {
-      clearTimeout(timer);
+  stop(): Promise<void> {
+    if (this.stopPromise) {
+      return this.stopPromise;
     }
-    this.pendingDisconnectHangups.clear();
-    this.webhookInFlightLimiter.clear();
-    this.startPromise = null;
 
+    const server = this.server;
+    const serverClosePromise = new Promise<void>((resolve, reject) => {
+      if (!server) {
+        resolve();
+        return;
+      }
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+    this.startPromise = null;
+    this.streamDisconnectGrace.close();
     if (this.stopStaleCallReaper) {
       this.stopStaleCallReaper();
       this.stopStaleCallReaper = null;
     }
-    return new Promise((resolve) => {
-      if (this.server) {
-        this.server.close(() => {
-          this.server = null;
-          this.listeningUrl = null;
-          resolve();
-        });
-      } else {
-        this.listeningUrl = null;
-        resolve();
+    this.webhookInFlightLimiter.clear();
+
+    this.stopPromise = (async () => {
+      const results = await Promise.allSettled([
+        serverClosePromise,
+        this.mediaStreamHandler?.close(serverClosePromise) ?? Promise.resolve(),
+        this.realtimeHandler?.close(serverClosePromise) ?? Promise.resolve(),
+      ]);
+
+      this.streamDisconnectGrace.close();
+      if (this.server === server) {
+        this.server = null;
       }
+      this.listeningUrl = null;
+
+      const failure = results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failure) {
+        throw failure.reason;
+      }
+    })().finally(() => {
+      this.stopPromise = null;
     });
+    return this.stopPromise;
   }
 
   private resolveListeningUrl(bind: string, webhookPath: string): string {
@@ -704,12 +730,12 @@ export class VoiceCallWebhookServer {
       const isReplay = Boolean(verification.isReplay);
       if (isReplay) {
         this.logger.warn("Replay detected; skipping event side effects");
-        if (this.provider.name === "twilio") {
-          return buildTwilioReplayTwiML();
-        }
         const cachedResponse = await this.getCachedReplayResponse(verification.verifiedRequestKey);
         if (cachedResponse) {
           return cachedResponse;
+        }
+        if (this.provider.name === "twilio") {
+          return buildTwilioReplayTwiML();
         }
       }
 
@@ -747,8 +773,8 @@ export class VoiceCallWebhookServer {
         const parsed = this.provider.parseWebhookEvent(ctx, {
           verifiedRequestKey: verification.verifiedRequestKey,
         });
-        if (!isReplay) {
-          this.processParsedEvents(parsed.events);
+        if (!isReplay && this.processParsedEvents(parsed.events)) {
+          verification.releaseReplay?.();
         }
 
         return normalizeWebhookResponse(parsed);
@@ -758,11 +784,11 @@ export class VoiceCallWebhookServer {
         return await buildResponse();
       }
 
-      if (this.provider.name === "twilio") {
-        return await buildResponse();
-      }
-
-      return await this.cacheReplayResponse(verification.verifiedRequestKey, buildResponse);
+      return await this.cacheReplayResponse(
+        verification.verifiedRequestKey,
+        buildResponse,
+        verification.releaseReplay,
+      );
     } finally {
       this.webhookInFlightLimiter.release(inFlightKey);
     }
@@ -802,6 +828,7 @@ export class VoiceCallWebhookServer {
   private async cacheReplayResponse(
     key: string,
     buildResponse: () => Promise<WebhookResponsePayload>,
+    releaseReplay?: () => void,
   ): Promise<WebhookResponsePayload> {
     const now = Date.now();
     const expiresAt = resolveExpiresAtMsFromDurationMs(WEBHOOK_REPLAY_RESPONSE_TTL_MS, {
@@ -812,22 +839,35 @@ export class VoiceCallWebhookServer {
       this.pruneReplayResponses(now);
     }
 
-    const response = buildResponse()
+    let cachedEntry: CachedWebhookResponse | undefined;
+    const ownerResponse = buildResponse()
       .then(cloneWebhookResponsePayload)
       .catch((err: unknown) => {
-        this.replayResponses.delete(key);
+        if (cachedEntry && this.replayResponses.get(key) === cachedEntry) {
+          this.replayResponses.delete(key);
+        }
+        releaseReplay?.();
         throw err;
       });
+    // Twilio owners receive the real one-time TwiML; waiters only see token-free XML.
+    const response = ownerResponse.then((payload) =>
+      this.provider.name === "twilio"
+        ? buildTwilioReplayTwiML()
+        : cloneWebhookResponsePayload(payload),
+    );
+    // Preserve rejection for concurrent waiters without creating an orphaned rejection.
+    void response.catch(() => {});
     if (expiresAt !== undefined) {
-      this.replayResponses.set(key, {
+      cachedEntry = {
         expiresAt,
         response,
-      });
+      };
+      this.replayResponses.set(key, cachedEntry);
     }
     if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
       this.pruneReplayResponses(now);
     }
-    return cloneWebhookResponsePayload(await response);
+    return cloneWebhookResponsePayload(await ownerResponse);
   }
 
   private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): WebhookHeaderGateResult {
@@ -928,24 +968,30 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private processParsedEvents(events: NormalizedEvent[]): void {
+  private processParsedEvents(events: NormalizedEvent[]): boolean {
+    let replayable = false;
     for (const event of events) {
       try {
-        this.processEventWithAutoResponse(event);
+        replayable = this.processEventWithAutoResponse(event) || replayable;
       } catch (err) {
         this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
+        throw err;
       }
     }
+    return replayable;
   }
 
-  private processEventWithAutoResponse(event: NormalizedEvent): void {
+  private processEventWithAutoResponse(event: NormalizedEvent): boolean {
     const result = this.manager.processEvent(event);
-    if (result.kind !== "final-speech" || result.waiterResolved) {
-      return;
+    if (result.kind !== "final-speech") {
+      return result.replayable === true;
+    }
+    if (result.waiterResolved) {
+      return false;
     }
     const callMode = result.call.metadata?.mode as string | undefined;
     if (result.call.direction !== "inbound" && callMode !== "conversation") {
-      return;
+      return false;
     }
 
     // Both media-stream and carrier-webhook transcripts share this handoff.
@@ -953,6 +999,7 @@ export class VoiceCallWebhookServer {
     void this.handleInboundResponse(result.call.callId, result.transcript).catch((err: unknown) => {
       this.logger.warn(`Failed to auto-respond: ${String(err)}`);
     });
+    return false;
   }
 
   private writeWebhookResponse(res: http.ServerResponse, payload: WebhookResponsePayload): void {
@@ -983,7 +1030,7 @@ export class VoiceCallWebhookServer {
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     this.logger.info(`Auto-responding to inbound call ${callId} chars=${userMessage.length}`);
 
-    // Get call context for conversation history
+    // Get the persisted call context for routing and response delivery.
     const call = this.manager.getCall(callId);
     if (!call) {
       this.logger.warn(`Call ${callId} not found for auto-response`);
@@ -1011,6 +1058,7 @@ export class VoiceCallWebhookServer {
         callId,
         sessionKey: call.sessionKey,
         from: call.from,
+        senderIsOwner: call.direction === "inbound" ? false : undefined,
         agentId: resolveCallAgentId(call, effectiveConfig),
         transcript: call.transcript,
         userMessage,

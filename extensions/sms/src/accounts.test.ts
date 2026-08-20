@@ -1,6 +1,6 @@
 // Sms tests cover accounts plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
+import { inspectSmsAccount, listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
 import type { SmsChannelConfig } from "./types.js";
 
@@ -65,6 +65,24 @@ describe("SMS account config", () => {
       dmPolicy: "pairing",
       allowFrom: [],
       textChunkLimit: 1500,
+    });
+  });
+
+  it("reports an invalid public webhook URL without unconfiguring SMS credentials", () => {
+    expect(
+      inspectSmsAccount({
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
+          },
+        },
+      }),
+    ).toMatchObject({
+      configured: true,
+      signatureValidation: "invalid-public-url",
     });
   });
 
@@ -204,6 +222,18 @@ describe("SMS account config", () => {
       textChunkLimit: 1500,
     });
   });
+
+  it.each(["0", "00", " 0 ", "-1", "1.5", "unlimited", " "])(
+    "keeps the default text chunk limit when SMS_TEXT_CHUNK_LIMIT is %j",
+    (raw) => {
+      process.env.TWILIO_ACCOUNT_SID = "AC-env";
+      process.env.TWILIO_AUTH_TOKEN = "env-token";
+      process.env.TWILIO_PHONE_NUMBER = "+15550001111";
+      process.env.SMS_TEXT_CHUNK_LIMIT = raw;
+
+      expect(resolveSmsAccount({}).textChunkLimit).toBe(1500);
+    },
+  );
 
   it("coerces numeric allowFrom entries accepted by the config schema", () => {
     const parsed = parseSmsConfig({

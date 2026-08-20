@@ -4,6 +4,8 @@ import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import {
+  ensureControlUiAssetsBuilt,
+  isControlUiStartupAssetsReady,
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "../infra/control-ui-assets.js";
@@ -50,7 +52,6 @@ export async function detectUiProtocolFreshnessIssues(
     return [];
   }
 
-  const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
   const uiHealth = await resolveControlUiDistIndexHealth({
     root,
     argv1: opts.argv1 ?? process.argv[1],
@@ -59,19 +60,15 @@ export async function detectUiProtocolFreshnessIssues(
   const uiSourcesPath = path.join(root, "ui/package.json");
 
   try {
-    const [schemaStats, uiStats, uiSourcesStats] = await Promise.all([
-      fs.stat(schemaPath).catch(() => null),
+    const [uiStats, uiSourcesStats] = await Promise.all([
       fs.stat(uiIndexPath).catch(() => null),
       fs.stat(uiSourcesPath).catch(() => null),
     ]);
-    if (!schemaStats) {
-      return [];
-    }
     const canBuild = uiSourcesStats !== null;
-    if (!uiStats) {
+    if (!uiStats || !isControlUiStartupAssetsReady(path.dirname(uiIndexPath))) {
       return [{ kind: "missing-assets", root, uiIndexPath, canBuild }];
     }
-    if (schemaStats.mtime <= uiStats.mtime) {
+    if (!canBuild) {
       return [];
     }
     const changesSinceBuild = await (
@@ -106,7 +103,7 @@ async function collectProtocolSchemaChangesSince(
       "log",
       `--since=${uiMtime.toISOString()}`,
       "--format=%h %s",
-      "packages/gateway-protocol/src/schema.ts",
+      "packages/gateway-protocol/src",
     ],
     { timeoutMs: 5000 },
   ).catch(() => null);
@@ -132,7 +129,7 @@ export function uiProtocolFreshnessIssueToHealthFinding(
       ? issue.kind === "missing-assets"
         ? "Run `openclaw doctor --fix` to build Control UI assets."
         : "Run `openclaw doctor --fix --force` to rebuild Control UI assets, or run `pnpm ui:build`."
-      : "Install from a source checkout with ui/ sources, then run `pnpm ui:build`.",
+      : "Reinstall OpenClaw to restore bundled Control UI assets.",
   };
 }
 
@@ -156,7 +153,12 @@ export function uiProtocolFreshnessIssueToRepairEffects(
 
 function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string {
   if (issue.kind === "missing-assets") {
-    return ["- Control UI assets are missing.", "- Run: pnpm ui:build"].join("\n");
+    return [
+      "- Control UI assets are missing.",
+      issue.canBuild
+        ? "- Run: pnpm ui:build"
+        : "- Reinstall OpenClaw to restore bundled Control UI assets.",
+    ].join("\n");
   }
   if (issue.changesSinceBuild.length === 0) {
     return "UI assets are older than the protocol schema.";
@@ -168,71 +170,46 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
 
 /** Prompts to build or rebuild Control UI assets when doctor detects missing or stale output. */
 export async function maybeRepairUiProtocolFreshness(
-  _runtime: RuntimeEnv,
+  runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
   for (const issue of await detectUiProtocolFreshnessIssues()) {
-    if (issue.kind === "missing-assets") {
-      note(formatUiProtocolFreshnessIssue(issue), "UI");
-      if (!issue.canBuild) {
-        note("Skipping UI build: ui/ sources not present.", "UI");
-        continue;
-      }
-      const shouldRepair = await prompter.confirmAutoFix({
-        message: "Build Control UI assets now?",
-        initialValue: true,
-      });
-      if (shouldRepair) {
-        note("Building Control UI assets... (this may take a moment)", "UI");
-        const uiScriptPath = path.join(issue.root, "scripts/ui.js");
-        const buildResult = await runCommandWithTimeout([process.execPath, uiScriptPath, "build"], {
-          cwd: issue.root,
-          timeoutMs: 120_000,
-          env: { ...process.env, FORCE_COLOR: "1" },
-        });
-        if (buildResult.code === 0) {
-          note("UI build complete.", "UI");
-        } else {
-          const details = [
-            `UI build failed (exit ${buildResult.code ?? "unknown"}).`,
-            buildResult.stderr.trim() ? buildResult.stderr.trim() : null,
-          ]
-            .filter(Boolean)
-            .join("\n");
-          note(details, "UI");
-        }
-      }
-      continue;
-    }
-
-    note(formatUiProtocolFreshnessIssue(issue), "UI Freshness");
+    const stale = issue.kind === "stale-assets";
+    note(formatUiProtocolFreshnessIssue(issue), stale ? "UI Freshness" : "UI");
     if (!issue.canBuild) {
-      note("Skipping UI rebuild: ui/ sources not present.", "UI");
+      note(`Skipping UI ${stale ? "rebuild" : "build"}: ui/ sources not present.`, "UI");
       continue;
     }
-    const shouldRepair = await prompter.confirmAggressiveAutoFix({
-      message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
-      initialValue: true,
-    });
-    if (shouldRepair) {
-      note("Rebuilding stale UI assets... (this may take a moment)", "UI");
-      const uiScriptPath = path.join(issue.root, "scripts/ui.js");
-      const buildResult = await runCommandWithTimeout([process.execPath, uiScriptPath, "build"], {
-        cwd: issue.root,
-        timeoutMs: 120_000,
-        env: { ...process.env, FORCE_COLOR: "1" },
-      });
-      if (buildResult.code === 0) {
-        note("UI rebuild complete.", "UI");
-      } else {
-        const details = [
-          `UI rebuild failed (exit ${buildResult.code ?? "unknown"}).`,
-          buildResult.stderr.trim() ? buildResult.stderr.trim() : null,
-        ]
-          .filter(Boolean)
-          .join("\n");
-        note(details, "UI");
-      }
+    const shouldRepair = stale
+      ? await prompter.confirmAggressiveAutoFix({
+          message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
+          initialValue: true,
+        })
+      : await prompter.confirmAutoFix({
+          message: "Build Control UI assets now?",
+          initialValue: true,
+        });
+    if (!shouldRepair) {
+      continue;
     }
+    const result = await ensureControlUiAssetsBuilt(runtime, {
+      root: issue.root,
+      force: stale,
+      onBuildStart: () =>
+        note(
+          stale
+            ? "Rebuilding stale UI assets... (this may take a moment)"
+            : "Building Control UI assets... (this may take a moment)",
+          "UI",
+        ),
+    });
+    note(
+      result.ok
+        ? stale
+          ? "UI rebuild complete."
+          : "UI build complete."
+        : (result.message ?? `UI ${stale ? "rebuild" : "build"} failed.`),
+      "UI",
+    );
   }
 }

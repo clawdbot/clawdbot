@@ -4,11 +4,13 @@
  */
 import type { Command } from "commander";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
+  printBrowserJsonResult as printJsonResult,
+  resolveBrowserProfileQuery as resolveProfileQuery,
+  runBrowserCliCommand as runBrowserCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import {
@@ -36,28 +38,6 @@ type BrowserDoctorCheck = {
   detail?: string;
   warning?: boolean;
 };
-
-function resolveProfileQuery(
-  profile?: string,
-  extra?: Record<string, string | number | boolean | undefined>,
-) {
-  const query: Record<string, string | number | boolean | undefined> = {};
-  if (profile) {
-    query.profile = profile;
-  }
-  if (extra) {
-    Object.assign(query, extra);
-  }
-  return Object.keys(query).length > 0 ? query : undefined;
-}
-
-function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
-  if (!parent?.json) {
-    return false;
-  }
-  defaultRuntime.writeJson(payload);
-  return true;
-}
 
 function sanitizeTableCell(value: string): string {
   // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
@@ -122,13 +102,6 @@ async function runBrowserToggle(
   const name = status.profile ?? "openclaw";
   const headlessLabel = params.path === "/start" && status.headless ? " (headless)" : "";
   defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
-}
-
-function runBrowserCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
 }
 
 function parseTabIndex(value: string): number {
@@ -413,12 +386,11 @@ export function registerBrowserManageCommands(
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         const result = await runBrowserDoctor(parent, profile, opts.deep === true);
-        if (printJsonResult(parent, result)) {
-          return;
+        if (!printJsonResult(parent, result)) {
+          defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         }
-        defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         if (!result.ok) {
-          defaultRuntime.exit(1);
+          process.exitCode = 1;
         }
       });
     });
@@ -838,6 +810,13 @@ export function registerBrowserManageCommands(
       ) => {
         const parent = parentOpts(cmd);
         await runBrowserCommand(async () => {
+          if (
+            opts.driver !== undefined &&
+            opts.driver !== "openclaw" &&
+            opts.driver !== "existing-session"
+          ) {
+            throw new Error("--driver must be openclaw or existing-session");
+          }
           const result = await callBrowserRequest<BrowserCreateProfileResult>(
             parent,
             {

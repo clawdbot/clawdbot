@@ -4,19 +4,20 @@
  */
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
+import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 
 function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   const allow = compileGlobPatterns({
     raw: expandToolGroups(policy.allow ?? []),
-    normalize: normalizeToolName,
+    normalize: normalizeToolPolicyName,
   });
   return (name: string) => {
-    const normalized = normalizeToolName(name);
+    const normalized = normalizeToolPolicyName(name);
     if (matchesAnyGlobPattern(normalized, deny)) {
       return false;
     }
@@ -41,6 +42,16 @@ export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPoli
     return true;
   }
   return makeToolPolicyMatcher(policy)(name);
+}
+
+/** Runtime caps deny empty lists and preserve every independently merged restriction. */
+export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boolean {
+  return (
+    toolsAllow === undefined ||
+    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
+      (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
+    )
+  );
 }
 
 /** Return whether one tool name is allowed by every active sandbox policy. */

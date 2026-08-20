@@ -28,6 +28,11 @@ export function registerBrowserBatchCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      if (opts.actions !== undefined && opts.actionsFile !== undefined) {
+        defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
+        defaultRuntime.exit(1);
+        return;
+      }
       if (!opts.actions && !opts.actionsFile) {
         defaultRuntime.error(danger("Provide --actions, --actions-file, or --actions-file -"));
         defaultRuntime.exit(1);

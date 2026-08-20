@@ -31,6 +31,9 @@ const QA_DOCKER_E2E_LANES = {
   "codex-on-demand": {
     script: "scripts/e2e/codex-on-demand-docker.sh",
   },
+  "cli-installer-distribution": {
+    script: "scripts/e2e/cli-installer-distribution-docker.sh",
+  },
   "system-agent-first-run": {
     script: "scripts/e2e/system-agent-first-run-docker.sh",
   },
@@ -79,8 +82,11 @@ const QA_DOCKER_E2E_LANES = {
   },
   "update-restart-auth": {
     env: (env) => ({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
+        env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC ?? "openclaw@latest",
       OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:
         env.OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT ?? "1500s",
+      OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
       OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
     }),
     script: "scripts/e2e/upgrade-survivor-docker.sh",

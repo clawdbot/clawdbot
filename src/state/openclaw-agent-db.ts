@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
@@ -15,6 +16,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -34,6 +36,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import {
+  isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
@@ -73,7 +76,10 @@ export {
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "./openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
-export { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
+export {
+  listOpenClawRegisteredAgentDatabases,
+  readOpenClawAgentDatabaseRegistryToken,
+} from "./openclaw-agent-db-registry.js";
 export { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 export {
   isIncognitoOpenClawAgentSqlitePath,
@@ -107,6 +113,7 @@ export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
 const incognitoDatabases = new WeakSet<OpenClawAgentDatabase>();
+let incognitoDatabaseGeneration = 0;
 const cachedDatabaseOpenFailures = new Map<string, unknown>();
 const cachedDatabaseLeases = new Map<
   string,
@@ -259,8 +266,10 @@ export function openOpenClawAgentDatabase(
     incognitoDatabases.add(database);
     unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cachedDatabases.set(pathname, database);
+    incognitoDatabaseGeneration += 1;
     return database;
   }
+  quarantineOrphanedSqliteSidecars(pathname);
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
   const terminalFailure = terminalOpenLatch.get(pathname);
@@ -343,7 +352,7 @@ export function openOpenClawAgentDatabase(
         db.close();
         if (
           err instanceof Error &&
-          (err.name === "SqliteSchemaVersionError" || isTerminalSqliteIntegrityError(err))
+          (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
         ) {
           recordOpenClawAgentDatabaseOpenFailure(pathname, err);
         }
@@ -578,6 +587,16 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
     );
 }
 
+/** Return the generation of process-held incognito database membership. */
+export function readOpenIncognitoAgentDatabaseGeneration(): number {
+  return incognitoDatabaseGeneration;
+}
+
+/** Returns whether this exact process-held database is incognito/in-memory. */
+export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase): boolean {
+  return incognitoDatabases.has(database);
+}
+
 /** List process-held agent databases without opening or inspecting fixture state. */
 export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
   return [...cachedDatabases.values()]
@@ -598,9 +617,13 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   if (!database) {
     return false;
   }
+  const incognito = incognitoDatabases.has(database);
   closeCachedOpenClawAgentDatabase(database);
   cachedDatabases.delete(resolvedPath);
   cachedDatabaseOpenFailures.delete(resolvedPath);
+  if (incognito) {
+    incognitoDatabaseGeneration += 1;
+  }
   if (cachedDatabases.size === 0) {
     unregisterExitClose?.();
     unregisterExitClose = null;
@@ -608,33 +631,37 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   return true;
 }
 
-/** Close and unregister one transient agent database by exact cached pathname. */
+/** Close and unregister one unambiguous transient agent database by filesystem identity. */
 export function disposeOpenClawAgentDatabaseByPath(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): boolean {
-  // Require the cache's exact lexical owner. Following a symlink or accepting
-  // an uncached path could unregister a database another process now owns.
   const resolvedPath = path.resolve(pathname);
   // Disposal can be followed by file deletion or recreation, so revalidate next open.
   validatedAgentDatabasePaths.delete(resolvedPath);
-  const database = cachedDatabases.get(resolvedPath);
-  if (!database || database.path !== resolvedPath) {
+  const matchingDatabases = [...cachedDatabases.values()].filter((candidate) =>
+    isSameOpenClawAgentDatabasePath(candidate.path, resolvedPath),
+  );
+  if (matchingDatabases.length > 1) {
     return false;
   }
-  if (incognitoDatabases.has(database)) {
-    return closeOpenClawAgentDatabaseByPath(resolvedPath);
+  const database = matchingDatabases[0];
+  if (database && incognitoDatabases.has(database)) {
+    return closeOpenClawAgentDatabaseByPath(database.path);
+  }
+  if (!database) {
+    return false;
   }
   try {
     unregisterOpenClawAgentDatabase({
       agentId: database.agentId,
-      path: resolvedPath,
+      path: database.path,
       ...(options.env ? { env: options.env } : {}),
     });
   } finally {
     // Secret-bearing transient DBs must close even when registry maintenance
     // fails; Windows otherwise cannot remove the file during caller cleanup.
-    closeOpenClawAgentDatabaseByPath(resolvedPath);
+    closeOpenClawAgentDatabaseByPath(database.path);
   }
   return true;
 }
@@ -643,11 +670,17 @@ export function disposeOpenClawAgentDatabaseByPath(
 export function closeOpenClawAgentDatabases(): void {
   unregisterExitClose?.();
   unregisterExitClose = null;
+  const removedIncognito = [...cachedDatabases.values()].some(
+    (database) => database.db.isOpen && incognitoDatabases.has(database),
+  );
   for (const database of cachedDatabases.values()) {
     closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
   cachedDatabaseOpenFailures.clear();
+  if (removedIncognito) {
+    incognitoDatabaseGeneration += 1;
+  }
 }
 
 /** Close cached agent handles and clear terminal failure latches for test isolation. */

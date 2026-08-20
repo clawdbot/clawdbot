@@ -12,16 +12,16 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-
-const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
+  AuthProfileCooldownClassification,
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileStore,
@@ -33,6 +33,8 @@ import {
   isModelScopedCooldownReason,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+
+const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
@@ -73,9 +75,16 @@ function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void
   });
 }
 
+const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
+
+export function resolveInlineProviderApiKeyUsageId(provider: string): string {
+  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
+}
+
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
   "auth",
+  "session_expired",
   "billing",
   "format",
   "model_not_found",
@@ -124,6 +133,18 @@ type WhamCooldownProbeResult = {
   blockedUntil?: number;
   blockedSource?: AuthProfileBlockedSource;
 };
+
+function resolveWhamCooldownClassification(
+  reason: string,
+): AuthProfileCooldownClassification | undefined {
+  return reason === "wham_token_expired" || reason === "wham_account_dead" ? reason : undefined;
+}
+
+function resolveWhamCanonicalCooldownReason(
+  classification: AuthProfileCooldownClassification,
+): Extract<AuthProfileFailureReason, "auth" | "auth_permanent"> {
+  return classification === "wham_token_expired" ? "auth" : "auth_permanent";
+}
 
 function shouldProbeWhamForFailure(
   profile: AuthProfileCredential | undefined,
@@ -234,9 +255,11 @@ function applyWhamCooldownResult(params: {
       blockedScope: undefined,
       cooldownUntil: undefined,
       cooldownReason: undefined,
+      cooldownClassification: undefined,
       cooldownModel: undefined,
     };
   }
+  const cooldownClassification = resolveWhamCooldownClassification(params.whamResult.reason);
   return {
     ...params.computed,
     lastProbeAt: params.now,
@@ -244,13 +267,12 @@ function applyWhamCooldownResult(params: {
       existingActiveCooldownUntil,
       resolveUsageWindowUntil(params.now, params.whamResult.cooldownMs),
     ),
+    cooldownReason: cooldownClassification
+      ? resolveWhamCanonicalCooldownReason(cooldownClassification)
+      : params.computed.cooldownReason,
+    cooldownClassification,
+    cooldownModel: cooldownClassification ? undefined : params.computed.cooldownModel,
   };
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 async function probeWhamForCooldown(
@@ -293,11 +315,26 @@ async function probeWhamForCooldown(
 
     if (!res.ok) {
       await cancelUnreadResponseBody(res);
-      if (res.status === 401) {
-        return { cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS, reason: "wham_token_expired" };
-      }
-      if (res.status === 403) {
-        return { cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS, reason: "wham_account_dead" };
+      if (res.status === 401 || res.status === 403) {
+        const result =
+          res.status === 401
+            ? {
+                cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS,
+                reason: "wham_token_expired" as const,
+              }
+            : {
+                cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS,
+                reason: "wham_account_dead" as const,
+              };
+        authProfileUsageLog.warn("WHAM probe classified auth profile unavailable", {
+          event: "auth_profile_wham_auth_classification",
+          profileId,
+          status: res.status,
+          cooldownClassification: result.reason,
+          cooldownMs: result.cooldownMs,
+          tags: ["auth_profiles", "provider_probe"],
+        });
+        return result;
       }
       return { cooldownMs: WHAM_HTTP_ERROR_COOLDOWN_MS, reason: "wham_http_error" };
     }
@@ -622,6 +659,11 @@ export function resolveProfilesUnavailableReason(params: {
       continue;
     }
 
+    if (stats.cooldownReason && FAILURE_REASON_SET.has(stats.cooldownReason)) {
+      addScore(stats.cooldownReason, 1_000);
+      continue;
+    }
+
     let recordedReason = false;
     for (const [rawReason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
       const reason = rawReason as AuthProfileFailureReason;
@@ -761,6 +803,20 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
+export function resolveInlineProviderApiKeyUnusableUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
+  if (!stats) {
+    return null;
+  }
+  return resolveProfileUnusableUntil(stats);
+}
+
 function resetUsageStats(
   existing: ProfileUsageStats | undefined,
   overrides?: Partial<ProfileUsageStats>,
@@ -775,6 +831,7 @@ function resetUsageStats(
     blockedScope: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     disabledUntil: undefined,
     disabledReason: undefined,
@@ -790,6 +847,19 @@ function updateUsageStatsEntry(
 ): void {
   store.usageStats = store.usageStats ?? {};
   store.usageStats[profileId] = updater(store.usageStats[profileId]);
+}
+
+function notifyAuthProfileFailureSafely(): void {
+  try {
+    notifyAuthProfileFailureHook();
+  } catch (err) {
+    // Hook errors must not break failure recording; log and continue.
+    authProfileUsageLog.warn("auth profile failure hook threw", {
+      event: "auth_profile_failure_hook_error",
+      tags: ["error_handling", "auth_profiles"],
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function keepActiveWindowOrRecompute(params: {
@@ -833,6 +903,9 @@ function computeNextProfileUsageStats(params: {
 
   const updatedStats: ProfileUsageStats = {
     ...params.existing,
+    // Exact provider diagnostics describe only the cooldown generation that
+    // produced them; every ordinary failure replaces that diagnostic state.
+    cooldownClassification: undefined,
     errorCount: nextErrorCount,
     failureCounts,
     lastFailureAt: params.now,
@@ -997,16 +1070,7 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
-    try {
-      notifyAuthProfileFailureHook();
-    } catch (err) {
-      // Hook errors must not break failure recording; log and continue.
-      authProfileUsageLog.warn("auth profile failure hook threw", {
-        event: "auth_profile_failure_hook_error",
-        tags: ["error_handling", "auth_profiles"],
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    notifyAuthProfileFailureSafely();
     return;
   }
   if (updated === null) {
@@ -1044,6 +1108,7 @@ function buildBlockedProfileUsageStats(params: {
     blockedScope: blockedModel ? "model" : undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     lastFailureAt: params.now,
     failureCounts: {
@@ -1117,6 +1182,67 @@ export async function markAuthProfileBlockedUntil(params: {
   }
   if (updated === null) {
     logDroppedAuthProfileBookkeeping("blocked_until", profileId);
+  }
+}
+
+export async function markInlineProviderApiKeyFailure(params: {
+  store: AuthProfileStore;
+  provider: string;
+  reason: AuthProfileFailureReason;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  runId?: string;
+  modelId?: string;
+}): Promise<void> {
+  const { store, provider, reason, agentDir, runId, modelId } = params;
+  if (
+    (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") ||
+    isAuthCooldownBypassedForProvider(provider)
+  ) {
+    return;
+  }
+
+  const usageId = resolveInlineProviderApiKeyUsageId(provider);
+  const cfgResolved = resolveAuthCooldownConfig();
+
+  let nextStats: ProfileUsageStats | undefined;
+  let previousStats: ProfileUsageStats | undefined;
+  let updateTime = 0;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      const now = Date.now();
+      previousStats = freshStore.usageStats?.[usageId];
+      updateTime = now;
+      nextStats = computeNextProfileUsageStats({
+        existing: previousStats ?? {},
+        now,
+        reason,
+        cfgResolved,
+        modelId,
+      });
+      updateUsageStatsEntry(freshStore, usageId, () => nextStats as ProfileUsageStats);
+      return true;
+    },
+  });
+  if (updated) {
+    store.usageStats = updated.usageStats;
+    if (nextStats) {
+      logAuthProfileFailureStateChange({
+        runId,
+        profileId: usageId,
+        provider,
+        reason,
+        previous: previousStats,
+        next: nextStats,
+        now: updateTime,
+      });
+    }
+    notifyAuthProfileFailureSafely();
+    return;
+  }
+  if (updated === null) {
+    logDroppedAuthProfileBookkeeping("inline_api_key_failure", usageId);
   }
 }
 

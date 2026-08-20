@@ -33,12 +33,11 @@ export function attachRuntimeUserTurnTranscriptContext(
 export function takeRuntimeUserTurnTranscriptContext(
   runtimeMessage: AgentMessage,
 ): RuntimeUserTurnTranscriptContext | undefined {
-  const record = runtimeMessage as unknown as Record<PropertyKey, unknown>;
-  const context = record[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT] as
+  const context = Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT) as
     | RuntimeUserTurnTranscriptContext
     | undefined;
   if (context) {
-    delete record[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT];
+    Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT);
   }
   return context;
 }
@@ -58,12 +57,11 @@ export function attachRuntimeUserTurnTranscriptRecorder(
 export function takeRuntimeUserTurnTranscriptRecorder(
   runtimeMessage: AgentMessage,
 ): UserTurnTranscriptRecorder | undefined {
-  const record = runtimeMessage as unknown as Record<PropertyKey, unknown>;
-  const recorder = record[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER] as
+  const recorder = Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
     | UserTurnTranscriptRecorder
     | undefined;
   if (recorder) {
-    delete record[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER];
+    Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER);
   }
   return recorder;
 }

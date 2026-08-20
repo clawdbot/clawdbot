@@ -8,11 +8,14 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
+import {
+  finalizeTerminalToolCallArguments,
+  transportAbortError,
+} from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   Context,
@@ -30,6 +33,8 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -37,12 +42,11 @@ import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
+  formatToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
-const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
 
 // 16 MiB cap on Mistral streaming success bodies, matching the
 // `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES`
@@ -191,13 +195,11 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      for (const block of output.content) {
-        // partialArgs is only a streaming scratch buffer; never persist it.
-        delete (block as { partialArgs?: string }).partialArgs;
-      }
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatMistralError(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      // Failed or canceled generations must never retain partially repaired tool calls.
+      output.content = output.content.filter((block) => block.type !== "toolCall");
+      const terminal = projectProviderError(error, options?.signal);
+      Object.assign(output, terminal);
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
   })();
@@ -295,39 +297,6 @@ function deriveMistralToolCallId(id: string, attempt: number): string {
     .slice(0, MISTRAL_TOOL_CALL_ID_LENGTH);
 }
 
-function formatMistralError(error: unknown): string {
-  if (error instanceof Error) {
-    const sdkError = error as Error & { statusCode?: unknown; body?: unknown };
-    const statusCode = typeof sdkError.statusCode === "number" ? sdkError.statusCode : undefined;
-    const bodyText = typeof sdkError.body === "string" ? sdkError.body.trim() : undefined;
-    if (statusCode !== undefined && bodyText) {
-      return `Mistral API error (${statusCode}): ${truncateErrorText(bodyText, MAX_MISTRAL_ERROR_BODY_CHARS)}`;
-    }
-    if (statusCode !== undefined) {
-      return `Mistral API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  return safeJsonStringify(error);
-}
-
-function truncateErrorText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  const truncated = truncateUtf16Safe(text, maxChars);
-  return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? String(value) : serialized;
-  } catch {
-    return String(value);
-  }
-}
-
 function buildChatPayload(
   model: Model<"mistral-conversations">,
   context: Context,
@@ -415,6 +384,7 @@ async function consumeChatStream(
   mistralStream: AsyncIterable<CompletionEvent>,
 ): Promise<void> {
   let currentBlock: TextContent | ThinkingContent | null = null;
+  let terminalFinishReason: string | undefined;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   type ToolBlockIdentity = {
@@ -621,6 +591,7 @@ async function consumeChatStream(
     }
 
     if (choice.finishReason) {
+      terminalFinishReason = choice.finishReason;
       output.stopReason = mapChatStopReason(choice.finishReason);
     }
 
@@ -780,40 +751,53 @@ async function consumeChatStream(
   }
 
   finishCurrentBlock(currentBlock);
-  for (const index of toolBlockIdentities.keys()) {
-    const block = output.content.at(index);
-    if (block?.type !== "toolCall") {
-      continue;
+  // Only an authoritative tool terminal can make strictly parsed arguments executable.
+  if (!terminalFinishReason || output.stopReason !== "toolUse") {
+    blocks.splice(0, blocks.length, ...blocks.filter((block) => block.type !== "toolCall"));
+    if (!terminalFinishReason) {
+      throw new Error("Mistral stream ended without a terminal finish reason");
     }
-    const toolBlock = block as ToolCall & { partialArgs?: string };
+    return;
+  }
+  const completedToolCalls = [...toolBlockIdentities.keys()].flatMap((contentIndex) => {
+    const block = blocks[contentIndex];
+    return block?.type === "toolCall"
+      ? [{ block: block as ToolCall & { partialArgs?: string }, contentIndex }]
+      : [];
+  });
+  finalizeTerminalToolCallArguments(
+    completedToolCalls.map(({ block }) => block),
+    (block) => block.partialArgs ?? "",
+    "Mistral completed tool call has invalid JSON arguments",
+  );
+  for (const { block, contentIndex } of completedToolCalls) {
     // Finalize in-place and strip the scratch buffer so replay only
     // carries parsed arguments.
-    delete toolBlock.partialArgs;
-    stream.push({
-      type: "toolcall_end",
-      contentIndex: index,
-      toolCall: toolBlock,
-      partial: output,
-    });
+    delete block.partialArgs;
+    stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
   }
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  return tools.flatMap((tool) => {
+  const converted = tools.flatMap((tool) => {
     try {
-      return {
+      const name = tool.name;
+      const description = tool.description;
+      const value = {
         type: "function",
         function: {
-          name: tool.name,
-          description: tool.description,
+          name,
+          description,
           parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
           strict: false,
         },
-      };
+      } satisfies FunctionTool & { type: "function" };
+      return { name, description, value };
     } catch {
       return [];
     }
   });
+  return sortPromptCacheToolsByName(converted).map(({ value }) => value);
 }
 
 function stripSymbolKeys(value: unknown): unknown {
@@ -911,13 +895,20 @@ function toChatMessages(
     const textResult = extractToolResultText(msg.content);
     const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
     const hasImages = msg.content.some(isImageWithMediaPayload);
-    const toolText = buildToolResultText(
-      textResult,
+    const omittedMediaPlaceholder =
+      hasImages && !supportsImages
+        ? textResult.trim()
+          ? "[tool image omitted: model does not support images]"
+          : mediaPlaceholder === "(see attached media)"
+            ? "(media omitted: model does not support images)"
+            : "(image omitted: model does not support images)"
+        : undefined;
+    const toolText = formatToolResultText({
+      text: textResult,
       mediaPlaceholder,
-      hasImages,
-      supportsImages,
-      msg.isError,
-    );
+      omittedMediaPlaceholder,
+      isError: msg.isError,
+    });
     toolContent.push({ type: "text", text: toolText });
     for (const part of msg.content) {
       if (!supportsImages) {
@@ -940,36 +931,6 @@ function toChatMessages(
   }
 
   return result;
-}
-
-function buildToolResultText(
-  text: string,
-  mediaPlaceholder: string | undefined,
-  hasImages: boolean,
-  supportsImages: boolean,
-  isError: boolean,
-): string {
-  const trimmed = text.trim();
-  const errorPrefix = isError ? "[tool error] " : "";
-
-  if (trimmed.length > 0) {
-    const imageSuffix =
-      hasImages && !supportsImages ? "\n[tool image omitted: model does not support images]" : "";
-    return `${errorPrefix}${trimmed}${imageSuffix}`;
-  }
-
-  if (mediaPlaceholder) {
-    if (!hasImages || supportsImages) {
-      return `${errorPrefix}${mediaPlaceholder}`;
-    }
-    const omitted =
-      mediaPlaceholder === "(see attached media)"
-        ? "(media omitted: model does not support images)"
-        : "(image omitted: model does not support images)";
-    return `${errorPrefix}${omitted}`;
-  }
-
-  return isError ? "[tool error] (no tool output)" : "(no tool output)";
 }
 
 function usesReasoningEffort(model: Model<"mistral-conversations">): boolean {

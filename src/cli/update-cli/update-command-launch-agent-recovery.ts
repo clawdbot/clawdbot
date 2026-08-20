@@ -30,16 +30,23 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   const readState = params.deps?.readState ?? readGatewayServiceState;
   const recover = params.deps?.recover ?? recoverInstalledLaunchAgent;
   const state = await readState(service, { env: params.env }).catch(() => null);
-  if (state?.loaded) {
+  if (!state || state.loadState.status !== "not-loaded") {
     return { attempted: false, recovered: false };
   }
   if (state && !state.installed && !state.runtime?.missingSupervision) {
     return { attempted: false, recovered: false };
   }
 
-  const recovered = await recover({ result: "restarted", env: state?.env ?? params.env }).catch(
-    () => null,
-  );
+  let recovered: Awaited<ReturnType<typeof recover>>;
+  try {
+    recovered = await recover({ result: "restarted", env: state?.env ?? params.env });
+  } catch (error) {
+    return {
+      attempted: true,
+      recovered: false,
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
   if (!recovered) {
     return {
       attempted: true,

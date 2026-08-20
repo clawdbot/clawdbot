@@ -14,8 +14,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
@@ -49,6 +50,11 @@ function resolveEmbeddedCliBackendDispatch(
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
   }
+  // The one-shot bridge cannot carry authenticated source-channel delivery
+  // context; private source replies must stay with their embedded owner.
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    return undefined;
+  }
   // The CLI runner needs the caller-owned transcript path; runs without one
   // stay on the passthrough where session targets are resolved internally.
   const sessionFile = params.sessionFile?.trim();
@@ -78,7 +84,7 @@ function resolveDispatchableToolsAllow(params: RunEmbeddedAgentParams): string[]
   if (!params.toolsAllow || params.toolsAllow.length === 0) {
     return undefined;
   }
-  const names = params.toolsAllow.map((name) => normalizeToolName(name));
+  const names = params.toolsAllow.map((name) => normalizeToolPolicyName(name));
   if (names.some((name) => !name || name === "*" || name.includes("*"))) {
     return undefined;
   }
@@ -91,6 +97,12 @@ async function runEmbeddedAgentViaCliBackend(
   dispatch: EmbeddedCliBackendDispatch,
 ): Promise<EmbeddedAgentRunResult> {
   const { runCliAgent } = await import("../cli-runner.runtime.js");
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: params.runId,
+    runtimeKind: "embedded",
+    admittedRunContext: params.admittedRunContext,
+    preparedRunAdmission: params.preparedRunAdmission,
+  });
   // The dispatch gate guarantees a non-empty named allowlist; translate it to
   // the selectable-backend surface: no native tools, only the listed loopback
   // MCP tools. The MCP list also bounds the loopback grant server-side (tools
@@ -117,6 +129,13 @@ async function runEmbeddedAgentViaCliBackend(
     model: params.model,
     cwd: params.cwd ?? params.workspaceDir,
     config: params.config,
+    ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+      : {}),
+    ...(params.sessionTarget?.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+      : {}),
+    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
   });
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
@@ -140,7 +159,7 @@ async function runEmbeddedAgentViaCliBackend(
     if (!rawName) {
       return;
     }
-    const toolName = normalizeToolName(stripOpenClawMcpToolPrefix(rawName));
+    const toolName = normalizeToolPolicyName(stripOpenClawMcpToolPrefix(rawName));
     const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined;
     if (phase === "start") {
       transcript.noteToolEvent({
@@ -152,12 +171,14 @@ async function runEmbeddedAgentViaCliBackend(
       return;
     }
     const isError = evt.data.isError === true || isToolResultError(evt.data.result);
+    const resultContentSource = evt.data.resultContentSource === "network" ? "network" : undefined;
     transcript.noteToolEvent({
       phase,
       toolName,
       toolCallId,
       result: evt.data.result,
       isError,
+      ...(resultContentSource ? { resultContentSource } : {}),
     });
     onAgentToolResult?.({
       toolName,
@@ -184,9 +205,18 @@ async function runEmbeddedAgentViaCliBackend(
   let finalAssistantText: string | undefined;
   try {
     const result = await runCliAgent({
+      admittedRunContext,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+        : {}),
+      ...(params.sessionTarget?.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+        : {}),
+      chatType: params.chatType,
       agentId: params.agentId,
+      ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,
@@ -194,9 +224,12 @@ async function runEmbeddedAgentViaCliBackend(
       config: params.config,
       prompt: params.prompt,
       imagePrompt: params.prompt,
+      images: params.images,
+      imageOrder: params.imageOrder,
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
+      modelHasVision: params.modelHasVision,
       thinkLevel: params.thinkLevel,
       timeoutMs: params.timeoutMs,
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,

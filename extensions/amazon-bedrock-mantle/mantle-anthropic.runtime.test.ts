@@ -1,5 +1,6 @@
-// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
+// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
@@ -29,12 +30,7 @@ function createTestDeps() {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[index];

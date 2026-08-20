@@ -15,7 +15,6 @@ import {
   runPluginRegistryHealth,
   runReleaseConfiguredPluginInstallsHealth,
   runSandboxHealth,
-  runSessionLocksHealth,
   runSessionSnapshotsHealth,
   runSessionTranscriptHeadersHealth,
   runSessionTranscriptLabelsHealth,
@@ -60,12 +59,8 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
+      required: true,
       run: runInitialConfigWriteHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:active-tool-schema-warnings",
-      label: "Active tool schema warnings",
-      run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -99,6 +94,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: params.runGatewayAuthHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:node-hosting-preconditions",
+      label: "Node hosting preconditions",
+      healthChecks: {
+        description: "Gateway config can authenticate and onboard node and worker hosts.",
+        async detect(ctx) {
+          const { collectNodeHostingPreconditionFindings } =
+            await import("../commands/doctor-node-hosting-preconditions.js");
+          return collectNodeHostingPreconditionFindings(ctx.cfg);
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:command-owner",
       label: "Command owner",
       healthCheckIds: ["core/doctor/command-owner"],
@@ -114,6 +121,29 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy state",
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      healthChecks: {
+        description: "Legacy or branchy session transcript files are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
+            await import("../commands/doctor-session-transcripts.js");
+          return (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToHealthFinding,
+          );
+        },
+        repair: legacyOwnedRepair(async () => {
+          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToRepairEffect } =
+            await import("../commands/doctor-session-transcripts.js");
+          return (await detectSessionTranscriptHealthIssues()).map(
+            sessionTranscriptIssueToRepairEffect,
+          );
+        }, "legacy doctor session transcript contribution owns transcript rewrites"),
+      },
+      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:agent-memory-schema",
@@ -230,6 +260,13 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
       run: runPluginRegistryHealth,
     }),
+    // Runtime tool discovery must follow plugin metadata repair; running it earlier
+    // scans each workspace again after the authoritative generation changes.
+    createDoctorHealthContribution({
+      id: "doctor:active-tool-schema-warnings",
+      label: "Active tool schema warnings",
+      run: runActiveToolSchemaWarningsHealth,
+    }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
@@ -296,35 +333,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Telegram General-topic conversations",
       healthCheckIds: ["core/doctor/telegram-general-topic-conversations"],
       run: runTelegramGeneralTopicConversationHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-locks",
-      label: "Session locks",
-      healthCheckIds: ["core/doctor/session-locks"],
-      run: runSessionLocksHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:session-transcripts",
-      label: "Session transcripts",
-      healthChecks: {
-        description: "Legacy or branchy session transcript files are represented as findings.",
-        defaultEnabled: false,
-        async detect() {
-          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
-            await import("../commands/doctor-session-transcripts.js");
-          return (await detectSessionTranscriptHealthIssues()).map(
-            sessionTranscriptIssueToHealthFinding,
-          );
-        },
-        repair: legacyOwnedRepair(async () => {
-          const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToRepairEffect } =
-            await import("../commands/doctor-session-transcripts.js");
-          return (await detectSessionTranscriptHealthIssues()).map(
-            sessionTranscriptIssueToRepairEffect,
-          );
-        }, "legacy doctor session transcript contribution owns transcript rewrites"),
-      },
-      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcript-headers",

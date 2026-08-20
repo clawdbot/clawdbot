@@ -1,5 +1,7 @@
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Shared type contracts for outbound planning, queueing, and transport.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
@@ -19,17 +21,18 @@ import type {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMessageSendOverrides } from "./message-plan.js";
+import type { MessageSentEvent } from "./message-sent-hook.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
+import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
 export type OutboundDeliveryIntent = {
   id: string;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
@@ -44,7 +47,7 @@ export type DurableFinalDeliveryRequirements = Partial<
 >;
 
 export type OutboundDurableDeliverySupport =
-  | { ok: true }
+  | { ok: true; automaticUnknownSendReconciliation: boolean }
   | {
       ok: false;
       reason: "missing_outbound_handler" | "capability_mismatch";
@@ -70,6 +73,7 @@ export type ChannelHandler = {
   ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
   renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
+  /** Resolved for the delivery's account when the adapter declares an account-aware resolver. */
   presentationCapabilities?: ChannelOutboundAdapter["presentationCapabilities"];
   pinDeliveredMessage?: (params: {
     target: ChannelOutboundTargetRef;
@@ -82,6 +86,10 @@ export type ChannelHandler = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void>;
+  adoptTargetFromDelivery?: (params: {
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
@@ -116,7 +124,9 @@ export type PlatformSendRoute = {
 
 export type ChannelHandlerParams = {
   cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
+  /** Admitted run owner for agent-scoped channel runtime discovery. */
+  agentId?: string;
+  channel: string;
   to: string;
   accountId?: string;
   replyToId?: string | null;
@@ -141,12 +151,17 @@ export type ChannelHandlerParams = {
 
 export type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   payloads: ReplyPayload[];
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
+  /** Admitted run correlation copied into the prepared durable batch. */
+  runId?: string;
+  /** @internal Exact admitted execution provenance copied into durable custody. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
+  /** @internal Canonical post-policy batch used by queue recovery and physical delivery. */
+  preparedBatch?: PreparedOutboundBatch;
+  reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
@@ -164,14 +179,18 @@ export type DeliverOutboundPayloadsCoreParams = {
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
   /** @internal Runs after each identified platform result, before further fallible work. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** @internal Reports a settled native payload for post-terminal message_sent observation. */
+  onMessageSentEvent?: (event: MessageSentEvent, sourceIndex: number) => void;
   /** @internal Persists ambiguous-send state immediately before platform I/O. */
-  onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
+  onPlatformSendStart?: (route: PlatformSendRoute, sourceIndex?: number) => Promise<void>;
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
   /** @internal Stable producer id used to make queue creation idempotent across crashes. */
   deliveryIntentId?: string;
   /** @internal Retain the completed receipt for a producer-owned replayable intent. */
   completionRetention?: DeliveryQueueCompletionRetention;
+  /** @internal Producer-specific durable recovery attempt budget. */
+  maxRetries?: number;
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */
@@ -200,10 +219,14 @@ export type DeliverOutboundPayloadsCoreParams = {
  * outbound substrate, recovery, and compatibility paths.
  */
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+  replyToId?: string | null;
+  replyToMode?: ReplyToMode;
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */
   deliveryProducerClaimId?: string;
+  /** @internal Keep the exact live producer claim alive during platform preparation. */
+  deliveryProducerLeaseRequired?: boolean;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */
   deferredDeliveryAdmissionPassed?: true;
   /** @internal State directory that owns the existing recovery queue entry. */

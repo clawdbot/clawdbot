@@ -1,0 +1,105 @@
+name: Mantis Telegram Desktop Proof Dispatch
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target: # zizmor: ignore[dangerous-triggers] dispatcher never checks out or executes PR code
+    types: [labeled]
+
+permissions:
+  actions: write
+  pull-requests: read
+
+jobs:
+  dispatch:
+    if: >-
+      ${{
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          (
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
+          )
+        ) ||
+        (
+          github.event_name == 'pull_request_target' &&
+          github.event.label.name == 'mantis: telegram-visible-proof'
+        )
+      }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate and dispatch request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const eventName = context.eventName;
+            let prNumber;
+            let instructions = "";
+            let requestSource;
+
+            if (eventName === "issue_comment") {
+              const normalized = (context.payload.comment?.body ?? "").toLowerCase();
+              const requestsDesktopProof =
+                /\b(?:telegram desktop proof|desktop proof|native telegram|visible proof|telegram-visible-proof)\b/u.test(
+                  normalized,
+                );
+              if (!requestsDesktopProof) {
+                return;
+              }
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner,
+                repo,
+                username: context.actor,
+              });
+              if (!new Set(["admin", "maintain", "write"]).has(data.permission)) {
+                core.notice(
+                  `Mantis requires write/maintain/admin access; ${context.actor} has ${data.permission}.`,
+                );
+                return;
+              }
+              prNumber = context.payload.issue.number;
+              instructions = context.payload.comment.body;
+              requestSource = "issue_comment";
+            } else {
+              const pr = context.payload.pull_request;
+              if (context.actor !== "clawsweeper[bot]") {
+                core.notice(`Ignoring Mantis label applied by ${context.actor}.`);
+                return;
+              }
+              if (pr.head.repo?.full_name !== `${owner}/${repo}`) {
+                core.notice(
+                  "ClawSweeper labels do not authorize secret-bearing fork execution; a maintainer can invoke Mantis from a PR comment.",
+                );
+                return;
+              }
+              prNumber = pr.number;
+              requestSource = "clawsweeper_label";
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+            if (!pr.head.repo) {
+              core.notice("PR source repository is unavailable.");
+              return;
+            }
+            const inputs = {
+              pr_number: String(prNumber),
+              instructions,
+              request_source: requestSource,
+            };
+            if (pr.head.repo.full_name !== `${owner}/${repo}`) {
+              inputs.allow_fork_candidate = "true";
+              inputs.approved_head_sha = pr.head.sha;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: "mantis-telegram-desktop-proof.yml",
+              ref: context.payload.repository.default_branch,
+              inputs,
+            });

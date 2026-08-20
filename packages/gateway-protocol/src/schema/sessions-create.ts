@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 /** Creates or adopts a session with optional model, thinking, label, and parent linkage. */
@@ -9,8 +10,10 @@ export const SessionsCreateParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  permissionMode: Type.Optional(SessionPermissionModeSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),
   catalogId: Type.Optional(NonEmptyString),
@@ -25,6 +28,12 @@ export const SessionsCreateParamsSchema = closedObject({
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
+  forkFrom: Type.Optional(
+    Type.Literal("last-completed", {
+      description:
+        "Fork through the parent's last completed assistant message; requires fork=true.",
+    }),
+  ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
   succeedsParent: Type.Optional(
     Type.Boolean({
@@ -35,6 +44,12 @@ export const SessionsCreateParamsSchema = closedObject({
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  projectId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Start in a registered project; operator.write.",
+    }),
+  ),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({
@@ -59,7 +74,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.String({
       minLength: 1,
       description:
-        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Requires operator.admin.",
+        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Gateway paths outside configured agent workspaces and all execNode paths require operator.admin.",
     }),
   ),
 });

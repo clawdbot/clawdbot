@@ -529,10 +529,10 @@ export function renderLobsterPetScene(args: {
   // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
   flavor: string | null;
   bottle: { spotPct: number; opened: boolean; fortune: string } | null;
-  onPointerDown: () => void;
-  onPointerUp: () => void;
+  onPointerDown: (event: PointerEvent) => void;
+  onPointerUp: (event: PointerEvent) => void;
   onPointerCancel: () => void;
-  onContextMenu: (event: Event) => void;
+  onContextMenu: (event: MouseEvent) => void;
   onBottleOpen: () => void;
 }) {
   const anchoredScale = (scale: number) =>

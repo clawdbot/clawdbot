@@ -3,7 +3,7 @@ import {
   ConversationDeliveryInputError,
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import {
   ConversationInputError,
   ConversationOperationConflictError,
@@ -23,7 +23,7 @@ const conversation = {
   lastSeenAt: 200,
 };
 
-function sentResult(): Extract<MessageActionRunResult, { kind: "send" }> {
+function sentResult(): Extract<MessageActionResult, { kind: "send" }> {
   return {
     kind: "send",
     channel: "reef",

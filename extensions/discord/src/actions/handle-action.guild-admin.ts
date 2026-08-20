@@ -56,8 +56,9 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
   readPolicyOptions?: DiscordMessagingActionOptions;
+  actionOptions: DiscordMessagingActionOptions;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId, readPolicyOptions } = params;
+  const { ctx, resolveChannelId, readPolicyOptions, actionOptions } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
@@ -441,7 +442,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         replyTo: replyTo ?? undefined,
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots, mediaReadFile: ctx.mediaReadFile },
+      actionOptions,
     );
   }
 

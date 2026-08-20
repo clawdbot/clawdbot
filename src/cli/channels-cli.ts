@@ -1,8 +1,9 @@
 // Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -16,7 +17,7 @@ import {
   type ChannelSetupCliOption,
 } from "./channels-cli-add-args.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { hasExplicitOptions } from "./command-options.js";
+import { hasExplicitOptions, inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
@@ -70,7 +71,7 @@ function runChannelsCommand(action: () => Promise<void>) {
 
 function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(`${label}: ${String(err)}`));
+    defaultRuntime.error(danger(`${label}: ${formatErrorMessage(err)}`));
     defaultRuntime.exit(1);
   });
 }
@@ -155,6 +156,7 @@ export async function registerChannelsCli(
   const channels = program
     .command("channels")
     .description("Manage connected chat channels and accounts")
+    .option("--agent <id>", "Agent owner for channel commands that require workspace context")
     .addHelpText(
       "after",
       () =>
@@ -221,16 +223,29 @@ export async function registerChannelsCli(
     .argument("<entries...>", "Entries to resolve (names or ids)")
     .option("--channel <name>", `Channel (${channelNames})`)
     .option("--account <id>", "Account id (accountId)")
-    .option("--kind <kind>", "Target kind (auto|user|group)", "auto")
+    .option("--agent <id>", "Agent owner for channel resolution")
+    .addOption(
+      new Option("--kind <kind>", "Target kind (auto|user|group|channel)")
+        .choices(["auto", "user", "group", "channel"])
+        .default("auto"),
+    )
     .option("--json", "Output JSON", false)
-    .action(async (entries, opts) => {
+    .action(async (entries, opts, command) => {
       await runChannelsCommand(async () => {
         const { channelsResolveCommand } = await loadChannelsCommands();
+        const agentSource = command.getOptionValueSource("agent");
+        const agent =
+          agentSource && agentSource !== "default"
+            ? typeof opts.agent === "string"
+              ? opts.agent
+              : undefined
+            : inheritOptionFromParent<string>(command, "agent");
         await channelsResolveCommand(
           {
+            agent,
             channel: opts.channel as string | undefined,
             account: opts.account as string | undefined,
-            kind: opts.kind as "auto" | "user" | "group",
+            kind: opts.kind as "auto" | "user" | "group" | "channel",
             json: Boolean(opts.json),
             entries: Array.isArray(entries) ? entries : [String(entries)],
           },
@@ -242,7 +257,7 @@ export async function registerChannelsCli(
   channels
     .command("logs")
     .description("Show recent channel logs from the gateway log file")
-    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])})`, "all")
+    .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])}; default: all)`)
     .option("--lines <n>", "Number of lines (default: 200)", "200")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {

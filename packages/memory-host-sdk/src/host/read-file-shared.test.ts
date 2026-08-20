@@ -3,6 +3,51 @@ import { describe, expect, it } from "vitest";
 import { buildMemoryReadResult, buildMemoryReadResultFromSlice } from "./read-file-shared.js";
 
 describe("memory read result slicing", () => {
+  it.each([
+    {
+      name: "a terminal newline",
+      content: "one\ntwo\n",
+      requestedLines: 2,
+      text: "one\ntwo",
+      lines: 2,
+    },
+    {
+      name: "an empty file",
+      content: "",
+      requestedLines: 2,
+      text: "",
+      lines: 0,
+    },
+    {
+      name: "one intentional trailing blank line",
+      content: "one\n\n",
+      requestedLines: 2,
+      text: "one\n",
+      lines: 2,
+    },
+    {
+      name: "two intentional trailing blank lines",
+      content: "one\n\n\n",
+      requestedLines: 3,
+      text: "one\n\n",
+      lines: 3,
+    },
+  ])("does not expose a phantom continuation for $name", (fixture) => {
+    expect(
+      buildMemoryReadResult({
+        content: fixture.content,
+        relPath: "memory/test.md",
+        lines: fixture.requestedLines,
+      }),
+    ).toEqual({
+      status: "ok",
+      text: fixture.text,
+      path: "memory/test.md",
+      from: 1,
+      lines: fixture.lines,
+    });
+  });
+
   it("uses default line windows for non-finite from and lines values", () => {
     expect(
       buildMemoryReadResult({
@@ -12,6 +57,7 @@ describe("memory read result slicing", () => {
         lines: Number.NaN,
       }),
     ).toEqual({
+      status: "ok",
       text: "one\ntwo\nthree",
       path: "memory/test.md",
       from: 1,
@@ -28,6 +74,7 @@ describe("memory read result slicing", () => {
         maxChars: Number.NaN,
       }),
     ).toEqual({
+      status: "ok",
       text: "one\ntwo",
       path: "memory/test.md",
       from: 1,
@@ -45,6 +92,7 @@ describe("memory read result slicing", () => {
         suggestReadFallback: true,
       }),
     ).toEqual({
+      status: "ok",
       text: "abc\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
       path: "memory/test.md",
       from: 1,
@@ -63,6 +111,7 @@ describe("memory read result slicing", () => {
         suggestReadFallback: true,
       }),
     ).toEqual({
+      status: "ok",
       text: "\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
       path: "memory/test.md",
       from: 1,

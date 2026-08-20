@@ -80,12 +80,11 @@ export function isDiscussionSessionKey(sessionKey: string): boolean {
 export function discussionExternalRef(
   installationId: string,
   mainSessionKey: string,
-  sessionId: string,
   destinationIdentity: string,
   bindingGeneration: string,
 ): string {
   return `openclaw:${installationId}:${shortSessionHash(
-    [mainSessionKey, sessionId, destinationIdentity, bindingGeneration].join("\0"),
+    [mainSessionKey, destinationIdentity, bindingGeneration].join("\0"),
   )}`;
 }
 

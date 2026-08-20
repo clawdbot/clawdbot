@@ -11,6 +11,47 @@ import {
 const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocked Gateway E2E");
 
 suite.define(() => {
+  it("keeps Gateway access fields editable by their visible labels", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/connection`);
+
+      const gatewayUrl = page.getByLabel("WebSocket URL", { exact: true });
+      const gatewayToken = page.getByLabel("Gateway Token", { exact: true });
+      const password = page.getByLabel("Password (not stored)", { exact: true });
+      const sessionKey = page.getByLabel("Default Session Key", { exact: true });
+
+      for (const input of [gatewayUrl, gatewayToken, password, sessionKey]) {
+        await input.waitFor({ state: "visible" });
+        expect(await input.isEditable()).toBe(true);
+      }
+
+      await gatewayUrl.fill("ws://gateway.example.test:18789");
+      await gatewayToken.fill("browser-proof-token");
+      await password.fill("browser-proof-password");
+      await sessionKey.fill("browser-proof-session");
+
+      expect(await gatewayUrl.inputValue()).toBe("ws://gateway.example.test:18789");
+      expect(await gatewayToken.inputValue()).toBe("browser-proof-token");
+      expect(await password.inputValue()).toBe("browser-proof-password");
+      expect(await sessionKey.inputValue()).toBe("browser-proof-session");
+
+      await page.getByRole("button", { name: "Toggle password visibility", exact: true }).click();
+      expect(await password.getAttribute("type")).toBe("text");
+      expect(await password.inputValue()).toBe("browser-proof-password");
+      expect(await password.isEditable()).toBe(true);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each([
     { mode: "standalone", webChrome: false },
     { mode: "native web chrome", webChrome: true },

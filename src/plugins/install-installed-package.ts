@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { matchesExpectedPluginId, validatePluginId } from "./install-paths.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import {
   buildDirectoryInstallResult,
   defaultLogger,
@@ -36,6 +37,7 @@ type ValidatedPackagePlugin = {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  setup?: import("./manifest.js").PluginManifestSetup;
   hasRuntimeDependencies: boolean;
   peerDependencies: Record<string, string>;
 };
@@ -48,6 +50,7 @@ export async function validatePackagePluginInstallSource(params: {
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   trustedSourceLinkedOfficialInstall?: boolean;
   config?: OpenClawConfig;
   installPolicyRequest?: PluginInstallPolicyRequest;
@@ -163,13 +166,13 @@ export async function validatePackagePluginInstallSource(params: {
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
         config: params.config,
         pluginId,
         logger: params.logger,
         extensions,
-        ...(packageMetadata ? { packageMetadata } : {}),
         requestKind: params.installPolicyRequest?.kind,
         requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
         source: params.installPolicyRequest?.source,
@@ -191,8 +194,11 @@ export async function validatePackagePluginInstallSource(params: {
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
       extensions,
+      ...(ocManifestResult.ok && ocManifestResult.manifest.setup
+        ? { setup: ocManifestResult.manifest.setup }
+        : {}),
       hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
-      peerDependencies: manifest.peerDependencies ?? {},
+      peerDependencies: { ...manifest.dependencies, ...manifest.peerDependencies },
     },
   };
 }
@@ -204,7 +210,7 @@ export async function scanAndLinkInstalledPackage(params: {
   dependencyScanRootDir?: string;
   pluginId: string;
   peerDependencies: Record<string, string>;
-  dangerouslyForceUnsafeInstall?: boolean;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
   requestKind?: PluginInstallPolicyRequest["kind"];
@@ -229,7 +235,7 @@ export async function scanAndLinkInstalledPackage(params: {
         allowManagedNpmRootPackagePeerSymlinks:
           params.dependencyScanRootDir !== undefined &&
           path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
         dependencyScanRootDir: params.dependencyScanRootDir,
         logger: params.logger,
         mode: params.mode,
@@ -287,6 +293,7 @@ async function installPluginFromInstalledPackageDirInternal(
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     installPolicyRequest: params.installPolicyRequest,
@@ -305,7 +312,7 @@ async function installPluginFromInstalledPackageDirInternal(
     dependencyScanRootDir: params.dependencyScanRootDir,
     pluginId: validated.plugin.pluginId,
     peerDependencies: validated.plugin.peerDependencies,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     mode: params.mode ?? "install",
@@ -323,6 +330,7 @@ async function installPluginFromInstalledPackageDirInternal(
     manifestName: validated.plugin.manifestName,
     version: validated.plugin.version,
     extensions: validated.plugin.extensions,
+    setup: validated.plugin.setup,
   });
   if (params.emitSuccessSecurityEvent !== false) {
     emitSuccessfulPluginInstallSecurityEvent(result, {

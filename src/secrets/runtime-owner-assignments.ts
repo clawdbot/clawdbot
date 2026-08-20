@@ -31,7 +31,7 @@ import {
   type SecretAssignment,
 } from "./runtime-shared.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotState,
   hasSameSecretProviderDefinition,
 } from "./runtime-state.js";
 
@@ -44,8 +44,12 @@ export function classifySecretOwnerDegradationState(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
   contractDigest?: string;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): "cold" | "stale" {
-  const active = getActiveSecretsRuntimeSnapshot();
+  if (params.refs.some((ref) => params.forceColdRefKeys?.has(secretRefKey(ref)))) {
+    return "cold";
+  }
+  const active = getActiveSecretsRuntimeSnapshotState();
   if (
     !active ||
     active.degradedOwners?.some(
@@ -83,6 +87,25 @@ function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknow
 
 function assignmentOwnerKey(assignment: SecretAssignment): string {
   return `${getSecretAssignmentSource(assignment)}\0${assignment.ownerKind}\0${assignment.ownerId}`;
+}
+
+const AUTH_STORE_PROVIDER_UNCONFIGURED_REASON = "secret provider is not configured" as const;
+
+function resolveOwnerFailureReason(params: {
+  assignments: SecretAssignment[];
+  error: unknown;
+  fallback: SecretDegradationReason | undefined;
+}): SecretDegradationReason | undefined {
+  if (params.fallback) {
+    return params.fallback;
+  }
+  const owner = params.assignments[0];
+  return owner &&
+    getSecretAssignmentSource(owner) === "auth-store" &&
+    isProviderScopedSecretResolutionError(params.error) &&
+    params.error.code === "SECRET_PROVIDER_NOT_CONFIGURED"
+    ? AUTH_STORE_PROVIDER_UNCONFIGURED_REASON
+    : undefined;
 }
 
 function groupAssignmentsByOwner(assignments: SecretAssignment[]): SecretAssignment[][] {
@@ -166,6 +189,7 @@ function associateAssignmentFailureOwners(params: {
   assignments: SecretAssignment[];
   error: unknown;
   config: OpenClawConfig;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): void {
   const validationFailures = getSecretAssignmentValidationFailures(params.error);
   const validationFailureRefKeys = new Set(validationFailures.map((failure) => failure.refKey));
@@ -182,11 +206,14 @@ function associateAssignmentFailureOwners(params: {
         .map(assignmentOwnerKey),
     ),
   );
-  const reason =
+  const sharedReason =
     validationFailures.length > 0
       ? "resolved secret value was invalid"
       : describeSecretResolutionError(params.error);
-  if (!reason) {
+  const authStoreProviderUnconfigured =
+    isProviderScopedSecretResolutionError(params.error) &&
+    params.error.code === "SECRET_PROVIDER_NOT_CONFIGURED";
+  if (!sharedReason && !authStoreProviderUnconfigured) {
     return;
   }
   const owners = groupAssignmentsByOwner(params.assignments).flatMap((assignments) => {
@@ -199,6 +226,14 @@ function associateAssignmentFailureOwners(params: {
         : assignmentMatchesResolutionFailure(assignment, params.error),
     );
     if (!failureMatched) {
+      return [];
+    }
+    const reason = resolveOwnerFailureReason({
+      assignments,
+      error: params.error,
+      fallback: sharedReason,
+    });
+    if (!reason) {
       return [];
     }
     const degradedOwner = createDegradedOwner(assignments, reason);
@@ -215,6 +250,7 @@ function associateAssignmentFailureOwners(params: {
               assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
             ),
           ),
+          forceColdRefKeys: params.forceColdRefKeys,
         }),
         failureMatched,
         source: getSecretAssignmentSource(assignments[0]!),
@@ -241,7 +277,7 @@ function associateAssignmentFailureOwners(params: {
     owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
   );
   const collectedOwnerKeys = new Set(params.assignments.map(assignmentOwnerKey));
-  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   const activeAuthOwnerIds = new Set(
     (activeSnapshot?.authStores ?? []).flatMap(({ agentDir, store }) =>
       Object.keys(store.profiles).map((profileId) =>
@@ -279,6 +315,14 @@ function associateAssignmentFailureOwners(params: {
     if (refs.length === 0) {
       return [];
     }
+    const reason =
+      sharedReason ??
+      (source === "auth-store" && authStoreProviderUnconfigured
+        ? AUTH_STORE_PROVIDER_UNCONFIGURED_REASON
+        : undefined);
+    if (!reason) {
+      return [];
+    }
     return [
       {
         ownerKind: owner.ownerKind,
@@ -293,6 +337,7 @@ function associateAssignmentFailureOwners(params: {
           refs,
           config: params.config,
           contractDigest: owner.contractDigest,
+          forceColdRefKeys: params.forceColdRefKeys,
         }),
         failureMatched: true,
         source,
@@ -319,6 +364,7 @@ export function warnDegradedSecretOwner(
 async function resolveStrictAssignments(params: {
   assignments: SecretAssignment[];
   options: SecretResolutionOptions;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<Map<string, unknown>> {
   try {
     const resolved = await resolveSecretRefValues(
@@ -333,6 +379,7 @@ async function resolveStrictAssignments(params: {
       assignments: params.assignments,
       error,
       config: params.options.config,
+      forceColdRefKeys: params.forceColdRefKeys,
     });
     throw error;
   }
@@ -355,10 +402,17 @@ function assertOwnerCanBeIsolated(
   error: unknown,
 ): SecretDegradationReason {
   const owner = assignments[0]!;
-  const reason = describeSecretResolutionError(error);
+  const reason = resolveOwnerFailureReason({
+    assignments,
+    error,
+    fallback: describeSecretResolutionError(error),
+  });
+  const isolatableFailure =
+    reason === AUTH_STORE_PROVIDER_UNCONFIGURED_REASON ||
+    (reason !== undefined && isRetryableSecretDegradationReason(reason));
   if (
     !reason ||
-    !isRetryableSecretDegradationReason(reason) ||
+    !isolatableFailure ||
     owner.ownerKind === "unknown" ||
     owner.requiredForGateway ||
     owner.disposition === "fail-closed"
@@ -373,6 +427,7 @@ export async function resolveAndApplySecretAssignments(params: {
   context: ResolverContext;
   options: SecretResolutionOptions;
   allowOwnerIsolation?: boolean;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<{ degradedOwners: DegradedSecretOwner[]; resolvedValues: Map<string, unknown> }> {
   if (!params.allowOwnerIsolation) {
     return {
@@ -404,6 +459,7 @@ export async function resolveAndApplySecretAssignments(params: {
         assignments: pendingOwners.flat(),
         error: failure.error,
         config: params.options.config,
+        forceColdRefKeys: params.forceColdRefKeys,
       });
       const matchingOwners = pendingOwners.filter((assignments) =>
         assignments.some((assignment) =>
@@ -461,6 +517,7 @@ export async function resolveAndApplySecretAssignments(params: {
           assignments: readyAssignments,
           error,
           config: params.options.config,
+          forceColdRefKeys: params.forceColdRefKeys,
         });
         throw error;
       }
@@ -481,10 +538,11 @@ export async function resolveAndApplySecretAssignments(params: {
               assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
             ),
           ),
+          forceColdRefKeys: params.forceColdRefKeys,
         });
         const activeOwner =
           degradationState === "stale"
-            ? getActiveSecretsRuntimeSnapshot()?.secretOwners?.find(
+            ? getActiveSecretsRuntimeSnapshotState()?.secretOwners?.find(
                 (entry) => entry.ownerKind === owner.ownerKind && entry.ownerId === owner.ownerId,
               )
             : undefined;

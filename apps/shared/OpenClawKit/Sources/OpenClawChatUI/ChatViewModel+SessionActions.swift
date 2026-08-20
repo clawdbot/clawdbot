@@ -6,6 +6,15 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    struct SessionBranchSwitchActivity: Equatable {
+        let session: SessionSnapshot
+        let generation: UInt64
+    }
+
+    var isSwitchingSessionBranch: Bool {
+        self.sessionBranchSwitchActivity != nil
+    }
+
     private enum SessionBranchesRefreshPurpose {
         case readOnly
         case reconcile
@@ -271,8 +280,15 @@ extension OpenClawChatViewModel {
                     archived: nil,
                     unread: nil)
             case .archive:
+                guard let expectedSessionID = entries[key]?.sessionId?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                    !expectedSessionID.isEmpty
+                else {
+                    throw ChatSessionBatchValidationError.cannotArchive
+                }
                 try await routeLease.patchSession(
                     key: key,
+                    expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
                     pinned: nil,
@@ -343,6 +359,7 @@ extension OpenClawChatViewModel {
             do {
                 try await self.transport.patchSession(
                     key: key,
+                    expectedSessionID: nil,
                     label: .some(nextLabel),
                     category: nil,
                     pinned: nil,
@@ -358,11 +375,15 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func forkSession(key: String) async {
+    public func forkSession(key: String, fromLastCompleted: Bool? = nil) async {
         guard self.canCreateSessionForImmediateSwitch() else { return }
         let initiatingSession = self.currentSessionSnapshot()
         do {
-            let createdKey = try await self.transport.forkSession(parentKey: key)
+            let stableBoundary = fromLastCompleted ??
+                (self.sessions.first(where: { $0.key == key })?.hasActiveRun == true)
+            let createdKey = try await self.transport.forkSession(
+                parentKey: key,
+                fromLastCompleted: stableBoundary)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !createdKey.isEmpty else { return }
             guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
@@ -463,7 +484,7 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let response = try await self.transport.listSessionBranches(
+            let response = try await self.requestSessionBranchListing(
                 sessionKey: session.key,
                 agentID: self.outboxAgentID(for: session))
             guard self.isCurrentSession(session),
@@ -716,6 +737,7 @@ extension OpenClawChatViewModel {
             do {
                 try await self.transport.patchSession(
                     key: key,
+                    expectedSessionID: nil,
                     label: nil,
                     category: nil,
                     pinned: pinned,
@@ -731,9 +753,17 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func setSessionArchived(key: String, archived: Bool) {
+    public func setSessionArchived(_ session: OpenClawChatSessionEntry, archived: Bool) {
+        let key = session.key
         guard archived else {
-            Task { await self.restoreSession(key: key) }
+            Task { await self.restoreSession(session) }
+            return
+        }
+        guard let expectedSessionID = session.sessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !expectedSessionID.isEmpty
+        else {
+            self.errorText = "Session lifecycle action requires a durable session identity."
             return
         }
         let previous = self.sessions
@@ -742,6 +772,7 @@ extension OpenClawChatViewModel {
             do {
                 try await self.transport.patchSession(
                     key: key,
+                    expectedSessionID: expectedSessionID,
                     label: nil,
                     category: nil,
                     pinned: nil,
@@ -765,10 +796,18 @@ extension OpenClawChatViewModel {
     /// Restores an archived session. Returns false (with `errorText` set) on
     /// failure so open-flows can avoid switching into a still-archived session.
     @discardableResult
-    public func restoreSession(key: String) async -> Bool {
+    public func restoreSession(_ session: OpenClawChatSessionEntry) async -> Bool {
+        guard let expectedSessionID = session.sessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !expectedSessionID.isEmpty
+        else {
+            self.errorText = "Session lifecycle action requires a durable session identity."
+            return false
+        }
         do {
             try await self.transport.patchSession(
-                key: key,
+                key: session.key,
+                expectedSessionID: expectedSessionID,
                 label: nil,
                 category: nil,
                 pinned: nil,

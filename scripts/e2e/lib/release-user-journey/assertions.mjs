@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../../../lib/bounded-response.mjs";
+import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
@@ -83,7 +86,10 @@ async function readBoundedResponseText(
   byteLimit = clickClackHttpBodyMaxBytes(),
   options = {},
 ) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit, options.timeoutPromise);
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit, {
+    createTooLargeError: createBoundedResponseTooLargeError,
+    timeoutPromise: options.timeoutPromise,
+  });
 }
 
 async function readBoundedResponseJson(response, label, options = {}) {

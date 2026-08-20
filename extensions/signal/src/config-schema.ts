@@ -16,7 +16,7 @@ import {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 
@@ -43,10 +43,6 @@ const SignalTransportUrlSchema = z
     SIGNAL_TRANSPORT_URL_PATTERN,
     "Expected http:// or https:// URL without embedded credentials",
   );
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function projectSignalConfigForUpdateValidation(value: unknown): unknown {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" || !isRecord(value)) {

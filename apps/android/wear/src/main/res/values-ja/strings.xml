@@ -6,15 +6,17 @@
     <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"前の%1$s"</string>
     <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"次の%1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"操作"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"話す"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"トーク"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"音声の視聴に失敗しました"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"音声入力"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ライブ"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スレッド"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"スレッドを開く"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← スワイプ →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"長押し"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"タップ"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ダブルタップ"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"新着メッセージを表示"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Liveを開始すると、ここに会話が表示されます。"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新規"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"入力"</string>
@@ -27,7 +29,7 @@
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"読み上げ中"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聞き取り中"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"接続中"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"入力中"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"送信中"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"エージェントが作業中"</string>
@@ -58,7 +60,7 @@
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"エージェント、セッション、チャットを読み込み中"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スマートフォンの準備ができました"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayに接続しました"</string>
-    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gatewayはオフラインです"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway オフライン"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ペアリングしたスマートフォンのOpenClawでGatewayに再接続してください。"</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スマートフォンでOpenClawを開く"</string>
     <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ウォッチ自体がGatewayを起動したり、認証したりすることはありません。"</string>
@@ -84,4 +86,30 @@
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"セッションを開き、ペアリング済みのスマートフォン経由で返信"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開く"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スマートフォンプロキシ"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"バックグラウンドタスク"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"セッションスウォーム"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"要確認"</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ステータス: %1$s"</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"準備完了"</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"更新中"</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"利用不可"</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulseを読み込み中"</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ペアリングされた電話から範囲付き集計を読み取っています。"</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"待機中"</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"実行中"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"完了"</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"完了"</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"失敗"</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"グループ"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"保留中のリクエスト"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"アクティブおよび最近のスナップショットの範囲"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"アクティブなタスクリストが上限に達しています"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"最近のタスクリストが上限に達しています"</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"有効"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"アイドル"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"フェーズ %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"キュー %1$d、実行中 %2$d、完了 %3$d、失敗 %4$d、非表示 %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"表示されていないフェーズがあります"</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"不明"</string>
 </resources>

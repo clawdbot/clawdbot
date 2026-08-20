@@ -122,7 +122,6 @@ describe("GatewayChatClient operator scopes", () => {
         const client = new RealGatewayChatClient({
           url: "ws://127.0.0.1:18789",
           ...(token ? { token } : {}),
-          allowInsecureLocalOperatorUi: false,
         });
         clients.push(client);
         const socketCount = sockets.length;
@@ -137,7 +136,7 @@ describe("GatewayChatClient operator scopes", () => {
         socket.receive({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce },
+          payload: { nonce, ts: Date.now() },
         });
         const connect = socket.sent.find((frame) => frame.method === "connect");
         if (!connect) {

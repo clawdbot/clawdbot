@@ -8,10 +8,10 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodePositiveInteger,
-  resolveNodeId,
+  resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -32,7 +32,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .command("invoke")
       .description("Invoke a command on a paired node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .requiredOption("--command <command>", "Command (e.g. canvas.eval)")
+      .requiredOption("--command <command>", "Command (e.g. canvas.navigate)")
       .option("--params <json>", "JSON object string for params", "{}")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .option("--idempotency-key <key>", "Idempotency key (optional)")
@@ -52,7 +52,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             );
           }
           const params = parseNodeInvokeParams(opts.params);
-          const nodeId = await resolveNodeId(opts, nodeQuery);
+          const nodeId = await resolveCliNodeId(opts, nodeQuery);
           const timeoutMs = parseOptionalNodePositiveInteger(
             opts.invokeTimeout,
             "--invoke-timeout",
@@ -68,7 +68,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const result = await callGatewayCli("node.invoke", opts, invokeParams);
+          const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           defaultRuntime.writeJson(result);
         });
       }),

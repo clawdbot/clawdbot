@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { fetchChildSessionRows } from "./child-session-data.ts";
 import type { SessionCapability } from "./index.ts";
+import { normalizeAgentId } from "./session-key.ts";
 
 const SWARM_SESSION_PAGE_SIZE = 10_000;
 
@@ -18,15 +19,13 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   const globalEnabled = readSwarmEnabled(asNullableRecord(root?.tools)?.swarm);
   const agents = asNullableRecord(root?.agents);
   const entries = asNullableRecord(agents?.entries);
-  const listedEntries = Array.isArray(agents?.list)
-    ? agents.list
-    : Array.isArray(agents?.entries)
-      ? agents.entries
-      : [];
-  const listedAgent = agentId
-    ? listedEntries.map((entry) => asNullableRecord(entry)).find((entry) => entry?.id === agentId)
-    : undefined;
-  const agent = agentId ? (asNullableRecord(entries?.[agentId]) ?? listedAgent) : null;
+  const normalizedAgentId = agentId ? normalizeAgentId(agentId) : null;
+  const authoredAgentId = normalizedAgentId
+    ? Object.keys(entries ?? {}).find(
+        (candidate) => normalizeAgentId(candidate) === normalizedAgentId,
+      )
+    : null;
+  const agent = authoredAgentId ? asNullableRecord(entries?.[authoredAgentId]) : null;
   const agentEnabled = readSwarmEnabled(asNullableRecord(agent?.tools)?.swarm);
   return agentEnabled ?? globalEnabled ?? false;
 }

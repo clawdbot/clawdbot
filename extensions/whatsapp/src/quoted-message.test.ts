@@ -106,6 +106,71 @@ describe("quoted message metadata cache", () => {
     });
   });
 
+  it.each([
+    {
+      name: "lookup-proven LID self-chat quote",
+      destinationJid: "15551112222@s.whatsapp.net",
+      requestedJid: "15551112222@s.whatsapp.net",
+      remoteJid: "277038292303944@lid",
+      lookupTargetJid: "15551112222@s.whatsapp.net",
+    },
+    {
+      name: "PN quote routed through its mapped LID",
+      destinationJid: "277038292303944@lid",
+      requestedJid: "15551112222@s.whatsapp.net",
+      remoteJid: "15551112222@s.whatsapp.net",
+      lookupTargetJid: undefined,
+    },
+  ])("keeps $name in the destination conversation", (input) => {
+    const quoteOptions = buildQuotedMessageOptions({
+      messageId: "alias-quote",
+      remoteJid: input.remoteJid,
+      fromMe: true,
+      destinationJid: input.destinationJid,
+      requestedJid: input.requestedJid,
+      lookupTargetJid: input.lookupTargetJid,
+      messageText: "quoted body",
+    });
+    if (!quoteOptions) {
+      throw new Error("expected quote options");
+    }
+
+    const encoded = generateWAMessageFromContent(
+      input.destinationJid,
+      { extendedTextMessage: { text: "reply" } },
+      { ...quoteOptions, userJid: input.requestedJid },
+    );
+
+    expect(quoteOptions.quoted?.key.remoteJid).toBe(input.destinationJid);
+    expect(encoded.message?.extendedTextMessage?.contextInfo?.remoteJid).toBeUndefined();
+  });
+
+  it("preserves unrelated direct and cross-conversation quote JIDs", () => {
+    const quoteOptions = buildQuotedMessageOptions({
+      messageId: "cross-chat-quote",
+      remoteJid: "277038292303944@lid",
+      fromMe: false,
+      destinationJid: "15551112222@s.whatsapp.net",
+      requestedJid: "15551112222@s.whatsapp.net",
+      participant: "19998887777@s.whatsapp.net",
+      messageText: "other chat",
+    });
+    if (!quoteOptions) {
+      throw new Error("expected quote options");
+    }
+
+    const encoded = generateWAMessageFromContent(
+      "15551112222@s.whatsapp.net",
+      { extendedTextMessage: { text: "reply" } },
+      { ...quoteOptions, userJid: "15551112222@s.whatsapp.net" },
+    );
+
+    expect(quoteOptions.quoted?.key.remoteJid).toBe("277038292303944@lid");
+    expect(encoded.message?.extendedTextMessage?.contextInfo?.remoteJid).toBe(
+      "277038292303944@lid",
+    );
+  });
+
   it("renders a cached structured media fact into the quote preview", () => {
     const remoteJid = "15551112222@s.whatsapp.net";
     cacheInboundMessageMeta("account-media", remoteJid, "media-msg-1", {

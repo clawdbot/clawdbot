@@ -15,7 +15,10 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -35,12 +38,14 @@ import {
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
+import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
+  rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
@@ -55,7 +60,10 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
+import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
+import { hashToolCall, recordToolCall } from "./tool-loop-detection.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
@@ -71,6 +79,7 @@ function asAgentTool(tool: {
   execute: ReturnType<typeof vi.fn>;
   name: string;
   parameters?: object;
+  resultContentSource?: AnyAgentTool["resultContentSource"];
 }): AnyAgentTool {
   return tool as unknown as AnyAgentTool;
 }
@@ -207,6 +216,32 @@ describe("before_tool_call hook integration", () => {
       extensionContext,
     );
     expect(consumeTrackedToolExecutionStarted("call-1")).toBeUndefined();
+  });
+
+  it("consumes private execution validation through the standard update slot", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "Read", execute }));
+    const validate = vi.fn(() => {
+      throw new Error("invalid projected arguments");
+    });
+    const validationControl = {
+      [Symbol.for("openclaw.internalToolExecutionValidation")]: true,
+      toolCallId: "call-private-validation",
+      validate,
+    };
+
+    await expect(
+      Reflect.apply(tool.execute, tool, [
+        "call-private-validation",
+        { path: 47 },
+        undefined,
+        validationControl,
+      ]),
+    ).rejects.toThrow("invalid projected arguments");
+
+    expect(validate).toHaveBeenCalledWith({ path: 47 });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("records structured replay trust only for concrete core-owned tools", async () => {
@@ -475,6 +510,352 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves private execution semantics through both session tool adapters", async () => {
+    const runId = "run-private-preparer-adapter";
+    const source = wrapToolWithBeforeToolCallHook(
+      asAgentTool({
+        name: "search",
+        execute: vi.fn().mockResolvedValue({ answer: 42 }),
+      }),
+      { runId },
+    );
+    const definition = expectDefined(
+      toToolDefinitions([source], { runId })[0],
+      "wrapped search tool definition",
+    );
+    const hydrated = wrapToolDefinition(definition);
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(hydrated),
+      "adapted private execution preparer",
+    );
+    const prepared = await preparer({
+      toolCallId: "call-private-preparer-adapter",
+      args: { query: "answer" },
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") {
+      return;
+    }
+    const result = await prepared.execute();
+    prepared.dispose();
+
+    expect(result.details).toEqual({ answer: 42 });
+    expect(
+      beforeToolCallTesting.structuredReplaySafeToolCallIds.has(
+        beforeToolCallTesting.buildAdjustedParamsKey({
+          runId,
+          toolCallId: "call-private-preparer-adapter",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves adapter error and abort handling for private execution", async () => {
+    const failure = new Error("private execution failed");
+    const failedSource = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "read", execute: vi.fn().mockRejectedValue(failure) }),
+    );
+    const failedTool = wrapToolDefinition(
+      expectDefined(toToolDefinitions([failedSource])[0], "failed private tool definition"),
+    );
+    const failedPreparer = expectDefined(
+      getInternalToolExecutionPreparer(failedTool),
+      "failed-tool private execution preparer",
+    );
+    const failedPrepared = await failedPreparer({ toolCallId: "call-failed", args: {} });
+    expect(failedPrepared.kind).toBe("ready");
+    if (failedPrepared.kind !== "ready") {
+      return;
+    }
+    await expect(failedPrepared.execute()).resolves.toMatchObject({
+      details: { status: "error", error: failure.message },
+    });
+    failedPrepared.dispose();
+
+    const controller = new AbortController();
+    const abortReason = new Error("private execution aborted");
+    const abortedSource = wrapToolWithBeforeToolCallHook(
+      asAgentTool({
+        name: "read",
+        execute: vi.fn(async (_id, _params, signal?: AbortSignal) => {
+          signal?.throwIfAborted();
+          return { content: [], details: { ok: true } };
+        }),
+      }),
+    );
+    const abortedTool = wrapToolDefinition(
+      expectDefined(toToolDefinitions([abortedSource])[0], "aborted private tool definition"),
+    );
+    const abortedPreparer = expectDefined(
+      getInternalToolExecutionPreparer(abortedTool),
+      "aborted-tool private execution preparer",
+    );
+    const abortedPrepared = await abortedPreparer({
+      toolCallId: "call-aborted",
+      args: {},
+      signal: controller.signal,
+    });
+    expect(abortedPrepared.kind).toBe("ready");
+    if (abortedPrepared.kind !== "ready") {
+      return;
+    }
+    const execution = abortedPrepared.execute();
+    controller.abort(abortReason);
+    await expect(execution).rejects.toBe(abortReason);
+    abortedPrepared.dispose();
+  });
+
+  it("finalizes private policy outcomes before launch", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ block: true, blockReason: "blocked by policy" }),
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const source = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }));
+    const tool = wrapToolDefinition(
+      expectDefined(toToolDefinitions([source])[0], "policy-blocked private tool definition"),
+    );
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(tool),
+      "policy private execution preparer",
+    );
+
+    const prepared = await preparer({ toolCallId: "call-policy", args: {} });
+
+    expect(prepared).toMatchObject({
+      kind: "immediate",
+      outcome: {
+        kind: "result",
+        isError: false,
+        result: { details: { status: "blocked", reason: "blocked by policy" } },
+      },
+    });
+    prepared.dispose();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("commits final rewritten args immediately before private implementation", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ params: { value: "rewritten" } }),
+    });
+    const order: string[] = [];
+    const execute = vi.fn(async () => {
+      order.push("body");
+      return { content: [], details: { ok: true } };
+    });
+    const source = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }));
+    const tool = wrapToolDefinition(
+      expectDefined(toToolDefinitions([source])[0], "rewritten private tool definition"),
+    );
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(tool),
+      "rewritten private execution preparer",
+    );
+    const prepared = await preparer({
+      toolCallId: "call-rewritten",
+      args: { value: "original" },
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") {
+      return;
+    }
+    const onImplementationStart = vi.fn(() => {
+      order.push("commit");
+      queueMicrotask(() => order.push("gap"));
+    });
+
+    await prepared.execute(onImplementationStart);
+    prepared.dispose();
+
+    expect(prepared.args).toEqual({ value: "rewritten" });
+    expect(onImplementationStart).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(
+      "call-rewritten",
+      { value: "rewritten" },
+      undefined,
+      undefined,
+    );
+    expect(order).toEqual(["commit", "body", "gap"]);
+  });
+
+  it("rechecks a private source guard after asynchronous before-tool policy", async () => {
+    let releaseHook: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        await held;
+      },
+    });
+    let authorityActive = true;
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const guarded = bindAgentToolSourceExecutionGuard(
+      asAgentTool({ name: "read", execute }),
+      () => {
+        if (!authorityActive) {
+          throw new Error("delegated authority closed");
+        }
+      },
+    );
+    const source = rewrapToolWithBeforeToolCallHook(guarded);
+
+    const pending = expectDefined(source.execute, "guarded source execute")("call-guard", {});
+    await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());
+    authorityActive = false;
+    releaseHook?.();
+
+    await expect(pending).rejects.toThrow("delegated authority closed");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not consume a voice grant when private execution is disposed", async () => {
+    const runId = "run-voice-private-dispose";
+    const toolParams = { action: "send", to: "target-a", message: "approved body" };
+    installVoiceRunBinding(runId);
+    approveVoiceToolParams(runId, toolParams);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const hookContext = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+    const source = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "message", execute }),
+      hookContext,
+    );
+    const tool = wrapToolDefinition(
+      expectDefined(toToolDefinitions([source], hookContext)[0], "voice private tool definition"),
+    );
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(tool),
+      "voice private execution preparer",
+    );
+    try {
+      const prepared = await preparer({ toolCallId: "call-voice-disposed", args: toolParams });
+      expect(prepared.kind).toBe("ready");
+      prepared.dispose();
+      prepared.dispose();
+      await Promise.resolve();
+
+      const first = await tool.execute("call-voice-retry", toolParams);
+      const second = await tool.execute("call-voice-consumed", toolParams);
+
+      expect(first.details).toEqual({ ok: true });
+      expect(second.details).toMatchObject({
+        status: "blocked",
+        deniedReason: "client-voice-confirmation",
+      });
+      expect(execute).toHaveBeenCalledOnce();
+      expect(consumeTrackedToolExecutionStarted("call-voice-disposed", runId)).toBeUndefined();
+    } finally {
+      resetClientVoiceConfirmationStateForTest();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each(["adapter", "client"] as const)(
+    "suppresses the %s body after awaited hook preflight",
+    async (kind) => {
+      let releaseHook!: () => void;
+      let markHookStarted!: () => void;
+      const hookStarted = new Promise<void>((resolve) => {
+        markHookStarted = resolve;
+      });
+      const hookRelease = new Promise<void>((resolve) => {
+        releaseHook = resolve;
+      });
+      beforeToolCallHook = installBeforeToolCallHook({
+        runBeforeToolCallImpl: async () => {
+          markHookStarted();
+          await hookRelease;
+          return undefined;
+        },
+      });
+      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const clientCall = vi.fn();
+      const definition =
+        kind === "adapter"
+          ? expectDefined(
+              toToolDefinitions([asAgentTool({ name: "read", execute })])[0],
+              "unwrapped adapter definition",
+            )
+          : expectDefined(
+              toClientToolDefinitions(
+                [
+                  {
+                    type: "function",
+                    function: {
+                      name: "client_read",
+                      description: "client read",
+                      parameters: { type: "object", properties: {} },
+                    },
+                  },
+                ],
+                clientCall,
+              )[0],
+              "client adapter definition",
+            );
+      const preparer = expectDefined(
+        getInternalToolExecutionPreparer(wrapToolDefinition(definition)),
+        `${kind} private execution preparer`,
+      );
+
+      const preparing = preparer({ toolCallId: `${kind}-call`, args: {} });
+      await hookStarted;
+      releaseHook();
+      const prepared = await preparing;
+      expect(prepared.kind).toBe("ready");
+      prepared.dispose();
+      await Promise.resolve();
+
+      expect(execute).not.toHaveBeenCalled();
+      expect(clientCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it("finishes async reconciliation before exposing a wrapped call as ready", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ params: { path: "/tmp/final" } }),
+    });
+    const runId = "run-reconcile-before-ready";
+    const sessionKey = "agent:main:reconcile-before-ready";
+    const state = getDiagnosticSessionState({ sessionKey, sessionId: "session-reconcile" });
+    recordToolCall(
+      state,
+      "read",
+      { path: "/tmp/original" },
+      "reconcile-call",
+      { enabled: true },
+      { runId },
+    );
+    const execute = vi.fn().mockResolvedValue({ content: [], details: {} });
+    const hookContext = {
+      runId,
+      sessionKey,
+      sessionId: "session-reconcile",
+      loopDetection: { enabled: true },
+    };
+    const source = wrapToolWithBeforeToolCallHook(
+      asAgentTool({ name: "read", execute }),
+      hookContext,
+    );
+    const tool = wrapToolDefinition(
+      expectDefined(toToolDefinitions([source], hookContext)[0], "reconcile tool definition"),
+    );
+    const preparer = expectDefined(
+      getInternalToolExecutionPreparer(tool),
+      "reconcile private execution preparer",
+    );
+
+    const prepared = await preparer({
+      toolCallId: "reconcile-call",
+      args: { path: "/tmp/original" },
+    });
+
+    expect(prepared.kind).toBe("ready");
+    expect(state.toolCallHistory?.at(-1)?.argsHash).toBe(
+      hashToolCall("read", { path: "/tmp/final" }),
+    );
+    prepared.dispose();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("passes agent context to outer code-mode exec hooks through OpenClaw custom tools", async () => {
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => ({
@@ -577,6 +958,40 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         sessionId: "session-main",
         runId: "run-main",
         toolCallId: "call-code-mode-exec-command",
+      },
+    );
+
+    beforeToolCallHook.mockClear();
+    const blankCodeAliasResult = await def.execute(
+      "call-code-mode-exec-blank-code",
+      { code: "", command: "return 3;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(blankCodeAliasResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 3;", command: "return 3;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-blank-code",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-blank-code",
       },
     );
 
@@ -779,6 +1194,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     if (!execTool) {
       throw new Error("missing code-mode exec tool");
     }
+    const abortSignal = new AbortController().signal;
     const wrapped = wrapToolWithAbortSignal(
       wrapToolWithBeforeToolCallHook(execTool, {
         agentId: "main",
@@ -786,7 +1202,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         sessionId: "session-main",
         runId: "run-main",
       }),
-      new AbortController().signal,
+      abortSignal,
     );
     const [def] = toToolDefinitions([wrapped]);
     if (!def) {
@@ -824,6 +1240,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         sessionKey: "agent:main:main",
         sessionId: "session-main",
         runId: "run-main",
+        abortSignal,
         toolCallId: "call-wrapped-code-mode-exec",
       },
     );
@@ -893,6 +1310,49 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     });
   });
 
+  it("fails closed when a hook blanks one code-mode exec alias", async () => {
+    // A blank alias from the caller is treated as absent, but a hook that
+    // deliberately blanks `code` is a policy decision: mirror it so neither
+    // alias survives, rather than silently running the original command.
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ params: { code: "" } }),
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = markCodeModeControlTool(
+      asAgentTool({
+        name: CODE_MODE_EXEC_TOOL_NAME,
+        execute,
+        description: "exec",
+        parameters: {},
+      }),
+    );
+    const [def] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+    });
+    if (!def) {
+      throw new Error("missing custom tool definition");
+    }
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-code-mode-exec-blank-rewrite",
+      { code: "", command: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-code-mode-exec-blank-rewrite",
+      { code: "", command: "" },
+      undefined,
+      undefined,
+    );
+  });
+
   it("renormalizes trusted policy rewrites before code-mode exec hooks observe params", async () => {
     resetGlobalHookRunner();
     const normalHook = vi.fn(async () => undefined);
@@ -924,6 +1384,9 @@ describe("before_tool_call hook deduplication (#15502)", () => {
                   language: "typescript",
                 },
               };
+            }
+            if (eventValue.toolCallId === "call-code-mode-trusted-blank") {
+              return { params: { code: "", command: "return 4;" } };
             }
             return undefined;
           },
@@ -973,6 +1436,13 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       await def.execute(
         "call-code-mode-trusted-language",
         { code: "return 3;", command: "return 3;", language: "javascript" },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+      await def.execute(
+        "call-code-mode-trusted-blank",
+        { code: "return 4;", command: "return 4;" },
         undefined,
         undefined,
         extensionContext,
@@ -1088,6 +1558,23 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         undefined,
         undefined,
       );
+      expect(normalHook).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ params: { code: "", command: "" } }),
+        expect.anything(),
+      );
+      expect(trustedObserver).toHaveBeenNthCalledWith(
+        3,
+        expect.objectContaining({ params: { code: "", command: "" } }),
+        expect.anything(),
+      );
+      expect(execute).toHaveBeenNthCalledWith(
+        3,
+        "call-code-mode-trusted-blank",
+        { code: "", command: "" },
+        undefined,
+        undefined,
+      );
       expect(
         consumeAdjustedParamsForToolCall("call-code-mode-trusted-command", "run-main"),
       ).toEqual({ command: "return 2;", code: "return 2;" });
@@ -1097,6 +1584,10 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         code: "const value: number = 3;",
         command: "const value: number = 3;",
         language: "typescript",
+      });
+      expect(consumeAdjustedParamsForToolCall("call-code-mode-trusted-blank", "run-main")).toEqual({
+        code: "",
+        command: "",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
@@ -1135,6 +1626,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         name: "web_fetch",
         description: "fetch",
         parameters: {},
+        resultContentSource: "network",
         execute: vi.fn().mockResolvedValue({
           content: [],
           details: { status: 200 },
@@ -1161,6 +1653,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(onToolOutcome).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "web_fetch",
+        resultContentSource: "network",
         terminalPresentation: "Fetched with status 200",
       }),
     );
@@ -1307,6 +1800,42 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 });
 
 describe("before_tool_call adapter and client tool integration", () => {
+  function installAbortBlockingHook() {
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let observedAbort = false;
+    installBeforeToolCallHook({
+      runBeforeToolCallImpl: async (_event, ctx) => {
+        const signal = (ctx as { abortSignal?: AbortSignal }).abortSignal;
+        markStarted();
+        if (signal) {
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              observedAbort = true;
+              resolve();
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                observedAbort = true;
+                resolve();
+              },
+              { once: true },
+            );
+          });
+        }
+        return { block: true, blockReason: "cancelled by owning tool call" };
+      },
+    });
+    return {
+      started,
+      didObserveAbort: () => observedAbort,
+    };
+  }
+
   beforeEach(() => {
     resetGlobalHookRunner();
     resetDiagnosticSessionStateForTest();
@@ -1318,6 +1847,74 @@ describe("before_tool_call adapter and client tool integration", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetClientVoiceConfirmationStateForTest();
     vi.restoreAllMocks();
+  });
+
+  it.each(["wrapped", "adapter"] as const)(
+    "cancels before-tool hook work through the %s path",
+    async (pathKind) => {
+      const controller = new AbortController();
+      const hook = installAbortBlockingHook();
+      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const sourceTool = asAgentTool({ name: "read", execute });
+      const tool = pathKind === "wrapped" ? wrapToolWithBeforeToolCallHook(sourceTool) : sourceTool;
+      const definition = expectDefined(toToolDefinitions([tool])[0], `${pathKind} tool definition`);
+
+      const execution = definition.execute(
+        `call-signal-${pathKind}`,
+        { path: "/tmp/input" },
+        controller.signal,
+        undefined,
+        {} as ExtensionContext,
+      );
+      await hook.started;
+      controller.abort(new Error("cancel test"));
+      await execution;
+
+      expect(hook.didObserveAbort()).toBe(true);
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels client-tool hook work and releases its reservation", async () => {
+    const controller = new AbortController();
+    const hook = installAbortBlockingHook();
+    const recorder = {
+      reserve: vi.fn(),
+      complete: vi.fn(),
+      discard: vi.fn(),
+    };
+    const tool = expectDefined(
+      toClientToolDefinitions(
+        [
+          {
+            type: "function",
+            function: {
+              name: "client_tool",
+              description: "Client tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        recorder,
+      )[0],
+      "client tool definition",
+    );
+
+    const execution = tool.execute(
+      "client-call-signal",
+      {},
+      controller.signal,
+      undefined,
+      {} as ExtensionContext,
+    );
+    await hook.started;
+    controller.abort(new Error("cancel test"));
+    await execution;
+
+    expect(hook.didObserveAbort()).toBe(true);
+    expect(recorder.reserve).toHaveBeenCalledWith("client-call-signal", "client_tool");
+    expect(recorder.discard).toHaveBeenCalledWith("client-call-signal", "client_tool");
+    expect(recorder.complete).not.toHaveBeenCalled();
   });
 
   it("passes modified params to client tool callbacks", async () => {

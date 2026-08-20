@@ -17,6 +17,7 @@ struct DebugSettings: View {
     @State private var debugSendInFlight = false
     @State private var debugSendStatus: String?
     @State private var debugSendError: String?
+    @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
     @State private var portReports: [DebugActions.PortReport] = []
     @State private var portKillStatus: String?
@@ -29,9 +30,6 @@ struct DebugSettings: View {
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
     @State private var canvasError: String?
-    @State private var canvasEvalJS: String = "document.title"
-    @State private var canvasEvalResult: String?
-    @State private var canvasSnapshotPath: String?
 
     init(state: AppState = AppStateStore.shared) {
         self.state = state
@@ -165,6 +163,15 @@ struct DebugSettings: View {
                 GridRow {
                     self.gridLabel("PID")
                     Text("\(ProcessInfo.processInfo.processIdentifier)")
+                }
+                GridRow {
+                    self.gridLabel("Settings")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show native settings panes", isOn: self.$state.nativeSettingsPanesEnabled)
+                        Text("These panes are being retired in favor of the Dashboard.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 GridRow {
                     self.gridLabel("Binary path")
@@ -451,9 +458,26 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Button("Send Test Notification") {
-                        Task { await DebugActions.sendTestNotification() }
+                        Task { await self.sendTestNotification() }
                     }
                     .buttonStyle(.bordered)
+                    .disabled(self.testNotificationOutcome == .pending)
+
+                    if let testNotificationOutcome {
+                        switch testNotificationOutcome {
+                        case .pending:
+                            ProgressView("Sending test notification…")
+                                .controlSize(.small)
+                        case .sent:
+                            Text("Test notification queued.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case let .error(message):
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
 
                     Button("Open Agent Events") {
                         DebugActions.openAgentEventsWindow()
@@ -502,13 +526,19 @@ struct DebugSettings: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        LaunchdManager.startOpenClaw()
-                    } label: {
-                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                    if AppProfile.current.isActive {
+                        Text("Login-agent restart is unavailable under a profile.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button {
+                            LaunchdManager.startOpenClaw()
+                        } label: {
+                            Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
 
                 HStack(spacing: 8) {
@@ -551,51 +581,11 @@ struct DebugSettings: View {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 8) {
-                    TextField("Eval JS", text: self.$canvasEvalJS)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption.monospaced())
-                        .frame(maxWidth: 520)
-                    Button("Eval") {
-                        Task { await self.canvasEval() }
-                    }
-                    .buttonStyle(.bordered)
-                    Button("Snapshot") {
-                        Task { await self.canvasSnapshot() }
-                    }
-                    .buttonStyle(.bordered)
-                    Spacer(minLength: 0)
-                }
-
                 if let canvasStatus {
                     Text(canvasStatus)
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                }
-                if let canvasEvalResult {
-                    Text("eval → \(canvasEvalResult)")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                if let canvasSnapshotPath {
-                    HStack(spacing: 8) {
-                        Text("snapshot → \(canvasSnapshotPath)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                        Button("Reveal") {
-                            NSWorkspace.shared
-                                .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
-                        }
-                        .buttonStyle(.bordered)
-                        Spacer(minLength: 0)
-                    }
                 }
                 if let canvasError {
                     Text(canvasError)
@@ -698,6 +688,13 @@ struct DebugSettings: View {
                 self.debugSendError = error.localizedDescription
             }
         }
+    }
+
+    @MainActor
+    private func sendTestNotification() async {
+        guard self.testNotificationOutcome != .pending else { return }
+        self.testNotificationOutcome = .pending
+        self.testNotificationOutcome = await DebugActions.sendTestNotification()
     }
 
     private func revealApp() {
@@ -845,36 +842,6 @@ extension DebugSettings {
             self.canvasError = error.localizedDescription
         }
     }
-
-    @MainActor
-    private func canvasEval() async {
-        self.canvasError = nil
-        self.canvasEvalResult = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result = try await CanvasManager.shared.eval(
-                sessionKey: session.isEmpty ? "main" : session,
-                javaScript: self.canvasEvalJS)
-            self.canvasEvalResult = result
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasSnapshot() async {
-        self.canvasError = nil
-        self.canvasSnapshotPath = nil
-        do {
-            let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            let path = try await CanvasManager.shared.snapshot(
-                sessionKey: session.isEmpty ? "main" : session,
-                outPath: nil)
-            self.canvasSnapshotPath = path
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
 }
 
 struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
@@ -962,55 +929,6 @@ struct DebugSettings_Previews: PreviewProvider {
     static var previews: some View {
         DebugSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-@MainActor
-extension DebugSettings {
-    static func exerciseForTesting() async {
-        let view = DebugSettings(state: .preview)
-        view.gatewayRootInput = "/tmp/openclaw"
-        view.sessionStorePath = "/tmp/sessions.json"
-        view.sessionStoreSaveError = "Save failed"
-        view.debugSendInFlight = true
-        view.debugSendStatus = "Sent"
-        view.debugSendError = "Failed"
-        view.portCheckInFlight = true
-        view.portReports = [
-            DebugActions.PortReport(
-                port: GatewayEnvironment.gatewayPort(),
-                expected: "Gateway websocket (node/tsx)",
-                status: .missing("Missing"),
-                listeners: []),
-        ]
-        view.portKillStatus = "Killed"
-        view.pendingKill = DebugActions.PortListener(
-            pid: 1,
-            command: "node",
-            fullCommand: "node",
-            user: nil,
-            expected: true)
-        view.canvasSessionKey = "main"
-        view.canvasStatus = "Canvas ok"
-        view.canvasError = "Canvas error"
-        view.canvasEvalJS = "document.title"
-        view.canvasEvalResult = "Canvas"
-        view.canvasSnapshotPath = "/tmp/snapshot.png"
-
-        _ = view.body
-        _ = view.header
-        _ = view.overviewSection
-        _ = view.appInfoSection
-        _ = view.gatewaySection
-        _ = view.logsSection
-        _ = view.portsSection
-        _ = view.pathsSection
-        _ = view.quickActionsSection
-        _ = view.canvasSection
-        _ = view.experimentsSection
-        _ = view.gridLabel("Test")
-
-        view.loadSessionStorePath()
     }
 }
 #endif

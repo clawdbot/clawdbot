@@ -2,6 +2,7 @@ export * from "../providers/agent-tools-parameter-schema.js";
 export * from "../providers/azure-deployment-map.js";
 export * from "../providers/azure-openai-responses-client-compat.js";
 export * from "../providers/clean-for-gemini.js";
+export * from "../providers/clean-for-llamacpp-gbnf.js";
 export * from "../providers/openai-completions.js";
 export * from "../providers/openai-prompt-cache.js";
 export * from "../providers/openai-reasoning-effort.js";
@@ -15,3 +16,9 @@ export * from "../providers/openai-tool-schema-compat.js";
 export * from "../providers/openai-tool-schema.js";
 export * from "../providers/schema-keyword-strip.js";
 export * from "../providers/tool-schema-json-projection.js";
+export {
+  codeModeToolSurfaceObserver,
+  type CodeModeToolSurfaceObservation,
+} from "../provider-options.js";
+export { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
+export type { ResponsesPromptObservation } from "../transports/openai-responses-contracts.js";

@@ -2,8 +2,10 @@
  * Zod-backed config schema for ClickClack channel accounts.
  */
 import {
+  buildChannelAllowBotsSchema,
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
+  ChannelBotLoopProtectionSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -12,6 +14,7 @@ const ClickClackAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
     apiBaseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
@@ -25,9 +28,27 @@ const ClickClackAccountConfigSchema = z
     toolsAllow: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
     agentActivity: z.boolean().optional(),
+    nativeProgress: z.boolean().optional(),
     commandMenu: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    mentionPatterns: z.array(z.string()).optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
+            allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+            botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     discussions: z
       .object({
         enabled: z.boolean().optional(),

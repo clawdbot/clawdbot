@@ -1,0 +1,28 @@
+title: Agent session scope and multi-turn continuity
+
+scenario:
+  id: session-scope-continuity
+  surface: agent-runtime
+  category: agent-runtime.agent-turn-execution
+  coverage:
+    primary:
+      - agent-runtime.session-scope
+      - agent-runtime.startup-multi-turn-continuity
+  objective: Verify fresh embedded agent turns reuse one canonical session transcript while a distinct session key remains isolated.
+  successCriteria:
+    - Session A completes two deliver:false agent RPC turns through one real child Gateway and three-call deterministic loopback Responses provider.
+    - The second provider request contains Session A turn one user and assistant markers followed by turn two user input in exact order.
+    - Public session and history RPCs expose one stable Session A session ID with exactly four canonical user and assistant transcript messages.
+    - Session B receives a distinct session ID and neither its provider request nor transcript contains Session A markers.
+    - The provider is called exactly three times and neither transcript contains duplicate canonical turns.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/server-methods/agent-session-prepare.ts
+    - src/agents/embedded-agent-runner/history.ts
+    - test/e2e/qa-lab/runtime/agent-session-scope-continuity.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/agent-session-scope-continuity.e2e.test.ts
+    summary: Run three fresh embedded turns through one child Gateway, inspect provider history, and compare public session and transcript identities across two keys.

@@ -178,7 +178,9 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       fetchImpl: (_url, init) => {
         observedSignal = init.signal;
         return new Promise<Response>((_resolve, reject) => {
-          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+          init.signal.addEventListener("abort", () => reject(init.signal.reason as Error), {
+            once: true,
+          });
         });
       },
       manifest,
@@ -276,7 +278,9 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       cause: { name: "TimeoutError" },
       message: "Timed out uploading Mantis artifact baseline.png after 50ms.",
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(cancelled).toBe(true);
   });
 
@@ -411,7 +415,6 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
     const manifest = loadEvidenceManifest(manifestPath);
     const body = renderEvidenceComment({
-      artifactRoot: "mantis/telegram-desktop/pr-1/run-1",
       manifest,
       marker: "<!-- mantis-telegram-desktop-proof -->",
       rawBase:

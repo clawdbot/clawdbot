@@ -62,8 +62,15 @@ function isActiveRunProgressStale(params: {
   sessionKey?: string;
   queueDepth?: number;
   staleAbortMs: number;
+  /**
+   * When false, staleness is evaluated even with a zero queued backlog.
+   * Run-handle recovery keeps the gate so an unqueued active run is not
+   * disturbed; reply-only ownership has no backlog to protect and must
+   * still expire when proven stale (phantom active reply work).
+   */
+  requireQueueBacklog?: boolean;
 }): boolean {
-  if ((params.queueDepth ?? 0) <= 0) {
+  if ((params.queueDepth ?? 0) <= 0 && params.requireQueueBacklog !== false) {
     return false;
   }
   const activity = getDiagnosticSessionActivitySnapshot({
@@ -250,6 +257,18 @@ export async function recoverStuckDiagnosticSession(
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
+          // Reply-only ownership must expire when proven stale even with zero
+          // queued backlog; the queue gate exists to protect run handles that
+          // are actively draining queued turns, and there is no such backlog
+          // here to protect. Recognized maintenance phases are the exception:
+          // preflight compaction and memory flush are explicitly allowed to
+          // run longer than the stale threshold (they honor a configured
+          // compaction timeout), so they keep the queue-backlog guard and are
+          // never force-cleared early by this reclaim path.
+          requireQueueBacklog:
+            activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing"
+              ? undefined
+              : false,
         });
       if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
         if (reclaimStaleReplyWork) {
@@ -340,9 +359,9 @@ export async function recoverStuckDiagnosticSession(
         ? resetCommandLane(sessionLane)
         : 0;
 
-    const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
+    const clearStaleSession = !aborted && released === 0 && !activeSessionId;
 
-    if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
+    if (aborted || forceCleared || released > 0 || clearStaleSession) {
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
@@ -377,17 +396,21 @@ export async function recoverStuckDiagnosticSession(
               sessionKey: params.sessionKey,
               released,
               lane: sessionLane ?? undefined,
+              ...(clearStaleSession ? { reason: "no_active_work" as const } : {}),
             };
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;
     }
+    // An active run that neither aborted nor released still owns its work. Reporting
+    // recovery here would clear the session's diagnostic state out from under it.
     const outcome: StuckSessionRecoveryOutcome = {
-      status: "noop",
-      action: "none",
-      reason: "no_active_work",
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_embedded_run",
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      lane: sessionLane ?? undefined,
+      activeSessionId,
+      activeWorkKind: "embedded_run",
     };
     diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
     return outcome;
@@ -410,11 +433,3 @@ export async function recoverStuckDiagnosticSession(
     recoveriesInFlight.delete(key);
   }
 }
-
-/** Test hooks for clearing in-flight recovery guards. */
-export const testing = {
-  resetRecoveriesInFlight(): void {
-    recoveriesInFlight.clear();
-  },
-};
-export { testing as __testing };

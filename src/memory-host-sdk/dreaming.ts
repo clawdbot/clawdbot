@@ -10,6 +10,7 @@ import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -40,7 +41,9 @@ const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
 const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
 const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
 export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.8;
+// Deterministic calibration scores 3-day/3-query durable facts at 0.750-0.756,
+// versus repeated filler at 0.489-0.549 and high-relevance one-offs at 0.529-0.606.
+export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
@@ -174,14 +177,6 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
   // Config integers are decimal-only; Number() would accept hex/exponent forms.
   return parseStrictNonNegativeInteger(value) ?? fallback;
@@ -281,7 +276,7 @@ function resolveExecutionConfig(
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
       ? Math.min(2, temperatureRaw)
       : undefined;
-  const model = normalizeTrimmedString(record?.model) ?? fallback.model;
+  const model = normalizeOptionalString(record?.model) ?? fallback.model;
 
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
@@ -313,7 +308,7 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  const configuredSlot = normalizeOptionalString(slots?.memory);
   if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }
@@ -337,15 +332,15 @@ export function resolveMemoryDreamingConfig(params: {
 }): MemoryDreamingConfig {
   const dreaming = asNullableRecord(params.pluginConfig?.dreaming);
   const frequency =
-    normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
+    normalizeOptionalString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
-    normalizeTrimmedString(dreaming?.timezone) ??
-    normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
+    normalizeOptionalString(dreaming?.timezone) ??
+    normalizeOptionalString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
-  const topLevelModel = normalizeTrimmedString(dreaming?.model);
+  const topLevelModel = normalizeOptionalString(dreaming?.model);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -630,9 +625,9 @@ export function resolveMemoryDreamingWorkspaces(
   for (const agentId of agentIds) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
+  const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
+  if (primaryWorkspaceDir) {
+    addWorkspace(primaryWorkspaceDir, options.primaryAgentId ?? resolveDefaultAgentId(cfg));
+  }
   return [...byWorkspace.values()];
 }

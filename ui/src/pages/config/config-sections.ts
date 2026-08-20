@@ -1,5 +1,4 @@
 export type ConfigPageId =
-  | "config"
   | "communications"
   | "appearance"
   | "notifications"
@@ -9,6 +8,7 @@ export type ConfigPageId =
   | "memory"
   | "talk"
   | "infrastructure"
+  | "updates"
   | "ai-agents"
   | "advanced";
 
@@ -30,20 +30,20 @@ const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "plugi
 
 const INFRASTRUCTURE_SECTION_KEYS = ["gateway", "browser", "nodeHost", "discovery", "acp"] as const;
 
+const UPDATE_SECTION_KEYS = ["update"] as const;
+
 const MCP_SECTION_KEYS = ["mcp"] as const;
 
 // Curated Memory home: engine/backend/add-on rows plus the Dreaming tab render
-// above the memory schema section (memory.ts). Memory left AI & Agents because
-// the engine choice and dreaming's global cron are not agent defaults.
+// above the memory schema section (memory.ts). Memory stays separate from Agent
+// Defaults because the engine choice and dreaming's global cron are not defaults.
 const MEMORY_SECTION_KEYS = ["memory"] as const;
 
 const AI_AGENTS_SECTION_KEYS = ["agents", "skills", "tools", "session"] as const;
 
-// "config" (the curated General hub) and "advanced" render without an include
-// list: General shows no schema sections at all, Advanced shows every section
-// that has no curated home (config-page computes its exclude list).
+// Advanced renders without an include list: it shows every section that has no
+// curated home (config-page computes its exclude list).
 const CONFIG_SECTION_KEYS_BY_PAGE = {
-  config: undefined,
   communications: COMMUNICATION_SECTION_KEYS,
   appearance: APPEARANCE_SECTION_KEYS,
   notifications: NOTIFICATION_SECTION_KEYS,
@@ -53,6 +53,7 @@ const CONFIG_SECTION_KEYS_BY_PAGE = {
   memory: MEMORY_SECTION_KEYS,
   talk: TALK_SECTION_KEYS,
   infrastructure: INFRASTRUCTURE_SECTION_KEYS,
+  updates: UPDATE_SECTION_KEYS,
   "ai-agents": AI_AGENTS_SECTION_KEYS,
   advanced: undefined,
 } as const satisfies Record<ConfigPageId, readonly string[] | undefined>;

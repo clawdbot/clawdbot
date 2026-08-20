@@ -22,6 +22,11 @@ on:
         required: false
         default: true
         type: boolean
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
       qa_evidence_run_id:
@@ -38,6 +43,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -86,6 +96,45 @@ jobs:
       workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
       workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
+      # Protect both direct dispatches and reusable calls before the workflow reaches the
+      # secret-bearing QA evidence workflow.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
       # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the non-secret
       # job context, validate those identity facts, and pass only checked outputs forward.
       - name: Resolve job workflow identity
@@ -173,7 +222,7 @@ jobs:
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
-          expected_sha="${EXPECTED_SHA,,}"
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
           branch_candidate="${INPUT_REF#refs/heads/}"
           floating_default_branch=false
           trusted_reason=""
@@ -182,7 +231,7 @@ jobs:
             echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
-          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
             echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
@@ -319,8 +368,10 @@ jobs:
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      trusted_ref: ${{ inputs.ref }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
+      allow_failures: ${{ inputs.allow_failures }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -393,21 +444,24 @@ jobs:
           QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
         run: |
           set -euo pipefail
-          mapfile -t evidence_paths < <(find .artifacts/maturity-evidence -type f -name qa-evidence.json | sort)
-          if [[ "${#evidence_paths[@]}" -eq 0 ]]; then
-            echo "Expected a qa-evidence.json file in the downloaded QA evidence artifact." >&2
+          mapfile -t manifest_paths < <(
+            find .artifacts/maturity-evidence -type f -name qa-profile-evidence-manifest.json | sort
+          )
+          if [[ "${#manifest_paths[@]}" -ne 1 ]]; then
+            echo "Expected exactly one aggregate QA evidence manifest, found ${#manifest_paths[@]}:" >&2
+            printf '%s\n' "${manifest_paths[@]}" >&2
             exit 1
           fi
-          if [[ "${#evidence_paths[@]}" -gt 1 ]]; then
-            echo "Expected exactly one qa-evidence.json file, found ${#evidence_paths[@]}:" >&2
-            printf '%s\n' "${evidence_paths[@]}" >&2
+          evidence_path="$(dirname "${manifest_paths[0]}")/qa-evidence.json"
+          if [[ ! -f "$evidence_path" || -L "$evidence_path" ]]; then
+            echo "Aggregate QA evidence is missing next to ${manifest_paths[0]}." >&2
             exit 1
           fi
-          echo "qa_evidence_path=${evidence_paths[0]}" >> "$GITHUB_OUTPUT"
+          echo "qa_evidence_path=${evidence_path}" >> "$GITHUB_OUTPUT"
           {
             echo "### QA evidence"
             echo
-            echo "- Evidence path: \`${evidence_paths[0]}\`"
+            echo "- Evidence path: \`${evidence_path}\`"
             echo "- Evidence source run: \`${QA_EVIDENCE_RUN_ID:-$GITHUB_RUN_ID}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -417,9 +471,11 @@ jobs:
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const evidencePath = process.env.QA_EVIDENCE_PATH;
           const targetSha = process.env.TARGET_SHA;
@@ -430,9 +486,12 @@ jobs:
             throw new Error("TARGET_SHA is required");
           }
 
-          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const evidence = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
           if (evidence.profile !== "all") {
             throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
+          }
+          if (!evidence.profilePlan) {
+            throw new Error("qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
           }
 
           const artifactDir = path.dirname(evidencePath);
@@ -454,6 +513,19 @@ jobs:
           }
           if (manifest.targetSha !== targetSha) {
             throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
+          }
+          if (typeof manifest.profilePlanSha256 !== "string") {
+            throw new Error("QA evidence manifest is missing profilePlanSha256; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            evidence.profilePlan,
+            manifest.qaPassed === true,
+          );
+          if (profilePlan.profile !== "all") {
+            throw new Error(`qa-evidence.json profilePlan.profile must be all, got ${JSON.stringify(profilePlan.profile)}`);
+          }
+          if (profilePlanSha256 !== manifest.profilePlanSha256) {
+            throw new Error("QA evidence profilePlan digest does not match the manifest");
           }
           NODE
 
@@ -518,6 +590,16 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare aggregate QA evidence for rendering
+        env:
+          QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
+        run: |
+          set -euo pipefail
+          render_evidence_dir=".artifacts/maturity-render-evidence"
+          rm -rf "$render_evidence_dir"
+          mkdir -p "$render_evidence_dir"
+          install -m 0644 "$QA_EVIDENCE_PATH" "$render_evidence_dir/qa-evidence.json"
+
       - name: Validate maturity score sources
         run: |
           node --import tsx --input-type=module <<'NODE'
@@ -533,31 +615,46 @@ jobs:
           NODE
 
       - name: Render artifact docs
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --evidence-dir .artifacts/maturity-render-evidence \
+            --strict-inputs \
+            "${allow_failures_args[@]}"
           {
             echo "### Maturity scorecard docs"
             echo
             echo "- Source validation: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
             echo "- Strict inputs: \`true\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
             echo "- QA evidence: included"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Render committed docs preview
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir docs \
             --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --evidence-dir .artifacts/maturity-render-evidence \
+            --strict-inputs \
+            "${allow_failures_args[@]}"
 
       - name: Upload generated PR files
         if: ${{ inputs.publish_pull_request }}
@@ -721,7 +818,7 @@ jobs:
 
             ## Why This Change Was Made
 
-            The maturity workflow generated this update from the selected immutable source and strict QA evidence.
+            The maturity workflow generated this update from the selected immutable source and validated QA evidence.
 
             ## User Impact
 

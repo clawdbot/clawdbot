@@ -263,6 +263,60 @@ describe("runSqliteImmediateTransactionSync", () => {
     );
   });
 
+  it("does not warn for busyTimeoutMs: 0 with fast successful transactions (regression)", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 5; // Fast: 5ms per step, well under the 1000ms default threshold
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      databaseLabel: "agent.sqlite",
+      logger,
+      slowTransactionHoldMs: 0,
+    });
+
+    // busyTimeoutMs: 0 should NOT collapse threshold to 1ms.
+    // With the default 1000ms threshold, 5ms steps are not slow.
+    // Before the fix, this would have produced false-positive warnings.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.anything(),
+    );
+  });
+
+  it("still warns for busyTimeoutMs: 0 when transaction crosses the default 1000ms threshold", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 1_500; // Genuinely slow: 1500ms per step
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      databaseLabel: "agent.sqlite",
+      logger,
+      slowTransactionHoldMs: 0,
+    });
+
+    // The 1000ms default threshold still catches genuinely slow transactions.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.anything(),
+    );
+  });
+
   it("logs slow successful transaction lock waits", () => {
     const logger = { warn: vi.fn() };
     let now = 0;

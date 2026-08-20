@@ -1,4 +1,3 @@
-// Telegram Mini App bootstrap page.
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const TELEGRAM_MINIAPP_EXPIRED_MESSAGE =
@@ -35,13 +34,14 @@ export function renderTelegramMiniAppPage(params: {
   </main>
   <script nonce="${nonce}">
     const accountId = ${accountId};
+    const launchTicket = new URLSearchParams(location.hash.slice(1)).get("launchTicket") || "";
     const status = document.getElementById("status");
     const showExpired = () => {
       status.textContent = ${JSON.stringify(TELEGRAM_MINIAPP_EXPIRED_MESSAGE)};
     };
     const webApp = window.Telegram && window.Telegram.WebApp;
     const initData = webApp && typeof webApp.initData === "string" ? webApp.initData : "";
-    if (!initData) {
+    if (!initData || !launchTicket) {
       showExpired();
     } else {
       webApp.ready();
@@ -54,7 +54,7 @@ export function renderTelegramMiniAppPage(params: {
       fetch("auth", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ initData, accountId }),
+        body: JSON.stringify({ initData, accountId, launchTicket }),
         credentials: "same-origin",
         signal: authController.signal
       }).then(async (response) => {

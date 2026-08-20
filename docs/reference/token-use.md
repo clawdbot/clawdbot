@@ -126,8 +126,7 @@ Other surfaces:
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
   normalized provider quota windows (`X% left`, not per-response costs).
   Current usage-window providers: Claude (Anthropic), ClawRouter, Copilot
-  (GitHub), DeepSeek, Gemini (Google Gemini CLI), MiniMax, OpenAI, Xiaomi,
-  Xiaomi Token Plan, and z.ai.
+  (GitHub), DeepSeek, MiniMax, OpenAI, Xiaomi, Xiaomi Token Plan, and z.ai.
 
 Usage surfaces normalize common provider-native field aliases before
 display. For OpenAI-family Responses traffic, that includes both

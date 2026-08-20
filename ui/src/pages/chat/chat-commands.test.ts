@@ -1,12 +1,23 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import {
+  invalidateChatMetadataStore,
+  rememberChatMetadata,
+} from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { dispatchChatSlashCommand, refreshSlashCommands } from "./chat-commands.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  dispatchChatSlashCommand,
+  refreshSlashCommands,
+} from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -24,6 +35,25 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key]).toEqual(expectedValue);
   }
+}
+
+function connectedSessionAccess() {
+  return {
+    client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+    connected: true,
+    hello: sessionMutationGatewayHello(),
+  };
+}
+
+function remoteCommand(name: string, description: string) {
+  return {
+    name,
+    textAliases: [`/${name}`],
+    description,
+    source: "plugin" as const,
+    scope: "text" as const,
+    acceptsArgs: false,
+  };
 }
 
 describe("refreshSlashCommands", () => {
@@ -242,9 +272,104 @@ describe("refreshSlashCommands", () => {
       description: "Generate setup codes.",
     });
   });
+
+  it("reads commands from the chat metadata store without requesting commands.list", async () => {
+    const request = vi.fn();
+    const client = { request } as never;
+    rememberChatMetadata(client, "main", {
+      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+    });
+
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).not.toHaveBeenCalled();
+    expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+      description: "Loaded from chat metadata.",
+      executeLocal: false,
+    });
+  });
+
+  it("prefers stored metadata after the commands.list cache expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue({
+        commands: [remoteCommand("cached-command", "Loaded from commands.list.")],
+      });
+      const client = { request } as never;
+
+      await refreshSlashCommands({ client, agentId: "main" });
+      vi.advanceTimersByTime(60_001);
+      rememberChatMetadata(client, "main", {
+        commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+      });
+
+      await refreshSlashCommands({ client, agentId: "main" });
+
+      expect(request).toHaveBeenCalledOnce();
+      expectRecordFields(requireCommandByName("metadata-command"), "metadata command", {
+        description: "Loaded from chat metadata.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retain applied metadata commands in the commands.list cache", async () => {
+    const request = vi.fn().mockResolvedValue({
+      commands: [remoteCommand("requested-command", "Loaded after metadata invalidation.")],
+    });
+    const client = { request } as never;
+    const metadata = {
+      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
+    };
+    rememberChatMetadata(client, "main", metadata);
+    applyRemoteSlashCommandsResult({ client, agentId: "main", result: metadata });
+
+    invalidateChatMetadataStore(client);
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).toHaveBeenCalledOnce();
+    expectRecordFields(requireCommandByName("requested-command"), "requested command", {
+      description: "Loaded after metadata invalidation.",
+    });
+  });
 });
 
 describe("conversation reset confirmation", () => {
+  it.each([
+    ["stop", "chat.abort"],
+    ["reset", "chat.send"],
+    ["clear", "sessions.reset"],
+    ["compact", "sessions.compact"],
+  ] as const)("rejects /%s without its exact operator scope", async (command, method) => {
+    const request = vi.fn();
+    const reset = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const host = {
+      client,
+      connected: true,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: [method] },
+      } as ApplicationGatewaySnapshot["hello"],
+      sessionKey: "agent:main:current",
+      chatRunId: command === "stop" ? "run-1" : null,
+      sessions: { reset },
+      confirmConversationReset: vi.fn(async () => true),
+      lastError: null,
+      chatError: null,
+    };
+
+    const result = await dispatchChatSlashCommand(host as never, command, "", {
+      sendResetMessage: vi.fn(),
+    });
+
+    expect(result).toBe("failed");
+    expect(request).not.toHaveBeenCalled();
+    expect(reset).not.toHaveBeenCalled();
+    expect(host.lastError).toBeTruthy();
+  });
+
   it("propagates cancelled /new session creation", async () => {
     const result = await dispatchChatSlashCommand(
       { createChatSession: vi.fn(async () => false) } as never,
@@ -260,6 +385,9 @@ describe("conversation reset confirmation", () => {
     const sendResetMessage = vi.fn(async () => {});
     const result = await dispatchChatSlashCommand(
       {
+        ...connectedSessionAccess(),
+        connectionEpoch: 1,
+        sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => false),
       } as never,
       "reset",
@@ -278,6 +406,8 @@ describe("conversation reset confirmation", () => {
     });
     const sendResetMessage = vi.fn(async () => {});
     const host = {
+      ...connectedSessionAccess(),
+      connectionEpoch: 1,
       sessionKey: "agent:main:first",
       confirmConversationReset: vi.fn(async () => await confirmation),
     };
@@ -292,6 +422,72 @@ describe("conversation reset confirmation", () => {
     expect(sendResetMessage).not.toHaveBeenCalled();
   });
 
+  it("does not send /reset through a replacement Gateway after confirmation", async () => {
+    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+    const confirmation = new Promise<boolean>((resolve) => {
+      settleConfirmation = resolve;
+    });
+    const sendResetMessage = vi.fn(async () => {});
+    const host = {
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      connected: true,
+      connectionEpoch: 1,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["chat.send"] },
+      } as ApplicationGatewaySnapshot["hello"],
+      sessionKey: "agent:main:current",
+      chatRunId: null,
+      confirmConversationReset: vi.fn(async () => await confirmation),
+      lastError: null as string | null,
+      chatError: null as string | null,
+    };
+
+    const pending = dispatchChatSlashCommand(host as never, "reset", "", {
+      sendResetMessage,
+    });
+    host.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    host.connectionEpoch += 1;
+    settleConfirmation?.(true);
+
+    await expect(pending).resolves.toBe("failed");
+    expect(sendResetMessage).not.toHaveBeenCalled();
+  });
+
+  it("rechecks /reset admin scope after confirmation", async () => {
+    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+    const confirmation = new Promise<boolean>((resolve) => {
+      settleConfirmation = resolve;
+    });
+    const sendResetMessage = vi.fn(async () => {});
+    const host = {
+      ...connectedSessionAccess(),
+      connectionEpoch: 1,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["chat.send"] },
+      } as ApplicationGatewaySnapshot["hello"],
+      sessionKey: "agent:main:current",
+      chatRunId: null,
+      confirmConversationReset: vi.fn(async () => await confirmation),
+      lastError: null as string | null,
+      chatError: null as string | null,
+    };
+
+    const pending = dispatchChatSlashCommand(host as never, "reset", "", {
+      sendResetMessage,
+    });
+    host.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["chat.send"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    settleConfirmation?.(true);
+
+    await expect(pending).resolves.toBe("failed");
+    expect(sendResetMessage).not.toHaveBeenCalled();
+    expect(host.lastError).toContain("operator.admin");
+  });
+
   it("continues /reset when the session key changes to an equivalent alias", async () => {
     let settleConfirmation: ((confirmed: boolean) => void) | undefined;
     const confirmation = new Promise<boolean>((resolve) => {
@@ -299,6 +495,8 @@ describe("conversation reset confirmation", () => {
     });
     const sendResetMessage = vi.fn(async () => {});
     const host = {
+      ...connectedSessionAccess(),
+      connectionEpoch: 1,
       sessionKey: "main",
       confirmConversationReset: vi.fn(async () => await confirmation),
     };
@@ -323,6 +521,7 @@ describe("conversation reset confirmation", () => {
       const sendResetMessage = vi.fn(async () => {});
       const reset = vi.fn();
       const host = {
+        ...connectedSessionAccess(),
         chatRunId: null as string | null,
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => await confirmation),
@@ -343,20 +542,33 @@ describe("conversation reset confirmation", () => {
 
   it("keeps chat-only /reset unchanged", async () => {
     const sendResetMessage = vi.fn(async () => {});
-    const result = await dispatchChatSlashCommand({} as never, "reset", "now", {
+    const host = {
+      ...connectedSessionAccess(),
+      connectionEpoch: 1,
+      sessionKey: "agent:main:current",
+    };
+    const result = await dispatchChatSlashCommand(host as never, "reset", "now", {
       sendResetMessage,
     });
 
     expect(result).toBe("completed");
-    expect(sendResetMessage).toHaveBeenCalledWith("/reset now", {
-      sendResetMessage,
-    });
+    expect(sendResetMessage).toHaveBeenCalledWith(
+      "/reset now",
+      expect.objectContaining({
+        target: expect.objectContaining({
+          client: host.client,
+          connectionEpoch: 1,
+          sessionKey: "agent:main:current",
+        }),
+      }),
+    );
   });
 
   it("cancels /clear before resetting a board-bearing session", async () => {
     const reset = vi.fn();
     const result = await dispatchChatSlashCommand(
       {
+        ...connectedSessionAccess(),
         sessionKey: "agent:main:current",
         confirmConversationReset: vi.fn(async () => false),
         sessions: { reset },
@@ -368,5 +580,80 @@ describe("conversation reset confirmation", () => {
 
     expect(result).toBe("cancelled");
     expect(reset).not.toHaveBeenCalled();
+  });
+
+  it("does not clear through a replacement Gateway after confirmation", async () => {
+    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+    const confirmation = new Promise<boolean>((resolve) => {
+      settleConfirmation = resolve;
+    });
+    const reset = vi.fn();
+    const originalClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const replacementClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const host = {
+      client: originalClient,
+      connected: true,
+      connectionEpoch: 1,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["sessions.reset"] },
+      } as ApplicationGatewaySnapshot["hello"],
+      sessionKey: "agent:main:current",
+      chatRunId: null,
+      confirmConversationReset: vi.fn(async () => await confirmation),
+      sessions: { reset },
+      lastError: null as string | null,
+      chatError: null as string | null,
+    };
+
+    const pending = dispatchChatSlashCommand(host as never, "clear", "", {
+      sendResetMessage: vi.fn(),
+    });
+    host.client = replacementClient;
+    host.connectionEpoch += 1;
+    host.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.reset"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    settleConfirmation?.(true);
+
+    await expect(pending).resolves.toBe("failed");
+    expect(reset).not.toHaveBeenCalled();
+    expect(host.lastError).toContain("connection changed");
+  });
+
+  it("rechecks /clear scope after confirmation", async () => {
+    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+    const confirmation = new Promise<boolean>((resolve) => {
+      settleConfirmation = resolve;
+    });
+    const reset = vi.fn();
+    const host = {
+      ...connectedSessionAccess(),
+      connectionEpoch: 1,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["sessions.reset"] },
+      } as ApplicationGatewaySnapshot["hello"],
+      sessionKey: "agent:main:current",
+      chatRunId: null,
+      confirmConversationReset: vi.fn(async () => await confirmation),
+      sessions: { reset },
+      lastError: null as string | null,
+      chatError: null as string | null,
+    };
+
+    const pending = dispatchChatSlashCommand(host as never, "clear", "", {
+      sendResetMessage: vi.fn(),
+    });
+    host.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.reset"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    settleConfirmation?.(true);
+
+    await expect(pending).resolves.toBe("failed");
+    expect(reset).not.toHaveBeenCalled();
+    expect(host.lastError).toContain("operator.admin");
   });
 });

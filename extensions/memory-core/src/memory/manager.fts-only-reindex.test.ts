@@ -120,6 +120,8 @@ describe("memory manager FTS-only reindex", () => {
         ? undefined
         : { vector: { enabled: params.vectorEnabled } };
     const cfg = {
+      // Provider construction is mocked here; avoid cold-loading real plugins during config resolution.
+      plugins: { enabled: false },
       memory: {
         backend: "builtin",
 

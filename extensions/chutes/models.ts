@@ -14,7 +14,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const CHUTES_MANIFEST_CATALOG = manifest.modelCatalog.providers.chutes;
@@ -50,6 +49,7 @@ interface ChutesModelEntry {
   supported_features?: string[];
   input_modalities?: string[];
   context_length?: number;
+  max_model_len?: number;
   max_output_length?: number;
   pricing?: {
     prompt?: number;
@@ -93,7 +93,10 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
         cacheRead: entry.pricing?.input_cache_read || 0,
         cacheWrite: 0,
       },
-      contextWindow: asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,
+      contextWindow:
+        asPositiveSafeInteger(entry.context_length) ??
+        asPositiveSafeInteger(entry.max_model_len) ??
+        CHUTES_DEFAULT_CONTEXT_WINDOW,
       maxTokens: asPositiveSafeInteger(entry.max_output_length) ?? CHUTES_DEFAULT_MAX_TOKENS,
       compat: { supportsUsageInStreaming: false },
     });
@@ -103,9 +106,6 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
 
 /** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
-  if (isChutesModelDiscoveryTestEnvironment()) {
-    return structuredClone(CHUTES_MODEL_CATALOG);
-  }
   const provider = await buildLiveModelProviderConfig({
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,

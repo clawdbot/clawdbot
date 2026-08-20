@@ -4,11 +4,12 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { toQaError } from "../errors.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
-import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.scenarios.js";
+import { resolveSlackQaScenarioIds } from "../live-transports/slack/scenario-selection.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
@@ -214,12 +215,9 @@ function resolveScenarioIds(params: {
         ].join(", ")}. Unsupported: ${unsupported.join(", ")}.`,
       );
     }
-    const requested = new Set(scenarioIds);
-    // Slack selects scenarios from catalog order, not CLI order. The watcher
-    // must mirror that order or both sides can block on different checkpoints.
-    return listSlackQaScenarioCatalog()
-      .map((scenario) => scenario.id)
-      .filter((scenarioId) => requested.has(scenarioId));
+    // Mirror the YAML catalog order used by the Slack runner so the watcher
+    // and runner cannot block on different approval checkpoints.
+    return resolveSlackQaScenarioIds({ scenarioIds });
   }
   return scenarioIds;
 }
@@ -1247,7 +1245,7 @@ async function copyRemoteArtifacts(params: {
   remoteOutputDir: string;
   runner: CommandRunner;
 }) {
-  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
+  const { host, sshArgs, sshUser } = await sshCommand(params);
   await fs.mkdir(path.join(params.outputDir, "slack-qa"), { recursive: true });
   await runCommand({
     command: "rsync",
@@ -1467,7 +1465,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw toErrorObject(remoteRunError);
+      throw toQaError(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1583,7 +1581,4 @@ export async function runMantisSlackDesktopSmoke(
   }
 }
 
-function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

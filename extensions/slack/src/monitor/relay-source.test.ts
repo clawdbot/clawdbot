@@ -153,6 +153,7 @@ describe("Slack relay source", () => {
       acceptRelayEvent,
       runtime: { error: runtimeError, log: vi.fn() } as unknown as RuntimeEnv,
       abortSignal: abortController.signal,
+      identityHealth: { lifecycle: "blocked", lastError: "request_timeout" },
       setIdentity: (identity) => identities.push(identity),
       setStatus: (status) => statuses.push(status),
     });
@@ -182,6 +183,12 @@ describe("Slack relay source", () => {
     });
     expect(statuses).toContainEqual({
       relayRoute: { kind: "channel_default", key: "T1:C1" },
+    });
+    expect(statuses).toContainEqual({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      lifecycle: "blocked",
+      lastError: "request_timeout",
     });
 
     abortController.abort();

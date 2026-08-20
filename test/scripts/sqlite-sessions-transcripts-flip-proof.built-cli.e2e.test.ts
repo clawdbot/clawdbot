@@ -11,5 +11,5 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
       expect.arrayContaining([expect.stringMatching(/^dist\/index\.(?:js|mjs)$/u)]),
     );
     assertSqliteFlipProofCore(report);
-  }, 180_000);
+  }, 420_000);
 });

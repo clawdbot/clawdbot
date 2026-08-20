@@ -7,7 +7,7 @@ import {
 
 const channel = "discord" as const;
 
-export const discordSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
+const discordSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
   channelKey: channel,
   defaultAccountOnlyEnvError: "DISCORD_BOT_TOKEN can only be used for the default account.",
   missingCredentialError: "Discord requires token (or --use-env).",
@@ -25,6 +25,7 @@ export const discordSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use DISCORD_BOT_TOKEN" },
+      envVars: ["DISCORD_BOT_TOKEN"],
     },
   },
   legacyAdapter: discordSetupAdapter,

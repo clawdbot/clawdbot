@@ -84,13 +84,18 @@ extension OnboardingView {
     }
 
     func handleNext() {
-        // All callers (Next button, chat handoff) honor the same page gates.
         guard canAdvance else { return }
-        if self.activePageIndex == self.memoryImportPageIndex,
-           self.memoryImport.isFailed
-        {
-            self.memoryImport.dismissFailure()
-            self.updateMonitoring(for: self.activePageIndex)
+        let remoteDecision = Self.remoteGatewayAdvanceDecision(
+            connectionMode: state.connectionMode,
+            activePageIndex: activePageIndex,
+            connectionPageIndex: connectionPageIndex,
+            authIssue: remoteAuthIssue,
+            probeState: remoteProbeState,
+            input: remoteGatewayProbeInput)
+        guard remoteDecision.canAdvance else {
+            if remoteDecision.shouldProbe {
+                Task { await self.probeRemoteConnection(advanceOnSuccess: true) }
+            }
             return
         }
         self.commitRecommendedConnectionIfNeeded(for: activePageIndex)
@@ -110,22 +115,18 @@ extension OnboardingView {
         }
     }
 
-    func finish(agentDraft: SystemAgentDraft? = nil) {
+    @discardableResult
+    func finish() -> Bool {
+        guard !finishState.didFinish else { return false }
+        finishState.didFinish = true
         aiSetup.clearCompletedHandoffIfOwned()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
-        // Land people in the real conversation, not on an empty desktop: the
-        // agent chat is the product, and it is verified working by now.
-        if state.connectionMode != .unconfigured {
-            AppNavigationActions.openChat(draft: agentDraft?.composerValue)
-        }
-    }
-
-    func advancePastEmptyMemoryImportIfNeeded() {
-        guard self.memoryImport.autoAdvanceRequested else { return }
-        withAnimation {
-            self.memoryImport.consumeAutoAdvanceRequest()
-        }
-        self.updateMonitoring(for: self.activePageIndex)
+        guard state.connectionMode != .unconfigured else { return true }
+        // Fresh activation hands off to the dashboard's custodian onboarding, which
+        // owns the remaining first-run steps (memory import, channels, permissions,
+        // hatch). A live-verified pre-existing setup reopens the normal dashboard.
+        dashboardHandoffOpener(aiSetup.verifiedExistingInference ? .dashboard : .custodianOnboarding)
+        return true
     }
 }

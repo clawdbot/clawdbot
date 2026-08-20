@@ -32,10 +32,10 @@ title: "Features"
 
 **Channels:**
 
-- iMessage, Telegram, and WebChat ship with the core install; every other channel is an
+- Telegram and WebChat ship with the core install; every other channel is an
   official plugin installed with `openclaw plugins install @openclaw/<id>` (or on demand
   during `openclaw onboard` / `openclaw channels add`)
-- Official plugin channels: Discord, Feishu, Google Chat, IRC, LINE, Matrix, Mattermost,
+- Official plugin channels: Discord, Feishu, Google Chat, iMessage, IRC, LINE, Matrix, Mattermost,
   Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Raft, Signal, Slack, SMS, Synology Chat,
   Tlon, Twitch, Voice Call, WhatsApp, Zalo, and Zalo Personal
 - External plugin channels maintained outside the OpenClaw repo: WeChat, Yuanbao, and Zalo ClawBot
@@ -46,7 +46,7 @@ title: "Features"
 
 - Embedded agent runtime with tool streaming
 - Multi-agent routing with isolated sessions per workspace or sender
-- Sessions: direct chats collapse into shared `main`; groups are isolated
+- Sessions: direct chats collapse into shared `main`; groups are isolated by default
 - Streaming and chunking for long responses
 
 **Auth and providers:**
@@ -59,6 +59,7 @@ title: "Features"
 **Media:**
 
 - Images, audio, video, and documents in and out
+- [Inline audio and video playback](/nodes/media-playback) across the Control UI, iOS/macOS, Android, and the Linux companion
 - Shared image generation and video generation capability surfaces
 - Voice note transcription
 - Text-to-speech with multiple providers
@@ -67,8 +68,8 @@ title: "Features"
 
 - WebChat and browser Control UI
 - macOS menu bar companion app
-- iOS node with pairing, Canvas, camera, screen recording, location, and voice
-- Android node with pairing, chat, voice, Canvas, camera, and device commands
+- iOS node with pairing, camera, screen recording, location, and voice
+- Android node with pairing, chat, voice, camera, and device commands
 
 **Tools and automation:**
 

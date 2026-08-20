@@ -3,6 +3,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
+import {
+  ensureMeetingAudioBackend,
+  resolveMeetingAudioRuntimeForFormat,
+  type MeetingAudioBackend,
+  type MeetingAudioBackendSelection,
+  type MeetingAudioRuntime,
+} from "./audio-backend.js";
 import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
 import { callMeetingBrowserProxyOnNode, resolveMeetingBrowserNode } from "./browser-node.js";
 import { resolveLocalMeetingBrowserRequest } from "./browser-request.js";
@@ -10,6 +17,7 @@ import {
   leaveMeetingWithBrowser,
   readMeetingTranscriptWithBrowser,
 } from "./browser-session-control.js";
+import { parseMeetingChromeNodeResult } from "./chrome-node-result.js";
 import type {
   MeetingBrowserJoinSession,
   MeetingBrowserRequestCaller,
@@ -30,10 +38,14 @@ import type {
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
 
-type MeetingChromeTransportConfig = MeetingRealtimeEngineConfig & {
+export type MeetingChromeTransportConfig = MeetingRealtimeEngineConfig & {
   chrome: MeetingRealtimeEngineConfig["chrome"] & {
+    audioBackend: MeetingAudioBackendSelection;
+    audioBufferBytes: number;
     audioInputCommand: string[];
+    audioInputCommandOverride?: string[];
     audioOutputCommand: string[];
+    audioOutputCommandOverride?: string[];
     autoJoin: boolean;
     bargeInCooldownMs: number;
     bargeInInputCommand?: string[];
@@ -60,7 +72,7 @@ type MeetingBrowserNodeAdapter = Pick<
   "displayName" | "nodeCommandName" | "nodeConfigPath"
 >;
 
-type MeetingChromeTransportOptions<
+export type MeetingChromeTransportOptions<
   Mode extends string,
   Health extends MeetingBrowserHealth,
   Transcript extends MeetingTranscriptSnapshot,
@@ -70,7 +82,6 @@ type MeetingChromeTransportOptions<
   isTalkBackMode(mode: Mode): boolean;
   meetingLabel: string;
   nodeCommandName: string;
-  outputMentionsAudioDevice(output: string): boolean;
   platform: MeetingPlatformAdapter<MeetingBrowserJoinSession<Mode>, Mode, Health, Transcript> &
     MeetingPlatformRuntimeMetadata;
   preserveTrackedBrowserOnEngineFailure: boolean;
@@ -81,7 +92,6 @@ type MeetingChromeTransportOptions<
     startAgentRealtimeEngine: typeof startMeetingAgentRealtimeEngine;
     startRealtimeEngine: typeof startMeetingRealtimeEngine;
   };
-  systemProfilerCommand: string;
 };
 
 export function createMeetingChromeTransport<
@@ -177,30 +187,35 @@ export function createMeetingChromeTransport<
     }
   }
 
+  async function prepareAudioRuntime(params: {
+    runtime: PluginRuntime;
+    config: Config;
+    timeoutMs: number;
+  }): Promise<MeetingAudioRuntime> {
+    const audio = resolveMeetingAudioRuntimeForFormat({
+      backend: params.config.chrome.audioBackend,
+      bufferBytes: params.config.chrome.audioBufferBytes,
+      format: params.config.chrome.audioFormat,
+      inputCommand: params.config.chrome.audioInputCommandOverride,
+      outputCommand: params.config.chrome.audioOutputCommandOverride,
+    });
+    await ensureMeetingAudioBackend({
+      backend: audio.backend,
+      timeoutMs: params.timeoutMs,
+      run: async (argv, timeoutMs) => {
+        const result = await params.runtime.system.runCommandWithTimeout(argv, { timeoutMs });
+        return { ...result, code: result.code ?? 1 };
+      },
+    });
+    return audio;
+  }
+
   async function assertAudioDeviceAvailable(params: {
     runtime: PluginRuntime;
+    config: Config;
     timeoutMs: number;
   }): Promise<void> {
-    if (process.platform !== "darwin") {
-      throw new Error(`${options.meetingLabel} talk-back with BlackHole 2ch is macOS-only`);
-    }
-    const result = await params.runtime.system.runCommandWithTimeout(
-      [options.systemProfilerCommand, "SPAudioDataType"],
-      { timeoutMs: params.timeoutMs },
-    );
-    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    if (result.code !== 0 || !options.outputMentionsAudioDevice(output)) {
-      const hint =
-        params.runtime.system.formatNativeDependencyHint?.({
-          packageName: "BlackHole 2ch",
-          downloadCommand: "brew install blackhole-2ch",
-        }) ?? "";
-      throw new Error(
-        ["BlackHole 2ch audio device not found.", "Install BlackHole 2ch and SoX.", hint]
-          .filter(Boolean)
-          .join(" "),
-      );
-    }
+    await prepareAudioRuntime(params);
   }
 
   async function startLocalAudioBridge(params: {
@@ -211,13 +226,14 @@ export function createMeetingChromeTransport<
     requesterSessionKey?: string;
     mode: Mode;
     logger: RuntimeLogger;
+    audio: MeetingAudioRuntime;
   }): Promise<LocalAudioBridge | undefined> {
     if (!options.isTalkBackMode(params.mode)) {
       return undefined;
     }
     const transport = options.runtime.createLocalAudioTransport({
-      inputCommand: params.config.chrome.audioInputCommand,
-      outputCommand: params.config.chrome.audioOutputCommand,
+      inputCommand: params.audio.inputCommand,
+      outputCommand: params.audio.outputCommand,
       audioFormat: params.config.chrome.audioFormat,
       bargeInInputCommand: params.config.chrome.bargeInInputCommand,
       bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
@@ -276,16 +292,18 @@ export function createMeetingChromeTransport<
     logger: RuntimeLogger;
   }): Promise<{
     launched: boolean;
+    audioBackend?: MeetingAudioBackend;
     audioBridge?: LocalAudioBridge;
     browser?: Health;
     tab?: MeetingBrowserTab;
   }> {
-    if (options.isTalkBackMode(params.mode)) {
-      await assertAudioDeviceAvailable({
-        runtime: params.runtime,
-        timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
-      });
-    }
+    const audio = options.isTalkBackMode(params.mode)
+      ? await prepareAudioRuntime({
+          runtime: params.runtime,
+          config: params.config,
+          timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
+        })
+      : undefined;
     const callBrowser = await resolveLocalMeetingBrowserRequest(params.runtime);
     const result = await openOrRecoverMeeting({
       callBrowser,
@@ -298,10 +316,14 @@ export function createMeetingChromeTransport<
       url: params.url,
     });
     if (!options.isRealtimeRouteReady(params.mode, result.browser)) {
-      return result;
+      return { ...result, audioBackend: audio?.backend };
     }
     try {
-      return { ...result, audioBridge: await startLocalAudioBridge(params) };
+      return {
+        ...result,
+        audioBackend: audio?.backend,
+        audioBridge: audio ? await startLocalAudioBridge({ ...params, audio }) : undefined,
+      };
     } catch (error) {
       if (!options.preserveTrackedBrowserOnEngineFailure || !params.trackedTargetId) {
         await rollbackBrowserJoin({
@@ -341,23 +363,11 @@ export function createMeetingChromeTransport<
     });
   }
 
-  type MeetingNodeStartResult = {
-    launched?: boolean;
-    bridgeId?: string;
-    audioBridge?: { type?: string };
-    browser?: Health;
-  };
-
-  function parseNodeStartResult(raw: unknown): MeetingNodeStartResult {
-    const value =
-      raw && typeof raw === "object" && "payload" in raw
-        ? (raw as { payload?: unknown }).payload
-        : raw;
-    if (!value || typeof value !== "object") {
-      throw new Error(`${options.meetingLabel} node returned an invalid start result.`);
-    }
-    return value as MeetingNodeStartResult;
-  }
+  const parseNodeResult = (raw: unknown) =>
+    parseMeetingChromeNodeResult<Health>(
+      raw,
+      `${options.meetingLabel} node returned an invalid start result.`,
+    );
 
   async function launchOnNode(params: {
     runtime: PluginRuntime;
@@ -372,6 +382,7 @@ export function createMeetingChromeTransport<
   }): Promise<{
     nodeId: string;
     launched: boolean;
+    audioBackend?: MeetingAudioBackend;
     audioBridge?: NodeAudioBridge;
     browser?: Health;
     tab?: MeetingBrowserTab;
@@ -394,6 +405,27 @@ export function createMeetingChromeTransport<
         }`,
       );
     }
+    const audioSetup = options.isTalkBackMode(params.mode)
+      ? parseNodeResult(
+          await params.runtime.nodes.invoke({
+            nodeId,
+            command: options.nodeCommandName,
+            params: {
+              action: "setup",
+              audioBackend: params.config.chrome.audioBackend,
+              audioFormat: params.config.chrome.audioFormat,
+              audioBufferBytes: params.config.chrome.audioBufferBytes,
+              ...(params.config.chrome.audioInputCommandOverride
+                ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+                : {}),
+              ...(params.config.chrome.audioOutputCommandOverride
+                ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+                : {}),
+            },
+            timeoutMs: 12_000,
+          }),
+        )
+      : undefined;
     const callBrowser: MeetingBrowserRequestCaller = async (request) =>
       await callNodeBrowser({
         runtime: params.runtime,
@@ -417,6 +449,7 @@ export function createMeetingChromeTransport<
       return {
         nodeId,
         launched: browser.launched,
+        audioBackend: audioSetup?.audioBackend,
         browser: browser.browser,
         tab: browser.tab,
       };
@@ -432,16 +465,24 @@ export function createMeetingChromeTransport<
           launch: false,
           browserProfile: params.config.chrome.browserProfile,
           joinTimeoutMs: params.config.chrome.joinTimeoutMs,
-          audioInputCommand: params.config.chrome.audioInputCommand,
-          audioOutputCommand: params.config.chrome.audioOutputCommand,
+          ...(params.config.chrome.audioInputCommandOverride
+            ? { audioInputCommand: params.config.chrome.audioInputCommandOverride }
+            : {}),
+          ...(params.config.chrome.audioOutputCommandOverride
+            ? { audioOutputCommand: params.config.chrome.audioOutputCommandOverride }
+            : {}),
+          audioBackend: params.config.chrome.audioBackend,
+          audioFormat: params.config.chrome.audioFormat,
+          audioBufferBytes: params.config.chrome.audioBufferBytes,
         },
         timeoutMs: addTimerTimeoutGraceMs(params.config.chrome.joinTimeoutMs) ?? 1,
       });
-      const result = parseNodeStartResult(raw);
+      const result = parseNodeResult(raw);
       if (result.audioBridge?.type !== "node-command-pair") {
         return {
           nodeId,
           launched: browser.launched || result.launched === true,
+          audioBackend: result.audioBackend ?? audioSetup?.audioBackend,
           browser: browser.browser ?? result.browser,
           tab: browser.tab,
         };
@@ -459,6 +500,11 @@ export function createMeetingChromeTransport<
         logScope: options.platform.logScope,
         logPrefix: params.mode === "agent" ? "node agent" : "node",
       });
+      Reflect.set(
+        transport,
+        Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+        result.audioBridge.outputGeneration === true,
+      );
       const bindings = options.runtime.createBindings({
         platform: options.platform,
         ...params,
@@ -502,6 +548,7 @@ export function createMeetingChromeTransport<
       return {
         nodeId,
         launched: browser.launched || result.launched === true,
+        audioBackend: result.audioBackend ?? audioSetup?.audioBackend,
         audioBridge: {
           type: "node-command-pair",
           nodeId,

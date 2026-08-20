@@ -1,7 +1,9 @@
 // Command queue tests cover bounded command execution and queue ordering.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import {
   tryBeginGatewayRootWorkAdmission,
@@ -31,25 +33,13 @@ let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
-let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
+let getTotalQueueSize: CommandQueueModule["getTotalQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
 let resetCommandLane: CommandQueueModule["resetCommandLane"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
-let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 function mockCallArg(
   mock: { mock: { calls: readonly unknown[][] } },
@@ -100,14 +90,13 @@ describe("command queue", () => {
       CommandLaneClearedError,
       enqueueCommandInLane,
       GatewayDrainingError,
-      getActiveTaskCount,
       getCommandLaneSnapshot,
       getQueueSize,
+      getTotalQueueSize,
       markGatewayDraining,
       resetAllLanes,
       resetCommandLane,
       setCommandLaneConcurrency,
-      waitForActiveTasks,
     } = await import("./command-queue.js"));
   });
 
@@ -129,9 +118,9 @@ describe("command queue", () => {
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {
-    expect(getActiveTaskCount()).toBe(0);
+    expect(getTotalQueueSize()).toBe(0);
     resetAllLanes();
-    expect(getActiveTaskCount()).toBe(0);
+    expect(getTotalQueueSize()).toBe(0);
   });
 
   it("runs tasks one at a time in order", async () => {
@@ -158,6 +147,25 @@ describe("command queue", () => {
     expect(calls).toEqual([1, 2, 3]);
     expect(maxActive).toBe(1);
     expect(getQueueSize()).toBe(0);
+  });
+
+  it("runs queued tasks in their enqueue-time async context", async () => {
+    const context = new AsyncLocalStorage<string>();
+    const blocker = createDeferred();
+    const first = context.run("first", () =>
+      enqueueCommandInLane(CommandLane.Main, async () => {
+        await blocker.promise;
+        return context.getStore();
+      }),
+    );
+    const second = context.run("second", () =>
+      enqueueCommandInLane(CommandLane.Main, async () => context.getStore()),
+    );
+
+    blocker.resolve();
+
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
   });
 
   it("runs foreground work before already queued background work", async () => {
@@ -330,6 +338,26 @@ describe("command queue", () => {
     ).toBe(true);
   });
 
+  it("logs error types separately from the actionable lane failure message", async () => {
+    const error = new Error("provider request failed");
+    error.name = "FailoverError";
+
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+      expect.not.stringContaining("FailoverError:"),
+      expect.objectContaining({ errorName: "FailoverError" }),
+    );
+    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+      expect.stringContaining('error="provider request failed"'),
+      expect.any(Object),
+    );
+  });
+
   it.each([
     "session:probe-setup-inference:openai",
     "session:temp:setup-inference:probe-setup-inference-test-uuid",
@@ -350,66 +378,14 @@ describe("command queue", () => {
     ).toBe(false);
   });
 
-  it("getActiveTaskCount returns count of currently executing tasks", async () => {
+  it("reports process queue totals while tasks execute", async () => {
     const { task, release } = enqueueBlockedMainTask();
 
-    expect(getActiveTaskCount()).toBe(1);
+    expect(getTotalQueueSize()).toBe(1);
 
     release();
     await task;
-    expect(getActiveTaskCount()).toBe(0);
-  });
-
-  it("waitForActiveTasks resolves immediately when no tasks are active", async () => {
-    const { drained } = await waitForActiveTasks(1000);
-    expect(drained).toBe(true);
-  });
-
-  it("waitForActiveTasks waits for active tasks to finish", async () => {
-    const { task, release } = enqueueBlockedMainTask();
-
-    vi.useFakeTimers();
-    try {
-      const drainPromise = waitForActiveTasks(5000);
-
-      await vi.advanceTimersByTimeAsync(50);
-      release();
-      await vi.advanceTimersByTimeAsync(50);
-
-      const { drained } = await drainPromise;
-      expect(drained).toBe(true);
-
-      await task;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("waitForActiveTasks returns drained=false when timeout is zero and tasks are active", async () => {
-    const { task, release } = enqueueBlockedMainTask();
-
-    const { drained } = await waitForActiveTasks(0);
-    expect(drained).toBe(false);
-
-    release();
-    await task;
-  });
-
-  it("waitForActiveTasks returns drained=false on timeout", async () => {
-    const { task, release } = enqueueBlockedMainTask();
-
-    vi.useFakeTimers();
-    try {
-      const waitPromise = waitForActiveTasks(50);
-      await vi.advanceTimersByTimeAsync(100);
-      const { drained } = await waitPromise;
-      expect(drained).toBe(false);
-
-      release();
-      await task;
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(getTotalQueueSize()).toBe(0);
   });
 
   it("resetAllLanes drains queued work immediately after reset", async () => {
@@ -423,7 +399,7 @@ describe("command queue", () => {
       await blocker.promise;
     });
 
-    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
+    expect(getTotalQueueSize()).toBeGreaterThanOrEqual(1);
 
     // Enqueue another task — it should be stuck behind the blocker
     let task2Ran = false;
@@ -472,7 +448,9 @@ describe("command queue", () => {
     });
 
     expect(secondRan).toBe(false);
-    expect(getActiveTaskCount()).toBe(2);
+    expect(
+      getCommandLaneSnapshot(lane).activeCount + getCommandLaneSnapshot(otherLane).activeCount,
+    ).toBe(2);
     expect(resetCommandLane(lane)).toBe(1);
 
     await expect(second).resolves.toBe("second");
@@ -749,35 +727,6 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
-  it("waitForActiveTasks ignores tasks that start after the call", async () => {
-    const lane = `drain-snapshot-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 2);
-
-    const blocker1 = createDeferred();
-    const blocker2 = createDeferred();
-    const firstStarted = createDeferred();
-
-    const first = enqueueCommandInLane(lane, async () => {
-      firstStarted.resolve();
-      await blocker1.promise;
-    });
-    await firstStarted.promise;
-    const drainPromise = waitForActiveTasks(2000);
-
-    // Starts after waitForActiveTasks snapshot and should not block drain completion.
-    const second = enqueueCommandInLane(lane, async () => {
-      await blocker2.promise;
-    });
-    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(2);
-
-    blocker1.resolve();
-    const { drained } = await drainPromise;
-    expect(drained).toBe(true);
-
-    blocker2.resolve();
-    await Promise.all([first, second]);
-  });
-
   it("clearCommandLane rejects pending promises", async () => {
     // First task blocks the lane.
     const { task: first, release } = enqueueBlockedMainTask(async () => "first");
@@ -895,40 +844,44 @@ describe("command queue", () => {
     await expect(enqueueCommandInLane(CommandLane.Main, async () => "ok")).resolves.toBe("ok");
   });
 
-  it("migrates legacy queue state missing activeTaskWaiters without crashing", async () => {
-    // Simulate a SIGUSR1 in-process restart where the globalThis singleton was
-    // created by an older code version (e.g. v2026.4.2) that did not include
-    // the `activeTaskWaiters` field.  The schema migration in getQueueState()
-    // must patch the missing field so resetAllLanes() and
-    // notifyActiveTaskWaiters() do not throw.
-    const key = Symbol.for("openclaw.commandQueueState");
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    const original = globalStore[key];
+  it("re-admits preserved queued work after reset retires its captured root", async () => {
+    const outerLane = `restart-outer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const innerLane = `restart-inner-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(outerLane, 0);
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    let task: Promise<string> | undefined;
+    await root?.run(async () => {
+      task = enqueueCommandInLane(outerLane, async () =>
+        enqueueCommandInLane(innerLane, async () => "continued"),
+      );
+    });
 
-    try {
-      // Plant a legacy-shaped state object (no activeTaskWaiters).
-      globalStore[key] = {
-        gatewayDraining: false,
-        lanes: new Map(),
-        nextTaskId: 1,
-      };
+    markGatewayDraining();
+    resetAllLanes();
+    setCommandLaneConcurrency(outerLane, 1);
 
-      // resetAllLanes calls notifyActiveTaskWaiters → Array.from(state.activeTaskWaiters).
-      // Without the migration this would throw:
-      //   TypeError: undefined is not iterable
-      resetAllLanes();
+    await expect(task).resolves.toBe("continued");
+    root?.release();
+  });
 
-      // waitForActiveTasks also accesses activeTaskWaiters.
-      await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });
-    } finally {
-      // Restore original state so subsequent tests are not affected.
-      if (original !== undefined) {
-        globalStore[key] = original;
-      } else {
-        delete globalStore[key];
-      }
-      resetCommandQueueStateForTest();
-    }
+  it("does not re-admit queued work after its root is released normally", async () => {
+    const outerLane = `released-outer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const innerLane = `released-inner-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(outerLane, 0);
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    let task: Promise<string> | undefined;
+    await root?.run(async () => {
+      task = enqueueCommandInLane(outerLane, async () =>
+        enqueueCommandInLane(innerLane, async () => "unexpected"),
+      );
+    });
+
+    root?.release();
+    setCommandLaneConcurrency(outerLane, 1);
+
+    await expect(task).rejects.toBeInstanceOf(GatewayDrainingError);
   });
 
   it("migrates legacy queued entries missing priority and wait diagnostics", async () => {
@@ -1011,7 +964,7 @@ describe("command queue", () => {
       });
 
       expect(commandQueueB.getQueueSize(lane)).toBe(1);
-      expect(commandQueueB.getActiveTaskCount()).toBe(1);
+      expect(commandQueueB.getTotalQueueSize()).toBe(1);
 
       blocker.resolve();
       await expect(task).resolves.toBe("done");

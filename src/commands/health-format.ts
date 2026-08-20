@@ -5,10 +5,10 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
-import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
-  if (!isGatewayTransportError(err) || err.kind !== "closed") {
+  if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
     return undefined;
   }
   return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;
@@ -186,35 +186,32 @@ export const formatHealthChannelLines = (
       : [];
     const statusState =
       typeof selectedSummary.statusState === "string" ? selectedSummary.statusState : null;
-    if (statusState) {
-      if (statusState === "linked") {
-        const authAgeMs =
-          typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
-        lines.push(`${label}: ${formatChannelStatusState(statusState)}${authLabel}`);
-      } else {
-        lines.push(`${label}: ${formatChannelStatusState(statusState)}`);
-      }
-      continue;
-    }
-
+    const healthState =
+      typeof selectedSummary.healthState === "string" && selectedSummary.healthState
+        ? selectedSummary.healthState
+        : null;
     const linked = typeof selectedSummary.linked === "boolean" ? selectedSummary.linked : null;
-    if (linked !== null) {
-      if (linked) {
-        const authAgeMs =
-          typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
-        lines.push(`${label}: linked${authLabel}`);
-      } else {
-        lines.push(`${label}: not linked`);
-      }
-      continue;
-    }
-
     const configured =
       typeof selectedSummary.configured === "boolean" ? selectedSummary.configured : null;
-    if (configured === false) {
-      lines.push(`${label}: not configured`);
+    const inactiveState =
+      statusState === "disabled" || statusState === "unconfigured"
+        ? formatChannelStatusState(statusState)
+        : configured === false
+          ? "not configured"
+          : null;
+    // Explicit inactive/degraded facts outrank probes; passive success waits until after them.
+    // Otherwise a live probe can be hidden behind stale "healthy", "linked", or "configured".
+    const preProbeState = inactiveState
+      ? inactiveState
+      : healthState && healthState !== "healthy"
+        ? healthState
+        : statusState && statusState !== "linked" && statusState !== "configured"
+          ? formatChannelStatusState(statusState)
+          : linked === false
+            ? "not linked"
+            : null;
+    if (preProbeState) {
+      lines.push(`${label}: ${preProbeState}`);
       continue;
     }
 
@@ -246,11 +243,19 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    if (configured === true) {
-      lines.push(`${label}: configured`);
-      continue;
-    }
-    lines.push(`${label}: unknown`);
+    const authAgeMs =
+      typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
+    const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+    const passiveState = healthState
+      ? healthState
+      : statusState
+        ? `${formatChannelStatusState(statusState)}${statusState === "linked" ? authLabel : ""}`
+        : linked === true
+          ? `linked${authLabel}`
+          : configured === true
+            ? "configured"
+            : "unknown";
+    lines.push(`${label}: ${passiveState}`);
   }
   return lines;
 };

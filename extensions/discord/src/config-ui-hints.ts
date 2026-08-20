@@ -1,5 +1,4 @@
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
-// Discord helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const discordChannelConfigUiHints = {
@@ -16,56 +15,32 @@ export const discordChannelConfigUiHints = {
       policyNote: "Native Discord @mentions still trigger even when regex patterns are denied.",
       denyNote: "Native @mentions still trigger.",
     },
+    nativeCommands: true,
+    streaming: {
+      "": 'Discord preview streaming is off by default. Set mode to "partial", "block", or "progress" to opt in. Run openclaw doctor --fix to migrate legacy keys.',
+      mode: 'Discord preview mode: "off" | "partial" | "block" | "progress". Default: "off".',
+      chunkMode:
+        'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
+      "block.enabled":
+        "Enable normal Discord block replies. This takes precedence over editable preview delivery.",
+      "block.coalesce": "Merge streamed Discord block replies before final delivery.",
+      "preview.chunk.minChars":
+        'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode="block" (default: 200).',
+      "preview.chunk.maxChars":
+        'Target max size for a Discord stream preview chunk when channels.discord.streaming.mode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+      "preview.chunk.breakPreference":
+        "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
+      "preview.toolProgress":
+        "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+      "preview.commandText":
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+    },
+    progress: { includeCommentary: true },
   }),
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
   },
-  ...createChannelConfigUiHints({ channelLabel: "Discord", nativeCommands: true }),
-  streaming: {
-    label: "Discord Streaming Mode",
-    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
-  },
-  "streaming.mode": {
-    label: "Discord Streaming Mode",
-    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress".',
-  },
-  "streaming.chunkMode": {
-    label: "Discord Chunk Mode",
-    help: 'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
-  },
-  "streaming.block.enabled": {
-    label: "Discord Block Streaming Enabled",
-    help: 'Enable chunked block-style Discord preview delivery when channels.discord.streaming.mode="block".',
-  },
-  "streaming.block.coalesce": {
-    label: "Discord Block Streaming Coalesce",
-    help: "Merge streamed Discord block replies before final delivery.",
-  },
-  "streaming.preview.chunk.minChars": {
-    label: "Discord Draft Chunk Min Chars",
-    help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode="block" (default: 200).',
-  },
-  "streaming.preview.chunk.maxChars": {
-    label: "Discord Draft Chunk Max Chars",
-    help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming.mode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
-  },
-  "streaming.preview.chunk.breakPreference": {
-    label: "Discord Draft Chunk Break Preference",
-    help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
-  },
-  "streaming.preview.toolProgress": {
-    label: "Discord Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
-  },
-  "streaming.preview.commandText": {
-    label: "Discord Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  ...createChannelConfigUiHints({
-    channelLabel: "Discord",
-    progress: { includeCommentary: true },
-  }),
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
@@ -101,6 +76,10 @@ export const discordChannelConfigUiHints = {
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",
     help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
+  },
+  "intents.messageContent": {
+    label: "Discord Message Content Intent",
+    help: "Request the privileged Message Content intent (default: true). Set false only for mention-only guild operation when Discord cannot grant the intent; DMs and explicit mentions still include message content.",
   },
   "intents.presence": {
     label: "Discord Presence Intent",
@@ -193,7 +172,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
-    help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+    help: "Voice channels to auto-join (list of guildId/channelId entries). Set whenOccupied on an entry to connect only while humans are present.",
+  },
+  "voice.autoJoin.*.whenOccupied": {
+    label: "Discord Voice Auto-Join When Occupied",
+    help: "Join and remain in this auto-managed voice channel only while at least one human is present. The OpenClaw bot and other bots do not count. Default: false.",
   },
   "voice.allowedChannels": {
     label: "Discord Voice Allowed Channels",
@@ -326,7 +309,7 @@ export const discordChannelConfigUiHints = {
   },
   activities: {
     label: "Discord Activities",
-    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+    help: "Enable the Discord Activity presenter for the core show_widget tool on this account. Activity routes and the launch handler remain disabled when this block is absent.",
   },
   "activities.clientSecret": {
     label: "Discord Activities Client Secret",

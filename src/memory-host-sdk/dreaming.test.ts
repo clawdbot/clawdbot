@@ -162,7 +162,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.timezone).toBe("America/Los_Angeles");
     expect(resolved.phases.deep.cron).toBe("0 3 * * *");
     expect(resolved.phases.deep.limit).toBe(10);
-    expect(resolved.phases.deep.minScore).toBe(0.8);
+    expect(resolved.phases.deep.minScore).toBe(0.75);
     expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
@@ -223,6 +223,29 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace/shared",
         agentIds: ["alpha", "gamma"],
+      },
+      {
+        workspaceDir: "/workspace/beta",
+        agentIds: ["beta"],
+      },
+    ]);
+  });
+
+  it("does not require a default owner when no primary workspace is supplied", () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        list: [
+          { id: "alpha", workspace: "/workspace/alpha" },
+          { id: "beta", workspace: "/workspace/beta" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
       },
       {
         workspaceDir: "/workspace/beta",

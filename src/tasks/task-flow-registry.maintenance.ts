@@ -35,7 +35,7 @@ export function assertTaskFlowRegistryMaintenanceReady(): void {
 function isTerminalFlow(flow: TaskFlowRecord): boolean {
   return (
     flow.status === "succeeded" ||
-    flow.status === "blocked" ||
+    (flow.status === "blocked" && flow.endedAt != null) ||
     flow.status === "failed" ||
     flow.status === "cancelled" ||
     flow.status === "lost"

@@ -26,6 +26,7 @@ export function loadSkillWorkshopPageData(params: {
 export async function runSkillWorkshopPageHistoryScan(params: {
   context: SkillWorkshopContext;
   current: () => { context: SkillWorkshopContext; state: SkillWorkshopState } | undefined;
+  isCurrent: () => boolean;
   state: SkillWorkshopState;
 }): Promise<void> {
   const agentId = resolveSkillWorkshopAgentId(params.context);
@@ -33,6 +34,7 @@ export async function runSkillWorkshopPageHistoryScan(params: {
   await runSkillWorkshopHistoryScan({
     agentId,
     gateway: params.context.gateway,
+    isCurrent: params.isCurrent,
     state: historyState,
   });
   const current = params.current();

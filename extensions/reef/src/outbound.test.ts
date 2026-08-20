@@ -18,6 +18,23 @@ describe("reefOutboundAdapter", () => {
     expect(reefOutboundAdapter.deliveryMode).toBe("gateway");
   });
 
+  it("removes internal tool text while preserving user-visible examples", () => {
+    const sanitizeText = reefOutboundAdapter.sanitizeText;
+    if (!sanitizeText) {
+      throw new Error("expected Reef outbound sanitizeText hook");
+    }
+    const sanitize = (text: string) => sanitizeText({ text, payload: { text } });
+    const fenced = ["```xml", '<tool_call>{"name":"exec"}</tool_call>', "```"].join("\n");
+
+    expect(sanitize("Done.\n⚠️ 🛠️ `search repos (agent)` failed")).toBe("Done.");
+    expect(sanitize('<tool_call>{"name":"exec"}</tool_call>Message sent.')).toBe("Message sent.");
+    expect(sanitize("The encrypted message was delivered.")).toBe(
+      "The encrypted message was delivered.",
+    );
+    expect(sanitize(fenced)).toBe(fenced);
+    expect(sanitize("⚠️ 🛠️ `search repos (agent)` failed")).toBe("");
+  });
+
   it("normalizes the SDK target and delegates only message content/context to the guarded flow", async () => {
     const order: string[] = [];
     const send = vi.fn(
@@ -50,7 +67,7 @@ describe("reefOutboundAdapter", () => {
     ).resolves.toEqual({
       channel: "reef",
       messageId: "01JZ0000000000000000000200",
-      chatId: "alice",
+      target: { kind: "chat", id: "alice" },
       toJid: "reef:alice",
     });
     expect(order).toEqual(["dispatch", "send"]);

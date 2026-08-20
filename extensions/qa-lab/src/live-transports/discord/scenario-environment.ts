@@ -4,7 +4,11 @@ import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
-import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import {
+  discordQaScenarioSupport,
+  type DiscordQaScenarioImplementation,
+  type DiscordQaScenarioRun,
+} from "./discord-live.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
@@ -18,18 +22,22 @@ type DiscordIdentity = Awaited<
 type DiscordObservedMessage = Parameters<
   typeof discordQaScenarioSupport.testing.pollChannelMessages
 >[0]["observedMessages"][number];
-
 export type DiscordQaScenarioEnvironment = {
-  cfg: OpenClawConfig;
+  configureScenario: (implementation: DiscordQaScenarioImplementation) => Promise<{
+    cfg: OpenClawConfig;
+    configureTranscriptVoiceAccess?: (authorized: boolean) => Promise<void>;
+    run: DiscordQaScenarioRun;
+    voiceChannel?: Awaited<
+      ReturnType<typeof discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel>
+    >;
+  }>;
   driverIdentity: DiscordIdentity;
   observedMessages: DiscordObservedMessage[];
   outputDir: string;
   runtimeEnv: DiscordRuntimeEnv;
+  scenario: { id: string; timeoutMs: number; title: string };
   sutAccountId: string;
   sutIdentity: DiscordIdentity;
-  voiceChannel?: Awaited<
-    ReturnType<typeof discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel>
-  >;
 };
 
 export function createDiscordQaScenarioEnvironment(params: {
@@ -40,61 +48,102 @@ export function createDiscordQaScenarioEnvironment(params: {
 }) {
   const observedMessages: DiscordObservedMessage[] = [];
   const prepareFlow = async (input: FlowPreparationInput) => {
-    const scenarioId = input.config.discordScenarioId;
-    if (typeof scenarioId !== "string") {
-      throw new Error("Discord QA module flow requires config.discordScenarioId");
-    }
-    const scenario = discordQaScenarioSupport.testing.findScenario([scenarioId])[0];
-    if (!scenario) {
-      throw new Error(`unknown Discord QA scenario id: ${scenarioId}`);
-    }
-    const scenarioRun = scenario.buildRun(params.runtimeEnv.sutApplicationId);
-    const voiceChannel =
-      scenarioRun.kind === "voice-autojoin"
-        ? await discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel({
-            guildId: params.runtimeEnv.guildId,
-            token: params.runtimeEnv.sutBotToken,
-            voiceChannelId: params.runtimeEnv.voiceChannelId,
-          })
-        : undefined;
-    const snapshot = await readLiveQaGatewayConfig(input.gateway);
-    const cfg = discordQaScenarioSupport.testing.buildDiscordQaConfig(
-      snapshot.config as OpenClawConfig,
-      {
-        guildId: params.runtimeEnv.guildId,
-        channelId: params.runtimeEnv.channelId,
-        driverBotId: params.driverIdentity.id,
-        sutAccountId: params.accountId,
-        sutBotToken: params.runtimeEnv.sutBotToken,
-      },
-      {
-        ...(voiceChannel
-          ? { voiceAutoJoin: { channelId: voiceChannel.id, guildId: params.runtimeEnv.guildId } }
-          : {}),
-        statusReactionsToolOnly: scenarioRun.kind === "status-reactions-tool-only",
-      },
-    );
-    await patchLiveQaGatewayConfig({
-      gateway: input.gateway,
-      patch: cfg as Record<string, unknown>,
-      replacePaths: ["channels.discord", "messages", "plugins"],
-      timeoutMs: input.timeoutMs,
-      waitForConfigRestartSettle: input.waitForConfigRestartSettle,
-    });
-    await discordQaScenarioSupport.testing.waitForDiscordChannelRunning(
-      input.gateway as never,
-      params.accountId,
-    );
     return {
       discordScenarioContext: {
-        cfg,
+        configureScenario: async (implementation: DiscordQaScenarioImplementation) => {
+          const run = implementation.buildRun(params.runtimeEnv.sutApplicationId);
+          const voiceChannel =
+            run.kind === "voice-autojoin" || run.kind === "transcripts-voice-authorization"
+              ? await discordQaScenarioSupport.testing.resolveDiscordQaVoiceChannel({
+                  guildId: params.runtimeEnv.guildId,
+                  token: params.runtimeEnv.sutBotToken,
+                  voiceChannelId: params.runtimeEnv.voiceChannelId,
+                })
+              : undefined;
+          const applyConfig = async (transcriptVoiceAuthorized?: boolean) => {
+            const snapshot = await readLiveQaGatewayConfig(input.gateway);
+            const cfg = discordQaScenarioSupport.testing.buildDiscordQaConfig(
+              snapshot.config as OpenClawConfig,
+              {
+                guildId: params.runtimeEnv.guildId,
+                channelId: params.runtimeEnv.channelId,
+                driverBotId: params.driverIdentity.id,
+                sutAccountId: params.accountId,
+                sutBotToken: params.runtimeEnv.sutBotToken,
+              },
+              {
+                ...(run.kind === "voice-autojoin" && voiceChannel
+                  ? {
+                      voiceAutoJoin: {
+                        channelId: voiceChannel.id,
+                        guildId: params.runtimeEnv.guildId,
+                      },
+                    }
+                  : {}),
+                ...(run.kind === "transcripts-voice-authorization" && voiceChannel
+                  ? {
+                      voiceChannelAccess: {
+                        channelId: voiceChannel.id,
+                        users: [
+                          transcriptVoiceAuthorized
+                            ? params.driverIdentity.id
+                            : params.sutIdentity.id,
+                        ],
+                      },
+                    }
+                  : {}),
+                ...(run.kind === "progress-draft-lifecycle"
+                  ? { progressDraftLabel: run.progressLabel }
+                  : {}),
+                statusReactionsToolOnly: run.kind === "status-reactions-tool-only",
+              },
+            );
+            await patchLiveQaGatewayConfig({
+              gateway: input.gateway,
+              patch: cfg as Record<string, unknown>,
+              replacePaths: [
+                "channels.discord",
+                "messages",
+                "plugins",
+                ...(run.kind === "transcripts-voice-authorization" && voiceChannel
+                  ? [
+                      `channels.discord.accounts.${params.accountId}.guilds.${params.runtimeEnv.guildId}.channels.${voiceChannel.id}.users`,
+                    ]
+                  : []),
+              ],
+              timeoutMs: input.timeoutMs,
+              waitForConfigRestartSettle: input.waitForConfigRestartSettle,
+            });
+            await discordQaScenarioSupport.testing.waitForDiscordChannelRunning(
+              input.gateway as never,
+              params.accountId,
+            );
+            return cfg;
+          };
+          const cfg = await applyConfig(false);
+          return {
+            cfg,
+            run,
+            ...(run.kind === "transcripts-voice-authorization"
+              ? {
+                  configureTranscriptVoiceAccess: async (authorized: boolean) =>
+                    void (await applyConfig(authorized)),
+                }
+              : {}),
+            ...(voiceChannel ? { voiceChannel } : {}),
+          };
+        },
         driverIdentity: params.driverIdentity,
         observedMessages,
         outputDir: input.outputDir,
         runtimeEnv: params.runtimeEnv,
+        scenario: {
+          id: input.scenarioId,
+          timeoutMs: input.timeoutMs,
+          title: input.scenarioTitle,
+        },
         sutAccountId: params.accountId,
         sutIdentity: params.sutIdentity,
-        ...(voiceChannel ? { voiceChannel } : {}),
       } satisfies DiscordQaScenarioEnvironment,
     };
   };

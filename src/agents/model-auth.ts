@@ -12,7 +12,7 @@ export {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   applySecretRefHeaderSentinels,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   hasAvailableAuthForProvider,
   resolveModelAuthMode,
 } from "./model-auth-model.js";
@@ -20,19 +20,20 @@ export type { ModelAuthMode } from "./model-auth-model.js";
 export {
   canUseProfileAsProviderEntryApiKey,
   getCustomProviderApiKey,
+  hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
+  isConfigBackedInlineProviderApiKey,
   resolveProviderEntryApiKeyBinding,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
 export type { ProviderEntryApiKeyBindingResolution } from "./model-auth-provider-config.js";
-export { resolveApiKeyForProvider } from "./model-auth-provider.js";
+export { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 export type { ProviderCredentialPrecedence } from "./model-auth-provider.js";
 export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
-  hasSyntheticLocalProviderAuthConfig,
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {

@@ -1,0 +1,26 @@
+title: Control UI authenticated PWA install metadata
+
+scenario:
+  id: control-ui-pwa-install-metadata
+  surface: control-ui
+  coverage:
+    primary:
+      - control-ui.pwa-install-metadata
+  objective: >-
+    Prove Chromium can load valid same-origin install metadata when the
+    Gateway-hosted Control UI is protected by HTTP Basic authentication.
+  successCriteria:
+    - The unauthenticated manifest request is rejected with an HTTP Basic challenge.
+    - Chromium's PWA manifest loader sends credentials for every manifest request.
+    - The manifest is same-origin, error-free, and declares standalone OpenClaw installation metadata.
+    - The document manifest link retains the use-credentials contract.
+  docsRefs:
+    - docs/web/control-ui.md
+  codeRefs:
+    - ui/src/e2e/pwa-manifest-credentials.e2e.test.ts
+    - ui/index.html
+  execution:
+    kind: playwright
+    path: ui/src/e2e/pwa-manifest-credentials.e2e.test.ts
+    testNamePattern: loads the installable same-origin PWA manifest through an HTTP Basic Auth proxy
+    summary: Real Chromium PWA manifest proof through an authenticated same-origin proxy.

@@ -1,5 +1,5 @@
 // Browser tests cover browser cli manage plugin behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
   getBrowserManageCallBrowserRequestMock,
@@ -15,10 +15,26 @@ function lastRuntimeLog(): string {
   return value;
 }
 
+function parseSingleRuntimeJson(): unknown {
+  const logs = getBrowserCliRuntimeCapture().runtimeLogs;
+  expect(logs).toHaveLength(1);
+  return JSON.parse(logs[0] ?? "");
+}
+
 describe("browser manage output", () => {
+  let previousExitCode: typeof process.exitCode;
+
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
     getBrowserManageCallBrowserRequestMock().mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    getBrowserCliRuntime().exit.mockClear();
+    getBrowserCliRuntime().writeJson.mockClear();
+  });
+
+  afterEach(() => {
+    process.exitCode = previousExitCode;
   });
 
   it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
@@ -459,6 +475,21 @@ describe("browser manage output", () => {
     );
   });
 
+  it("rejects unsupported profile drivers before creating a profile", async () => {
+    const program = createBrowserManageProgram();
+
+    await expect(
+      program.parseAsync(["browser", "create-profile", "--name", "test", "--driver", "chromium"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
+      "--driver must be openclaw or existing-session",
+    );
+    expect(getBrowserManageCallBrowserRequestMock()).not.toHaveBeenCalled();
+  });
+
   it("prints a readable browser doctor report", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {
@@ -524,6 +555,72 @@ describe("browser manage output", () => {
     expect(output).toContain("OK gateway: browser control endpoint reachable");
     expect(output).toContain("OK graphics: software");
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
+    expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prints one complete JSON browser doctor failure before setting exit status", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: false,
+          profile: "openclaw",
+          transport: "cdp",
+          running: false,
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        checks: expect.arrayContaining([
+          expect.objectContaining({ name: "gateway", ok: true }),
+          expect.objectContaining({ name: "plugin", ok: false }),
+        ]),
+      }),
+    );
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
+    expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints one JSON browser doctor report and succeeds when every check passes", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: true,
+          profile: "openclaw",
+          transport: "cdp",
+          running: true,
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "openclaw", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return { running: true, tabs: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
+
+    expect(parseSingleRuntimeJson()).toMatchObject({ ok: true });
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
+    expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {
@@ -534,9 +631,7 @@ describe("browser manage output", () => {
     getBrowserManageCallBrowserRequestMock().mockRejectedValueOnce(error);
 
     const program = createBrowserManageProgram();
-    await expect(program.parseAsync(["browser", "doctor"], { from: "user" })).rejects.toThrow(
-      "__exit__:1",
-    );
+    await program.parseAsync(["browser", "doctor"], { from: "user" });
 
     const output = lastRuntimeLog();
     expect(output).toContain(
@@ -544,5 +639,8 @@ describe("browser manage output", () => {
     );
     expect(output).toContain("OPENCLAW_GATEWAY_TOKEN");
     expect(output).not.toContain("GatewaySecretRefUnavailableError");
+    expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 });

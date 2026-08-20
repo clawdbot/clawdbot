@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
+  type ConfiguredBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -15,8 +16,8 @@ export function resolveIMessageConversationRoute(params: {
   peerId: string;
   sender: string;
   chatId?: number;
-}): ReturnType<typeof resolveAgentRoute> {
-  let route = resolveAgentRoute({
+}): ConfiguredBindingRouteResult {
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "imessage",
     accountId: params.accountId,
@@ -32,10 +33,10 @@ export function resolveIMessageConversationRoute(params: {
     chatId: params.chatId,
   });
   if (!conversationId) {
-    return route;
+    return { route, bindingResolution: null };
   }
 
-  route = resolveConfiguredBindingRoute({
+  const configuredRoute = resolveConfiguredBindingRoute({
     cfg: params.cfg,
     route,
     conversation: {
@@ -43,17 +44,16 @@ export function resolveIMessageConversationRoute(params: {
       accountId: params.accountId,
       conversationId,
     },
-  }).route;
+  });
 
   const runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route,
+    route: configuredRoute.route,
     conversation: {
       channel: "imessage",
       accountId: params.accountId,
       conversationId,
     },
   });
-  route = runtimeRoute.route;
   if (runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey) {
     logVerbose(`imessage: plugin-bound conversation ${conversationId}`);
   } else if (runtimeRoute.boundSessionKey) {
@@ -61,5 +61,8 @@ export function resolveIMessageConversationRoute(params: {
       `imessage: routed via bound conversation ${conversationId} -> ${runtimeRoute.boundSessionKey}`,
     );
   }
-  return route;
+  return {
+    route: runtimeRoute.route,
+    bindingResolution: runtimeRoute.bindingRecord ? null : configuredRoute.bindingResolution,
+  };
 }

@@ -205,6 +205,55 @@ describe("tlon core", () => {
     expect(result.cfg.channels?.tlon?.network?.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
+  it("never sends an existing login code back through setup prompts", async () => {
+    const existingCode = "lidlut-existing-secret-code";
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Login code") {
+        return "lidlut-replacement-code";
+      }
+      throw new Error(`Unexpected prompt: ${message}`);
+    });
+    const confirm = vi.fn(async ({ message }: { message: string }) => {
+      if (message.startsWith("Ship name") || message.startsWith("Ship URL")) {
+        return true;
+      }
+      if (message.startsWith("Login code")) {
+        return false;
+      }
+      if (message === "Enable auto-discovery of group channels?") {
+        return true;
+      }
+      return false;
+    });
+    const prompter = createTestWizardPrompter({
+      text: text as WizardPrompter["text"],
+      confirm,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: tlonConfigure,
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~sampel-palnet",
+            url: "https://urbit.example.com",
+            code: existingCode,
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.tlon?.code).toBe("lidlut-replacement-code");
+    expect(JSON.stringify({ confirms: confirm.mock.calls, texts: text.mock.calls })).not.toContain(
+      existingCode,
+    );
+    const codePrompt = text.mock.calls.find(([args]) => args.message === "Login code")?.[0];
+    expect(codePrompt).toMatchObject({ sensitive: true });
+    expect(codePrompt).not.toHaveProperty("initialValue");
+  });
+
   it("resolves dm targets to normalized ships", () => {
     expect(resolveTlonOutboundTarget("dm/sampel-palnet")).toEqual({
       ok: true,

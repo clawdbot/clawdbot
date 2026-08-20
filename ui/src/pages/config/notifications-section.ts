@@ -1,13 +1,24 @@
 import { html, nothing } from "lit";
-import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import type {
+  NativeNotificationsPermission,
+  NativeNotificationTestOutcome,
+} from "../../app/native-notifications.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+
+const NOTIFICATIONS_DOCS_URL = "https://docs.openclaw.ai/web/notifications";
+
+function renderNotificationsHint(copy: string) {
+  return html`${copy} ${renderDocsLink(NOTIFICATIONS_DOCS_URL, t("common.learnMore"))}`;
+}
 
 export type WebPushUiState = {
   supported: boolean;
@@ -22,7 +33,10 @@ export type WebPushUiState = {
 // assignable to this subset.
 type NotificationsSectionProps = {
   connected: boolean;
-  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  nativeNotifications?: {
+    permission: NativeNotificationsPermission | "unknown";
+    test: NativeNotificationTestOutcome | null;
+  };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushUiState;
@@ -51,6 +65,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
   const native = props.nativeNotifications;
   if (native) {
     const status = nativeNotificationsStatus(native.permission);
+    const testPending = native.test?.state === "pending";
     const actionButton =
       native.permission === "notDetermined"
         ? html`
@@ -69,8 +84,15 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             `
           : native.permission === "granted"
             ? html`
-                <button class="btn primary" @click=${() => props.onNativeNotificationsSendTest?.()}>
-                  ${icons.send} ${t("configView.notifications.sendTest")}
+                <button
+                  class="btn primary"
+                  ?disabled=${testPending}
+                  @click=${() => props.onNativeNotificationsSendTest?.()}
+                >
+                  ${testPending ? icons.loader : icons.send}
+                  ${testPending
+                    ? t("configView.notifications.sendingTest")
+                    : t("configView.notifications.sendTest")}
                 </button>
               `
             : nothing;
@@ -82,7 +104,9 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             <h2 class="settings-section__heading">${t("configView.notifications.nativeTitle")}</h2>
             <div class="settings-section__actions">${renderSettingsStatus(status)}</div>
           </div>
-          <p class="settings-section__desc">${t("configView.notifications.nativeHint")}</p>
+          <p class="settings-section__desc">
+            ${renderNotificationsHint(t("configView.notifications.nativeHint"))}
+          </p>
           <div class="settings-group">
             ${renderSettingsRow({
               title: t("configView.notifications.permission"),
@@ -105,6 +129,28 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
                   }),
                 })
               : nothing}
+            ${native.test
+              ? renderSettingsRow({
+                  title: t("configView.notifications.testOutcome"),
+                  description: native.test.state === "error" ? native.test.message : undefined,
+                  control: renderSettingsStatus(
+                    native.test.state === "pending"
+                      ? {
+                          kind: "accent",
+                          label: t("configView.notifications.sendingTest"),
+                        }
+                      : native.test.state === "sent"
+                        ? {
+                            kind: "ok",
+                            label: t("configView.notifications.testQueued"),
+                          }
+                        : {
+                            kind: "danger",
+                            label: t("configView.notifications.testFailed"),
+                          },
+                  ),
+                })
+              : nothing}
           </div>
         </section>
       </div>
@@ -125,6 +171,9 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               })}
             </div>
           </div>
+          <p class="settings-section__desc">
+            ${renderNotificationsHint(t("configView.notifications.unavailableHint"))}
+          </p>
           <div class="settings-group">
             <div class="settings-row">
               <div class="settings-row__text">
@@ -207,7 +256,9 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
           </div>
         </div>
-        <p class="settings-section__desc">${t("configView.notifications.hint")}</p>
+        <p class="settings-section__desc">
+          ${renderNotificationsHint(t("configView.notifications.hint"))}
+        </p>
         <div class="settings-group">
           ${renderSettingsRow({
             title: t("configView.notifications.browserSupport"),
@@ -249,7 +300,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ? html`
                 <div class="settings-row">
                   <div class="settings-row__text">
-                    <span class="cfg-field__error">${push.error}</span>
+                    <span class="cfg-field__error">${formatUiExternalText(push.error)}</span>
                   </div>
                 </div>
               `

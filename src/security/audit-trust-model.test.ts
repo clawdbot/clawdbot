@@ -20,6 +20,16 @@ function requireMultiUserHeuristicFinding(findings: ReturnType<typeof audit>) {
   return finding;
 }
 
+function requireGroupScopeMainFinding(findings: ReturnType<typeof audit>) {
+  const finding = findings.find(
+    (entry) => entry.checkId === "security.trust_model.group_scope_main",
+  );
+  if (!finding) {
+    throw new Error("Expected group-scope main finding");
+  }
+  return finding;
+}
+
 describe("security audit trust model findings", () => {
   it("evaluates trust-model exposure findings", () => {
     const cases = [
@@ -140,6 +150,158 @@ describe("security audit trust model findings", () => {
               (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
             ),
           ).toBe(false);
+          expect(
+            findings.some((finding) => finding.checkId === "security.trust_model.group_scope_main"),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "warns when global group scope shares all rooms with the main session",
+        cfg: {
+          session: { groupScope: "main" },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding).toMatchObject({
+            severity: "warn",
+            title: "Group rooms share the main session",
+          });
+          expect(finding.detail).toContain('session.groupScope="main"');
+          expect(finding.detail).toContain("all group/channel rooms");
+          expect(finding.remediation).toContain(
+            "https://docs.openclaw.ai/channels/groups#session-keys",
+          );
+        },
+      },
+      {
+        name: "warns with the matched room for binding group scope",
+        cfg: {
+          session: { groupScope: "per-group" },
+          bindings: [
+            {
+              agentId: "support",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "channel", id: "1234567890" },
+                guildId: "9876543210",
+                roles: ["operators", "reviewers"],
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding.severity).toBe("warn");
+          expect(finding.detail).toContain(
+            "discord accountId=work peer=channel:1234567890 guild=9876543210 roles=operators,reviewers",
+          );
+          expect(finding.detail).not.toContain("all group/channel rooms");
+        },
+      },
+      {
+        name: "does not warn for a direct-only binding group scope",
+        cfg: {
+          bindings: [
+            {
+              agentId: "support",
+              match: {
+                channel: "whatsapp",
+                peer: { kind: "direct", id: "user-a" },
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some((finding) => finding.checkId === "security.trust_model.group_scope_main"),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not warn for a main-scoped room binding shadowed by an earlier equivalent binding",
+        cfg: {
+          bindings: [
+            {
+              agentId: "isolated",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "group", id: "room-1" },
+              },
+              session: { groupScope: "per-group" },
+            },
+            {
+              agentId: "shared",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "channel", id: "room-1" },
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some((finding) => finding.checkId === "security.trust_model.group_scope_main"),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "warns when a main-scoped room binding precedes an equivalent binding",
+        cfg: {
+          bindings: [
+            {
+              agentId: "shared",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "channel", id: "room-1" },
+              },
+              session: { groupScope: "main" },
+            },
+            {
+              agentId: "isolated",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "group", id: "room-1" },
+              },
+              session: { groupScope: "per-group" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding.detail).toContain("discord accountId=work peer=channel:room-1");
+        },
+      },
+      {
+        name: "warns for a more-specific main-scoped room binding after a broader binding",
+        cfg: {
+          bindings: [
+            {
+              agentId: "isolated",
+              match: { channel: "discord", accountId: "work" },
+              session: { groupScope: "per-group" },
+            },
+            {
+              agentId: "shared",
+              match: {
+                channel: "discord",
+                accountId: "work",
+                peer: { kind: "group", id: "room-1" },
+              },
+              session: { groupScope: "main" },
+            },
+          ],
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = requireGroupScopeMainFinding(findings);
+          expect(finding.detail).toContain("discord accountId=work peer=group:room-1");
         },
       },
       {
@@ -244,8 +406,8 @@ describe("security audit trust model findings", () => {
           );
           expect(finding?.severity).toBe("critical");
           expect(finding?.detail).toContain("channels.whatsapp.groupPolicy");
-          expect(finding?.detail).toContain("controlPlane=[cron]");
-          expect(finding?.detail).not.toContain("controlPlane=[gateway, cron]");
+          expect(finding?.detail).toContain("controlPlane=[automations]");
+          expect(finding?.detail).not.toContain("controlPlane=[automations, gateway]");
         },
       },
       {
@@ -278,7 +440,7 @@ describe("security audit trust model findings", () => {
             (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
           );
           expect(finding?.detail).toContain(
-            "agents.defaults (profile=messaging; controlPlane=[cron])",
+            "agents.defaults (profile=messaging; controlPlane=[automations])",
           );
         },
       },

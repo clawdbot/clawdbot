@@ -1,9 +1,11 @@
 // Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getMattermostRuntime } from "../runtime.js";
@@ -16,11 +18,6 @@ import {
 
 const MATTERMOST_INGRESS_PAYLOAD_VERSION = 1;
 const MATTERMOST_INGRESS_POLL_INTERVAL_MS = 1_000;
-const MATTERMOST_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const MATTERMOST_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 export type MattermostIngressLifecycle = {
   abortSignal: AbortSignal;
@@ -36,28 +33,19 @@ type MattermostIngressPayload = {
   rawEvent: string;
 };
 
+export type MattermostIngressPost = MattermostPost & { user_id: string };
+
 type MattermostIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type MattermostIngressDispatch = (
-  post: MattermostPost,
+  post: MattermostIngressPost,
   payload: MattermostEventPayload,
   lifecycle: MattermostIngressLifecycle,
 ) => Promise<MattermostIngressDispatchResult | void> | MattermostIngressDispatchResult | void;
 
-class MattermostIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "mattermost-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MattermostIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const MattermostIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "mattermost-auth"
+>("MattermostIngressPermanentError", { withReason: true });
 
 function parseRawObject(raw: string, subject: string): Record<string, unknown> {
   let parsed: unknown;
@@ -110,6 +98,7 @@ function inspectMattermostIngressEvent(rawEvent: string): {
   const data = isRecord(envelope.data) ? envelope.data : null;
   const post = parseRawPost(data?.post);
   const eventId = requiredString(post.id, "post.id");
+  requiredString(post.user_id, "post.user_id");
   // Mattermost can carry the channel id on the post, the event data, or the
   // broadcast envelope (the monitor dispatch honors all three). Rejecting the
   // envelope-level shapes as permanent would drop valid posts and tear the
@@ -128,7 +117,7 @@ function parseClaimedEvent(
   rawEvent: string,
   eventId: string,
 ): {
-  post: MattermostPost;
+  post: MattermostIngressPost;
   payload: MattermostEventPayload;
 } {
   const payload = parseMattermostEventPayload(rawEvent);
@@ -145,13 +134,14 @@ function parseClaimedEvent(
     post?.channel_id?.trim() ||
     payload.data?.channel_id?.trim() ||
     payload.broadcast?.channel_id?.trim();
-  if (!post || post.id !== eventId || !claimedChannelId) {
+  const senderId = post?.user_id?.trim();
+  if (!post || post.id !== eventId || !senderId || !claimedChannelId) {
     throw new MattermostIngressPermanentError(
       "invalid-event",
       `Mattermost ingress row ${eventId} has invalid post identity.`,
     );
   }
-  return { post, payload };
+  return { post: { ...post, user_id: senderId }, payload };
 }
 
 function resolveMattermostIngressNonRetryableFailure(error: unknown) {
@@ -215,13 +205,7 @@ export function createMattermostIngressMonitor(options: {
     pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
     // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
     waitForDeliveryIdleBeforeRepump: true,
-    retention: {
-      pruneIntervalMs: MATTERMOST_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: MATTERMOST_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: MATTERMOST_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: MATTERMOST_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
       ...(options.adoptionStallTimeoutMs === undefined
@@ -237,7 +221,21 @@ export function createMattermostIngressMonitor(options: {
   monitor.start();
 
   return {
-    receive: (rawEvent) => monitor.admit(rawEvent).then(() => undefined),
+    receive: async (rawEvent) => {
+      try {
+        await monitor.admit(rawEvent);
+      } catch (error) {
+        // Permanent shape errors cannot recover through a reconnect; record the drop and keep
+        // reading. Storage failures still escape so the WebSocket exposes the outage.
+        if (
+          !(error instanceof MattermostIngressPermanentError) ||
+          error.reason !== "invalid-event"
+        ) {
+          throw error;
+        }
+        options.runtime.error?.(`mattermost ingress rejected invalid event: ${error.message}`);
+      }
+    },
     stop: monitor.stop,
     waitForIdle: monitor.waitForIdle,
   };

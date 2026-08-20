@@ -3,13 +3,14 @@
 import { html, render } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAssistantAttachmentAvailability } from "./chat-message-attachments.ts";
+import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
   readManagedImageBlobUrl,
   releaseChatMediaResourceSubscriber,
+  schedulePairingQrExpiryRefresh,
   type ImageRenderOptions,
   type RenderableImageBlock,
 } from "./chat-message-media.ts";
@@ -34,6 +35,10 @@ afterEach(() => {
 
 function managedImageSource(): string {
   return `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+}
+
+function managedImageResourceKey(source: string): string {
+  return `${source.replace(/\/full$/u, "/thumbnail")}::::`;
 }
 
 function installManagedImageUrls(): string {
@@ -77,6 +82,50 @@ function observeSubscriber(subscriber: () => void): () => void {
 }
 
 describe("chat media resource lifecycle", () => {
+  it("refreshes every split pane when a shared pairing QR expires", async () => {
+    const message = {
+      content: [
+        {
+          type: "openclaw_pairing_qr",
+          image_url: "data:image/png;base64,cXJwbmc=",
+          expiresAtMs: Date.now() + 1_000,
+        },
+      ],
+    };
+    const refreshFirst = observeSubscriber(vi.fn());
+    const refreshSecond = observeSubscriber(vi.fn());
+
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshFirst);
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshSecond);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(refreshFirst).toHaveBeenCalledOnce();
+    expect(refreshSecond).toHaveBeenCalledOnce();
+  });
+
+  it("releases a pairing QR expiry timer when its chat pane disconnects", async () => {
+    const refresh = observeSubscriber(vi.fn());
+    schedulePairingQrExpiryRefresh(
+      "disconnected-pairing-qr",
+      {
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,cXJwbmc=",
+            expiresAtMs: Date.now() + 1_000,
+          },
+        ],
+      },
+      refresh,
+    );
+
+    releaseChatMediaResourceSubscriber(refresh);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("wakes a managed image after one transient failure without an external render", async () => {
     const source = managedImageSource();
     const blobUrl = installManagedImageUrls();
@@ -175,7 +224,9 @@ describe("chat media resource lifecycle", () => {
     for (const source of sources) {
       currentSource = source;
       rerender();
-      resources.push(observeChatMediaResource<string | null>("managed-image", `${source}::::`));
+      resources.push(
+        observeChatMediaResource<string | null>("managed-image", managedImageResourceKey(source)),
+      );
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -206,11 +257,11 @@ describe("chat media resource lifecycle", () => {
     rerender();
     const firstResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${firstSource}::::`,
+      managedImageResourceKey(firstSource),
     );
     const secondResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${secondSource}::::`,
+      managedImageResourceKey(secondSource),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -246,7 +297,7 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     const originalResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::::`,
+      managedImageResourceKey(source),
     );
     expect(originalResource.subscribers.size).toBe(1);
 
@@ -258,7 +309,7 @@ describe("chat media resource lifecycle", () => {
 
     const reconnectedResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::::`,
+      managedImageResourceKey(source),
     );
     expect(reconnectedResource.subscribers.size).toBe(1);
     expect(renderImageRow).toHaveBeenCalledTimes(1);
@@ -316,7 +367,10 @@ describe("chat media resource lifecycle", () => {
     const sources = Array.from({ length: 65 }, () => managedImageSource());
     const resources = sources.map((source) => {
       renderManagedImage(document.createElement("div"), source);
-      return observeChatMediaResource<string | null>("managed-image", `${source}::::`);
+      return observeChatMediaResource<string | null>(
+        "managed-image",
+        managedImageResourceKey(source),
+      );
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -330,8 +384,10 @@ describe("chat media resource lifecycle", () => {
       throw new Error("expected the oldest and newest managed images");
     }
     expect(isChatMediaResourceCurrent(oldestResource)).toBe(false);
-    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBeUndefined();
-    expect(readManagedImageBlobUrl(`${latestSource}::::`)).toBe("blob:bounded-managed-image-64");
+    expect(readManagedImageBlobUrl(managedImageResourceKey(oldestSource))).toBeUndefined();
+    expect(readManagedImageBlobUrl(managedImageResourceKey(latestSource))).toBe(
+      "blob:bounded-managed-image-64",
+    );
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
 
     renderManagedImage(document.createElement("div"), latestSource);
@@ -341,7 +397,9 @@ describe("chat media resource lifecycle", () => {
     renderManagedImage(document.createElement("div"), oldestSource);
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(66);
-    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBe("blob:bounded-managed-image-65");
+    expect(readManagedImageBlobUrl(managedImageResourceKey(oldestSource))).toBe(
+      "blob:bounded-managed-image-65",
+    );
   });
 
   it("shares a managed image retry and wakes both subscribed split panes", async () => {
@@ -436,6 +494,135 @@ describe("chat media resource lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(firstTicket).toBe("ticket-after-refresh");
     expect(secondTicket).toBe("ticket-after-refresh");
+  });
+
+  it("stops polling after a definitive ticket refresh rejection and one unavailable retry", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "ticket-before-definitive-rejection",
+          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
+        }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ available: false, reason: "Attachment removed" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(
+        source,
+        ["/tmp/openclaw"],
+        "/openclaw",
+        "definitive-rejection-token",
+        rerender,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(latest?.status).toBe("unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(latest?.status).toBe("unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds transient ticket refresh failures before using the unavailable retry", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "ticket-before-transient-failures",
+          mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      })
+      .mockRejectedValueOnce(new Error("refresh unavailable 1"))
+      .mockRejectedValueOnce(new Error("refresh unavailable 2"))
+      .mockRejectedValueOnce(new Error("refresh unavailable 3"))
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ available: false }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(
+        source,
+        ["/tmp/openclaw"],
+        "/openclaw",
+        "transient-refresh-token",
+        rerender,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(latest?.status).toBe("available");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(latest?.status).toBe("available");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(latest?.status).toBe("unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(latest?.status).toBe("unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("transitions an expired ticket to unavailable instead of retrying it", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
+    const expiredAt = new Date(Date.now() + 31_000);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          available: true,
+          mediaTicket: "ticket-that-will-expire",
+          mediaTicketExpiresAt: expiredAt.toISOString(),
+        }),
+      })
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(new Date(expiredAt.getTime() + 1));
+        throw new Error("refresh completed after ticket expiry");
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(
+        source,
+        ["/tmp/openclaw"],
+        "/openclaw",
+        "expired-refresh-token",
+        rerender,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(latest?.status).toBe("unavailable");
   });
 
   it("shares the one bounded assistant attachment retry across split panes", async () => {
@@ -633,7 +820,7 @@ describe("chat media resource lifecycle", () => {
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [requestUrl, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
-      expect(requestUrl).toBe(ticketedUrl);
+      expect(requestUrl).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

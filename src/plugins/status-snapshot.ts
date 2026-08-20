@@ -1,19 +1,30 @@
 /** Builds plugin status reports from persisted metadata without importing full plugin runtimes. */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  appendPluginControlPlaneWorkspaceDiagnostic,
+  resolvePluginControlPlaneWorkspace,
+} from "./control-plane-workspace.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
   type PluginRegistrySnapshotDiagnostic,
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
-import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import {
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 
 /** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
 export type PluginRegistryStatusReport = PluginRegistry & {
   workspaceDir?: string;
+  workspaceScope: "selected" | "omitted";
   registrySource: PluginRegistrySnapshotSource;
   registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
 };
@@ -25,46 +36,6 @@ type PluginRegistrySnapshotReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
 };
-
-type TraceDetails = Record<string, boolean | number | string | undefined>;
-
-function isPluginLifecycleTraceEnabled(): boolean {
-  const raw = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
-}
-
-function formatTraceValue(value: boolean | number | string): string {
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return JSON.stringify(value);
-}
-
-function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: TraceDetails): T {
-  if (!isPluginLifecycleTraceEnabled()) {
-    return fn();
-  }
-  const start = process.hrtime.bigint();
-  let status: "error" | "ok" | undefined;
-  try {
-    const result = fn();
-    status = "ok";
-    return result;
-  } catch (error) {
-    status = "error";
-    throw error;
-  } finally {
-    const elapsedMs = Number(process.hrtime.bigint() - start) / 1_000_000;
-    const detailText = Object.entries(details ?? {})
-      .filter((entry): entry is [string, boolean | number | string] => entry[1] !== undefined)
-      .map(([key, value]) => `${key}=${formatTraceValue(value)}`)
-      .join(" ");
-    const suffix = detailText ? ` ${detailText}` : "";
-    console.error(
-      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status ?? "error"}${suffix}`,
-    );
-  }
-}
 
 function buildPluginRecordFromInstalledIndex(
   plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,
@@ -89,7 +60,7 @@ function buildPluginRecordFromInstalledIndex(
     compat: plugin.compat,
     syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
-    toolNames: [],
+    toolNames: uniqueStrings(manifest?.contracts?.tools ?? []),
     hookNames: [],
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
@@ -108,7 +79,6 @@ function buildPluginRecordFromInstalledIndex(
     webFetchProviderIds: [...(manifest?.contracts?.webFetchProviders ?? [])],
     webSearchProviderIds: [...(manifest?.contracts?.webSearchProviders ?? [])],
     migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
-    memoryEmbeddingProviderIds: [...(manifest?.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],
@@ -116,13 +86,16 @@ function buildPluginRecordFromInstalledIndex(
     commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],
     httpRoutes: 0,
     hookCount: 0,
-    configSchema: false,
+    configSchema: Boolean(manifest?.configSchema),
     contracts: manifest?.contracts,
-    dependencyStatus: buildPluginDependencyStatus({
-      rootDir: plugin.rootDir,
-      dependencies: manifest?.packageDependencies,
-      optionalDependencies: manifest?.packageOptionalDependencies,
-    }),
+    dependencyStatus:
+      plugin.origin === "bundled"
+        ? undefined
+        : buildPluginDependencyStatus({
+            rootDir: plugin.rootDir,
+            dependencies: manifest?.packageDependencies,
+            optionalDependencies: manifest?.packageOptionalDependencies,
+          }),
   };
 }
 
@@ -131,32 +104,41 @@ export function buildPluginRegistrySnapshotReport(
   params?: PluginRegistrySnapshotReportParams,
 ): PluginRegistryStatusReport {
   const config = params?.config ?? getRuntimeConfig();
+  const env = params?.env ?? process.env;
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config,
+    env,
+    workspaceDir: params?.workspaceDir,
+  });
   const result = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () =>
       loadPluginRegistrySnapshotWithMetadata({
         config,
         env: params?.env,
-        workspaceDir: params?.workspaceDir,
+        workspaceDir: workspace.workspaceDir,
       }),
     { surface: "status" },
   );
-  const env = params?.env ?? process.env;
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
     index: result.snapshot,
     config,
     env,
-    workspaceDir: params?.workspaceDir,
+    workspaceDir: workspace.workspaceDir,
   });
   const manifestByPluginId = metadataSnapshot.byPluginId;
-  return {
-    workspaceDir: params?.workspaceDir,
+  return projectPluginDependencyHealth({
+    workspaceDir: workspace.workspaceDir,
+    workspaceScope: workspace.workspaceScope,
     ...createEmptyPluginRegistry(),
     plugins: result.snapshot.plugins.map((plugin) =>
       buildPluginRecordFromInstalledIndex(plugin, manifestByPluginId.get(plugin.pluginId)),
     ),
-    diagnostics: [...result.snapshot.diagnostics],
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+      result.snapshot.diagnostics,
+      workspace,
+    ),
     registrySource: result.source,
     registryDiagnostics: result.diagnostics,
-  };
+  });
 }

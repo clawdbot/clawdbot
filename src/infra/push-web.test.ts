@@ -26,9 +26,13 @@ const generatedVapidKeys = vi.hoisted(
       ["privateKey", "test-private-key-base64url"],
     ]) as { publicKey: string; privateKey: string },
 );
-vi.mock("../config/paths.js", () => ({
-  resolveStateDir: () => tmpDir,
-}));
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveStateDir: () => tmpDir,
+  };
+});
 
 vi.mock("web-push", () => ({
   default: {

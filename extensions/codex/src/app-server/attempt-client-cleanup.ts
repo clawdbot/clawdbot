@@ -2,17 +2,28 @@
  * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexAppServerClient } from "./client.js";
-import {
-  clearSharedCodexAppServerClientIfCurrent,
-  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
-  retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 /** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 /** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
+const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
+const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
+
+/** Identifies Codex's exact proof that an interrupt target already finished. */
+export function isCodexAlreadyTerminalInterruptError(
+  error: unknown,
+): error is CodexAppServerRpcError {
+  return (
+    error instanceof CodexAppServerRpcError &&
+    error.code === CODEX_NO_ACTIVE_TURN_ERROR_CODE &&
+    error.message === CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE
+  );
+}
 
 /** Raised when a thread subscription may be live on a client OpenClaw no longer controls. */
 export class CodexAppServerUnsafeSubscriptionError extends Error {
@@ -58,42 +69,35 @@ export async function closeCodexStartupClientBestEffort(
   if (!client) {
     return;
   }
-  const unclaimedSharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
-  if (unclaimedSharedClient.closed) {
-    await closeClientAndWaitIfAvailable(client);
-    return;
-  }
-  if (unclaimedSharedClient.found) {
-    const retired = retireSharedCodexAppServerClientIfCurrent(client);
-    if (retired?.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
   const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
-  if (retiredSharedClient) {
-    if (retiredSharedClient.closed) {
-      await closeClientAndWaitIfAvailable(client);
-    }
-    return;
-  }
-  if (clearSharedCodexAppServerClientIfCurrent(client)) {
+  // Detached entries retain every ordinary and native lease; only isolated or
+  // already-closed shared clients may be joined without aborting sibling turns.
+  if (!retiredSharedClient || retiredSharedClient.closed) {
     await closeClientAndWaitIfAvailable(client);
-    return;
   }
-  await closeClientAndWaitIfAvailable(client);
 }
 
-/** Sends a turn interrupt without blocking abort cleanup on app-server errors. */
-export function interruptCodexTurnBestEffort(
+/** Retires an unsafe turn client without replacing an already-authoritative failure. */
+export async function retireUnsafeCodexTurnClientBestEffort(
   client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    timeoutMs?: number;
-  },
-): void {
-  void interruptCodexTurnAndWaitBestEffort(client, params);
+  operation: string,
+): Promise<void> {
+  try {
+    await closeCodexStartupClientBestEffort(client);
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server unsafe turn client retirement failed", {
+      operation,
+      error,
+    });
+    try {
+      client.close();
+    } catch (closeError) {
+      embeddedAgentLog.debug("codex app-server unsafe turn client close failed", {
+        operation,
+        error: closeError,
+      });
+    }
+  }
 }
 
 /** Sends a bounded turn interrupt and waits for Codex to confirm terminal abort handling. */
@@ -104,20 +108,33 @@ export async function interruptCodexTurnAndWaitBestEffort(
     turnId: string;
     timeoutMs?: number;
   },
-): Promise<void> {
-  const requestOptions =
+): Promise<boolean> {
+  const timeoutMs =
     params.timeoutMs && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
-      ? { timeoutMs: params.timeoutMs }
-      : undefined;
+      ? params.timeoutMs
+      : CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS;
   const requestParams = { threadId: params.threadId, turnId: params.turnId };
+  let completion: { completion: Promise<boolean>; cancel: () => void } | undefined;
   try {
-    // Non-empty interrupts resolve after Codex emits TurnAborted; the empty
-    // startup form resolves after Op::Interrupt is submitted because no turn exists yet.
-    await (requestOptions
-      ? client.request("turn/interrupt", requestParams, requestOptions)
-      : client.request("turn/interrupt", requestParams));
+    // Codex acknowledges interruption before publishing turn/completed. Register
+    // first so an immediate exact-turn terminal cannot race past its owner.
+    completion = params.turnId
+      ? getCodexAppServerTurnRouter(client).watchNativeTurnCompletion({
+          threadId: params.threadId,
+          turnId: params.turnId,
+          timeoutMs,
+        })
+      : undefined;
+    await client.request("turn/interrupt", requestParams, { timeoutMs });
+    return completion ? await completion.completion : true;
   } catch (error) {
+    if (isCodexAlreadyTerminalInterruptError(error)) {
+      return true;
+    }
     embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+    return false;
+  } finally {
+    completion?.cancel();
   }
 }
 
@@ -130,11 +147,7 @@ export async function unsubscribeCodexThreadBestEffort(
   },
 ): Promise<boolean> {
   try {
-    await client.request(
-      "thread/unsubscribe",
-      { threadId: params.threadId },
-      { timeoutMs: params.timeoutMs },
-    );
+    await unsubscribeCodexAppServerLiveThread(client, params.threadId, params.timeoutMs);
     return true;
   } catch (error) {
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
@@ -173,7 +186,7 @@ export async function retireCodexAppServerClientAfterTimedOutTurn(
   // Best-effort interrupt/unsubscribe only make sense while the transport is
   // still open; a suspect client was just closed (child gets SIGKILLed).
   if (!clientAlreadyClosed) {
-    interruptCodexTurnBestEffort(client, {
+    await interruptCodexTurnAndWaitBestEffort(client, {
       threadId: params.threadId,
       turnId: params.turnId,
       timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,

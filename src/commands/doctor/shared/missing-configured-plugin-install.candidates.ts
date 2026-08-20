@@ -3,12 +3,19 @@ import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/ca
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec.js";
-import type { UpdateChannel } from "../../../infra/update-channels.js";
+import {
+  normalizeUpdateChannel,
+  resolveRegistryUpdateChannel,
+  type UpdateChannel,
+} from "../../../infra/update-channels.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { loadInstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
 import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
   listOfficialExternalPluginCatalogEntries,
@@ -27,6 +34,7 @@ import {
 import {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
+  collectEffectiveConfiguredChannelOwnerPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
 
 export type DownloadableInstallCandidate = {
@@ -37,12 +45,96 @@ export type DownloadableInstallCandidate = {
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
   defaultChoice?: PluginPackageInstall["defaultChoice"];
+  versionBoundToOpenClaw?: boolean;
 };
 
 export type BundledPluginPackageDescriptor = {
   name?: string;
   packageName?: string;
 };
+
+/** Keep doctor diagnostics and actual package repair on the same discovery snapshot. */
+export async function resolveConfiguredPluginInstallContext(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+  blockedPluginIds?: ReadonlySet<string>;
+  baselineRecords?: Record<string, PluginInstallRecord>;
+}) {
+  const snapshot = loadManifestMetadataSnapshot({ config: params.cfg, env: params.env });
+  const currentBundledPlugins = loadInstalledPluginIndex({
+    config: params.cfg,
+    env: params.env,
+    installRecords: {},
+  }).plugins.filter((plugin) => plugin.origin === "bundled");
+  const knownIds = new Set([
+    ...snapshot.plugins.filter((plugin) => plugin.origin !== "bundled").map((plugin) => plugin.id),
+    ...currentBundledPlugins.map((plugin) => plugin.pluginId),
+  ]);
+  const configuredChannelOwnerPluginIds = collectEffectiveConfiguredChannelOwnerPluginIds({
+    cfg: params.cfg,
+    env: params.env,
+    snapshot,
+    configuredChannelIds: params.configuredChannelIds,
+  });
+  const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
+    currentBundledPlugins.map(
+      (plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const,
+    ),
+  );
+  const configuredPluginIdsWithStaleDescriptors =
+    collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
+      snapshot,
+      configuredPluginIds: params.configuredPluginIds,
+      configuredChannelIds: params.configuredChannelIds,
+    });
+  const records =
+    params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
+  const updateChannel = resolveRegistryUpdateChannel({
+    configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
+    currentVersion: VERSION,
+  });
+  const installedPluginIdsWithRepairablePackageDiagnostics =
+    collectInstalledPluginIdsWithRepairablePackageDiagnostics({
+      snapshot,
+      installRecords: records,
+    });
+  const installedPluginIdsWithStaleVersionBoundRuntimePackages =
+    collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages({
+      snapshot,
+      installRecords: records,
+      configuredPluginIds: params.configuredPluginIds,
+      updateChannel,
+    });
+  const installedPluginIdsWithRepairablePackages = new Set([
+    ...installedPluginIdsWithRepairablePackageDiagnostics,
+    ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
+  ]);
+  const officialReplacementPluginIds = new Set(
+    collectOfficialReplacementInstallCandidates({
+      cfg: params.cfg,
+      env: params.env,
+      repairablePluginIds: installedPluginIdsWithRepairablePackages,
+      configuredPluginIds: params.configuredPluginIds,
+      configuredChannelIds: params.configuredChannelIds,
+      configuredChannelOwnerPluginIds,
+      blockedPluginIds: params.blockedPluginIds,
+    }).keys(),
+  );
+  return {
+    knownIds,
+    configuredChannelOwnerPluginIds,
+    bundledPluginsById,
+    configuredPluginIdsWithStaleDescriptors,
+    records,
+    updateChannel,
+    installedPluginIdsWithRepairablePackageDiagnostics,
+    installedPluginIdsWithStaleVersionBoundRuntimePackages,
+    installedPluginIdsWithRepairablePackages,
+    officialReplacementPluginIds,
+  };
+}
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
@@ -60,6 +152,33 @@ function resolveCandidateClawHubSpec(install: PluginPackageInstall): string | un
     return explicit;
   }
   return undefined;
+}
+
+function setDownloadableInstallCandidate(params: {
+  candidates: Map<string, DownloadableInstallCandidate>;
+  pluginId: string;
+  label: string;
+  install: PluginPackageInstall;
+  trustedSourceLinkedOfficialInstall?: boolean;
+}): void {
+  const npmSpec = params.install.npmSpec?.trim();
+  const clawhubSpec = resolveCandidateClawHubSpec(params.install);
+  if (!npmSpec && !clawhubSpec) {
+    return;
+  }
+  params.candidates.set(params.pluginId, {
+    pluginId: params.pluginId,
+    label: params.label,
+    ...(npmSpec ? { npmSpec } : {}),
+    ...(clawhubSpec ? { clawhubSpec } : {}),
+    ...(params.install.expectedIntegrity
+      ? { expectedIntegrity: params.install.expectedIntegrity }
+      : {}),
+    ...(params.trustedSourceLinkedOfficialInstall
+      ? { trustedSourceLinkedOfficialInstall: true }
+      : {}),
+    ...(params.install.defaultChoice ? { defaultChoice: params.install.defaultChoice } : {}),
+  });
 }
 
 export function collectDownloadableInstallCandidates(params: {
@@ -110,23 +229,12 @@ export function collectDownloadableInstallCandidates(params: {
     ) {
       continue;
     }
-    const npmSpec = entry.install.npmSpec?.trim();
-    const clawhubSpec = resolveCandidateClawHubSpec(entry.install);
-    if (!npmSpec && !clawhubSpec) {
-      continue;
-    }
-    candidates.set(pluginId, {
+    setDownloadableInstallCandidate({
+      candidates,
       pluginId,
       label: entry.meta.label,
-      ...(npmSpec ? { npmSpec } : {}),
-      ...(clawhubSpec ? { clawhubSpec } : {}),
-      ...(entry.install.expectedIntegrity
-        ? { expectedIntegrity: entry.install.expectedIntegrity }
-        : {}),
-      ...(entry.trustedSourceLinkedOfficialInstall
-        ? { trustedSourceLinkedOfficialInstall: true }
-        : {}),
-      ...(entry.install.defaultChoice ? { defaultChoice: entry.install.defaultChoice } : {}),
+      install: entry.install,
+      trustedSourceLinkedOfficialInstall: entry.trustedSourceLinkedOfficialInstall,
     });
   }
 
@@ -141,21 +249,12 @@ export function collectDownloadableInstallCandidates(params: {
     if (params.blockedPluginIds?.has(entry.pluginId)) {
       continue;
     }
-    const npmSpec = entry.install.npmSpec?.trim();
-    const clawhubSpec = resolveCandidateClawHubSpec(entry.install);
-    if (!npmSpec && !clawhubSpec) {
-      continue;
-    }
-    candidates.set(entry.pluginId, {
+    setDownloadableInstallCandidate({
+      candidates,
       pluginId: entry.pluginId,
       label: entry.label,
-      ...(npmSpec ? { npmSpec } : {}),
-      ...(clawhubSpec ? { clawhubSpec } : {}),
-      ...(entry.install.expectedIntegrity
-        ? { expectedIntegrity: entry.install.expectedIntegrity }
-        : {}),
-      ...(entry.origin === "bundled" ? { trustedSourceLinkedOfficialInstall: true } : {}),
-      ...(entry.install.defaultChoice ? { defaultChoice: entry.install.defaultChoice } : {}),
+      install: entry.install,
+      trustedSourceLinkedOfficialInstall: entry.origin === "bundled",
     });
   }
 
@@ -171,19 +270,12 @@ export function collectDownloadableInstallCandidates(params: {
     if (!install) {
       continue;
     }
-    const npmSpec = install.npmSpec?.trim();
-    const clawhubSpec = resolveCandidateClawHubSpec(install);
-    if (!npmSpec && !clawhubSpec) {
-      continue;
-    }
-    candidates.set(pluginId, {
+    setDownloadableInstallCandidate({
+      candidates,
       pluginId,
       label: resolveOfficialExternalPluginLabel(entry),
-      ...(npmSpec ? { npmSpec } : {}),
-      ...(clawhubSpec ? { clawhubSpec } : {}),
-      ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+      install,
       trustedSourceLinkedOfficialInstall: true,
-      ...(install.defaultChoice ? { defaultChoice: install.defaultChoice } : {}),
     });
   }
 
@@ -194,7 +286,10 @@ export function collectDownloadableInstallCandidates(params: {
     if (params.blockedPluginIds?.has(entry.pluginId)) {
       continue;
     }
-    if (!candidates.has(entry.pluginId)) {
+    const existing = candidates.get(entry.pluginId);
+    if (existing && entry.versionBoundToOpenClaw) {
+      candidates.set(entry.pluginId, { ...existing, versionBoundToOpenClaw: true });
+    } else if (!existing) {
       candidates.set(entry.pluginId, entry);
     }
   }
@@ -314,7 +409,7 @@ export function collectUpdateDeferredPluginIds(params: {
   return pluginIds;
 }
 
-export function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
+function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
   snapshot: PluginMetadataSnapshot;
   configuredPluginIds: ReadonlySet<string>;
   configuredChannelIds: ReadonlySet<string>;
@@ -337,7 +432,7 @@ export function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(pa
   return stalePluginIds;
 }
 
-export function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
+function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
 }): Set<string> {
@@ -404,7 +499,7 @@ function betaCompanionMatchesCurrentStableVersion(params: {
   return Boolean(installedBase && currentBase && installedBase === currentBase);
 }
 
-export function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
+function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
   configuredPluginIds: ReadonlySet<string>;
@@ -464,7 +559,7 @@ function isConfiguredPluginRepairTarget(params: {
   return false;
 }
 
-export function collectOfficialReplacementInstallCandidates(params: {
+function collectOfficialReplacementInstallCandidates(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   repairablePluginIds: ReadonlySet<string>;

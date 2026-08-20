@@ -11,24 +11,6 @@ import { readNonEmptyString } from "./config-utils.js";
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
-export function isCodexAppServerApprovalPolicyAllowedByRequirements(
-  policy: CodexAppServerApprovalPolicy,
-  params: {
-    env?: NodeJS.ProcessEnv;
-    requirementsToml?: string | null;
-    requirementsPath?: string;
-    readRequirementsFile?: (path: string) => string | undefined;
-    platform?: NodeJS.Platform;
-  } = {},
-): boolean {
-  const content = readCodexRequirementsToml(params);
-  if (content === undefined) {
-    return true;
-  }
-  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
-  return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
-}
-
 export function readCodexRequirementsToml(params: {
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
@@ -315,8 +297,8 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
-  // Codex 0.143 keeps this deprecated requirements-file alias in its core
-  // parser, but app-server exposes only the canonical on-request value.
+  // Codex still accepts this alias in persisted requirements, while its
+  // app-server exposes only the canonical on-request value.
   if (normalized === "on-failure") {
     return "on-request";
   }

@@ -1,6 +1,6 @@
 // Openai tests cover openai chatgpt device code plugin behavior.
+import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -123,11 +123,10 @@ describe("loginOpenAICodexDeviceCode", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const rejected = expect(login).rejects.toThrow(
-      "OpenAI device code user code request timed out after 30000ms",
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    await rejected;
+    await Promise.all([
+      expect(login).rejects.toThrow("OpenAI device code user code request timed out after 30000ms"),
+      vi.advanceTimersByTimeAsync(30_000),
+    ]);
   });
 
   it("still honors caller cancellation during an active device-code request", async () => {
@@ -450,7 +449,7 @@ describe("loginOpenAICodexDeviceCode", () => {
         chatgpt_account_id: "acct_123",
       },
     });
-    const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+    const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -531,7 +530,7 @@ describe("loginOpenAICodexDeviceCode", () => {
           chatgpt_account_id: "acct_123",
         },
       });
-      const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+      const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockResolvedValueOnce(

@@ -28,9 +28,16 @@ describe("settings search target manifest", () => {
     ).toEqual([
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
+      ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
+      [
+        "appearanceLanguage",
+        "/settings/appearance",
+        "?section=__appearance__",
+        "#settings-language",
+      ],
       [
         "appearanceTheme",
         "/settings/appearance",
@@ -111,6 +118,7 @@ describe("settings config section ownership", () => {
     ["memory", ["memory"]],
     ["talk", ["talk"]],
     ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+    ["updates", ["update"]],
     ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];
 
@@ -135,8 +143,7 @@ describe("settings config section ownership", () => {
     expect(configPageForSection("models")).toBe("advanced");
   });
 
-  it("keeps General and Advanced free of curated include lists", () => {
-    expect(configSectionKeysForPage("config")).toBeUndefined();
+  it("keeps Advanced free of a curated include list", () => {
     expect(configSectionKeysForPage("advanced")).toBeUndefined();
   });
 });

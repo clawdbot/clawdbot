@@ -1,7 +1,10 @@
-// Plugin registry migration tests cover doctor repair of persisted plugin registry state.
 import fs from "node:fs";
 import path from "node:path";
+// Plugin registry migration tests cover doctor repair of persisted plugin registry state.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -38,7 +41,11 @@ function createCandidate(
   rootDir: string,
   id = "demo",
   origin: PluginCandidate["origin"] = "global",
-  options: { enabledByDefault?: boolean; manifest?: Record<string, unknown> } = {},
+  options: {
+    enabledByDefault?: boolean;
+    installOwner?: string;
+    manifest?: Record<string, unknown>;
+  } = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -57,12 +64,15 @@ function createCandidate(
     }),
     "utf8",
   );
-  return {
-    idHint: id,
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: id,
+      source: path.join(rootDir, "index.ts"),
+      rootDir,
+      origin,
+    },
+    options.installOwner,
+  );
 }
 
 function createCurrentIndex(): InstalledPluginIndex {
@@ -79,16 +89,7 @@ function createCurrentIndex(): InstalledPluginIndex {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`Expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -117,7 +118,7 @@ function requirePlugin(index: InstalledPluginIndex | null | undefined, pluginId:
   return plugin;
 }
 
-function insertStalePersistedIndexRow(stateDir: string) {
+function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}") {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare(
@@ -129,10 +130,10 @@ function insertStalePersistedIndexRow(stateDir: string) {
           ) VALUES (
             'installed-plugin-index', 1, '2026.4.25', 'compat-v1',
             0, 'stale-policy', 123, NULL,
-            '{}', '[]', '[]', NULL, 123
+            @install_records_json, '[]', '[]', NULL, 123
           )
         `,
-      ).run();
+      ).run({ install_records_json: installRecordsJson });
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
@@ -183,6 +184,61 @@ describe("plugin registry install migration", () => {
     expectRecordFields(requirePlugin(persisted, "demo") as unknown as Record<string, unknown>, {
       pluginId: "demo",
     });
+  });
+
+  it("rejects invalid SQLite install records without rewriting the row", async () => {
+    const stateDir = makeTempDir();
+    const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
+    insertStalePersistedIndexRow(stateDir, installRecordsJson);
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        readConfig: async () => ({}),
+        env: hermeticEnv(),
+      }),
+    ).rejects.toThrow(
+      "delete only the installed_plugin_index row with index_key='installed-plugin-index'",
+    );
+
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            `SELECT migration_version, install_records_json, updated_at_ms
+               FROM installed_plugin_index
+              WHERE index_key = 'installed-plugin-index'`,
+          )
+          .get() as {
+          migration_version: number | bigint;
+          install_records_json: string;
+          updated_at_ms: number | bigint;
+        },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toEqual({
+      migration_version: 0,
+      install_records_json: installRecordsJson,
+      updated_at_ms: 123,
+    });
+  });
+
+  it("rejects invalid config install records before recovery or persistence", async () => {
+    const stateDir = makeTempDir();
+    const invalidConfig = JSON.parse(
+      '{"plugins":{"installs":{"constructor":{"source":"bogus"}}}}',
+    ) as OpenClawConfig;
+
+    await expect(
+      migratePluginRegistryForInstall({
+        stateDir,
+        readConfig: async () => invalidConfig,
+        env: hermeticEnv(),
+      }),
+    ).rejects.toThrow(
+      "Back up openclaw.json, correct or remove the invalid retired plugins.installs record",
+    );
+    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
   });
 
   it("persists migration-relevant plugin records without dropping explicit disabled state", async () => {
@@ -406,7 +462,7 @@ describe("plugin registry install migration", () => {
 
     const result = await migratePluginRegistryForInstall({
       stateDir,
-      candidates: [createCandidate(pluginDir)],
+      candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
       readConfig: async () => ({
         plugins: {
           entries: {

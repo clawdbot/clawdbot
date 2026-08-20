@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
@@ -23,17 +24,28 @@ const MAX_ARTIFACT_FILES = 8192;
 const MAX_ARTIFACT_TOTAL_BYTES = 1024n * 1024n * 1024n;
 const READ_CHUNK_BYTES = 64 * 1024;
 const CODE_MODE_HOST_PATH_ENV = "CODEX_CODE_MODE_HOST_PATH";
-const RUNTIME_INJECTION_ENV_KEYS = new Set([
-  "NODE_PATH",
-  "LD_AUDIT",
-  "LD_LIBRARY_PATH",
-  "LD_PRELOAD",
-  "DYLD_FALLBACK_FRAMEWORK_PATH",
-  "DYLD_FALLBACK_LIBRARY_PATH",
-  "DYLD_FRAMEWORK_PATH",
-  "DYLD_INSERT_LIBRARIES",
-  "DYLD_LIBRARY_PATH",
+const SAFE_NODE_OPTIONS_BOOLEAN_FLAGS = new Set([
+  "--enable-network-family-autoselection",
+  "--network-family-autoselection",
+  "--no-deprecation",
+  "--no-network-family-autoselection",
+  "--no-warnings",
+  "--pending-deprecation",
+  "--throw-deprecation",
+  "--trace-deprecation",
+  "--trace-warnings",
+  "--use-bundled-ca",
+  "--use-env-proxy",
+  "--use-openssl-ca",
+  "--use-system-ca",
 ]);
+const SAFE_NODE_OPTIONS_NUMERIC_FLAGS = new Set([
+  "--max-old-space-size",
+  "--max-semi-space-size",
+  "--network-family-autoselection-attempt-timeout",
+  "--stack-trace-limit",
+]);
+const SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS = new Set(["ipv4first", "ipv6first", "verbatim"]);
 const ARTIFACT_BINDINGS_SYMBOL = Symbol.for("openclaw.codexAppServerRuntimeArtifactBindings");
 
 type CodexRuntimeArtifactSpawnIdentity = Readonly<{
@@ -212,59 +224,84 @@ async function listPackageFiles(params: {
   return files;
 }
 
-function pathIsWithin(rootPath: string, candidatePath: string): boolean {
-  const relative = path.relative(rootPath, candidatePath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
-function assertNoRuntimeInjectionEnvironment(env: NodeJS.ProcessEnv): void {
+function assertSafeNodeOptions(env: NodeJS.ProcessEnv): void {
   for (const [rawKey, value] of Object.entries(env)) {
     const key = rawKey.toUpperCase();
-    if (!value?.trim()) {
+    if (key !== "NODE_OPTIONS" || !value?.trim()) {
       continue;
     }
-    if (key === "NODE_OPTIONS" && isSafeNodeOptions(value)) {
+    const result = attestNodeOptions(value);
+    if (result.ok) {
       continue;
     }
-    if (key === "NODE_OPTIONS") {
-      throw new Error(`Codex runtime artifact cannot attest injected runtime environment: ${key}`);
+    if (result.option) {
+      throw new Error(`Codex runtime artifact cannot attest NODE_OPTIONS option ${result.option}`);
     }
-    if (RUNTIME_INJECTION_ENV_KEYS.has(key) || key.startsWith("DYLD_")) {
-      // These variables can load code outside the selected launcher/package.
-      // Exact setup attestation must fail instead of minting a partial identity.
-      throw new Error(`Codex runtime artifact cannot attest injected runtime environment: ${key}`);
-    }
+    throw new Error("Codex runtime artifact cannot safely parse NODE_OPTIONS");
   }
 }
 
-function isSafeNodeOptions(value: string): boolean {
-  const tokens = value.trim().split(/\s+/u);
-  const valueFlags = new Set([
-    "--max-old-space-size",
-    "--max_old_space_size",
-    "--max-semi-space-size",
-    "--max_semi_space_size",
-    "--stack-trace-limit",
-  ]);
-  const booleanFlags = new Set([
-    "--no-deprecation",
-    "--no-warnings",
-    "--pending-deprecation",
-    "--throw-deprecation",
-    "--trace-deprecation",
-    "--trace-warnings",
-  ]);
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!;
-    if (booleanFlags.has(token)) {
+type NodeOptionsAttestationResult =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; option?: string }>;
+
+function parseNodeOptions(value: string): string[] | undefined {
+  const tokens: string[] = [];
+  let inQuotes = false;
+  let startsNewToken = true;
+  for (let index = 0; index < value.length; index += 1) {
+    let character = value[index]!;
+    if (character === "\\" && inQuotes) {
+      index += 1;
+      if (index >= value.length) {
+        return undefined;
+      }
+      character = value[index]!;
+    } else if (character === " " && !inQuotes) {
+      startsNewToken = true;
+      continue;
+    } else if (character === '"') {
+      inQuotes = !inQuotes;
       continue;
     }
+    if (startsNewToken) {
+      tokens.push(character);
+      startsNewToken = false;
+    } else {
+      tokens[tokens.length - 1] += character;
+    }
+  }
+  return inQuotes ? undefined : tokens;
+}
+
+function normalizedNodeOptionName(token: string): string | undefined {
+  const equalsIndex = token.indexOf("=");
+  const rawName = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+  const name = rawName.replaceAll("_", "-");
+  return /^--[a-z][a-z0-9-]{0,63}$/u.test(name) ? name : undefined;
+}
+
+function attestNodeOptions(value: string): NodeOptionsAttestationResult {
+  // Match Node's NODE_OPTIONS lexer: only literal spaces delimit arguments,
+  // while double quotes group and backslashes escape only inside quotes.
+  const tokens = parseNodeOptions(value);
+  if (!tokens || tokens.length === 0) {
+    return { ok: false };
+  }
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
     const equalsIndex = token.indexOf("=");
-    const flag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    const flag = normalizedNodeOptionName(token);
+    if (!flag) {
+      return { ok: false };
+    }
     const inlineValue = equalsIndex === -1 ? undefined : token.slice(equalsIndex + 1);
+    if (SAFE_NODE_OPTIONS_BOOLEAN_FLAGS.has(flag)) {
+      if (inlineValue === undefined) {
+        continue;
+      }
+      return { ok: false, option: flag };
+    }
     if (
       flag === "--disable-warning" &&
       inlineValue &&
@@ -272,15 +309,22 @@ function isSafeNodeOptions(value: string): boolean {
     ) {
       continue;
     }
-    if (!valueFlags.has(flag)) {
-      return false;
+    if (flag === "--dns-result-order") {
+      const order = inlineValue ?? tokens[++index];
+      if (order && SAFE_NODE_OPTIONS_DNS_RESULT_ORDERS.has(order)) {
+        continue;
+      }
+      return { ok: false, option: flag };
+    }
+    if (!SAFE_NODE_OPTIONS_NUMERIC_FLAGS.has(flag)) {
+      return { ok: false, option: flag };
     }
     const numericValue = inlineValue ?? tokens[++index];
     if (!numericValue || !/^\d+$/u.test(numericValue)) {
-      return false;
+      return { ok: false, option: flag };
     }
   }
-  return tokens.length > 0;
+  return { ok: true };
 }
 
 async function hashSelectedArtifactFiles(
@@ -325,7 +369,7 @@ async function hashSelectedArtifactFiles(
     }
   }
   const externalFiles = [...new Set(allFiles)]
-    .filter((filePath) => !packageRoot || !pathIsWithin(packageRoot, filePath))
+    .filter((filePath) => !packageRoot || !isPathInside(packageRoot, filePath))
     .toSorted(compareArtifactNames);
   const budget: ArtifactHashBudget = { fileCount: 0, totalBytes: 0n };
   const hash = createHash("sha256");
@@ -466,7 +510,7 @@ async function resolvePackageRoot(nativePath: string): Promise<string | undefine
       return undefined;
     }
     const root = await fs.realpath(candidate);
-    return pathIsWithin(root, nativePath) ? root : undefined;
+    return isPathInside(root, nativePath) ? root : undefined;
   } catch {
     return undefined;
   }
@@ -511,7 +555,7 @@ async function captureFilesystemDescriptor(params: {
     );
   }
   const env = resolveCodexAppServerSpawnEnv(params.startOptions);
-  assertNoRuntimeInjectionEnvironment(env);
+  assertSafeNodeOptions(env);
   // child_process resolves relative launchers and PATH entries after applying cwd.
   // Attestation must use the same base or it can bind bytes that spawn never executes.
   const spawnCwd = path.resolve(params.startOptions.cwd ?? process.cwd());

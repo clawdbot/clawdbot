@@ -1,16 +1,15 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 // Release prepare tests cover shadow planning, cutover commands, and candidate manifests.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildReleasePreparationManifest,
   createReleasePrepareSteps,
   parseReleasePrepareArgs,
   readWorktreeState,
-  runReleasePrepareStep,
   runReleasePrepareSteps,
 } from "../../scripts/release-prepare.ts";
 
@@ -125,41 +124,41 @@ describe("release preparation plan", () => {
     expect(results.map((result) => result.status)).toEqual(["failed", "skipped"]);
   });
 
-  it("keeps JSON mode child output off stdout", () => {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      stdout.push(String(chunk));
-      return true;
-    });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-      stderr.push(String(chunk));
-      return true;
-    });
-    try {
+  it("streams large JSON-mode child output to stderr without buffering", () => {
+    const childScript = [
+      'const { writeSync } = require("node:fs");',
+      'writeSync(1, "child stdout begin\\n" + "x".repeat(2 * 1024 * 1024) + "\\nchild stdout end\\n");',
+      'writeSync(2, "child stderr sentinel\\n");',
+      "process.exit(23);",
+    ].join("");
+    const harness = `
+      import { runReleasePrepareStep } from ${JSON.stringify(new URL("../../scripts/release-prepare.ts", import.meta.url).href)};
       const status = runReleasePrepareStep(
-        {
-          args: [
-            "-e",
-            'process.stdout.write("child stdout\\n"); process.stderr.write("child stderr\\n");',
-          ],
-          command: process.execPath,
-          id: "release-version",
-          name: "JSON child",
-        },
+        { args: ["-e", ${JSON.stringify(childScript)}], command: process.execPath, id: "release-version", name: "JSON child" },
         process.cwd(),
         { json: true },
       );
+      process.exitCode = status;
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", harness],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
 
-      expect(status).toBe(0);
-      expect(stdout.join("")).toBe("");
-      expect(stderr.join("")).toContain("[release-prepare] JSON child");
-      expect(stderr.join("")).toContain("child stdout");
-      expect(stderr.join("")).toContain("child stderr");
-    } finally {
-      stdoutSpy.mockRestore();
-      stderrSpy.mockRestore();
-    }
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(23);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("[release-prepare] JSON child");
+    expect(result.stderr).toContain("child stdout begin");
+    expect(result.stderr).toContain("child stdout end");
+    expect(result.stderr).toContain("child stderr sentinel");
+    expect(Buffer.byteLength(result.stderr)).toBeGreaterThan(2 * 1024 * 1024);
   });
 });
 

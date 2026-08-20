@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
 export type ParsedAgentSessionKey = {
@@ -142,13 +143,7 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
     return;
   }
   normalizedSessionKeyCache.set(raw, normalized);
-  while (normalizedSessionKeyCache.size > NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES) {
-    const oldest = normalizedSessionKeyCache.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    normalizedSessionKeyCache.delete(oldest);
-  }
+  pruneMapToMaxSize(normalizedSessionKeyCache, NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES);
 }
 
 function mayContainCasePreservingPeer(raw: string): boolean {

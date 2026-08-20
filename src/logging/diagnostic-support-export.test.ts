@@ -93,6 +93,8 @@ describe("diagnostic support export", () => {
       "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
     ].join(".");
     const privateChat = "private user said diagnose my bank transfer";
+    const privateAssistantReply = "the reimbursement is approved for 420 credits";
+    const privateLogTapeAssistantReply = "the wire transfer clears on Thursday";
     const webhookBody = "raw webhook body with message contents";
     const requestAuthValue = "support-request-auth-value";
     const requestTlsPassphrase = "support-request-tls-passphrase";
@@ -224,6 +226,17 @@ describe("diagnostic support export", () => {
           msg: "user said structured secret payload",
         }),
         JSON.stringify({
+          time: "2026-04-22T12:00:00.250Z",
+          level: "warn",
+          subsystem: "diagnostic",
+          msg: `stuck session: lastAssistant="${privateAssistantReply}"`,
+        }),
+        JSON.stringify({
+          "0": `stalled session: lastAssistant="${privateLogTapeAssistantReply}"`,
+          _meta: { logLevelName: "warn", name: "diagnostic" },
+          time: "2026-04-22T12:00:00.275Z",
+        }),
+        JSON.stringify({
           "0": JSON.stringify({ subsystem: "gateway/channels/matrix" }),
           "1": privateChat,
           _meta: {
@@ -312,6 +325,8 @@ describe("diagnostic support export", () => {
     const combined = Object.values(entries).join("\n");
     expect(combined).not.toContain(fakeToken);
     expect(combined).not.toContain(privateChat);
+    expect(combined).not.toContain(privateAssistantReply);
+    expect(combined).not.toContain(privateLogTapeAssistantReply);
     expect(combined).not.toContain(webhookBody);
     expect(combined).not.toContain("15555551212");
     expect(combined).not.toContain("4444555566");
@@ -363,6 +378,8 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain('"omittedLogMessageBytes"');
     expect(sanitizedLogs).toContain('"omittedLogMessageCount"');
     expect(sanitizedLogs).not.toContain("private user said");
+    expect(sanitizedLogs).not.toContain(privateAssistantReply);
+    expect(sanitizedLogs).not.toContain(privateLogTapeAssistantReply);
     expect(sanitizedLogs).not.toContain("@support-user:matrix.example.com");
     expect(sanitizedLogs).not.toContain("support-host");
     expect(sanitizedLogs).toContain('"omitted":"unparsed"');

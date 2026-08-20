@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
@@ -19,8 +20,10 @@ type InProcessGatewayDispatchOptions = {
   isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
   methodRegistry?: GatewayMethodRegistry;
   onAccepted?: (payload: unknown) => void;
+  onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export function unwrapGatewayMethodDispatchResponse(
@@ -28,13 +31,18 @@ export function unwrapGatewayMethodDispatchResponse(
   response: GatewayMethodDispatchResponse,
 ): unknown {
   if (!response.ok) {
-    throw new GatewayClientRequestError({
+    const requestError = new GatewayClientRequestError({
       code: response.error?.code,
       message: response.error?.message ?? `Gateway method "${method}" failed.`,
       details: response.error?.details,
       retryable: response.error?.retryable,
       retryAfterMs: response.error?.retryAfterMs,
     });
+    const cause = (response.error as (ErrorShape & { cause?: unknown }) | undefined)?.cause;
+    if (cause !== undefined) {
+      Object.defineProperty(requestError, "cause", { value: cause });
+    }
+    throw requestError;
   }
   return response.payload;
 }
@@ -52,30 +60,83 @@ function resolveRemainingDispatchTimeoutMs(deadlineMs?: number): number | undefi
     : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
 }
 
+function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : createAbortError(`gateway request aborted for ${method}`, { cause: signal.reason });
+}
+
+/** Reject before a cancelled in-process request can invoke method work. */
+export function throwIfGatewayDispatchAborted(method: string, signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw resolveDispatchAbortError(method, signal);
+  }
+}
+
 async function waitForDispatch<T>(
   method: string,
   promise: Promise<T>,
   deadlineMs?: number,
+  signal?: AbortSignal,
+  onSignalAbort?: () => Promise<void> | void,
 ): Promise<T> {
-  const remainingTimeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
-  if (remainingTimeoutMs === undefined) {
-    return await promise;
-  }
   let timeout: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
+    if (signal?.aborted) {
+      throw resolveDispatchAbortError(method, signal);
+    }
+    const remainingTimeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
+    if (remainingTimeoutMs === undefined && !signal) {
+      return await promise;
+    }
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
           reject(new Error(`gateway request timeout for ${method}`));
         }, remainingTimeoutMs);
-      }),
-    ]);
+      }
+      if (signal) {
+        onAbort = () => reject(resolveDispatchAbortError(method, signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+        }
+      }
+    });
+    return await Promise.race([promise, cancellation]);
+  } catch (error) {
+    if (signal?.aborted && onSignalAbort) {
+      await Promise.resolve()
+        .then(onSignalAbort)
+        .catch(() => {});
+    }
+    throw error;
   } finally {
     if (timeout) {
       clearTimeout(timeout);
     }
+    if (signal && onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
+}
+
+/** Applies the same non-cancelling deadline used by in-process Gateway dispatch. */
+export async function waitForGatewayDispatch<T>(
+  method: string,
+  promise: Promise<T>,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+  onSignalAbort?: () => Promise<void> | void,
+): Promise<T> {
+  return await waitForDispatch(
+    method,
+    promise,
+    resolveDispatchDeadlineMs(timeoutMs),
+    signal,
+    onSignalAbort,
+  );
 }
 
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */
@@ -84,6 +145,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   params: unknown,
   options: InProcessGatewayDispatchOptions,
 ): Promise<GatewayMethodDispatchResponse> {
+  throwIfGatewayDispatchAborted(method, options.signal);
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
   let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -120,6 +182,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     },
     context: options.context,
     methodRegistry: options.methodRegistry,
+    ...(options.signal ? { signal: options.signal } : {}),
   })
     .then(() => {
       if (!firstResponse) {
@@ -138,7 +201,13 @@ export async function dispatchGatewayRequestInProcessRaw(
       rejectFinalResponse?.(error);
     });
 
-  firstResponse = await waitForDispatch(method, firstResponsePromise, deadlineMs);
+  firstResponse = await waitForDispatch(
+    method,
+    firstResponsePromise,
+    deadlineMs,
+    options.signal,
+    options.onSignalAbort,
+  );
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
@@ -149,36 +218,23 @@ export async function dispatchGatewayRequestInProcessRaw(
   }
   return (
     finalResponse ??
-    (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-      resolveFinalResponse = resolve;
-      const timeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
-      const timeout =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => reject(new Error(`gateway request timeout for ${method}`)), timeoutMs);
-      const clearFinalTimeout = () => {
-        if (timeout) {
-          clearTimeout(timeout);
+    (await waitForDispatch(
+      method,
+      new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
+        resolveFinalResponse = resolve;
+        rejectFinalResponse = reject;
+        if (postFirstResponseError) {
+          reject(postFirstResponseError);
+          return;
         }
-      };
-      rejectFinalResponse = (err) => {
-        clearFinalTimeout();
-        reject(err);
-      };
-      if (postFirstResponseError) {
-        rejectFinalResponse(postFirstResponseError);
-        return;
-      }
-      if (finalResponse) {
-        clearFinalTimeout();
-        resolve(finalResponse);
-        return;
-      }
-      resolveFinalResponse = (response) => {
-        clearFinalTimeout();
-        resolve(response);
-      };
-    }))
+        if (finalResponse) {
+          resolve(finalResponse);
+        }
+      }),
+      deadlineMs,
+      options.signal,
+      options.onSignalAbort,
+    ))
   );
 }
 

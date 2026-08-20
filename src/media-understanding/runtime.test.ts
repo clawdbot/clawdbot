@@ -135,7 +135,13 @@ describe("media-understanding runtime", () => {
       provider: undefined,
       model: undefined,
       output: undefined,
-      decision: { capability: "image", outcome: "disabled", attachments: [] },
+      decision: {
+        capability: "image",
+        outcome: "disabled",
+        attachments: [],
+        attachmentDispositions: { 0: { kind: "capability-disabled" } },
+        nativeVisionActive: false,
+      },
     });
 
     expect(mocks.buildProviderRegistry).not.toHaveBeenCalled();

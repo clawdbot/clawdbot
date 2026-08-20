@@ -1,8 +1,12 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TObject } from "typebox";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
-import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "../agents/tools/common.js";
-import { jsonResult } from "../agents/tools/common.js";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  jsonResult,
+} from "../agents/tools/common.js";
 import { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,6 +14,8 @@ import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginConfigSchema } from "../plugins/plugin-config-schema.types.js";
 import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import type { MeetingPluginConfig as SharedMeetingPluginConfig } from "./plugin-config.js";
+import type { MeetingPluginJoinRequest } from "./session-types.js";
 import {
   createMeetingTranscriptSourceProvider,
   type MeetingTranscriptSourceRuntime,
@@ -19,22 +25,11 @@ type MeetingToolAction = "join" | "leave" | "status" | "transcript" | "speak";
 type MeetingMode = "agent" | "bidi" | "transcribe";
 type MeetingTransport = "chrome" | "chrome-node";
 
-type MeetingJoinRequest = {
-  agentId?: string;
-  message?: string;
-  mode?: MeetingMode;
-  requesterSessionKey?: string;
-  timeoutMs?: number;
-  transport?: MeetingTransport;
-  url: string;
-};
+export type MeetingJoinRequest = MeetingPluginJoinRequest<MeetingTransport, MeetingMode>;
 
-type MeetingPluginConfig = {
-  enabled: boolean;
-  chromeNode: { node?: string };
-};
+export type MeetingPluginConfig = Pick<SharedMeetingPluginConfig, "enabled" | "chromeNode">;
 
-type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
+export type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
   Partial<MeetingTranscriptSourceRuntime> & {
     join(request: Request): Promise<unknown>;
     leave(sessionId: string): Promise<unknown>;
@@ -48,7 +43,7 @@ type MeetingPluginRuntime<Request extends MeetingJoinRequest> =
     transcript(sessionId: string, options: { sinceIndex?: number }): Promise<unknown>;
   };
 
-type MeetingPluginEntryOptions<
+export type MeetingPluginEntryOptions<
   Config extends MeetingPluginConfig,
   Request extends MeetingJoinRequest,
   Runtime extends MeetingPluginRuntime<Request>,
@@ -87,12 +82,6 @@ type MeetingPluginEntryOptions<
   };
   unknownActionMessage: string;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function readErrorDetails(error: unknown): unknown {
   return error && typeof error === "object" && "details" in error
@@ -260,7 +249,7 @@ export function createMeetingPluginEntryOptions<
         `${options.gatewayMethodPrefix}.join`,
         async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
           try {
-            const raw = keepTrustedToolContext(asRecord(params), client);
+            const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
             respond(true, await (await ensureRuntime()).join(joinRequest(raw)));
           } catch (error) {
             sendRequestError(respond, error);
@@ -271,7 +260,7 @@ export function createMeetingPluginEntryOptions<
         `${options.gatewayMethodPrefix}.leave`,
         async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
           try {
-            const raw = asRecord(params);
+            const raw = asOptionalRecord(params) ?? {};
             const agentId = trustedToolAgentId(raw, client);
             const sessionId = requireString(raw.sessionId, "sessionId");
             const rt = await ensureRuntime();
@@ -290,7 +279,7 @@ export function createMeetingPluginEntryOptions<
         `${options.gatewayMethodPrefix}.status`,
         async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
           try {
-            const raw = asRecord(params);
+            const raw = asOptionalRecord(params) ?? {};
             const agentId = trustedToolAgentId(raw, client);
             const rt = await ensureRuntime();
             respond(
@@ -308,7 +297,7 @@ export function createMeetingPluginEntryOptions<
         `${options.gatewayMethodPrefix}.transcript`,
         async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
           try {
-            const raw = asRecord(params);
+            const raw = asOptionalRecord(params) ?? {};
             const sessionId = requireString(raw.sessionId, "sessionId");
             const sinceIndex = readSinceIndex(raw);
             const agentId = trustedToolAgentId(raw, client);
@@ -328,7 +317,7 @@ export function createMeetingPluginEntryOptions<
         `${options.gatewayMethodPrefix}.speak`,
         async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
           try {
-            const raw = asRecord(params);
+            const raw = asOptionalRecord(params) ?? {};
             const sessionId = requireString(raw.sessionId, "sessionId");
             const agentId = trustedToolAgentId(raw, client);
             const rt = await ensureRuntime();
@@ -377,7 +366,7 @@ export function createMeetingPluginEntryOptions<
           method,
           async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
             try {
-              const raw = keepTrustedToolContext(asRecord(params), client);
+              const raw = keepTrustedToolContext(asOptionalRecord(params) ?? {}, client);
               respond(true, await run(await ensureRuntime(), raw));
             } catch (error) {
               sendRequestError(respond, error);
@@ -392,7 +381,7 @@ export function createMeetingPluginEntryOptions<
           description: options.toolDescription,
           parameters: options.toolParameters,
           async execute(_toolCallId, params) {
-            const raw = asRecord(params);
+            const raw = asOptionalRecord(params) ?? {};
             const action = raw.action as MeetingToolAction;
             const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
             const contextAgentId =

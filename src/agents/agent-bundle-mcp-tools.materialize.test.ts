@@ -10,12 +10,15 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
-import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpToolCatalogDiagnostic,
+  SessionMcpRuntime,
+} from "./agent-bundle-mcp-types.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import { isToolResultError } from "./tool-result-error.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
@@ -90,6 +93,18 @@ function makeToolRuntime(
   };
 }
 
+async function executeMcpToolResult(result: CallToolResult) {
+  const runtime = await materializeBundleMcpToolsForRun({
+    runtime: makeToolRuntime({ result }),
+  });
+  return await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+    "call-bundle-probe",
+    {},
+    undefined,
+    undefined,
+  );
+}
+
 describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
@@ -133,6 +148,7 @@ describe("createBundleMcpToolRuntime", () => {
       "demo__hidden_tool",
       "demo__model_tool",
     ]);
+    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({ mode: "auto" });
     expect(
       applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -267,47 +283,109 @@ describe("createBundleMcpToolRuntime", () => {
     );
   });
 
-  it("keeps structuredContent visible when MCP tools also return text content", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        result: {
-          content: [{ type: "text", text: "pong" }],
-          structuredContent: {
-            threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
-            content: "pong",
-          },
-          isError: false,
-        },
-      }),
+  it("preserves recovery text alongside structuredContent", async () => {
+    const result = await executeMcpToolResult({
+      content: [{ type: "text", text: "authentication expired; run login" }],
+      structuredContent: { retryable: true },
+      isError: false,
     });
 
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
-
-    expectTextContentBlock(
-      result.content[0],
-      `structuredContent:\n${JSON.stringify(
-        {
-          threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
-          content: "pong",
-        },
-        null,
-        2,
-      )}`,
-    );
-    expect(result.content).toHaveLength(1);
+    expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "retryable": true\n}' },
+      { type: "text", text: "authentication expired; run login" },
+    ]);
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
-      structuredContent: {
-        threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
-        content: "pong",
-      },
+      structuredContent: { retryable: true },
     });
+  });
+
+  it("preserves text and non-text MCP content alongside structuredContent", async () => {
+    const structuredContent = { description: "captured screenshot" };
+    const result = await executeMcpToolResult({
+      content: [
+        { type: "text", text: "captured screenshot" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        {
+          type: "resource_link",
+          uri: "https://example.com/report",
+          name: "report",
+          title: "Report",
+        },
+        { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+        { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+      ],
+      structuredContent,
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+      },
+      { type: "text", text: "captured screenshot" },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "text", text: "[Report] https://example.com/report" },
+      { type: "text", text: "memo body" },
+      { type: "text", text: "[audio audio/mpeg]" },
+    ]);
+  });
+
+  it("deduplicates exact structured JSON mirrors without dropping near matches", async () => {
+    const structuredContent = { zeta: 2, alpha: 1 };
+    const result = await executeMcpToolResult({
+      content: [
+        { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+        { type: "text", text: 'Result metadata: {"alpha":1,"zeta":2}' },
+      ],
+      structuredContent,
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}',
+      },
+      { type: "text", text: 'Result metadata: {"alpha":1,"zeta":2}' },
+    ]);
+  });
+
+  it("marks isError through the tool-result owner while preserving recovery text", async () => {
+    const result = await executeMcpToolResult({
+      content: [{ type: "text", text: "authentication expired; run login" }],
+      structuredContent: { retryable: true },
+      isError: true,
+    });
+
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "authentication expired; run login",
+    });
+    expect(result.details).toMatchObject({
+      status: "error",
+      structuredContent: { retryable: true },
+    });
+    expect(isToolResultError(result)).toBe(true);
+  });
+
+  it("renders structured-only results in deterministic key order", async () => {
+    const result = await executeMcpToolResult({
+      content: [],
+      structuredContent: { zeta: 2, alpha: 1 },
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}' },
+    ]);
+  });
+
+  it("keeps text-only results unchanged", async () => {
+    const result = await executeMcpToolResult({
+      content: [{ type: "text", text: "plain result" }],
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "plain result" }]);
   });
 
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
@@ -559,6 +637,68 @@ describe("createBundleMcpToolRuntime", () => {
         undefined,
       ),
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
+  });
+
+  it("projects session-denied tools only for read-only inventory", () => {
+    const catalog = {
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        knowledge: {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          launchSummary: "knowledge",
+          toolCount: 0,
+          resources: { listChanged: false },
+          deniedToolNames: ["resources_read"],
+        },
+      },
+      tools: [
+        {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          toolName: "alpha?",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Enabled knowledge tool",
+        },
+      ],
+      sessionDeniedTools: [
+        {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          toolName: "alpha!",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Denied knowledge tool",
+          deniedBySession: true,
+        },
+      ],
+    } satisfies Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
+
+    expect(buildBundleMcpToolsFromCatalog({ catalog }).map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__resources_list",
+    ]);
+    const inventoryTools = buildBundleMcpToolsFromCatalog({
+      catalog,
+      includeSessionDenied: true,
+    });
+    expect(inventoryTools.map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__alpha--2",
+      "knowledge__resources_list",
+      "knowledge__resources_read",
+    ]);
+    expect(
+      inventoryTools.map((tool) => ({
+        name: tool.name,
+        deniedBySession: getPluginToolMeta(tool)?.mcp?.deniedBySession,
+      })),
+    ).toEqual([
+      { name: "knowledge__alpha-", deniedBySession: undefined },
+      { name: "knowledge__alpha--2", deniedBySession: true },
+      { name: "knowledge__resources_list", deniedBySession: undefined },
+      { name: "knowledge__resources_read", deniedBySession: true },
+    ]);
   });
 
   it("materializes configured MCP tools through the session runtime boundary", async () => {

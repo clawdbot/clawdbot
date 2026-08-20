@@ -1,5 +1,9 @@
 import path from "node:path";
-import { removePathWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isPathInside,
+  removePathWithinRoot,
+  root as fsRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
   type SandboxBackendHandle,
@@ -7,7 +11,7 @@ import {
   type SandboxFsStat,
   type SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveMxcReadOnlySkillMounts,
   type MxcReadOnlySkillMount,
@@ -35,18 +39,26 @@ export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): Sand
 }
 
 class MxcFsBridge implements SandboxFsBridge {
-  private readonly defaultContainerRoot = path.resolve(this.sandbox.containerWorkdir);
+  // These must be assigned in the constructor body, not as field initializers.
+  // Plugin sources load through jiti, which evaluates field initializers before
+  // it assigns constructor parameter properties, so `this.sandbox` would still
+  // be undefined here and provisioning would crash reading containerWorkdir.
+  private readonly defaultContainerRoot: string;
 
-  private readonly protectedSkillMounts = resolveMxcProtectedSkillMounts(this.sandbox);
+  private readonly protectedSkillMounts: readonly MxcFsMount[];
 
-  private readonly workspaceMounts = resolveWorkspaceMounts(this.sandbox);
+  private readonly workspaceMounts: readonly MxcFsMount[];
 
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
 
-  constructor(private readonly sandbox: MxcFsBridgeContext) {}
+  constructor(private readonly sandbox: MxcFsBridgeContext) {
+    this.defaultContainerRoot = path.resolve(sandbox.containerWorkdir);
+    this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
+    this.workspaceMounts = resolveWorkspaceMounts(sandbox);
+  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -57,12 +69,13 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
-  async readFile(params: { filePath: string; cwd?: string }): Promise<Buffer> {
+  async readFile(params: { filePath: string; cwd?: string; maxBytes?: number }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     return (await (
       await fsRoot(target.mount.hostRoot)
     ).readBytes(target.mountRelativePath, {
       hardlinks: "reject",
+      ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
   }
 
@@ -83,6 +96,33 @@ class MxcFsBridge implements SandboxFsBridge {
     ).write(target.mountRelativePath, buffer, {
       mkdir: params.mkdir !== false,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    this.ensureWritable(target, "create files");
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    try {
+      await (
+        await fsRoot(target.mount.hostRoot)
+      ).create(target.mountRelativePath, buffer, {
+        mkdir: params.mkdir !== false,
+      });
+      return "created";
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        return "exists";
+      }
+      throw error;
+    }
   }
 
   async mkdirp(params: { filePath: string; cwd?: string }): Promise<void> {

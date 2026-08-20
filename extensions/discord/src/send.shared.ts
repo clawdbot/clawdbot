@@ -4,9 +4,9 @@ import type { APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements send.shared behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
+  buildOutboundMediaLoadOptions,
+  extensionForMime,
   normalizePollDurationHours,
   normalizePollInput,
   type OutboundMediaAccess,
@@ -28,6 +28,15 @@ import {
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
+import {
+  buildDiscordMessageRequest,
+  resolveDiscordMessageFlags,
+  resolveDiscordSendComponents,
+  resolveDiscordSendEmbeds,
+  type DiscordAllowedMentions,
+  type DiscordSendComponents,
+  type DiscordSendEmbeds,
+} from "./send.message-request.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
@@ -48,19 +57,11 @@ export {
   buildDiscordMessageRequest,
   createDiscordMessageNonce,
   resolveDiscordMessageFlags,
+  resolveDiscordSuppressEmbeds,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordAllowedMentions,
-  type DiscordSendComponents,
-  type DiscordSendEmbeds,
-} from "./send.message-request.js";
-import {
-  buildDiscordMessageRequest,
-  resolveDiscordMessageFlags,
-  resolveDiscordSendComponents,
-  resolveDiscordSendEmbeds,
   type DiscordAllowedMentions,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
@@ -324,6 +325,7 @@ type DiscordTextSendParams = {
   suppressEmbeds?: boolean;
   maxChars?: number;
   onResult?: DiscordSendProgress;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 async function sendDiscordText(params: DiscordTextSendParams) {
@@ -342,6 +344,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     suppressEmbeds,
     maxChars,
     onResult,
+    onPlatformSendDispatch,
   } = params;
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -368,6 +371,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
       flags,
       replyTo: chunkReplyTo,
     });
+    await onPlatformSendDispatch?.();
     const result = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "text",
@@ -428,6 +432,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     suppressEmbeds,
     maxChars,
     onResult,
+    onPlatformSendDispatch,
   } = params;
   const media = await loadWebMedia(
     mediaUrl,
@@ -465,11 +470,13 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       {
         data: media.buffer,
         name: resolvedFileName,
+        contentType: media.contentType,
       },
     ],
   });
   let res: { id: string; channel_id: string };
   try {
+    await onPlatformSendDispatch?.();
     res = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "media",
@@ -494,6 +501,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
   }
   await onResult?.(res, "media", reply?.messageId);

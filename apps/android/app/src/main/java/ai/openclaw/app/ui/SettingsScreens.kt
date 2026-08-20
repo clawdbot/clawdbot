@@ -6,8 +6,6 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
-import ai.openclaw.app.GatewayConnectionDisplay
-import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobDetailState
@@ -189,8 +187,8 @@ internal enum class SettingsRoute {
   NodesDevices,
   Channels,
   Dreaming,
-  Canvas,
   Terminal,
+  Desktop,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -224,8 +222,8 @@ internal fun SettingsDetailScreen(
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Desktop -> DesktopScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -1277,7 +1275,6 @@ private fun PhoneCapabilitiesScreen(
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
-  val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
   val photosAvailable = remember { SensitiveFeatureConfig.photosEnabled }
   val backgroundLocationAvailable = remember { SensitiveFeatureConfig.backgroundLocationEnabled }
@@ -1490,7 +1487,6 @@ private fun PhoneCapabilitiesScreen(
             ::setInstalledAppsSharing,
           ),
           SettingsToggleRow(nativeString("Keep Awake"), nativeString("Keep the node available during active work."), Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
-          SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
     if (SensitiveFeatureConfig.accessibilityControlEnabled) {
@@ -2102,29 +2098,6 @@ private val LocationMode.displayLabel: String
       LocationMode.WhileUsing -> nativeString("While Using")
       LocationMode.Always -> nativeString("Always")
     }
-
-/** Converts raw gateway connection text into stable settings metric labels. */
-internal fun gatewayStatusLabel(
-  statusText: String,
-  isConnected: Boolean,
-  gatewayConnectionProblem: GatewayConnectionProblem? = null,
-): String {
-  if (isConnected) return nativeString("Ready")
-  val status = statusText.trim().lowercase()
-  return when {
-    status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
-    status.contains("pair") -> nativeString("Pairing needed")
-    status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
-    status.contains("fingerprint verification timed out") -> nativeString("TLS timed out")
-    status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
-    status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
-    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
-    status.isBlank() -> nativeString("Not connected")
-    else -> nativeString("Not connected")
-  }
-}
-
-internal fun gatewayStatusLabel(display: GatewayConnectionDisplay): String = gatewayStatusLabel(display.statusText, display.isConnected, display.problem)
 
 @Composable
 private fun AboutSettingsScreen(

@@ -8,7 +8,7 @@ import {
   type QaProviderModeInput,
 } from "./model-selection.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { describeQaProviderLaneMismatches } from "./scenario-lane.js";
+import { describeQaProviderLaneMismatches, resolveQaScenarioLaneChannel } from "./scenario-lane.js";
 import {
   readQaScorecardTaxonomyReport,
   type QaScorecardCategoryCoverageReport,
@@ -121,33 +121,32 @@ export function resolveQaRunProfileExecutionSelection(params: {
   channel?: string | null;
   defaultChannel?: string;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }): QaRunProfileExecutionSelection {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
   const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
   for (const scenario of params.scenarios) {
     const reasons: string[] = [];
+    if (params.executionKind && scenario.execution.kind !== params.executionKind) {
+      reasons.push(`execution.kind=${params.executionKind}`);
+    }
     // qa-channel is the built-in harness channel, so another driver cannot implement it.
-    if (scenario.execution.channel === "qa-channel" && params.channelDriver !== "qa-channel") {
+    if (
+      scenario.execution.channels?.length === 1 &&
+      scenario.execution.channels[0] === "qa-channel" &&
+      params.channelDriver !== "qa-channel"
+    ) {
       reasons.push("channelDriver=qa-channel");
     }
-    // Unpinned live profiles must resolve a declared real transport before checking a
-    // portable scenario; qa-channel is the built-in harness, not a live adapter.
-    const declaredLiveChannel =
-      params.channelDriver === "live" && scenario.execution.kind === "flow"
-        ? (scenario.execution.channels?.find(
-            (channel) =>
-              channel !== "qa-channel" &&
-              (!params.supportsChannel || params.supportsChannel(channel)),
-          ) ?? scenario.execution.channels?.find((channel) => channel !== "qa-channel"))
-        : undefined;
-    const effectiveChannel =
-      params.channelDriver === "qa-channel"
-        ? "qa-channel"
-        : (params.channel ??
-          scenario.execution.channel ??
-          declaredLiveChannel ??
-          params.defaultChannel);
+    const effectiveChannel = resolveQaScenarioLaneChannel({
+      scenario,
+      channelDriver: params.channelDriver,
+      channel: params.channel,
+      defaultChannel: params.defaultChannel,
+      supportsChannel: params.supportsChannel,
+    });
     reasons.push(
       ...describeQaProviderLaneMismatches({
         scenario,
@@ -156,6 +155,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
         channelDriver: params.channelDriver,
         channel: effectiveChannel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(effectiveChannel),
       }),
     );
     if (
@@ -179,13 +179,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
 
 export function scenarioDeclaresQaChannel(scenario: QaSeedScenarioWithSource, channel: string) {
   const normalizedChannel = channel.trim().toLowerCase();
-  if (scenario.execution.channel === normalizedChannel) {
-    return true;
-  }
-  return (
-    scenario.execution.kind === "flow" &&
-    scenario.execution.channels?.includes(normalizedChannel) === true
-  );
+  return scenario.execution.channels?.includes(normalizedChannel) === true;
 }
 
 export function resolveQaProfileScenarios(params: {
@@ -195,7 +189,9 @@ export function resolveQaProfileScenarios(params: {
   channelDriver?: QaScorecardChannelDriver;
   channel?: string;
   eligibleChannels?: readonly string[];
+  executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   requireDeclaredChannel?: boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
   scenarioIds?: readonly string[];
 }) {
   const membership = resolveQaRunProfileMembership({
@@ -219,11 +215,7 @@ export function resolveQaProfileScenarios(params: {
       reasons.push(`does not declare channel ${channel}`);
     }
     if (eligibleChannels.size > 0) {
-      const declaredChannels = scenario.execution.channel
-        ? [scenario.execution.channel]
-        : scenario.execution.kind === "flow"
-          ? (scenario.execution.channels ?? [])
-          : [];
+      const declaredChannels = scenario.execution.channels ?? [];
       if (
         declaredChannels.length > 0 &&
         !declaredChannels.some((declaredChannel) => eligibleChannels.has(declaredChannel))
@@ -240,6 +232,8 @@ export function resolveQaProfileScenarios(params: {
         primaryModel,
         channelDriver,
         channel: channel ?? scenario.execution.channel,
+        executionKind: params.executionKind,
+        resolveModuleFlowSupport: params.resolveModuleFlowSupport,
       }).excludedScenarios.flatMap((entry) => entry.reasons),
     );
     return { scenario, reasons: uniqueStrings(reasons) };

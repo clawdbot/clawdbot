@@ -54,7 +54,13 @@ function createContext(): ApplicationContext {
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   } as unknown as ApplicationGateway;
-  return { gateway } as unknown as ApplicationContext;
+  return {
+    gateway,
+    agents: {
+      state: { agentsList: null },
+      subscribe: () => () => undefined,
+    },
+  } as unknown as ApplicationContext;
 }
 
 afterEach(() => {
@@ -90,8 +96,9 @@ describe("custodian route", () => {
     >("openclaw-custodian-page");
     await onboardingPage?.updateComplete;
     expect(onboardingPage?.querySelector(".custodian__header .btn")).not.toBeNull();
-    expect(onboardingPage?.querySelector(".custodian__header p")?.textContent?.trim()).toBe(
-      "Your system setup guide",
-    );
+    // Onboarding renders the minimal header: actions only, no identity block.
+    expect(onboardingPage?.querySelector(".custodian__header--minimal")).not.toBeNull();
+    expect(onboardingPage?.querySelector(".custodian__header p")).toBeNull();
+    expect(onboardingPage?.querySelector(".custodian__identity")).toBeNull();
   });
 });

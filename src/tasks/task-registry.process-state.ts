@@ -1,6 +1,21 @@
 // Tracks task process state transitions used to reconcile running work.
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
+export type TaskActivityOverlayState = {
+  runId: string;
+  assistantText: string;
+  thinkingText: string;
+  hasAssistantActivity: boolean;
+  lastActivity?: string;
+  files: Set<string>;
+  added: number;
+  removed: number;
+  pendingDiffByToolCallId: Map<string, { files: string[]; added: number; removed: number }>;
+  dirty: boolean;
+  lastFlushedAt?: number;
+  flushTimer?: ReturnType<typeof setTimeout>;
+};
+
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
 type TaskRegistryProcessState = {
   tasks: Map<string, TaskRecord>;
@@ -10,6 +25,10 @@ type TaskRegistryProcessState = {
   taskIdsByParentFlowId: Map<string, Set<string>>;
   taskIdsByRelatedSessionKey: Map<string, Set<string>>;
   tasksWithPendingDelivery: Set<string>;
+  /** Ephemeral live activity is intentionally discarded on gateway restart. */
+  taskActivityByTaskId: Map<string, TaskActivityOverlayState>;
+  // Listener ownership must survive module reloads alongside the task indexes it updates.
+  listenerStop?: (() => void) | null;
 };
 
 const TASK_REGISTRY_PROCESS_STATE_KEY = Symbol.for("openclaw.taskRegistry.state");
@@ -27,6 +46,7 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     taskIdsByParentFlowId: new Map<string, Set<string>>(),
     taskIdsByRelatedSessionKey: new Map<string, Set<string>>(),
     tasksWithPendingDelivery: new Set<string>(),
+    taskActivityByTaskId: new Map<string, TaskActivityOverlayState>(),
   };
   return globalState[TASK_REGISTRY_PROCESS_STATE_KEY];
 }

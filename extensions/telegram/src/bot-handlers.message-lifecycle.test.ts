@@ -1,6 +1,9 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
-import { createTelegramMessageLifecycleRuntime } from "./bot-handlers.message-lifecycle.runtime.js";
+import {
+  buildSyntheticTextMessage,
+  formatTelegramAmbientTranscriptBody,
+} from "./bot-handlers.message-context.js";
 
 function message(fields: Record<string, unknown>): Message {
   return {
@@ -13,13 +16,8 @@ function message(fields: Record<string, unknown>): Message {
 }
 
 describe("Telegram ambient transcript media text", () => {
-  const runtime = createTelegramMessageLifecycleRuntime({
-    accountId: "default",
-    runtime: { log: () => {}, error: () => {}, exit: () => {} } as never,
-  });
-
   it("renders native media kinds for captionless transcript lines", () => {
-    const body = runtime.formatTelegramAmbientTranscriptBody([
+    const body = formatTelegramAmbientTranscriptBody([
       message({
         message_id: 7,
         photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
@@ -30,7 +28,7 @@ describe("Telegram ambient transcript media text", () => {
   });
 
   it("preserves captions instead of appending media text", () => {
-    const body = runtime.formatTelegramAmbientTranscriptBody([
+    const body = formatTelegramAmbientTranscriptBody([
       message({ message_id: 8, caption: "diagram", document: { file_id: "doc-1" } }),
     ]);
 
@@ -38,8 +36,22 @@ describe("Telegram ambient transcript media text", () => {
   });
 
   it("uses the formatter attachment fallback for media-less empty messages", () => {
-    const body = runtime.formatTelegramAmbientTranscriptBody([message({ message_id: 9 })]);
+    const body = formatTelegramAmbientTranscriptBody([message({ message_id: 9 })]);
 
     expect(body).toBe("#9 Ada: <media:attachment>");
+  });
+
+  it("preserves combined formatting entities when building synthetic text messages", () => {
+    const entities = [{ type: "bold" as const, offset: 3, length: 4 }];
+    const synthetic = buildSyntheticTextMessage({
+      base: message({ caption: "old caption", caption_entities: entities }),
+      text: "😀 bold",
+      entities,
+    });
+
+    expect(synthetic.text).toBe("😀 bold");
+    expect(synthetic.entities).toEqual(entities);
+    expect(synthetic.caption).toBeUndefined();
+    expect(synthetic.caption_entities).toBeUndefined();
   });
 });

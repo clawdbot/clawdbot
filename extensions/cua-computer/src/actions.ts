@@ -1,40 +1,4 @@
-import { z } from "zod";
 import type { CuaLastFrame } from "./frame.js";
-
-const COMPUTER_ACTIONS = [
-  "left_click",
-  "right_click",
-  "middle_click",
-  "double_click",
-  "triple_click",
-  "mouse_move",
-  "left_click_drag",
-  "left_mouse_down",
-  "left_mouse_up",
-  "scroll",
-  "type",
-  "key",
-  "hold_key",
-] as const;
-
-export const ComputerActParamsSchema = z.strictObject({
-  action: z.enum(COMPUTER_ACTIONS),
-  displayFrameId: z.string().optional(),
-  x: z.number().finite().nonnegative().optional(),
-  y: z.number().finite().nonnegative().optional(),
-  fromX: z.number().finite().nonnegative().optional(),
-  fromY: z.number().finite().nonnegative().optional(),
-  text: z.string().optional(),
-  keys: z.string().optional(),
-  modifiers: z.string().optional(),
-  scrollDirection: z.enum(["up", "down", "left", "right"]).optional(),
-  scrollAmount: z.number().int().positive().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
-  screenIndex: z.number().int().nonnegative().optional(),
-  refWidth: z.number().int().positive().optional(),
-});
-
-export type ComputerActParams = z.infer<typeof ComputerActParamsSchema>;
 
 const MODIFIER_ALIASES = new Map<string, string>([
   ["ctrl", "ctrl"],
@@ -119,12 +83,10 @@ function normalizeKey(value: string): string {
   if (named) {
     return named;
   }
-  // cua-driver 0.10 resolves single characters through VkKeyScanW/keysym lookups
-  // and keeps only the base virtual key, dropping the shift/AltGr state the
-  // active layout needs (keyboard.rs key_name_to_vk). ASCII letters are unshifted
-  // in every Latin layout, so they stay valid chord keys (e.g. ctrl+c). Digits
-  // and punctuation are shifted on some layouts (AZERTY digits, US symbols), so
-  // they are rejected toward the `type` action rather than mis-sent.
+  // CUA Driver's key contract carries a base key, not the layout-specific
+  // shift/AltGr state required for arbitrary characters. ASCII letters remain
+  // valid chord keys (for example ctrl+c); send digits and punctuation through
+  // `type` rather than risk a layout-dependent misfire.
   if (/^[a-z]$/i.test(raw)) {
     return lowered;
   }

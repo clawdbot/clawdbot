@@ -1,10 +1,15 @@
 // Telegram tests cover token plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTelegramBotUserIdFromToken, resolveTelegramToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+import { resolveTelegramToken } from "./token.js";
 
 describe("resolveTelegramBotUserIdFromToken", () => {
   it.each([
@@ -20,17 +25,15 @@ describe("resolveTelegramBotUserIdFromToken", () => {
 });
 
 describe("resolveTelegramToken", () => {
-  const tempDirs: string[] = [];
-
-  function createTempDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-token-"));
-    tempDirs.push(dir);
-    return dir;
-  }
+  const tempWorkspaces: TempWorkspaceSync[] = [];
 
   function createTokenFile(fileName: string, contents = "file-token\n"): string {
-    const dir = createTempDir();
-    const tokenFile = path.join(dir, fileName);
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-telegram-token-",
+    });
+    tempWorkspaces.push(workspace);
+    const tokenFile = path.join(workspace.dir, fileName);
     fs.writeFileSync(tokenFile, contents, "utf-8");
     return tokenFile;
   }
@@ -56,8 +59,8 @@ describe("resolveTelegramToken", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+    for (const workspace of tempWorkspaces.splice(0)) {
+      workspace.cleanup();
     }
   });
 
@@ -139,7 +142,12 @@ describe("resolveTelegramToken", () => {
     "marks symlinked tokenFile paths configured-unavailable",
     () => {
       vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-      const dir = createTempDir();
+      const workspace = tempWorkspaceSync({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-telegram-token-",
+      });
+      tempWorkspaces.push(workspace);
+      const dir = workspace.dir;
       const tokenFile = path.join(dir, "token.txt");
       const tokenLink = path.join(dir, "token-link.txt");
       fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
@@ -166,7 +174,12 @@ describe("resolveTelegramToken", () => {
     "marks symlinked account-level tokenFile paths configured-unavailable",
     () => {
       vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-      const dir = createTempDir();
+      const workspace = tempWorkspaceSync({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-telegram-token-",
+      });
+      tempWorkspaces.push(workspace);
+      const dir = workspace.dir;
       const tokenFile = path.join(dir, "token.txt");
       const tokenLink = path.join(dir, "token-link.txt");
       fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
@@ -195,7 +208,12 @@ describe("resolveTelegramToken", () => {
 
   it("does not fall back to config when tokenFile is missing", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const dir = createTempDir();
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-telegram-token-",
+    });
+    tempWorkspaces.push(workspace);
+    const dir = workspace.dir;
     const tokenFile = path.join(dir, "missing-token.txt");
     const cfg = {
       channels: { telegram: { tokenFile, botToken: "cfg-token" } },
@@ -283,6 +301,51 @@ describe("resolveTelegramToken", () => {
     const res = resolveTelegramToken(cfg, { accountId: "work" });
     expect(res.token).toBe("account-file-token");
     expect(res.source).toBe("tokenFile");
+  });
+
+  it("applies account file, account config, channel file, channel config, then env precedence", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const accountTokenFile = createTokenFile("account-token.txt", "account-file-token\n");
+    const channelTokenFile = createTokenFile("channel-token.txt", "channel-file-token\n");
+    const baseTelegramConfig = {
+      botToken: "channel-config-token",
+      tokenFile: channelTokenFile,
+      accounts: {
+        default: {
+          botToken: "account-config-token",
+          tokenFile: accountTokenFile,
+        },
+      },
+    };
+
+    const resolve = (telegram: Record<string, unknown>) =>
+      resolveTelegramToken({ channels: { telegram } } as OpenClawConfig);
+
+    expect(resolve(baseTelegramConfig)).toEqual({
+      token: "account-file-token",
+      source: "tokenFile",
+    });
+    expect(
+      resolve({
+        ...baseTelegramConfig,
+        accounts: { default: { botToken: "account-config-token" } },
+      }),
+    ).toEqual({ token: "account-config-token", source: "config" });
+    expect(resolve({ ...baseTelegramConfig, accounts: { default: {} } })).toEqual({
+      token: "channel-file-token",
+      source: "tokenFile",
+    });
+    expect(
+      resolve({
+        ...baseTelegramConfig,
+        tokenFile: undefined,
+        accounts: { default: {} },
+      }),
+    ).toEqual({ token: "channel-config-token", source: "config" });
+    expect(resolve({ accounts: { default: {} } })).toEqual({
+      token: "env-token",
+      source: "env",
+    });
   });
 
   it("falls back to top-level tokenFile for non-default accounts", () => {
@@ -497,10 +560,5 @@ describe("resolveTelegramToken", () => {
     const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
     expect(res.token).toBe("channel-level-token");
     expect(res.source).toBe("config");
-  });
-
-  it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
   });
 });

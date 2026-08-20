@@ -21,6 +21,7 @@ import {
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  createConditionalWarningCollector,
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
@@ -30,8 +31,10 @@ import {
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  createChannelDirectoryAdapter,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
+} from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -55,7 +58,7 @@ import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { createZaloSetupWizardProxy, zaloSetupAdapter, zaloSetupContract } from "./setup-core.js";
+import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -189,13 +192,18 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
     ];
   },
 });
+const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectZaloSecurityWarnings,
+  checkId: "channels.zalo.groups.open",
+  severity: "critical",
+  title: "Zalo security warning",
+});
 
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
   createChatChannelPlugin({
     base: {
       id: "zalo",
       meta,
-      setup: zaloSetupAdapter,
       setupContract: zaloSetupContract,
       setupWizard: zaloSetupWizard,
       capabilities: {
@@ -236,6 +244,10 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       messaging: {
         targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
+        inferTargetChatType: ({ to }) => {
+          const target = normalizeZaloMessagingTarget(to);
+          return target ? (/^group:/i.test(target) ? "group" : "direct") : undefined;
+        },
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeZaloChatId,
@@ -282,7 +294,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
     },
     security: {
       resolveDmPolicy: resolveZaloDmPolicy,
-      collectWarnings: collectZaloSecurityWarnings,
+      collectWarnings: collectZaloOpenGroupFindings,
     },
     pairing: {
       text: {

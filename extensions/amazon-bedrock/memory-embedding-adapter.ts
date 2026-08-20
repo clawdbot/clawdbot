@@ -45,6 +45,7 @@ export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
           region: client.region,
           model: client.model,
           dimensions: client.dimensions,
+          ...(client.endpoint ? { endpoint: client.endpoint } : {}),
         },
       },
     };

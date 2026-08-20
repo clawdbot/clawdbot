@@ -7,7 +7,6 @@ import {
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
-  listMemoryPromptSupplements,
   listActiveMemoryPublicArtifacts,
   prepareMemoryPromptSection,
   registerMemoryCapability,
@@ -16,9 +15,10 @@ import {
   registerMemoryPromptSupplement,
   registerTestMemoryPromptBuilder,
   resolveMemoryFlushPlan,
-  restoreMemoryPluginState,
   type MemoryPluginPublicArtifact,
 } from "./memory-state.test-fixtures.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRegistrationContext } from "./runtime.js";
 
 function createMemoryRuntime() {
   return {
@@ -51,15 +51,6 @@ function expectClearedMemoryState() {
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
-function createMemoryStateSnapshot() {
-  return {
-    capability: getMemoryCapabilityRegistration(),
-    corpusSupplements: listMemoryCorpusSupplements(),
-    promptPreparations: listMemoryPromptPreparations(),
-    promptSupplements: listMemoryPromptSupplements(),
-  };
-}
-
 function registerMemoryState(params: {
   promptSection?: string[];
   relativePath?: string;
@@ -81,6 +72,25 @@ describe("memory plugin state", () => {
 
   it("returns empty defaults when no memory plugin state is registered", () => {
     expectClearedMemoryState();
+  });
+
+  it("attributes direct builder registrations to the synchronous plugin owner", () => {
+    const building = createEmptyPluginRegistry();
+
+    withPluginRegistrationContext(building, "actual-plugin", () => {
+      registerMemoryCapability("spoofed-plugin", { runtime: createMemoryRuntime() });
+      registerMemoryCorpusSupplement("spoofed-plugin", {
+        search: async () => [],
+        get: async () => null,
+      });
+      registerMemoryPromptSupplement("spoofed-plugin", () => ["supplement"]);
+      registerMemoryPromptPreparation("spoofed-plugin", async () => ["prepared"]);
+    });
+
+    expect(building.memoryCapabilities[0]?.pluginId).toBe("actual-plugin");
+    expect(building.memoryCorpusSupplements[0]?.pluginId).toBe("actual-plugin");
+    expect(building.memoryPromptSupplements[0]?.pluginId).toBe("actual-plugin");
+    expect(building.memoryPromptPreparations[0]?.pluginId).toBe("actual-plugin");
   });
 
   it("delegates prompt building to the registered memory plugin", () => {
@@ -265,6 +275,19 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("preserves runtime fields when the same plugin adds public artifacts", () => {
+    const runtime = createMemoryRuntime();
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/same-owner.md");
+
+    registerMemoryCapability("memory-core", { runtime, flushPlanResolver });
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: { listArtifacts: async () => [] },
+    });
+
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/same-owner.md");
+  });
+
   it("passes citations mode through to the prompt builder", () => {
     registerTestMemoryPromptBuilder(({ citationsMode }) => [
       `citations: ${citationsMode ?? "default"}`,
@@ -396,33 +419,6 @@ describe("memory plugin state", () => {
     await expect(
       listMemoryCorpusSupplements()[0]?.supplement.search({ query: "alpha" }),
     ).resolves.toEqual([{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }]);
-  });
-
-  it("restoreMemoryPluginState swaps both prompt and flush state", () => {
-    const runtime = createMemoryRuntime();
-    registerMemoryState({
-      promptSection: ["first"],
-      relativePath: "memory/first.md",
-      runtime,
-    });
-    registerMemoryPromptSupplement("memory-wiki", () => ["wiki supplement"]);
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],
-      get: async () => null,
-    });
-    const snapshot = createMemoryStateSnapshot();
-
-    clearMemoryPluginState();
-    expectClearedMemoryState();
-
-    restoreMemoryPluginState(snapshot);
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
-      "first",
-      "wiki supplement",
-    ]);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/first.md");
-    expect(listMemoryCorpusSupplements()).toHaveLength(1);
-    expect(getMemoryRuntime()).toBe(runtime);
   });
 
   it("clearMemoryPluginState resets both registries", () => {

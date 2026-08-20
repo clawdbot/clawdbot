@@ -1,5 +1,16 @@
 {
   "id": "memory-core",
+  "doctorContract": {
+    "stateMigrations": true
+  },
+  "name": "OpenClaw Memory",
+  "cliCommands": [
+    {
+      "name": "memory",
+      "description": "Search, inspect, and reindex memory files",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false
   },
@@ -8,6 +19,9 @@
     "tools": ["intent", "memory_get", "memory_search"]
   },
   "toolMetadata": {
+    "intent": {
+      "profiles": ["coding", "messaging"]
+    },
     "memory_get": {
       "replaySafe": true
     }
@@ -140,15 +154,18 @@
                   "minScore": {
                     "type": "number",
                     "minimum": 0,
-                    "maximum": 1
+                    "maximum": 1,
+                    "default": 0.75
                   },
                   "minRecallCount": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "default": 3
                   },
                   "minUniqueQueries": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "default": 3
                   },
                   "recencyHalfLifeDays": {
                     "type": "integer",

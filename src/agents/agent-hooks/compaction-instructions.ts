@@ -4,6 +4,7 @@
  * Provides default language-preservation instructions and a precedence-based
  * resolver for customInstructions used during context compaction summaries.
  */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Default instructions injected into every safeguard-mode compaction summary.
@@ -22,22 +23,6 @@ const DEFAULT_COMPACTION_INSTRUCTIONS =
  */
 const MAX_INSTRUCTION_LENGTH = 800;
 
-function truncateUnicodeSafe(s: string, maxCodePoints: number): string {
-  const chars = Array.from(s);
-  if (chars.length <= maxCodePoints) {
-    return s;
-  }
-  return chars.slice(0, maxCodePoints).join("");
-}
-
-function normalize(s: string | undefined): string | undefined {
-  if (s == null) {
-    return undefined;
-  }
-  const trimmed = s.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 /**
  * Resolve compaction instructions with precedence:
  *   event (SDK) → runtime (config) → DEFAULT constant.
@@ -50,19 +35,8 @@ export function resolveCompactionInstructions(
   runtimeInstructions: string | undefined,
 ): string {
   const resolved =
-    normalize(eventInstructions) ??
-    normalize(runtimeInstructions) ??
+    normalizeOptionalString(eventInstructions) ??
+    normalizeOptionalString(runtimeInstructions) ??
     DEFAULT_COMPACTION_INSTRUCTIONS;
-  return truncateUnicodeSafe(resolved, MAX_INSTRUCTION_LENGTH);
-}
-
-/**
- * Compose split-turn instructions by combining the SDK's turn-prefix
- * instructions with the resolved compaction instructions.
- */
-export function composeSplitTurnInstructions(
-  turnPrefixInstructions: string,
-  resolvedInstructions: string,
-): string {
-  return [turnPrefixInstructions, "Additional requirements:", resolvedInstructions].join("\n\n");
+  return Array.from(resolved).slice(0, MAX_INSTRUCTION_LENGTH).join("");
 }

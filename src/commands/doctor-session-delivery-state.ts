@@ -1,35 +1,22 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
+import {
+  rewriteDoctorSessionEntries,
+  scanDoctorSessionEntriesTolerant,
+} from "../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
-  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryChannel,
-} from "../utils/delivery-context.shared.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 
 export type SessionDeliveryStateRepairReport = {
   found: number;
   repaired: number;
   scannedStores: number;
-};
-
-type DeliveryRewrite = {
-  accountId: string | null;
-  channel: string | null;
-  currentSessionId: string;
-  entryJson: string;
-  sessionKey: string;
 };
 
 /** Scan or rewrite legacy delivery fields inside existing session row JSON. */
@@ -42,24 +29,37 @@ export function repairCanonicalSessionDeliveryStates(params: {
   let found = 0;
   let repaired = 0;
   for (const target of targets) {
-    const inspected = withOpenClawAgentDatabaseReadOnly(
-      (database) => collectDeliveryRewrites(database.db),
-      { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-    );
-    if (!inspected.found) {
+    const sessionKeys: string[] = [];
+    const operation = runDoctorAgentDatabaseOperation({
+      agentId: target.agentId,
+      path: target.sqlitePath,
+      run: () => {
+        scanDoctorSessionEntriesTolerant(
+          { agentId: target.agentId, env: params.env, storePath: target.storePath },
+          ({ entry, recoveredFromProjections, sessionKey }) => {
+            if (!recoveredFromProjections && normalizeLegacySessionEntryDelivery(entry) !== entry) {
+              sessionKeys.push(sessionKey);
+            }
+          },
+        );
+        return { found: true, value: sessionKeys.length } as { found: true; value: number };
+      },
+    });
+    if (!operation.ok || !operation.value.found) {
       continue;
     }
-    found += inspected.value.length;
-    if (!params.apply || inspected.value.length === 0) {
+    found += operation.value.value;
+    if (!params.apply || operation.value.value === 0) {
       continue;
     }
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
     try {
-      repaired += runOpenClawAgentWriteTransaction(
-        (database) => applyDeliveryRewrites(database.db),
-        { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-        { operationLabel: "doctor.canonicalize-session-delivery-state" },
-      );
+      repaired += rewriteDoctorSessionEntries({
+        scope: { agentId: target.agentId, env: params.env, storePath: target.storePath },
+        sessionKeys,
+        transform: normalizeLegacySessionEntryDelivery,
+        updateDeliveryProjection: true,
+      });
     } finally {
       if (!wasOpen) {
         closeOpenClawAgentDatabaseByPath(target.sqlitePath);
@@ -72,7 +72,7 @@ export function repairCanonicalSessionDeliveryStates(params: {
 function listExistingAgentDatabaseTargets(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string }> {
+): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
   const seenPaths = new Set<string>();
   return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
     const sqlitePath = resolveTargetSqlitePath(target);
@@ -80,61 +80,6 @@ function listExistingAgentDatabaseTargets(
       return [];
     }
     seenPaths.add(sqlitePath);
-    return [{ agentId: target.agentId, sqlitePath }];
+    return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
   });
-}
-
-function collectDeliveryRewrites(database: DatabaseSync): DeliveryRewrite[] {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const rows = executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_nodes").select(["session_key", "current_session_id", "entry_json"]),
-  ).rows;
-  return rows.flatMap((row) => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.entry_json);
-    } catch {
-      return [];
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return [];
-    }
-    const entry = parsed as SessionEntry;
-    const normalizedEntry = normalizeLegacySessionEntryDelivery(entry);
-    const entryJson = JSON.stringify(normalizedEntry);
-    return entryJson === row.entry_json
-      ? []
-      : [
-          {
-            accountId: deliveryContextFromSession(normalizedEntry)?.accountId ?? null,
-            channel: sessionDeliveryChannel(normalizedEntry) ?? null,
-            currentSessionId: row.current_session_id,
-            entryJson,
-            sessionKey: row.session_key,
-          },
-        ];
-  });
-}
-
-function applyDeliveryRewrites(database: DatabaseSync): number {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const rewrites = collectDeliveryRewrites(database);
-  for (const rewrite of rewrites) {
-    executeSqliteQuerySync(
-      database,
-      db
-        .updateTable("session_nodes")
-        .set({ entry_json: rewrite.entryJson })
-        .where("session_key", "=", rewrite.sessionKey),
-    );
-    executeSqliteQuerySync(
-      database,
-      db
-        .updateTable("session_windows")
-        .set({ account_id: rewrite.accountId, channel: rewrite.channel })
-        .where("session_id", "=", rewrite.currentSessionId),
-    );
-  }
-  return rewrites.length;
 }

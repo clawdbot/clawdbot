@@ -2,12 +2,14 @@
 // body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { closeRequestAfterResponse } from "../infra/http-body.js";
 import {
   logRejectedLargePayload,
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
+import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
 
 /**
  * Apply baseline security headers that are safe for all response types (API JSON,
@@ -26,6 +28,22 @@ export function setDefaultSecurityHeaders(
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
   }
+}
+
+/** Finish a failed request without rewriting committed headers or orphaning its transport. */
+export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  if (!res.headersSent) {
+    res.statusCode = 500;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Internal Server Error");
+    return;
+  }
+
+  // Ending would frame a partial chunked body as a complete successful response.
+  res.destroy();
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -68,6 +86,16 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
     sendRateLimited(res, authResult.retryAfterMs);
     return;
   }
+  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    sendJson(res, 403, {
+      error: {
+        message:
+          "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    return;
+  }
   sendUnauthorized(res);
 }
 
@@ -77,7 +105,7 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
-export function buildMissingScopeForbiddenBody(
+function buildMissingScopeForbiddenBody(
   missingScope: string | undefined,
   requiredScopes?: readonly string[],
 ) {
@@ -121,12 +149,14 @@ export async function readJsonBodyOrError(
         reason: "json_body_limit",
         ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
+      closeRequestAfterResponse(req, res);
       sendJson(res, 413, {
         error: { message: "Payload too large", type: "invalid_request_error" },
       });
       return undefined;
     }
     if (body.error === "request body timeout") {
+      closeRequestAfterResponse(req, res);
       sendJson(res, 408, {
         error: { message: "Request body timeout", type: "invalid_request_error" },
       });
@@ -142,9 +172,11 @@ export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+export const SSE_CONTENT_TYPE = "text/event-stream; charset=utf-8";
+
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Content-Type", SSE_CONTENT_TYPE);
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
@@ -180,6 +212,18 @@ export function watchClientDisconnect(
       abortController.abort(new ClientDisconnectError());
     }
   };
+  const stopWatchingResponseErrors = () => {
+    res.off("error", handleClose);
+    res.off("close", stopWatchingResponseErrors);
+  };
+  // Finalizers release socket watchers before res.end(); keep its error
+  // listener until close so a failed flush cannot become process-fatal.
+  res.on("error", handleClose);
+  res.once("close", stopWatchingResponseErrors);
+  if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
+    handleClose();
+    return () => {};
+  }
   for (const socket of sockets) {
     socket.on("close", handleClose);
   }

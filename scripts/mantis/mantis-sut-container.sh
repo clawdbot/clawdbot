@@ -11,6 +11,7 @@ readonly iptables_bin="/usr/sbin/iptables"
 readonly timeout_bin="/usr/bin/timeout"
 readonly network_lock_file="/run/lock/openclaw-mantis-sut-network.lock"
 readonly network_state_root="/run/openclaw-mantis-sut-networks"
+readonly telegram_proxy_script="/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs"
 
 die() {
   echo "mantis SUT container: $*" >&2
@@ -124,11 +125,17 @@ cancel_runtime_claim() {
 }
 
 terminate_runtime_claim() {
-  # cancel_runtime_claim already captured the root-owned PID/PGID/start tuple.
-  # Never reread by name here: delayed cleanup must not target a replacement claim.
+  # Uses the tuple cancel_runtime_claim captured; never reread the claim by name here,
+  # or delayed cleanup targets whatever replacement claim now holds the container name.
   if claim_process_is_active; then
     kill -TERM -- "-$claimed_pgid" 2>/dev/null || true
   fi
+}
+
+wait_for_runtime_claim_exit() {
+  while claim_process_is_active; do
+    /bin/sleep 0.1
+  done
 }
 
 require_runtime_claim_active() {
@@ -156,6 +163,12 @@ runtime_resource_args=(
   --cpus 4
   --memory 8g
   --memory-swap 8g
+)
+
+proxy_resource_args=(
+  --cpus 1
+  --memory 256m
+  --memory-swap 256m
 )
 
 blocked_networks=(
@@ -265,7 +278,7 @@ cleanup_network_unlocked() {
     [[ -z "$subnet" || "$subnet" == "$inspected_subnet" ]] || return 1
     subnet="$inspected_subnet"
     write_network_state "$network_name" "$subnet" || return 1
-    if ! "$docker_bin" network rm "$network_name" >/dev/null 2>&1; then
+    if ! "$docker_bin" network rm "$network_name" >/dev/null; then
       if network_exists "$network_name"; then
         return 1
       else
@@ -304,7 +317,7 @@ remove_container_or_fail() {
     exists_result=$?
   fi
   if ((exists_result == 0)); then
-    if ! "$docker_bin" rm --force "$container_name" >/dev/null 2>&1; then
+    if ! "$docker_bin" rm --force "$container_name" >/dev/null; then
       if container_exists "$container_name"; then
         return 1
       else
@@ -367,7 +380,7 @@ remove_claimed_runtime_input() {
   fi
   [[ -e "$input_path" ]] || return 0
   [[ -d "$input_path" ]] || die "claimed runtime input is not a directory"
-  [[ "$(stat -c %u "$input_path")" == "$(id -u codex)" ]] \
+  [[ "$(stat -c %u "$input_path")" == "$(id -u mantis-sut)" ]] \
     || die "claimed runtime input owner mismatch"
   [[ "$(stat -c %d "$input_path")" == "$(stat -c %d "$runtime_parent")" ]] \
     || die "claimed runtime input filesystem mismatch"
@@ -409,6 +422,25 @@ create_public_only_network_unlocked() {
 
 create_public_only_network() {
   with_network_lock create_public_only_network_unlocked "$1"
+}
+
+create_internal_network_unlocked() {
+  local network_name="$1"
+  cleanup_network_unlocked "$network_name" || return 1
+  if ! "$docker_bin" network create --driver bridge --internal "$network_name" >/dev/null; then
+    return 1
+  fi
+  local subnet
+  if ! subnet="$(network_subnet "$network_name")"; then
+    cleanup_network_unlocked "$network_name" || true
+    return 1
+  fi
+  [[ "$subnet" =~ ^[0-9.]+/[0-9]+$ ]] || return 1
+  write_network_state "$network_name" "$subnet"
+}
+
+create_internal_network() {
+  with_network_lock create_internal_network_unlocked "$1"
 }
 
 require_locked_worktree() {
@@ -467,7 +499,7 @@ lock_runtime_root() {
   [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
     || die "invalid runtime root"
   [[ -d "$runtime_source" && ! -L "$runtime_source" ]] || die "runtime root is not a directory"
-  [[ "$(stat -c %u "$runtime_source")" == "$(id -u codex)" ]] || die "runtime root owner mismatch"
+  [[ "$(stat -c %u "$runtime_source")" == "$(id -u mantis-sut)" ]] || die "runtime root owner mismatch"
   local runtime_parent
   runtime_parent="$(realpath -e "$(<"$runtime_root_file")")"
   [[ "$(stat -c %u "$runtime_parent")" == "0" ]] || die "runtime parent is not root-owned"
@@ -481,7 +513,7 @@ lock_runtime_root() {
     rm -f "$quarantine"
     die "quarantined runtime is not a directory"
   fi
-  if [[ "$(stat -c %u "$quarantine")" != "$(id -u codex)" ]]; then
+  if [[ "$(stat -c %u "$quarantine")" != "$(id -u mantis-sut)" ]]; then
     rm -rf --one-file-system "$quarantine"
     die "quarantined runtime owner mismatch"
   fi
@@ -492,9 +524,9 @@ lock_runtime_root() {
   fi
   local safe_runtime="${filesystem%%$'\t'*}"
   local image_path="${filesystem#*$'\t'}"
-  chown codex:codex "$safe_runtime"
+  chown mantis-sut:mantis-proof "$safe_runtime"
   chmod 0700 "$safe_runtime"
-  if ! /usr/sbin/runuser -u codex -- \
+  if ! /usr/sbin/runuser -u mantis-sut -- \
     /bin/cp -a --no-dereference "$quarantine/." "$safe_runtime/"; then
     destroy_bounded_filesystem "$safe_runtime" "$image_path"
     rm -rf --one-file-system "$quarantine"
@@ -527,8 +559,10 @@ readonly network_probe_script='
     socket.on("timeout", () => { socket.destroy(); resolve(false); });
   });
   (async () => {
+    // Port 9 need not be open: the INPUT reject counter below proves the host-bound
+    // packet hit our isolation rule, while a closed port alone cannot satisfy the check.
     const blocked = await Promise.all([
-      connects("codex-host", Number(process.env.PROXY_PORT)),
+      connects("runner-host", 9),
       connects("10.0.0.1", 80),
       connects("100.100.100.200", 80),
       connects("169.254.169.254", 80),
@@ -537,7 +571,7 @@ readonly network_probe_script='
     if (blocked.some(Boolean)) process.exit(41);
     const [telegramIp] = await dns.resolve4("api.telegram.org");
     if (!telegramIp || !(await connects(telegramIp, 443))) process.exit(42);
-  })().catch(() => process.exit(42));
+  })().catch((error) => { console.error(error); process.exit(42); });
 '
 
 # Candidate lifecycle scripts run only inside the isolated build container.
@@ -555,11 +589,9 @@ readonly build_command='
 
 run_network_probe() {
   local network_name="$1"
-  local proxy_port="$2"
   "$docker_bin" run --rm --network "$network_name" "${container_security_args[@]}" \
     "${runtime_resource_args[@]}" \
-    --add-host codex-host:host-gateway \
-    --env PROXY_PORT="$proxy_port" \
+    --add-host runner-host:host-gateway \
     "$image" node -e "$network_probe_script"
   local subnet
   subnet="$(network_subnet "$network_name")"
@@ -649,6 +681,8 @@ case "$command" in
       fi
       return "$result"
     }
+    # `set -e` preserves a failed probe/container status through this EXIT trap.
+    # The explicit cleanup below is reached only after the protected command succeeds.
     trap cleanup_build EXIT INT TERM
     create_bounded_filesystem "${container_name}-fs" 10G >/dev/null
     isolated_root="$build_mount/repo"
@@ -656,7 +690,7 @@ case "$command" in
     /bin/cp -a "$candidate_root/." "$isolated_root/"
     chown -R mantis-builder:mantis-builder "$isolated_root"
     create_public_only_network "$network_name"
-    run_network_probe "$network_name" 9
+    run_network_probe "$network_name"
     /usr/bin/timeout --signal=TERM --kill-after=30s 30m \
       "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${build_resource_args[@]}" \
@@ -670,7 +704,6 @@ case "$command" in
       --env OPENCLAW_BUILD_PRIVATE_QA=1 \
       --env OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
       "$image" sh -c "$build_command"
-    build_result=$?
     remove_container_or_fail "$container_name"
     cleanup_network "$network_name"
     build_size_mb="$(du -sm "$isolated_root" | awk '{print $1}')"
@@ -693,11 +726,9 @@ case "$command" in
     published_root=""
     destroy_bounded_filesystem "$build_mount" "$build_image"
     trap - EXIT INT TERM
-    exit "$build_result"
     ;;
   check)
-    [[ $# -eq 1 ]] || die "check expects a proxy port"
-    require_port "$1"
+    [[ $# -eq 0 ]] || die "check expects no arguments"
     network_name="openclaw-mantis-check-$$"
     create_public_only_network "$network_name"
     # shellcheck disable=SC2329
@@ -705,26 +736,22 @@ case "$command" in
       cleanup_network "$network_name"
     }
     trap cleanup_check EXIT INT TERM
-    run_network_probe "$network_name" "$1"
-    check_result=$?
+    run_network_probe "$network_name"
     cleanup_network "$network_name"
     trap - EXIT INT TERM
-    exit "$check_result"
     ;;
   run)
-    [[ $# -eq 7 ]] \
-      || die "run expects name, lane, repo root, runtime root, gateway port, mock port, and proxy port"
+    [[ $# -eq 6 ]] \
+      || die "run expects name, lane, repo root, runtime root, gateway port, and mock port"
     container_name="$1"
     lane="$2"
     repo_root="$(realpath -e "$3")"
     runtime_source="$4"
     gateway_port="$5"
     mock_port="$6"
-    proxy_port="$7"
     require_container_name "$container_name"
     require_port "$gateway_port"
     require_port "$mock_port"
-    require_port "$proxy_port"
     [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
       || die "invalid runtime root"
     create_runtime_claim "$container_name" "$runtime_source"
@@ -738,9 +765,24 @@ case "$command" in
     input_file="$safe_runtime/container-input.json"
     trap 'rm -f "${input_file:-}"' EXIT
     [[ -f "$input_file" && ! -L "$input_file" ]] || die "invalid container input"
-    [[ "$(stat -c %u "$input_file")" == "$(id -u codex)" ]] || die "container input owner mismatch"
+    [[ "$(stat -c %u "$input_file")" == "$(id -u mantis-sut)" ]] || die "container input owner mismatch"
     [[ "$(stat -c %a "$input_file")" == "600" ]] || die "container input mode mismatch"
     [[ "$(stat -c %h "$input_file")" == "1" ]] || die "container input must not be hard-linked"
+    response_control_dir="$safe_runtime/mock-control"
+    [[ -d "$response_control_dir" && ! -L "$response_control_dir" ]] \
+      || die "invalid mock response control directory"
+    [[ "$(stat -c %u "$response_control_dir")" == "$(id -u mantis-sut)" ]] \
+      || die "mock response control directory owner mismatch"
+    [[ "$(stat -c %a "$response_control_dir")" == "700" ]] \
+      || die "mock response control directory mode mismatch"
+    response_control="$response_control_dir/response.json"
+    [[ -f "$response_control" && ! -L "$response_control" ]] || die "invalid mock response control"
+    [[ "$(stat -c %u "$response_control")" == "$(id -u mantis-sut)" ]] \
+      || die "mock response control owner mismatch"
+    [[ "$(stat -c %a "$response_control")" == "600" ]] \
+      || die "mock response control mode mismatch"
+    [[ "$(stat -c %h "$response_control")" == "1" ]] \
+      || die "mock response control must not be hard-linked"
     for name in gateway.log mock-openai.log mock-openai-requests.ndjson sut-attestation.json; do
       [[ ! -e "$safe_runtime/$name" && ! -L "$safe_runtime/$name" ]] \
         || die "runtime output was pre-created"
@@ -750,8 +792,11 @@ case "$command" in
     write_root_attestation "$runtime_parent/attestations/$lane.json" "$lane" "$attested_sha"
     success_marker="$(jq -er '.mockResponseText | strings' "$input_file")"
     telegram_bot_token="$(jq -er '.telegramBotToken | strings' "$input_file")"
+    telegram_bot_id="${telegram_bot_token%%:*}"
+    [[ "$telegram_bot_id" =~ ^[1-9][0-9]*$ ]] || die "invalid Telegram bot token"
+    telegram_alias_token="${telegram_bot_id}:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     export SUCCESS_MARKER="$success_marker"
-    export TELEGRAM_BOT_TOKEN="$telegram_bot_token"
+    export TELEGRAM_BOT_TOKEN="$telegram_alias_token"
     mock_response_chunk_delay_ms="$(jq -r '.mockResponseChunkDelayMs // ""' "$input_file")"
     gateway_password="$(jq -r '.gatewayPassword // ""' "$input_file")"
     rm -f "$input_file"
@@ -760,9 +805,9 @@ case "$command" in
     gateway_log="$runtime_source/gateway.log"
     mock_log="$runtime_source/mock-openai.log"
     request_log="$runtime_source/mock-openai-requests.ndjson"
-    install -T -o codex -g codex -m 0600 /dev/null "$safe_runtime/gateway.log"
-    install -T -o codex -g codex -m 0600 /dev/null "$safe_runtime/mock-openai.log"
-    install -T -o codex -g codex -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
+    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/gateway.log"
+    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/mock-openai.log"
+    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
     export CI=1
     export GATEWAY_LOG="$gateway_log"
     export GIT_COMMIT="$attested_sha"
@@ -770,6 +815,7 @@ case "$command" in
     export MOCK_LOG="$mock_log"
     export MOCK_PORT="$mock_port"
     export MOCK_REQUEST_LOG="$request_log"
+    export MOCK_RESPONSE_CONTROL="$runtime_source/mock-control/response.json"
     export NODE_DISABLE_COMPILE_CACHE=1
     export OPENAI_API_KEY=sk-openclaw-e2e-mock
     export OPENCLAW_BUILD_PRIVATE_QA=1
@@ -786,7 +832,7 @@ case "$command" in
     fi
 
     forwarded_env=(
-      CI GATEWAY_LOG GIT_COMMIT HOME MOCK_LOG MOCK_PORT MOCK_REQUEST_LOG NODE_DISABLE_COMPILE_CACHE
+      CI GATEWAY_LOG GIT_COMMIT HOME MOCK_LOG MOCK_PORT MOCK_REQUEST_LOG MOCK_RESPONSE_CONTROL NODE_DISABLE_COMPILE_CACHE
       OPENAI_API_KEY OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_CONFIG_PATH
       OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_GATEWAY_PORT OPENCLAW_STATE_DIR
       SUCCESS_MARKER TELEGRAM_BOT_TOKEN
@@ -799,29 +845,49 @@ case "$command" in
     done
 
     network_name="${container_name}-net"
-    create_public_only_network "$network_name"
+    egress_network_name="${container_name}-egress"
+    proxy_container_name="${container_name}-telegram-proxy"
+    [[ -f "$telegram_proxy_script" && ! -L "$telegram_proxy_script" ]] \
+      || die "missing trusted Telegram Bot API proxy"
+    [[ "$(stat -c %u "$telegram_proxy_script")" == "0" ]] \
+      || die "Telegram Bot API proxy owner mismatch"
+    [[ -z "$(find "$telegram_proxy_script" -perm /222 -print -quit)" ]] \
+      || die "Telegram Bot API proxy is writable"
     # shellcheck disable=SC2329
     cleanup_run() {
       local result=0
       remove_container_or_fail "$container_name" || result=$?
+      remove_container_or_fail "$proxy_container_name" || result=$?
       cleanup_network "$network_name" || result=$?
+      cleanup_network "$egress_network_name" || result=$?
       return "$result"
     }
     trap cleanup_run EXIT INT TERM
-    run_network_probe "$network_name" "$proxy_port"
+    create_internal_network "$network_name"
+    create_public_only_network "$egress_network_name"
+    run_network_probe "$egress_network_name"
     require_runtime_claim_active "$container_name"
-      "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
+    "$docker_bin" run --detach --name "$proxy_container_name" --network "$egress_network_name" \
+      "${container_security_args[@]}" "${proxy_resource_args[@]}" \
+      --mount "type=bind,src=$telegram_proxy_script,dst=/opt/mantis/telegram-bot-api-proxy.mjs,readonly" \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      --env TELEGRAM_PROXY_ALIAS_TOKEN="$telegram_alias_token" \
+      --env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token" \
+      "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
+    "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"
+    require_runtime_claim_active "$container_name"
+    "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
       --workdir "$repo_root" \
-      --user "$(id -u codex):$(id -g codex)" \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \
       "$image" sh -c "$sut_command"
-    run_result=$?
+    remove_container_or_fail "$proxy_container_name"
     cleanup_network "$network_name"
+    cleanup_network "$egress_network_name"
     trap - EXIT INT TERM
-    exit "$run_result"
     ;;
   stop)
     run_cleanup_with_deadline stop "$@"
@@ -834,10 +900,15 @@ case "$command" in
     [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
       || die "invalid runtime source"
     cancel_runtime_claim "$1" "$runtime_source"
+    # Signal the owner before deadline-exposed removal, then wait for its exact claim to end;
+    # destroy follows stop synchronously and must not race the owner's TERM cleanup.
+    terminate_runtime_claim
     stop_result=0
     remove_container_or_fail "$1" || stop_result=1
+    remove_container_or_fail "${1}-telegram-proxy" || stop_result=1
     cleanup_network "${1}-net" || stop_result=1
-    terminate_runtime_claim
+    cleanup_network "${1}-egress" || stop_result=1
+    wait_for_runtime_claim_exit
     exit "$stop_result"
     ;;
   destroy)
@@ -861,15 +932,23 @@ case "$command" in
       exists_result=$?
       ((exists_result == 1)) || exit "$exists_result"
     fi
-    if network_exists "${1}-net"; then
-      die "refusing to destroy an active SUT network"
+    if container_exists "${1}-telegram-proxy"; then
+      die "refusing to destroy a running Telegram proxy container"
     else
       exists_result=$?
       ((exists_result == 1)) || exit "$exists_result"
     fi
-    network_state="$(network_state_path "${1}-net")"
-    [[ ! -e "$network_state" && ! -L "$network_state" ]] \
-      || die "refusing to destroy runtime with pending network cleanup"
+    for network_name in "${1}-net" "${1}-egress"; do
+      if network_exists "$network_name"; then
+        die "refusing to destroy an active SUT network"
+      else
+        exists_result=$?
+        ((exists_result == 1)) || exit "$exists_result"
+      fi
+      network_state="$(network_state_path "$network_name")"
+      [[ ! -e "$network_state" && ! -L "$network_state" ]] \
+        || die "refusing to destroy runtime with pending network cleanup"
+    done
     if [[ -L "$runtime_source" ]]; then
       [[ "$(readlink "$runtime_source")" == "$runtime_root" ]] \
         || die "invalid locked runtime symlink"

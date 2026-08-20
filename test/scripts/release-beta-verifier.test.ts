@@ -735,13 +735,13 @@ describe("readBoundedJsonResponse", () => {
         "ClawHub package",
         64,
       ),
-    ).rejects.toThrow("ClawHub package response body exceeded 64 bytes.");
+    ).rejects.toThrow("ClawHub package response body exceeded 64 bytes");
   });
 
   it("rejects oversized streamed JSON bodies", async () => {
     await expect(
       readBoundedJsonResponse(new Response('{"padding":"too-large"}'), "ClawHub package", 8),
-    ).rejects.toThrow("ClawHub package response body exceeded 8 bytes.");
+    ).rejects.toThrow("ClawHub package response body exceeded 8 bytes");
   });
 
   it("keeps ClawHub request timeouts active while reading JSON bodies", async () => {

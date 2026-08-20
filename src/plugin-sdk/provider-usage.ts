@@ -30,6 +30,7 @@ export {
   encodeProviderUsageAdminToken,
   fetchProviderUsagePages,
   parseProviderUsageNonNegativeInteger,
+  parseProviderUsageNonNegativeNumber,
   parseProviderUsageNumber,
   resolveProviderUsageDailyPeriod,
   resolveProviderUsageDisplayName,

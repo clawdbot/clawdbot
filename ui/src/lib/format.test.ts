@@ -1,25 +1,35 @@
 // @vitest-environment node
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import {
   clampText,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
+  formatContextTokenCapacity,
+  formatDurationCompact,
+  formatDurationHuman,
   formatMs,
   formatRelativeTimestamp,
+  formatTimeAgo,
   formatTimeMs,
-  formatTokens,
   formatUnknownText,
-  parseSessionKeyParts,
-  setUiTimeFormatPreference,
   truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 describe("formatAgo", () => {
-  it("returns 'in <1m' for timestamps less than 60s in the future", () => {
-    expect(formatRelativeTimestamp(Date.now() + 30_000)).toBe("in <1m");
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  it("formats timestamps less than 60s in the future", () => {
+    expect(formatRelativeTimestamp(Date.now() + 30_000)).toMatch(/^in (29|30)s$/);
+  });
+
+  it("preserves past seconds without a suffix", () => {
+    expect(formatRelativeTimestamp(Date.now() - 30_000, { suffix: false })).toMatch(/^(29|30)s$/);
   });
 
   it("returns 'Xm from now' for future timestamps", () => {
@@ -34,7 +44,7 @@ describe("formatAgo", () => {
     expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
   });
 
-  it("returns 'Xs ago' for recent past timestamps", () => {
+  it("returns a localized current-time label for recent past timestamps", () => {
     expect(formatRelativeTimestamp(Date.now() - 10_000)).toBe("just now");
   });
 
@@ -45,6 +55,39 @@ describe("formatAgo", () => {
   it("returns 'n/a' for null/undefined", () => {
     expect(formatRelativeTimestamp(null)).toBe("n/a");
     expect(formatRelativeTimestamp(undefined)).toBe("n/a");
+  });
+
+  it("uses the active Control UI locale", async () => {
+    await i18n.setLocale("fr");
+    expect(formatRelativeTimestamp(Date.now() - 5 * 60_000)).toContain("5");
+    expect(formatRelativeTimestamp(Date.now() - 5 * 60_000)).not.toContain("ago");
+  });
+});
+
+describe("localized durations", () => {
+  it.each([
+    { durationMs: 59_000, expected: "59s" },
+    { durationMs: 92_000, expected: "1m 32s" },
+    { durationMs: 3_660_000, expected: "1h 1m" },
+    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
+  ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
+    expect(formatDurationCompact(durationMs)).toBe(expected);
+  });
+
+  it("switches human durations to days at 24 hours", () => {
+    expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  });
+});
+
+describe("formatTimeAgo", () => {
+  it("keeps sub-minute durations in seconds", () => {
+    expect(formatTimeAgo(30_000, { suffix: false })).toBe("30s");
+  });
+
+  it("localizes its invalid-duration fallback", async () => {
+    await i18n.setLocale("fr");
+    expect(formatTimeAgo(null)).not.toBe("unknown");
+    await i18n.setLocale("en");
   });
 });
 
@@ -64,44 +107,6 @@ describe("date/time millisecond formatters", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
     expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
     expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
-  });
-});
-
-describe("agents.defaults.timeFormat preference", () => {
-  // 19:30 UTC: 24-hour renders "19:30", 12-hour renders "7:30 PM".
-  const ts = Date.UTC(2026, 0, 15, 19, 30);
-  const opts: Intl.DateTimeFormatOptions = {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  };
-
-  afterEach(() => {
-    setUiTimeFormatPreference("auto");
-  });
-
-  it("forces a 24-hour clock when preference is 24", () => {
-    setUiTimeFormatPreference("24");
-    expect(formatTimeMs(ts, opts, "")).toBe("19:30");
-  });
-
-  it("forces a 12-hour clock when preference is 12", () => {
-    setUiTimeFormatPreference("12");
-    const formatted = formatTimeMs(ts, opts, "");
-    expect(formatted).toContain("7:30");
-    expect(formatted).toMatch(/PM/i);
-  });
-
-  it("lets the caller override the resolved hour cycle", () => {
-    setUiTimeFormatPreference("24");
-    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toMatch(/PM/i);
-  });
-
-  it("leaves rendering to the browser locale default for auto", () => {
-    setUiTimeFormatPreference("auto");
-    const auto = formatDateTimeMs(ts, opts, "");
-    const native = new Date(ts).toLocaleString([], opts);
-    expect(auto).toBe(native);
   });
 });
 
@@ -195,34 +200,6 @@ describe("formatUnknownText", () => {
   });
 });
 
-describe("parseSessionKeyParts", () => {
-  it("parses a standard agent session key", () => {
-    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
-      agentId: "data-expert",
-      channel: "dingtalk",
-      accountId: "cidzg6sF43NZMy52Rnk8EN",
-    });
-  });
-
-  it("parses account ids containing separators", () => {
-    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
-      agentId: "main",
-      channel: "telegram",
-      accountId: "user:12345:extra",
-    });
-  });
-
-  it("returns null for non-agent or malformed keys", () => {
-    expect(parseSessionKeyParts("global:default")).toBeNull();
-    expect(parseSessionKeyParts("direct:some-key")).toBeNull();
-    expect(parseSessionKeyParts("")).toBeNull();
-    expect(parseSessionKeyParts("agent:")).toBeNull();
-    expect(parseSessionKeyParts("agent:main")).toBeNull();
-    expect(parseSessionKeyParts("agent:main:")).toBeNull();
-    expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
-  });
-});
-
 describe("formatCompactTokenCount", () => {
   it("formats values under 1,000 as-is", () => {
     expect(formatCompactTokenCount(0)).toBe("0");
@@ -237,6 +214,7 @@ describe("formatCompactTokenCount", () => {
 
   it("formats millions with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000_000)).toBe("1M");
+    expect(formatCompactTokenCount(1_050_000)).toBe("1.1M");
     expect(formatCompactTokenCount(1_500_000)).toBe("1.5M");
   });
 
@@ -263,15 +241,31 @@ describe("formatCompactTokenCount", () => {
   });
 });
 
-describe("formatTokens", () => {
-  it("rolls a value that rounds up to 1000k over into the M branch", () => {
-    expect(formatTokens(999_500)).toBe("1.0M");
-    expect(formatTokens(999_999)).toBe("1.0M");
-    expect(formatTokens(999_499)).toBe("999k");
-    expect(formatTokens(1_000_000)).toBe("1.0M");
-    expect(formatTokens(12_345)).toBe("12k");
-    expect(formatTokens(5_500)).toBe("5.5k");
-    expect(formatTokens(null)).toBe("0");
+describe("formatContextTokenCapacity", () => {
+  it("truncates million-scale capacity to at most one decimal", () => {
+    expect(formatContextTokenCapacity(1_000_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_050_000)).toBe("1M");
+    expect(formatContextTokenCapacity(1_100_000)).toBe("1.1M");
+  });
+
+  it("preserves shared compact formatting below one million", () => {
+    expect(formatContextTokenCapacity(999)).toBe("999");
+    expect(formatContextTokenCapacity(1_000)).toBe("1k");
+    expect(formatContextTokenCapacity(32_768)).toBe("32.8k");
+    expect(formatContextTokenCapacity(999_999)).toBe("1M");
+  });
+});
+
+describe("formatCompactTokenCount edge inputs", () => {
+  it("falls back to 0 for nullish or non-finite input", () => {
+    expect(formatCompactTokenCount(null)).toBe("0");
+    expect(formatCompactTokenCount(undefined)).toBe("0");
+    expect(formatCompactTokenCount(Number.NaN)).toBe("0");
+  });
+
+  it("formats billion-scale provider totals with a B suffix", () => {
+    expect(formatCompactTokenCount(1_000_000_000)).toBe("1B");
+    expect(formatCompactTokenCount(4_132_000_000)).toBe("4.1B");
   });
 });
 

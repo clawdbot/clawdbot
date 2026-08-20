@@ -20,8 +20,8 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
         },
       } as never),
     ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png" },
-      { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
+      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
+      { url: "https://example.test/b.jpg", contentType: "image/jpeg", kind: "image" },
     ]);
   });
 
@@ -33,7 +33,13 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
           media: [{ path: "media/inbound/a.png", contentType: "image/png", workspaceDir }],
         },
       } as never),
-    ).toEqual([{ path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" }]);
+    ).toEqual([
+      {
+        path: path.join(workspaceDir, "media/inbound/a.png"),
+        contentType: "image/png",
+        kind: "image",
+      },
+    ]);
   });
 
   it("does not consult legacy top-level fields after the versioned cutover", () => {
@@ -244,10 +250,38 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       expectedMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true }],
     },
     {
+      name: "probed video metadata",
+      media: [
+        {
+          path: "/tmp/clip.mp4",
+          contentType: "video/mp4",
+          durationMs: 12_346,
+          width: 1280,
+          height: 720,
+        },
+      ],
+      expectedLegacy: {
+        MediaPath: "/tmp/clip.mp4",
+        MediaPaths: ["/tmp/clip.mp4"],
+        MediaType: "video/mp4",
+        MediaTypes: ["video/mp4"],
+      },
+      expectedMedia: [
+        {
+          path: "/tmp/clip.mp4",
+          contentType: "video/mp4",
+          durationMs: 12_346,
+          width: 1280,
+          height: 720,
+        },
+      ],
+    },
+    {
       name: "workspace-relative attachment",
       media: [
         {
           path: "media/inbound/a.png",
+          url: "https://example.test/original.png",
           contentType: "image/png",
           workspaceDir: "/tmp/workspace",
         },
@@ -260,11 +294,23 @@ describe("buildPersistedUserTurnMessage media projection", () => {
       },
       expectedMedia: [
         {
-          path: "media/inbound/a.png",
+          path: path.join("/tmp/workspace", "media/inbound/a.png"),
+          url: "https://example.test/original.png",
           contentType: "image/png",
           workspaceDir: "/tmp/workspace",
         },
       ],
+    },
+    {
+      name: "unanchored relative attachment",
+      media: [{ path: "media/inbound/unanchored.png", contentType: "image/png" }],
+      expectedLegacy: {
+        MediaPath: "media/inbound/unanchored.png",
+        MediaPaths: ["media/inbound/unanchored.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+      expectedMedia: [{ path: "media/inbound/unanchored.png", contentType: "image/png" }],
     },
     {
       name: "hydration-suppressed attachment",

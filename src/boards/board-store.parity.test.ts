@@ -11,7 +11,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { InMemoryBoardStore, type BoardStore } from "./board-store.js";
+import type { BoardStore } from "./board-store.js";
+import { createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -27,16 +28,7 @@ function seedSession(env: NodeJS.ProcessEnv, agentId: string, sessionKey: string
 }
 
 function createSqliteStore(): BoardStore {
-  const stateDir = tempDirs.make("openclaw-board-parity-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  seedSession(env, "main", "agent:main:board");
-  return new SqliteBoardStore({
-    resolveSession: (sessionKey) => ({
-      agentId: sessionKey.split(":")[1] ?? "main",
-      sessionKey,
-    }),
-    env,
-  });
+  return createTestBoardStore();
 }
 
 afterEach(() => {
@@ -73,10 +65,8 @@ it("does not select the HTML BLOB when preparing board view metadata", () => {
   prepare.mockRestore();
 });
 
-describe.each([
-  ["memory", () => new InMemoryBoardStore()],
-  ["sqlite", createSqliteStore],
-] as const)("BoardStore parity: %s", (_kind, createStore) => {
+describe("SqliteBoardStore behavior", () => {
+  const createStore = createSqliteStore;
   it("persists revisions, layout, bytes, and declared summaries", () => {
     const store = createStore();
     const first = store.putWidget({

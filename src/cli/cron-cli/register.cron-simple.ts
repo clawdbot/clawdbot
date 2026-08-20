@@ -1,10 +1,12 @@
 // Cron simple command registration: remove, toggle, show, runs, and run-now.
 import {
+  parseStrictPositiveInteger,
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { resolveCronCompletionStatus } from "../../cron/completion-status.js";
+import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
@@ -12,8 +14,10 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import {
   enrichCronJsonWithStatus,
+  formatCronLookupMiss,
   handleCronCliError,
   printCronJson,
   printCronShow,
@@ -30,9 +34,10 @@ type CronRunCommandResult = {
   runId?: string;
 };
 
-type CronRunLogEntryResult = {
-  status?: "ok" | "error" | "skipped";
-};
+type CronRunLogEntryResult = Pick<
+  CronRunLogEntry,
+  "status" | "completionStatus" | "delivered" | "deliveryStatus"
+>;
 
 function parseCronRunWaitDuration(raw: unknown, label: string): number {
   const input =
@@ -101,8 +106,7 @@ function registerCronToggleCommand(params: {
   enabled: boolean;
 }) {
   addGatewayClientOptions(
-    params.cron
-      .command(params.name)
+    createCronOutputCommand(params.cron, params.name)
       .description(params.description)
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
@@ -127,13 +131,9 @@ function registerCronToggleCommand(params: {
 
 export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("rm")
-      .alias("remove")
-      .alias("delete")
-      .description("Remove a cron job")
+    createCronOutputCommand(cron, "rm")
+      .description("Remove an automation")
       .argument("<id>", "Job id")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.remove", opts, { id });
@@ -147,20 +147,19 @@ export function registerCronSimpleCommands(cron: Command) {
   registerCronToggleCommand({
     cron,
     name: "enable",
-    description: "Enable a cron job",
+    description: "Enable an automation",
     enabled: true,
   });
   registerCronToggleCommand({
     cron,
     name: "disable",
-    description: "Disable a cron job",
+    description: "Disable an automation",
     enabled: false,
   });
 
   addGatewayClientOptions(
-    cron
-      .command("get")
-      .description("Get a cron job as JSON")
+    createCronOutputCommand(cron, "get")
+      .description("Get an automation as JSON")
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
         try {
@@ -175,7 +174,7 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("show")
-      .description("Show a cron job")
+      .description("Show an automation")
       .argument("<id>", "Job id or exact name")
       .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
@@ -184,7 +183,7 @@ export function registerCronSimpleCommands(cron: Command) {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new Error(`cron job not found: ${String(id)}`);
+            throw new Error(formatCronLookupMiss(String(id)));
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));
@@ -198,9 +197,8 @@ export function registerCronSimpleCommands(cron: Command) {
   );
 
   addGatewayClientOptions(
-    cron
-      .command("runs")
-      .description("Show cron run history")
+    createCronOutputCommand(cron, "runs")
+      .description("Show automation run history")
       .requiredOption("--id <id>", "Job id")
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
@@ -211,6 +209,9 @@ export function registerCronSimpleCommands(cron: Command) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
           const id = String(opts.id);
+          if (typeof opts.runId === "string" && !opts.runId.trim()) {
+            throw new Error("--run-id must not be blank");
+          }
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
@@ -224,9 +225,8 @@ export function registerCronSimpleCommands(cron: Command) {
   );
 
   addGatewayClientOptions(
-    cron
-      .command("run")
-      .description("Run a cron job now (debug)")
+    createCronOutputCommand(cron, "run")
+      .description("Run an automation now (debug)")
       .argument("<id>", "Job id")
       .option("--due", "Run only when due (default behavior in older versions)", false)
       .option("--wait", "Wait for the queued run to finish", false)
@@ -267,8 +267,22 @@ export function registerCronSimpleCommands(cron: Command) {
               timeoutMs: waitTimeoutMs,
               pollIntervalMs,
             });
-            printCronJson({ ...res, completed: true, status: run.status, run });
-            defaultRuntime.exit(run.status === "ok" ? 0 : 1);
+            const completionStatus =
+              run.completionStatus ??
+              resolveCronCompletionStatus({
+                status: run.status,
+                delivered: run.delivered,
+                deliveryStatus: run.deliveryStatus,
+              });
+            const completedRun = { ...run, completionStatus };
+            printCronJson({
+              ...res,
+              completed: true,
+              status: run.status,
+              completionStatus,
+              run: completedRun,
+            });
+            defaultRuntime.exit(completionStatus === "succeeded" ? 0 : 1);
             return;
           }
           printCronJson(res);

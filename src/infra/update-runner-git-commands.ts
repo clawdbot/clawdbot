@@ -42,13 +42,20 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+export function resolveBuildEnv(
+  env?: NodeJS.ProcessEnv,
+  buildCacheRoot?: string,
+): NodeJS.ProcessEnv | undefined {
   const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
   const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
-  if (nextNodeOptions === currentNodeOptions) {
+  if (nextNodeOptions === currentNodeOptions && !buildCacheRoot) {
     return env;
   }
-  return { ...env, NODE_OPTIONS: nextNodeOptions };
+  return {
+    ...env,
+    NODE_OPTIONS: nextNodeOptions,
+    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+  };
 }
 
 export function resolveInstallEnv(
@@ -87,7 +94,7 @@ function isSupersededInstallFailure(
 }
 
 function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
+  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
     step.name,
   );
 }

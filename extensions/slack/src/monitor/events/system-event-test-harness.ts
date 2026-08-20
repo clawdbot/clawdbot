@@ -1,15 +1,18 @@
 // Slack plugin module implements system event test harness behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
 import type { SlackMonitorContext } from "../context.js";
 
 export type SlackSystemEventHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
+  context?: AllMiddlewareArgs["context"];
+  client?: AllMiddlewareArgs["client"];
 }) => Promise<void>;
 
 export type SlackSystemEventTestOverrides = {
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
-  channelType?: "im" | "channel";
+  channelType?: "im" | "channel" | "group" | "mpim";
   channelUsers?: string[];
   reactionMode?: "off" | "own" | "all" | "allowlist";
   reactionAllowlist?: Array<string | number>;
@@ -50,6 +53,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     shouldDropMismatchedSlackEvent: () => false,
     isChannelAllowed: () => true,
     rememberSlackChannelType: () => {},
+    recallSlackChannelType: () => undefined,
     resolveChannelName: async () => ({
       name: channelType === "im" ? "direct" : "general",
       type: channelType,
@@ -57,7 +61,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     resolveUserName: async (userId: string) => ({
       name: overrides?.userNames?.[userId] ?? "alice",
     }),
-    resolveSlackSystemEventSessionKey: () => "agent:main:main",
+    resolveSlackSystemEventRoute: () => ({ agentId: "main", sessionKey: "agent:main:main" }),
   } as unknown as SlackMonitorContext;
 
   return {

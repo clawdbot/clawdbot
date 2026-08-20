@@ -8,7 +8,7 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
-  clearSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshotState,
 } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
@@ -30,7 +30,7 @@ const CODEX_APP_SERVER_TOKEN_REF = {
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
-  clearSecretsRuntimeSnapshot();
+  clearSecretsRuntimeSnapshotState();
 });
 
 const TTS_REF = {

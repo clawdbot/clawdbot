@@ -1,3 +1,4 @@
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createAccountCronScheduledToolPolicy,
@@ -34,12 +35,6 @@ export function createScheduledToolPolicyMigrationCollector() {
       return result.mutated;
     },
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function usesToolRuntime(raw: Record<string, unknown>): boolean {

@@ -14,7 +14,6 @@ import { ZaloWebhookPayloadError } from "./webhook-spool.js";
 
 const {
   clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest: handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
@@ -218,7 +217,9 @@ describe("handleZaloWebhookRequest", () => {
         await vi.waitFor(() => expect(acceptWebhook).toHaveBeenCalledTimes(1));
         expect(settled).toBe(false);
         releaseAdmission();
-        expect((await responsePromise).status).toBe(200);
+        const response = await responsePromise;
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
       });
     } finally {
       releaseAdmission();
@@ -256,6 +257,7 @@ describe("handleZaloWebhookRequest", () => {
           body: '{"event_name":"message.text.received"}',
         });
         expect(response.status).toBe(500);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       });
     } finally {
       unregister();
@@ -322,7 +324,6 @@ describe("handleZaloWebhookRequest", () => {
         });
 
         expect(saw429).toBe(true);
-        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
       });
     } finally {
       unregister();
@@ -342,7 +343,6 @@ describe("handleZaloWebhookRequest", () => {
         });
 
         expect(saw429).toBe(true);
-        expect(getZaloWebhookRateLimitStateSizeForTest()).toBe(1);
       });
     } finally {
       unregister();

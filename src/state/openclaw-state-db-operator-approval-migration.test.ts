@@ -5,7 +5,7 @@ import {
   assertCanonicalOperatorApprovalKinds,
   repairOperatorApprovalSchema,
 } from "./openclaw-state-db-operator-approval-migration.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";

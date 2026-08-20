@@ -7,7 +7,7 @@ import {
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
@@ -43,6 +43,22 @@ function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[
     current = getFutureProofInnerMessage(current);
   }
   return chain;
+}
+
+export function findMessageSection<K extends keyof proto.IMessage>(
+  rawMessage: proto.IMessage | undefined,
+  sectionNames: readonly K[],
+): { name: K; value: Record<string, unknown> } | undefined {
+  const chain = buildMessageChain(rawMessage);
+  for (const name of sectionNames) {
+    for (const message of chain) {
+      const value = message[name];
+      if (isRecord(value)) {
+        return { name, value };
+      }
+    }
+  }
+  return undefined;
 }
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
@@ -113,27 +129,32 @@ export function extractContextInfo(
 }
 
 export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
-  const message = unwrapMessage(rawMessage);
-  if (!message) {
+  // Context ownership already follows Baileys envelopes without entering quoted messages.
+  const mentionedJids = extractContextInfo(rawMessage)?.mentionedJid?.filter(Boolean);
+  if (!mentionedJids?.length) {
     return undefined;
   }
+  return uniqueStrings(mentionedJids);
+}
 
-  const candidates: Array<string[] | null | undefined> = [
-    message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.imageMessage?.contextInfo?.mentionedJid,
-    message.videoMessage?.contextInfo?.mentionedJid,
-    message.documentMessage?.contextInfo?.mentionedJid,
-    message.audioMessage?.contextInfo?.mentionedJid,
-    message.stickerMessage?.contextInfo?.mentionedJid,
-    message.buttonsResponseMessage?.contextInfo?.mentionedJid,
-    message.listResponseMessage?.contextInfo?.mentionedJid,
-  ];
-
-  const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
-  if (flattened.length === 0) {
+function extractNativeFlowResponseText(
+  response: proto.Message.IInteractiveResponseMessage | null | undefined,
+): string | undefined {
+  const paramsJson = response?.nativeFlowResponseMessage?.paramsJson;
+  if (!paramsJson) {
     return undefined;
   }
-  return uniqueStrings(flattened);
+  try {
+    const params: unknown = JSON.parse(paramsJson);
+    if (!isRecord(params)) {
+      return undefined;
+    }
+    return [params.title, params.id].find(
+      (value): value is string => typeof value === "string" && Boolean(value.trim()),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
@@ -157,9 +178,40 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
     const caption =
       candidate.imageMessage?.caption ??
       candidate.videoMessage?.caption ??
+      candidate.ptvMessage?.caption ??
       candidate.documentMessage?.caption;
     if (caption?.trim()) {
       return caption.trim();
+    }
+    const interactiveSelection = [
+      candidate.buttonsResponseMessage?.selectedDisplayText,
+      candidate.buttonsResponseMessage?.selectedButtonId,
+      candidate.listResponseMessage?.title,
+      candidate.listResponseMessage?.singleSelectReply?.selectedRowId,
+      candidate.templateButtonReplyMessage?.selectedDisplayText,
+      candidate.templateButtonReplyMessage?.selectedId,
+      candidate.interactiveResponseMessage?.body?.text,
+      extractNativeFlowResponseText(candidate.interactiveResponseMessage),
+    ].find((value) => Boolean(value?.trim()));
+    if (interactiveSelection) {
+      return interactiveSelection.trim();
+    }
+    const poll =
+      candidate.pollCreationMessage ??
+      candidate.pollCreationMessageV2 ??
+      candidate.pollCreationMessageV3 ??
+      candidate.pollCreationMessageV5;
+    if (poll) {
+      const question = poll.name?.trim();
+      const options = (poll.options ?? [])
+        .map((option) => option.optionName?.trim())
+        .filter((option): option is string => Boolean(option));
+      const pollText = [question, ...options.map((option) => `- ${option}`)]
+        .filter(Boolean)
+        .join("\n");
+      if (pollText) {
+        return pollText;
+      }
     }
   }
   const contactPlaceholder =
@@ -203,7 +255,7 @@ export function extractMediaKind(
   if (message.imageMessage) {
     return "image";
   }
-  if (message.videoMessage) {
+  if (message.videoMessage || message.ptvMessage) {
     // GIF playback is a video transport detail; no downstream behavior needs a new GIF kind.
     return "video";
   }
@@ -336,8 +388,21 @@ export function describeReplyContext(
   }
   const contextInfo = extractContextInfo(message);
   const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
-  if (!quoted) {
+  if (!quoted && !contextInfo?.stanzaId) {
     return null;
+  }
+  const senderJid = contextInfo?.participant ?? undefined;
+  const sender = resolveComparableIdentity({
+    jid: senderJid,
+    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
+  });
+  if (!quoted) {
+    // Baileys may preserve a real reply ID while omitting its private quoted payload.
+    return {
+      id: contextInfo?.stanzaId || undefined,
+      body: "[quoted message unavailable]",
+      sender,
+    };
   }
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
@@ -354,11 +419,6 @@ export function describeReplyContext(
     );
     return null;
   }
-  const senderJid = contextInfo?.participant ?? undefined;
-  const sender = resolveComparableIdentity({
-    jid: senderJid,
-    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
-  });
   return {
     id: contextInfo?.stanzaId || undefined,
     body: body ?? "",

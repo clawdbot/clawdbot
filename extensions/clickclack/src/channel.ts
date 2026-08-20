@@ -30,7 +30,7 @@ import {
   sendClickClackText,
 } from "./outbound.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { clickClackSetupAdapter, clickClackSetupContract } from "./setup-core.js";
+import { clickClackSetupContract } from "./setup-core.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import {
   buildClickClackTarget,
@@ -122,12 +122,12 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     capabilities: {
       chatTypes: ["direct", "group"],
       threads: true,
+      media: true,
       blockStreaming: true,
     },
     reload: { configPrefixes: ["channels.clickclack"] },
     configSchema: clickClackConfigSchema,
     config: clickClackConfigAdapter,
-    setup: clickClackSetupAdapter,
     setupContract: clickClackSetupContract,
     setupWizard: clickClackSetupWizard,
     secrets: {

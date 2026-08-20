@@ -4,6 +4,8 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 const PROCESS_BOUNDARY_VERSION = 1;
@@ -116,10 +118,6 @@ type QaGatewayProcessBoundaryEvidenceLaunch = {
   quiescedAt?: string;
   terminalState?: "failed-before-ready" | "ready-exited";
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function sha256(value: Buffer | string) {
   return createHash("sha256").update(value).digest("hex");
@@ -239,8 +237,7 @@ function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRunt
 async function assertContainedPath(root: string, target: string, label: string) {
   const rootPath = await fs.realpath(root);
   const targetPath = await fs.realpath(target);
-  const relative = path.relative(rootPath, targetPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathInside(rootPath, targetPath)) {
     throw new Error(`${label} escaped its trusted root`);
   }
   return targetPath;

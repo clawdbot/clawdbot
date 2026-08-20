@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
@@ -11,6 +12,8 @@ import "./tooltip.ts";
 class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
+  @property({ attribute: false }) authToken: string | null = null;
+  @property({ attribute: false }) avatarAuthReady = false;
   @property({ attribute: false }) avatarText = "";
   @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) menuOpen = false;
@@ -21,7 +24,27 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
 
+  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
+    if (this.isConnected) {
+      this.requestUpdate();
+    }
+  });
+
+  override disconnectedCallback() {
+    this.avatarLoader.reset();
+    super.disconnectedCallback();
+  }
+
   override render() {
+    return this.avatarLoader.withActiveRoutes(() => this.renderContent());
+  }
+
+  private renderContent() {
+    const avatarUrl = this.avatarUrl?.startsWith("/")
+      ? this.avatarAuthReady
+        ? this.avatarLoader.resolve(this.avatarUrl, this.authToken ? [this.authToken] : [])
+        : null
+      : this.avatarUrl;
     const menuLabel = this.switcherAvailable
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
@@ -42,9 +65,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-card__avatar">
-            ${this.avatarUrl
+            ${avatarUrl
               ? html`<img
-                  src=${this.avatarUrl}
+                  src=${avatarUrl}
                   alt=""
                   aria-hidden="true"
                   loading="lazy"

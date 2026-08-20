@@ -2,6 +2,16 @@
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
+export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+
+export {
+  estimateToolResultTextChars,
+  sliceToolResultTextToBudget,
+} from "../agents/embedded-agent-runner/tool-result-text-budget.js";
+export {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  resolveLiveToolResultMaxChars,
+} from "../agents/tool-result-limits.js";
 export { escapeHtml } from "../shared/html-escape.js";
 
 type ChannelProbeResult = BaseProbeResult & { elapsedMs?: number };
@@ -45,7 +55,7 @@ export {
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
-  safeParseJson,
+  tryParseJson as safeParseJson,
   shortenHomeInString,
   shortenHomePath,
   sleep,
@@ -53,4 +63,5 @@ export {
   truncateUtf16Safe,
 } from "../utils.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 export { withTimeout };

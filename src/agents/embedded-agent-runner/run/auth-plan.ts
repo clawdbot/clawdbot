@@ -87,7 +87,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           agentId: runParams.agentId,
           modelId: params.modelId,
           workspaceDir: params.workspaceDir,
-          userLockedAuthProfileId:
+          userPinnedAuthProfileId:
             runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
         });
   let noExternalAuthStore: AuthProfileStore | undefined;
@@ -102,7 +102,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       modelId: params.modelId,
       workspaceDir: params.workspaceDir,
       store: noExternalAuthStore,
-      userLockedAuthProfileId:
+      userPinnedAuthProfileId:
         runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
     });
   }
@@ -148,6 +148,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       env: process.env,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       authProfileStore: attemptAuthProfileStore,
       sessionAuthProfileId: preferredProfileId,
       sessionAuthProfileSource: runParams.authProfileIdSource,
@@ -189,8 +190,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: true,
           preferBundledStaticCatalogTransport: true,
-          preparedRuntimeModels: params.preparedModelRuntime?.configuredRuntimeModels,
-          preparedInlineProviderModels: params.preparedModelRuntime?.inlineProviderModels,
+          preparedModelRuntime: params.preparedModelRuntime,
           workspaceDir: params.workspaceDir,
           authProfileId,
           authProfileMode,

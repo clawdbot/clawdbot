@@ -7,10 +7,14 @@ version and the additive schema surface. Dates are authoring dates (2026).
 
 ## Unreleased
 
+- Add bounded `sessions.patchMany` session mutation orchestration.
+- Preserve required legacy agent-default fields while adding honest `ownership` and `selectionRequired` state to agent lists and initial snapshots.
 - Add semantic `agent` / `system` roster kinds negotiated through the `agent-kind` client capability.
 - Rename structured-question item `id` to `questionId` and flatten keyed answer arrays.
 - Slim worker and session-catalog payloads to the active wire contract.
 - Remove dead protocol surfaces and add since-vintage metadata to retained schemas and methods.
+- Add optional `step` on `SystemAgentChatResult` carrying the full awaited wizard step.
+- Project plugin tab `placement` in `hello-ok` so active plugins can target native Control UI routes.
 
 ## Protocol v4 (current)
 
@@ -126,7 +130,8 @@ Enhancement-only month (no new schema modules):
 - Add cron event triggers via polled condition-watcher scripts (#101195) and native
   mobile Automations parity (#106355).
 - Add system-agent conversational onboarding (#99935); rename `crestodian.*` methods to
-  `openclaw.chat` / `openclaw.setup.*` (2026-07-14, `a6a0716`).
+  `openclaw.chat` / `openclaw.setup.*` (2026-07-14, `a6a0716`); add typed hosted-wizard
+  steps and answers to `openclaw.chat` (#114631).
 - Add typed structured questions / `ask_user` with live option cards (#109922, #110242)
   and the questions schema module.
 - Add ui-command / screen-tool Control UI layout control and capability-gated

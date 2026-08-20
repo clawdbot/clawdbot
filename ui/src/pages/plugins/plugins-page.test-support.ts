@@ -1,3 +1,4 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -8,6 +9,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
+  PluginInstallRequest,
   PluginListResult,
   PluginMutationResult,
   PluginSearchResult,
@@ -16,10 +18,21 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
+import type { PluginRowMessage } from "./view.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
+
+const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
+  "config.set",
+  "plugins.install",
+  "plugins.list",
+  "plugins.search",
+  "plugins.setEnabled",
+  "plugins.uninstall",
+]);
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -32,9 +45,14 @@ type TestPluginsPage = HTMLElement & {
   result: PluginListResult | null;
   loading: boolean;
   busy: Record<string, boolean>;
+  messages: Record<string, PluginRowMessage>;
   activeTab: "installed" | "discover";
   searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
+  install: (request: PluginInstallRequest, installIdentity: string) => Promise<void>;
+  refreshCatalog: () => Promise<void>;
+  updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
+  uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };
 
 export type RuntimeConfigTestState = {
@@ -62,6 +80,23 @@ export function createResult(plugin = createPlugin()): PluginListResult {
   return { plugins: [plugin], diagnostics: [], mutationAllowed: true };
 }
 
+export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLocation {
+  const parsed = new URL(url, "https://control.test");
+  return {
+    pathname: parsed.pathname,
+    search: parsed.search,
+    hash: parsed.hash,
+  };
+}
+
+export function createPluginsRouteData(
+  gateway: ApplicationGateway,
+  result: PluginListResult | null = createResult(),
+  location = createPluginsRouteLocation(),
+): PluginsRouteData {
+  return { gateway, gatewaySnapshot: gateway.snapshot, location, result, error: null };
+}
+
 export function createClient(handler: RequestHandler) {
   const request = vi.fn(handler);
   return {
@@ -79,11 +114,7 @@ function createSnapshot(
     phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
-    },
+    hello: PLUGINS_GATEWAY_HELLO,
     assistantAgentId: "main",
     sessionKey: "main",
     lastError: null,
@@ -132,6 +163,7 @@ type RuntimeConfigTestHarness = {
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
     patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
+    runExternalMutation: ApplicationContext["runtimeConfig"]["runExternalMutation"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
   };
   notify: () => void;
@@ -140,6 +172,7 @@ type RuntimeConfigTestHarness = {
 export function createRuntimeConfigHarness(
   refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
   runtimeConfigState: RuntimeConfigTestState,
+  getClient?: () => GatewayBrowserClient | null,
 ): RuntimeConfigTestHarness {
   const listeners = new Set<(state: RuntimeConfigTestState) => void>();
   const patch = vi.fn<
@@ -159,6 +192,38 @@ export function createRuntimeConfigHarness(
       }
       return patch(built.options);
     }),
+    runExternalMutation: vi.fn(async (task) => {
+      const client = getClient?.() ?? null;
+      if (!client) {
+        return {
+          ok: false as const,
+          reason: "unavailable" as const,
+          error: "Configuration is unavailable; reconnect and try again.",
+        };
+      }
+      try {
+        const value = await task(client);
+        try {
+          await refreshConfig();
+          return { ok: true as const, value, refresh: { ok: true as const } };
+        } catch (error) {
+          return {
+            ok: true as const,
+            value,
+            refresh: {
+              ok: false as const,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+      } catch (error) {
+        return {
+          ok: false as const,
+          reason: "error" as const,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }),
     subscribe(listener: (state: RuntimeConfigTestState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -176,18 +241,24 @@ export function createRuntimeConfigHarness(
 
 export function createContext(
   gateway: ApplicationGateway,
-  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
+  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"] = vi.fn(async () => undefined),
   runtimeConfigState: RuntimeConfigTestState = {
     configFormDirty: false,
     lastError: null,
   },
-  harness = createRuntimeConfigHarness(refreshConfig, runtimeConfigState),
+  harness = createRuntimeConfigHarness(
+    refreshConfig,
+    runtimeConfigState,
+    () => gateway.snapshot.client,
+  ),
 ): ApplicationContext {
   return {
     gateway,
     basePath: "",
+    resourceBasePath: "",
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
+    replace: vi.fn(),
   } as unknown as ApplicationContext;
 }
 
@@ -206,10 +277,12 @@ export async function mountPage(
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 export async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {

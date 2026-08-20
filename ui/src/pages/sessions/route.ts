@@ -6,19 +6,64 @@ import type { ApplicationContext } from "../../app/context.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
   type SessionArchivedFilter,
+  type SessionListOptions,
+  type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import type { SessionsRouteData } from "./sessions-page.ts";
+
+export type SessionsRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
+  sessions: ApplicationContext["sessions"];
+  result: SessionListSnapshot["result"];
+  loading: boolean;
+  error: string | null;
+  expandedSessionKey: string | null;
+  statusFilter: SessionArchivedFilter;
+};
+
+type SessionsPageListFilters = {
+  activeMinutes?: number;
+  limit?: number;
+  includeGlobal: boolean;
+  includeUnknown: boolean;
+  statusFilter: SessionArchivedFilter;
+  deepLinkSessionKey?: string | null;
+};
 
 function routeOptions(location: RouteLocation) {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
-  // The retired internal `showArchived` param is deliberately not read; dashboard
+  // The retired internal `showArchived` param is deliberately not read; Sessions
   // URLs are not a shipped contract and stale links fall back to the Active view.
   const requestedStatus = search.get("status");
   const statusFilter: SessionArchivedFilter =
     requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
   return { expandedSessionKey, statusFilter };
+}
+
+export function sessionsPageListQuery(
+  context: ApplicationContext,
+  filters: SessionsPageListFilters,
+): SessionListOptions {
+  const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
+  const scopeAgentId =
+    parseAgentSessionKey(deepLinkSessionKey)?.agentId ??
+    context.agentSelection.state.scopeId?.trim();
+  const activeMinutes =
+    !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
+  return {
+    limit: deepLinkSessionKey ? DEFAULT_SESSION_LIST_QUERY.limit : filters.limit,
+    ...(activeMinutes ? { activeMinutes } : {}),
+    ...(deepLinkSessionKey ? { search: deepLinkSessionKey } : {}),
+    includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
+    includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
+    includeDerivedTitles: false,
+    includeLastMessage: false,
+    archivedFilter: filters.statusFilter,
+    ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
+  };
 }
 
 async function loadSessionsRoute(
@@ -27,30 +72,30 @@ async function loadSessionsRoute(
 ): Promise<SessionsRouteData> {
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
+  const sessions = context.sessions;
   const options = routeOptions(location);
-  const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
-  const scopeAgentId = checkpointAgentId ?? context.agentSelection.state.scopeId;
-  const [sessions] = await Promise.all([
-    context.sessions
-      .list({
-        ...DEFAULT_SESSION_LIST_QUERY,
-        search: options.expandedSessionKey ?? undefined,
-        includeGlobal: true,
-        includeUnknown: Boolean(options.expandedSessionKey),
-        archivedFilter: options.statusFilter,
-        ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
-      })
-      .then(
-        (result) => ({ result, error: null }),
-        (error: unknown) => ({ result: null, error: String(error) }),
-      ),
+  const query = sessionsPageListQuery(context, {
+    limit: DEFAULT_SESSION_LIST_QUERY.limit,
+    includeGlobal: true,
+    includeUnknown: false,
+    statusFilter: options.statusFilter,
+    deepLinkSessionKey: options.expandedSessionKey,
+  });
+  let snapshot = sessions.listSnapshot(query);
+  await Promise.all([
+    !snapshot.result && !snapshot.loading
+      ? sessions.refreshList({ ...query, force: true })
+      : undefined,
     context.runtimeConfig.ensureLoaded().catch(() => undefined),
   ]);
+  snapshot = sessions.listSnapshot(query);
   return {
     gateway,
     gatewaySnapshot,
-    result: sessions.result,
-    error: sessions.error,
+    sessions,
+    result: snapshot.result,
+    loading: snapshot.loading,
+    error: snapshot.error,
     ...options,
   };
 }

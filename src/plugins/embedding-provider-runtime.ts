@@ -53,5 +53,3 @@ export function getEmbeddingProvider(
     getRegisteredProvider: getRegisteredEmbeddingProvider,
   });
 }
-
-export type { EmbeddingProvider, EmbeddingProviderAdapter } from "./embedding-providers.js";

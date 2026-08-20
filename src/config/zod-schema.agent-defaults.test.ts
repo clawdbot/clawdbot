@@ -360,6 +360,7 @@ describe("agent defaults schema", () => {
     "adaptive",
     "max",
     "ultra",
+    "inherit",
   ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
     const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
     expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);
@@ -454,6 +455,22 @@ describe("agent defaults schema", () => {
     expect(agent.heartbeat?.timeoutSeconds).toBe(45);
   });
 
+  it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        heartbeat: { activeHours: { start: "99:99", end: "17:00" } },
+      }),
+      "heartbeat.activeHours.start",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        heartbeat: { activeHours: { start: "09:00", end: "not-a-time" } },
+      }),
+      "heartbeat.activeHours.end",
+    );
+  });
+
   it("accepts per-agent TTS overrides", () => {
     const agent = AgentEntrySchema.parse({
       id: "reader",
@@ -482,28 +499,6 @@ describe("agent defaults schema", () => {
       AgentEntrySchema.safeParse({ id: "ops", heartbeat: { timeoutSeconds: 0 } }),
       "heartbeat.timeoutSeconds",
     );
-  });
-
-  it("preserves per-agent contextTokens through config validation", () => {
-    const result = validateConfigObject({
-      agents: {
-        entries: {
-          ops: {
-            default: true,
-            contextTokens: 1_048_576,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected config validation to succeed");
-    }
-    const config = result.config as {
-      agents?: { entries?: Record<string, { contextTokens?: number }> };
-    };
-    expect(config.agents?.entries?.ops?.contextTokens).toBe(1_048_576);
   });
 
   it("accepts per-agent tools.codeMode config", () => {
@@ -550,21 +545,5 @@ describe("agent defaults schema", () => {
       AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { unknownKey: 1 } } }),
       "tools.swarm",
     );
-  });
-
-  it("rejects non-positive contextTokens on agent entries and defaults", () => {
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: -1 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 1.5 }),
-      "contextTokens",
-    );
-    expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ contextTokens: 0 }), "contextTokens");
   });
 });

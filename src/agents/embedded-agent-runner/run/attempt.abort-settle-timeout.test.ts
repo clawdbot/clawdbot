@@ -1,6 +1,6 @@
 // Coverage for resolving abort-settle timeout overrides.
 import { describe, expect, it } from "vitest";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
 describe("resolveEmbeddedAbortSettleTimeoutMs", () => {
   it("uses a positive decimal integer override", () => {

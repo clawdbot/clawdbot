@@ -10,12 +10,6 @@ type NativeCommandSpecMock = {
   acceptsArgs: boolean;
 };
 
-type PluginCommandSpecMock = {
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-};
-
 type ProviderMonitorTestMocks = {
   clientDeployCommandsMock: Mock<(options?: { mode?: string }) => Promise<void>>;
   clientFetchUserMock: Mock<(target: string) => Promise<{ id: string }>>;
@@ -44,7 +38,6 @@ type ProviderMonitorTestMocks = {
       signal?: AbortSignal;
     }) => Promise<{ state: string }>
   >;
-  getPluginCommandSpecsMock: Mock<(provider?: string) => PluginCommandSpecMock[]>;
   listNativeCommandSpecsForConfigMock: Mock<
     (
       cfg?: unknown,
@@ -130,7 +123,6 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
         state: "idle",
       }),
     ),
-    getPluginCommandSpecsMock: vi.fn<(provider?: string) => PluginCommandSpecMock[]>(() => []),
     listNativeCommandSpecsForConfigMock: vi.fn<
       (
         cfg?: unknown,
@@ -180,7 +172,6 @@ const {
   reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   getAcpSessionStatusMock,
-  getPluginCommandSpecsMock,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
@@ -244,7 +235,6 @@ export function resetDiscordProviderMonitorMocks(params?: {
   });
   createdBindingManagers.length = 0;
   getAcpSessionStatusMock.mockClear().mockResolvedValue({ state: "idle" });
-  getPluginCommandSpecsMock.mockClear().mockReturnValue([]);
   listNativeCommandSpecsForConfigMock
     .mockClear()
     .mockReturnValue(
@@ -451,6 +441,7 @@ vi.mock(buildDiscordSourceModuleId("accounts.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("probe.js"), () => ({
   fetchDiscordApplicationId: async () => "app-1",
+  probeDiscordApplicationId: async () => ({ kind: "resolved", applicationId: "app-1" }),
   parseApplicationIdFromToken: (token: string) => {
     const segment = token.trim().split(".")[0];
     if (!segment) {
@@ -470,7 +461,12 @@ vi.mock(buildDiscordSourceModuleId("token.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("voice/command.js"), () => ({
-  createDiscordVoiceCommand: () => ({ name: "voice-command" }),
+  DISCORD_VOICE_COMMAND_SPEC: {
+    name: "vc",
+    description: "Voice channel controls",
+    acceptsArgs: false,
+  },
+  createDiscordVoiceCommand: () => ({ name: "vc" }),
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/agent-components.js"), () => ({
@@ -509,6 +505,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
   DiscordPresenceListener: function DiscordPresenceListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
+  DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {},
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import {
   hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
@@ -57,6 +58,25 @@ describe("config presence", () => {
     expect(hasMeaningfulChannelConfig({ homeserver: "https://matrix.example.org" })).toBe(true);
   });
 
+  it("excludes metadata and blank keys while trimming configured channel ids", () => {
+    const cfg = {
+      channels: {
+        defaults: { token: "test-token" },
+        modelByChannel: { discord: "openai/gpt-5.6-luna" },
+        "  ": { token: "dummy" },
+        " matrix ": { homeserver: "https://matrix.example.org" },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(isChannelConfigMetadataKey(" modelByChannel ")).toBe(true);
+    expectPotentialConfiguredChannelCase({
+      cfg,
+      env: {},
+      expectedIds: ["matrix"],
+      options: { includePersistedAuthState: false },
+    });
+  });
+
   it("ignores enabled-only matrix config when listing configured channels", () => {
     const env = {} as NodeJS.ProcessEnv;
     const cfg = { channels: { matrix: { enabled: false } } };
@@ -76,6 +96,8 @@ describe("config presence", () => {
         telegram: { enabled: true },
         slack: { botToken: "token" },
         discord: false,
+        modelByChannel: { enabled: false },
+        " ": { enabled: false },
       },
     } as unknown as OpenClawConfig;
 

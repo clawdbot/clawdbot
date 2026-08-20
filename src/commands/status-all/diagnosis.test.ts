@@ -51,6 +51,10 @@ function createProgressReporter(): ProgressReporter {
   };
 }
 
+function availableDiagnostics(value: unknown) {
+  return { ok: true as const, value };
+}
+
 function createBaseParams(
   listeners: NonNullable<DiagnosisParams["portUsage"]>["listeners"],
 ): DiagnosisParams {
@@ -82,6 +86,7 @@ function createBaseParams(
     channelsStatus: null,
     channelIssues: [],
     deliveryDiagnostics: null,
+    exporterDiagnostics: null,
     gatewayReachable: false,
     health: null,
     nodeOnlyGateway: null,
@@ -152,6 +157,32 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("! Port 18789");
     expect(output).toContain("2 OpenClaw gateway processes appear to be listening on port 18789");
     expect(output).toContain("Port 18789 is already in use.");
+  });
+
+  it("warns when port availability could not be determined", async () => {
+    const params = createBaseParams([]);
+    params.portUsage = { port: 18789, status: "unknown", listeners: [], hints: [] };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 availability could not be determined.");
+    expect(output).not.toContain("Port 18789 is free.");
+  });
+
+  it("does not let attributed listeners override indeterminate availability", async () => {
+    const params = createBaseParams([
+      { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+    ]);
+    params.portUsage!.status = "unknown";
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 availability could not be determined.");
+    expect(output).not.toContain("Detected OpenClaw Gateway listener");
   });
 
   it("adds direct update restart guidance for failed update sentinels", async () => {
@@ -244,7 +275,7 @@ describe("status-all diagnosis port checks", () => {
   it("summarizes inbound delivery telemetry proof counters", async () => {
     const params = createBaseParams([]);
     params.gatewayReachable = true;
-    params.deliveryDiagnostics = {
+    params.deliveryDiagnostics = availableDiagnostics({
       summary: {
         byType: {
           "message.received": 2,
@@ -255,7 +286,7 @@ describe("status-all diagnosis port checks", () => {
         },
       },
       events: [{ type: "session.turn.created", ts: Date.now() - 60_000 }],
-    };
+    });
 
     await appendStatusAllDiagnosis(params);
 
@@ -266,10 +297,72 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("latest delivery event:");
   });
 
+  it("renders the shared redacted telemetry exporter summary", async () => {
+    const params = createBaseParams([]);
+    params.exporterDiagnostics = availableDiagnostics({
+      events: [
+        {
+          seq: 1,
+          type: "telemetry.exporter",
+          source: "diagnostics-otel",
+          target: "traces",
+          transport: "otlp-http-protobuf",
+          outcome: "failure",
+          reason: "export_failed",
+          mode: "configured",
+          url: "https://collector.example/private",
+          headers: { authorization: "secret" },
+          error: "raw failure",
+        },
+      ],
+    });
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Telemetry exporters");
+    expect(output).toContain(
+      "diagnostics-otel · traces · failed · OTLP/HTTP protobuf (explicit endpoint) · export failed",
+    );
+    expect(output).not.toContain("collector.example");
+    expect(output).not.toContain("secret");
+    expect(output).not.toContain("raw failure");
+  });
+
+  it("renders failed diagnostics as unavailable instead of empty", async () => {
+    const params = createBaseParams([]);
+    params.gatewayReachable = true;
+    const failedProbe = {
+      ok: false as const,
+      error:
+        "Error: diagnostics probe timed out at wss://probe-user:probe-pass@gateway.example/socket?token=probe-secret",
+    };
+    params.deliveryDiagnostics = failedProbe;
+    params.exporterDiagnostics = failedProbe;
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Telemetry exporters: unavailable");
+    expect(output).toContain(
+      "Exporter diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
+    );
+    expect(output).toContain("Retry: openclaw gateway stability --type telemetry.exporter");
+    expect(output).toContain("! Inbound delivery telemetry: unavailable");
+    expect(output).toContain(
+      "Delivery diagnostics failed: Error: diagnostics probe timed out at wss://***:***@gateway.example/socket?token=***",
+    );
+    expect(output).toContain("Retry: openclaw gateway stability");
+    expect(output).not.toContain("received 0 · dispatch 0/0 · turns 0 · processed 0");
+    expect(output).not.toContain("probe-user");
+    expect(output).not.toContain("probe-pass");
+    expect(output).not.toContain("probe-secret");
+  });
+
   it("keeps handled terminal delivery paths healthy without dispatch starts", async () => {
     const params = createBaseParams([]);
     params.gatewayReachable = true;
-    params.deliveryDiagnostics = {
+    params.deliveryDiagnostics = availableDiagnostics({
       summary: {
         byType: {
           "message.received": 1,
@@ -280,7 +373,7 @@ describe("status-all diagnosis port checks", () => {
         },
       },
       events: [{ type: "message.processed", ts: Date.now() - 30_000 }],
-    };
+    });
 
     await appendStatusAllDiagnosis(params);
 
@@ -294,7 +387,7 @@ describe("status-all diagnosis port checks", () => {
   it("keeps handled terminal dispatches healthy without agent turns", async () => {
     const params = createBaseParams([]);
     params.gatewayReachable = true;
-    params.deliveryDiagnostics = {
+    params.deliveryDiagnostics = availableDiagnostics({
       summary: {
         byType: {
           "message.received": 1,
@@ -305,7 +398,7 @@ describe("status-all diagnosis port checks", () => {
         },
       },
       events: [{ type: "message.processed", ts: Date.now() - 30_000 }],
-    };
+    });
 
     await appendStatusAllDiagnosis(params);
 
@@ -319,7 +412,7 @@ describe("status-all diagnosis port checks", () => {
   it("warns when received messages never reach agent turn creation", async () => {
     const params = createBaseParams([]);
     params.gatewayReachable = true;
-    params.deliveryDiagnostics = {
+    params.deliveryDiagnostics = availableDiagnostics({
       summary: {
         byType: {
           "message.received": 3,
@@ -330,7 +423,7 @@ describe("status-all diagnosis port checks", () => {
         },
       },
       events: [{ type: "message.dispatch.started", ts: Date.now() - 120_000 }],
-    };
+    });
 
     await appendStatusAllDiagnosis(params);
 
@@ -362,6 +455,12 @@ describe("status-all diagnosis port checks", () => {
       ].join("\n"),
     };
     params.gatewayReachable = true;
+    const failedProbe = {
+      ok: false as const,
+      error: "Error: diagnostics probe unavailable in node-only mode",
+    };
+    params.deliveryDiagnostics = failedProbe;
+    params.exporterDiagnostics = failedProbe;
 
     await appendStatusAllDiagnosis(params);
 
@@ -373,6 +472,8 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Channel issues skipped (gateway unreachable)");
     expect(output).not.toContain("Gateway health:");
     expect(output).not.toContain("Inbound delivery telemetry: unavailable");
+    expect(output).not.toContain("Telemetry exporters: unavailable");
+    expect(output).not.toContain("Retry: openclaw gateway stability");
   });
 
   it("does not read or display stale stderr tails on Darwin", async () => {

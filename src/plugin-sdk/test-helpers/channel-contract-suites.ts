@@ -1,5 +1,6 @@
 // Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
+import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import type { ChannelSetupDmPolicy } from "../../channels/plugins/setup-wizard-types.js";
 import type {
   ChannelAccountSnapshot,
@@ -65,12 +66,23 @@ type ChannelActionsContractCase = {
   name: string;
   cfg: OpenClawConfig;
   expectedActions: readonly ChannelMessageActionName[];
+  expectedCanonicalOutboundActions?: readonly ChannelMessageActionName[];
   expectedCapabilities?: readonly ChannelMessageCapability[];
   beforeTest?: () => void;
 };
 
+function hasCanonicalOutboundAction(
+  plugin: Pick<ChannelPlugin, "outbound">,
+  action: ChannelMessageActionName,
+) {
+  if (action !== "poll") {
+    return false;
+  }
+  return Boolean(plugin.outbound?.sendPoll);
+}
+
 export function installChannelActionsContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "actions">;
+  plugin: Pick<ChannelPlugin, "id" | "actions" | "outbound">;
   cases: readonly ChannelActionsContractCase[];
   unsupportedAction?: ChannelMessageActionName;
 }) {
@@ -95,8 +107,19 @@ export function installChannelActionsContractSuite(params: {
       expect(sortStrings(actions)).toEqual(sortStrings(testCase.expectedActions));
       expect(sortStrings(capabilities)).toEqual(sortStrings(testCase.expectedCapabilities ?? []));
 
+      const canonicalOutboundActions = new Set(testCase.expectedCanonicalOutboundActions ?? []);
+      for (const action of canonicalOutboundActions) {
+        expect(actions).toContain(action);
+        expect(hasCanonicalOutboundAction(params.plugin, action)).toBe(true);
+        expect(params.plugin.actions?.supportsAction).toBeTypeOf("function");
+        expect(params.plugin.actions?.supportsAction?.({ action })).toBe(false);
+      }
+
       if (params.plugin.actions?.supportsAction) {
         for (const action of testCase.expectedActions) {
+          if (canonicalOutboundActions.has(action)) {
+            continue;
+          }
           expect(params.plugin.actions.supportsAction({ action })).toBe(true);
         }
         if (
@@ -131,9 +154,11 @@ export function installChannelSetupContractSuite<
   plugin: Pick<ChannelPlugin<ResolvedAccount>, "id" | "config" | "setup">;
   cases: readonly ChannelSetupContractCase<ResolvedAccount, SetupInput>[];
 }) {
+  const setup = resolveChannelSetupExecutionAdapter(
+    params.plugin as Pick<ChannelPlugin<ResolvedAccount>, "setup" | "setupContract">,
+  );
   it("exposes the base setup contract", () => {
-    expect(params.plugin.setup).toBeDefined();
-    expect(typeof params.plugin.setup?.applyAccountConfig).toBe("function");
+    expect(typeof setup?.applyAccountConfig).toBe("function");
   });
 
   for (const testCase of params.cases) {
@@ -141,7 +166,7 @@ export function installChannelSetupContractSuite<
       testCase.beforeTest?.();
 
       const resolvedAccountId =
-        params.plugin.setup?.resolveAccountId?.({
+        setup?.resolveAccountId?.({
           cfg: testCase.cfg,
           accountId: testCase.accountId,
           input: testCase.input,
@@ -152,14 +177,14 @@ export function installChannelSetupContractSuite<
       expect(resolvedAccountId).toBe(testCase.expectedAccountId ?? resolvedAccountId);
 
       const validation =
-        params.plugin.setup?.validateInput?.({
+        setup?.validateInput?.({
           cfg: testCase.cfg,
           accountId: resolvedAccountId,
           input: testCase.input,
         }) ?? null;
       expect(validation).toBe(testCase.expectedValidation ?? null);
 
-      const nextCfg = params.plugin.setup?.applyAccountConfig({
+      const nextCfg = setup?.applyAccountConfig({
         cfg: testCase.cfg,
         accountId: resolvedAccountId,
         input: testCase.input,

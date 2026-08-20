@@ -14,11 +14,30 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
 
 Install a current stable Rust toolchain with `rustup`.
 
-## Develop and build
+## Media codecs
 
-The frontend is static HTML, CSS, and JavaScript. It has no package install or build step.
+The companion uses GStreamer plugins for audio and video playback.
+WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
+H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
+The `.deb` uses the host's plugins and declares all three packages as
+dependencies. The AppImage bundles the GStreamer media framework and the
+plugins available on its Ubuntu build host. For a source build or when
+rebuilding either Linux bundle, install the packages explicitly:
 
 ```bash
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+```
+
+The released AppImage therefore carries the codecs installed by the release
+workflow instead of relying on GStreamer packages from the user's system.
+
+## Develop and build
+
+The companion frontend is static HTML, CSS, and JavaScript. Install repository dependencies once
+before building:
+
+```bash
+pnpm install
 cd apps/linux/src-tauri
 cargo run
 cargo build
@@ -34,15 +53,9 @@ On first run, release builds automatically install the stable CLI channel, while
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
-## Canvas bridge
-
-The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.
-
-The plugin-generated A2UI renderer in `extensions/canvas/src/host/a2ui/` remains the source of truth. The app embeds its committed, synced OpenClawKit mirror from `apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/`. Run `node scripts/sync-native-a2ui.mjs --check` from the repository root after changing those assets.
-
 ## Quick Chat widgets
 
-Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message Canvas previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
+Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
 
 ## Installer resource
 

@@ -97,16 +97,15 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
     agentDir: unknown,
     cfg: unknown,
     options: unknown,
-  ) =>
-    ({
-      model: effectiveInventoryState.dynamicModelMock({
-        provider,
-        modelId,
-        agentDir,
-        cfg,
-        options,
-      }),
-    }) as unknown,
+  ) => ({
+    model: effectiveInventoryState.dynamicModelMock({
+      provider,
+      modelId,
+      agentDir,
+      cfg,
+      options,
+    }),
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({

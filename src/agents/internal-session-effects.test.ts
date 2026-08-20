@@ -3,17 +3,17 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadExactSessionEntry,
   loadTranscriptEvents,
   persistSessionResetLifecycle,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   prepareInternalSessionEffectsSession,
@@ -41,7 +41,7 @@ describe("internal session effects", () => {
   });
 
   it("does not archive an incognito internal-effects transcript during rotation", async () => {
-    await withTempDir({ prefix: "openclaw-incognito-internal-rotation-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-incognito-internal-rotation-" }, async (dir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => {
         const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
         try {
@@ -61,7 +61,7 @@ describe("internal session effects", () => {
             })}\n`,
             "utf8",
           );
-          const previousEntry = await upsertSessionEntry(target, {
+          const previousEntry = await upsertSessionEntryCore(target, {
             ...target.sessionEntry,
             sessionFile: previousTranscript,
           });
@@ -96,7 +96,7 @@ describe("internal session effects", () => {
   });
 
   it("creates a hidden deterministic SQLite session", async () => {
-    await withTempDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const target = await prepareInternalSessionEffectsSession({
         agentId: "main",
@@ -114,7 +114,7 @@ describe("internal session effects", () => {
         delivery: { kind: "internal" },
         createdAt: expect.any(Number),
       });
-      expect(listSessionEntries({ agentId: "main", storePath })).toEqual([]);
+      expect(listSessionEntriesCore({ agentId: "main", storePath })).toEqual([]);
       await expect(loadTranscriptEvents(target)).resolves.toEqual([
         expect.objectContaining({ id: target.sessionId, type: "session" }),
       ]);
@@ -130,7 +130,7 @@ describe("internal session effects", () => {
   });
 
   it("escapes the reserved prefix for a durable internal-effects run id", async () => {
-    await withTempDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
       const target = resolveInternalSessionEffectsTarget({
         agentId: "main",
         runId: "incognito-not-private",
@@ -144,7 +144,7 @@ describe("internal session effects", () => {
   });
 
   it("forks visible SQLite history into the hidden session", async () => {
-    await withTempDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const source = {
         agentId: "main",
@@ -152,7 +152,7 @@ describe("internal session effects", () => {
         sessionKey: "agent:main:main",
         storePath,
       };
-      await upsertSessionEntry(source, { sessionId: source.sessionId, updatedAt: 1 });
+      await upsertSessionEntryCore(source, { sessionId: source.sessionId, updatedAt: 1 });
       await appendTranscriptMessage(source, {
         cwd: dir,
         message: { content: "stored", role: "assistant", timestamp: 2 },
@@ -173,14 +173,14 @@ describe("internal session effects", () => {
           type: "message",
         }),
       );
-      expect(listSessionEntries({ agentId: "main", storePath })).toEqual([
+      expect(listSessionEntriesCore({ agentId: "main", storePath })).toEqual([
         expect.objectContaining({ sessionKey: source.sessionKey }),
       ]);
     });
   });
 
   it("hard-deletes the hidden entry and transcript rows", async () => {
-    await withTempDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const target = await prepareInternalSessionEffectsSession({
         agentId: "main",

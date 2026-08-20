@@ -4,7 +4,9 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SessionBranch
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -12,6 +14,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatScreenTest {
+  @Test
+  fun jumpToLatestReservesItsTouchTargetBelowMessages() {
+    assertEquals(0.dp, chatReaderListBottomInset(showJumpToLatest = false))
+    assertEquals(56.dp, chatReaderListBottomInset(showJumpToLatest = true))
+  }
+
   @Test
   fun branchMessageCountUsesCountNeutralCopy() {
     assertEquals("Messages: 1", branchMessageCountText(1))
@@ -66,18 +74,22 @@ class ChatScreenTest {
   }
 
   @Test
-  fun activeTalkAlwaysKeepsTheStopControlVisible() {
+  fun composerTrailingActionPreservesTalkAndRunStopPrecedence() {
     assertEquals(
       ChatComposerTrailingAction.StopTalk,
-      resolveChatComposerTrailingAction(talkActive = true, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = true, runActive = true, sendEnabled = true),
+    )
+    assertEquals(
+      ChatComposerTrailingAction.Stop,
+      resolveChatComposerTrailingAction(talkActive = false, runActive = true, sendEnabled = true),
     )
     assertEquals(
       ChatComposerTrailingAction.Send,
-      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = true),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = true),
     )
     assertEquals(
       ChatComposerTrailingAction.StartTalk,
-      resolveChatComposerTrailingAction(talkActive = false, sendEnabled = false),
+      resolveChatComposerTrailingAction(talkActive = false, runActive = false, sendEnabled = false),
     )
   }
 
@@ -90,6 +102,32 @@ class ChatScreenTest {
     assertEquals(
       "ops",
       chatAgentChipText(GatewayAgentSummary(id = "ops", name = " ", emoji = null)),
+    )
+  }
+
+  @Test
+  fun sessionChipUsesTheSharedDashboardTitlePrecedence() {
+    val dashboardKey = "agent:main:dashboard:fresh"
+
+    assertEquals(
+      "New chat",
+      chatSessionChipText(
+        entry = ChatSessionEntry(key = dashboardKey, updatedAtMs = 1),
+        mainSessionKey = "agent:main:node-phone",
+      ),
+    )
+    assertEquals(
+      "Manual bee research",
+      chatSessionChipText(
+        entry =
+          ChatSessionEntry(
+            key = dashboardKey,
+            updatedAtMs = 1,
+            label = "Manual bee research",
+            displayName = "Honeybee flower-location communication",
+          ),
+        mainSessionKey = "agent:main:node-phone",
+      ),
     )
   }
 

@@ -154,6 +154,60 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("keeps pending sessions on their selected local or UTC activity day", () => {
+    const localOffsetMs = -7 * 60 * 60 * 1000;
+    const localYear = vi
+      .spyOn(Date.prototype, "getFullYear")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+      });
+    const localMonth = vi
+      .spyOn(Date.prototype, "getMonth")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+      });
+    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
+      return new Date(this.getTime() + localOffsetMs).getUTCDate();
+    });
+
+    try {
+      const pendingSession = {
+        key: "agent:main:pending-cache",
+        label: "Pending cache",
+        agentId: "main",
+        updatedAt: Date.parse("2026-05-14T00:30:00.000Z"),
+        usage: null,
+      } satisfies UsageSessionEntry;
+
+      for (const { timeZone, selectedDay, visible } of [
+        { timeZone: "utc", selectedDay: "2026-05-14", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-13", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-14", visible: false },
+      ] as const) {
+        const container = document.createElement("div");
+        render(
+          renderUsage(
+            createUsageProps({
+              data: { ...createUsageProps().data, sessions: [pendingSession] },
+              filters: {
+                ...createUsageProps().filters,
+                selectedDays: [selectedDay],
+                timeZone,
+              },
+            }),
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".session-bar-row") !== null).toBe(visible);
+      }
+    } finally {
+      localYear.mockRestore();
+      localMonth.mockRestore();
+      localDay.mockRestore();
+    }
+  });
+
   it("keeps insight aggregates scoped to the selected agent", () => {
     const container = document.createElement("div");
     const sessions = [
@@ -595,5 +649,48 @@ describe("renderUsage", () => {
       );
       expect(container.querySelector(".cost-window-analysis")).toBeNull();
     }
+  });
+
+  it("shows the empty state for an all-zero successful response", () => {
+    const zeroTotals = {
+      totalTokens: 0,
+      totalCost: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      missingCostEntries: 0,
+    };
+    const container = document.createElement("div");
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            // The gateway always returns a totals object, even with no usage.
+            totals: zeroTotals as UsageProps["data"]["totals"],
+          },
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".usage-empty-state")).not.toBeNull();
+  });
+
+  it("does not render the empty state under an error callout", () => {
+    const container = document.createElement("div");
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            error: "usage failed",
+          },
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".usage-callout")).not.toBeNull();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
   });
 });

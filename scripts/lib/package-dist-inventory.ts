@@ -7,7 +7,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../../src/infra/package-dist-inventory.ts";
 
-export { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mjs";
+export { LOCAL_BUILD_METADATA_DIST_PATHS } from "./local-build-metadata-paths.mts";
 export { PACKAGE_DIST_INVENTORY_RELATIVE_PATH };
 
 export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";

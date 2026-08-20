@@ -24,6 +24,63 @@ function waitForMockCycle(): Promise<void> {
 }
 
 describe("mock gateway stateful config", () => {
+  it("takes existing mock sockets offline without closing their replacement", async () => {
+    const passthroughPrefix = "ws://source-ui/?token=";
+    const script = createControlUiMockGatewayInitScript({
+      webSocketPassthroughPrefixes: [passthroughPrefix],
+    });
+    window.sessionStorage.clear();
+    const priorWebSocket = window.WebSocket;
+    class PassthroughWebSocket extends EventTarget {
+      static readonly CLOSED = 3;
+      static readonly CLOSING = 2;
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      readyState = PassthroughWebSocket.OPEN;
+
+      close(): void {
+        this.readyState = PassthroughWebSocket.CLOSED;
+      }
+    }
+    window.WebSocket = PassthroughWebSocket as unknown as typeof WebSocket;
+
+    try {
+      // oxlint-disable-next-line typescript/no-implied-eval -- Exercises the serialized browser fixture.
+      new Function(script)();
+
+      const passthrough = new WebSocket(`${passthroughPrefix}vite`);
+      const first = new WebSocket("ws://mock-gateway/first");
+      const second = new WebSocket("ws://mock-gateway/second");
+      await flushMockTimers();
+      expect(passthrough.readyState).toBe(WebSocket.OPEN);
+      expect(first.readyState).toBe(WebSocket.OPEN);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      let replacement: WebSocket | undefined;
+      first.addEventListener("close", () => {
+        replacement = new WebSocket("ws://mock-gateway/replacement");
+      });
+
+      const controls = (
+        window as Window & {
+          openclawControlUiE2eGateway?: { setOnline: (online: boolean) => void };
+        }
+      ).openclawControlUiE2eGateway;
+      expect(controls).toBeDefined();
+      controls?.setOnline(false);
+
+      expect(passthrough.readyState).toBe(WebSocket.OPEN);
+      expect(first.readyState).toBe(WebSocket.CLOSED);
+      expect(second.readyState).toBe(WebSocket.CLOSED);
+      expect(replacement?.readyState).toBe(WebSocket.CONNECTING);
+
+      controls?.setOnline(true);
+      expect(replacement?.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      window.WebSocket = priorWebSocket;
+    }
+  });
+
   it("round-trips config.set through config.get with an advancing hash", async () => {
     const raw = '{\n  "logging": {\n    "level": "info"\n  }\n}\n';
     const script = createControlUiMockGatewayInitScript({
@@ -74,7 +131,11 @@ describe("mock gateway stateful config", () => {
       baseHash: "fixture-hash",
     });
     // Acks carry the persisted hash, mirroring the real gateway contract.
-    expect(set).toEqual({ ok: true, hash: "mock-config-hash-1" });
+    expect(set).toEqual({
+      ok: true,
+      hash: "mock-config-hash-1",
+      config: { logging: { level: "debug" } },
+    });
 
     const reloaded = await request("get-2", "config.get", {});
     expect(reloaded).toMatchObject({
@@ -89,12 +150,30 @@ describe("mock gateway stateful config", () => {
       raw: nextRaw,
       baseHash: "mock-config-hash-1",
     });
-    expect(applied).toEqual({ ok: true, hash: "mock-config-hash-2" });
+    expect(applied).toEqual({
+      ok: true,
+      hash: "mock-config-hash-2",
+      config: { logging: { level: "debug" } },
+    });
     expect(await request("get-3", "config.get", {})).toMatchObject({
       hash: "mock-config-hash-2",
       configRevisionHash: "mock-config-hash-2",
       appliedConfigHash: "mock-config-hash-2",
     });
+
+    const json5Raw = '{\n  // Keep this comment.\n  logging: { level: "warn", },\n}\n';
+    const json5Ack = await request("set-json5", "config.set", {
+      raw: json5Raw,
+      baseHash: "mock-config-hash-2",
+    });
+    expect(json5Ack).toEqual({
+      ok: true,
+      hash: "mock-config-hash-3",
+      config: { logging: { level: "warn" } },
+    });
+    const json5Reloaded = await request("get-json5", "config.get", {});
+    expect(json5Reloaded).toMatchObject({ raw: json5Raw, hash: "mock-config-hash-3" });
+    expect(json5Reloaded.config).toEqual({ logging: { level: "warn" } });
 
     socket.close();
   });
@@ -162,6 +241,30 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("acknowledges broad session observation with the real Gateway response", async () => {
+    const script = createControlUiMockGatewayInitScript({});
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({ type: "req", id: "subscribe-events", method: "sessions.subscribe" }),
+    );
+    await flushMockTimers();
+
+    expect(frames.find((frame) => frame.id === "subscribe-events")?.payload).toEqual({
+      subscribed: true,
+    });
+    socket.close();
+  });
+
   it("makes a successfully adopted catalog session visible to the next sessions.list", async () => {
     const sessionKey = "agent:main:adopted-codex";
     const script = createControlUiMockGatewayInitScript({

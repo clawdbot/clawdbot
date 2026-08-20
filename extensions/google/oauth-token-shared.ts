@@ -31,13 +31,3 @@ export function formatGoogleOauthApiKey(cred: GoogleOauthApiKeyCredential): stri
     projectId: cred.projectId,
   });
 }
-
-export function parseGoogleUsageToken(apiKey: string): string {
-  const parsed = parseGoogleOauthApiKey(apiKey);
-  if (parsed?.token) {
-    return parsed.token;
-  }
-
-  // Keep the raw token when the stored credential is not a project-aware JSON payload.
-  return apiKey;
-}

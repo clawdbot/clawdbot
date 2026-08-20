@@ -5,9 +5,8 @@ scenario:
   surface: session-memory
   risk: high
   coverage:
-    primary:
-      - session-memory.active-memory-active-recall
     secondary:
+      - session-memory.active-memory-active-recall
       - session-memory.active-memory-recall
       - session-memory.active-memory-qa-channel
   objective: Verify bounded private transcript recall across separate conversations without crossing shared, anchor, disabled, or paused conversation boundaries.

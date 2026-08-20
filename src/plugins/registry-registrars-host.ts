@@ -1,4 +1,5 @@
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "./board-widget-content-kinds.js";
 import {
   getPluginSessionSchedulerJobGeneration,
   registerPluginSessionSchedulerJob,
@@ -15,6 +16,7 @@ import {
   type PluginToolMetadataRegistration,
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import { validateControlUiNativeRoutePlacement } from "./registry-control-ui-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type {
   PluginRecord,
@@ -27,6 +29,7 @@ import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
 } from "./tool-contracts.js";
+import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type { PluginConversationBindingResolvedEvent } from "./types.js";
 
 const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
@@ -216,6 +219,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     }
     const id = normalizeHostHookString(policy.id);
     const description = normalizeHostHookString(policy.description);
+    const matcher = normalizePluginToolMatcher(policy.matcher);
     if (!id || !description || typeof policy.evaluate !== "function") {
       pushDiagnostic({
         level: "error",
@@ -262,7 +266,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     const registration: PluginTrustedToolPolicyRegistryRegistration = {
       pluginId: record.id,
       pluginName: record.name,
-      policy: { ...policy, id, description },
+      policy: { ...policy, id, description, ...(matcher ? { matcher } : {}) },
       origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
@@ -388,6 +392,9 @@ export function createHostRegistrars(state: PluginRegistryState) {
         });
         return;
       }
+    }
+    if (!validateControlUiNativeRoutePlacement({ record, placement, pushDiagnostic })) {
+      return;
     }
     if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
       pushDiagnostic({
@@ -702,6 +709,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerBoardWidgetContentKind: createPluginBoardWidgetContentKindRegistrar(registry),
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,

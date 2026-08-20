@@ -132,6 +132,11 @@ function resolveGoogleApplicationCredentialsPath(
   if (explicit) {
     return existsSync(explicit) ? explicit : undefined;
   }
+  const cloudSdkDir = normalizeOptionalString(env.CLOUDSDK_CONFIG);
+  if (cloudSdkDir) {
+    const cloudSdkFallback = path.join(cloudSdkDir, "application_default_credentials.json");
+    return existsSync(cloudSdkFallback) ? cloudSdkFallback : undefined;
+  }
   const homeDir = normalizeOptionalString(env.HOME) ?? os.homedir();
   const homeFallback = path.join(
     homeDir,
@@ -449,22 +454,23 @@ export async function resolveGoogleVertexAuthorizedUserHeaders(
   fetchImpl?: typeof fetch,
 ): Promise<Record<string, string>> {
   const adcPath = resolveGoogleApplicationCredentialsPath();
-  let adcConfig: GoogleAdcConfig | undefined;
-  if (adcPath) {
-    adcConfig = readGoogleAdcCredentials(adcPath);
-    const userAdc = resolveGoogleAuthorizedUserCredentials(adcConfig);
-    if (userAdc) {
-      const token = await refreshGoogleVertexAuthorizedUserAccessToken({
-        credentialsPath: adcPath,
-        credentials: userAdc,
-        fetchImpl,
-      });
-      return { Authorization: `Bearer ${token}` };
-    }
-  }
-  // No file-based authorized_user ADC. Fall back to google-auth-library which
-  // handles GKE Workload Identity (metadata server), Workload Identity
-  // Federation (external_account), and service-account keys.
-  const token = await resolveGoogleVertexAccessTokenViaGoogleAuth(adcConfig);
-  return { Authorization: `Bearer ${token}` };
+  const adcConfig = adcPath ? readGoogleAdcCredentials(adcPath) : undefined;
+  const userAdc = adcConfig ? resolveGoogleAuthorizedUserCredentials(adcConfig) : undefined;
+  // Google auth owns metadata, federation, and service-account ADC variants.
+  const token =
+    userAdc && adcPath
+      ? await refreshGoogleVertexAuthorizedUserAccessToken({
+          credentialsPath: adcPath,
+          credentials: userAdc,
+          fetchImpl,
+        })
+      : await resolveGoogleVertexAccessTokenViaGoogleAuth(adcConfig);
+  // Google auth gives the explicit billing project precedence over ADC metadata.
+  const quotaProject =
+    normalizeOptionalString(process.env.GOOGLE_CLOUD_QUOTA_PROJECT) ??
+    normalizeOptionalString((adcConfig as Record<string, unknown> | undefined)?.quota_project_id);
+  return {
+    Authorization: `Bearer ${token}`,
+    ...(quotaProject ? { "x-goog-user-project": quotaProject } : {}),
+  };
 }

@@ -1,8 +1,11 @@
 // Channels page shared view helpers.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
@@ -11,7 +14,6 @@ type ChannelDisplayState = {
   running: boolean | null;
   connected: boolean | null;
   defaultAccount: ChannelAccountSnapshot | null;
-  hasAnyActiveAccount: boolean;
   status: Record<string, unknown> | undefined;
 };
 
@@ -28,16 +30,20 @@ function resolveChannelStatus(
   key: ChannelKey,
   props: ChannelsProps,
 ): Record<string, unknown> | undefined {
-  const channels = props.snapshot?.channels as Record<string, unknown> | null;
-  return channels?.[key] as Record<string, unknown> | undefined;
+  const channels = props.snapshot?.channels;
+  return channels && Object.hasOwn(channels, key)
+    ? (asNullableRecord(channels[key]) ?? undefined)
+    : undefined;
 }
 
 function resolveDefaultChannelAccount(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
-  const accounts = props.snapshot?.channelAccounts?.[key] ?? [];
-  const defaultAccountId = props.snapshot?.channelDefaultAccountId?.[key];
+  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
+  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
+  const defaultAccountId =
+    defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
   return (
     (defaultAccountId
       ? accounts.find((account) => account.accountId === defaultAccountId)
@@ -52,7 +58,6 @@ export function resolveChannelDisplayState(
   props: ChannelsProps,
 ): ChannelDisplayState {
   const status = resolveChannelStatus(key, props);
-  const accounts = props.snapshot?.channelAccounts?.[key] ?? [];
   const defaultAccount = resolveDefaultChannelAccount(key, props);
   const configured =
     typeof status?.configured === "boolean"
@@ -62,31 +67,18 @@ export function resolveChannelDisplayState(
         : null;
   const running = typeof status?.running === "boolean" ? status.running : null;
   const connected = typeof status?.connected === "boolean" ? status.connected : null;
-  const hasAnyActiveAccount = accounts.some(
-    (account) => account.configured || account.running || account.connected,
-  );
 
   return {
     configured,
     running,
     connected,
     defaultAccount,
-    hasAnyActiveAccount,
     status,
   };
 }
 
 export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  if (!props.snapshot) {
-    return false;
-  }
-  const displayState = resolveChannelDisplayState(key, props);
-  return (
-    displayState.configured === true ||
-    displayState.running === true ||
-    displayState.connected === true ||
-    displayState.hasAnyActiveAccount
-  );
+  return channelSnapshotEntryIsActive(props.snapshot, key);
 }
 
 export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
@@ -131,7 +123,7 @@ export function renderChannelErrorRow(message: unknown) {
         <span class="settings-row__title"
           >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
         >
-        <span class="settings-row__desc">${message}</span>
+        <span class="settings-row__desc">${formatUiError(message)}</span>
       </div>
     </div>
   `;
@@ -143,7 +135,9 @@ export function renderChannelProbeRow(probe: {
   status?: number | string | null;
   error?: string | null;
 }) {
-  const detail = [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" ");
+  const detail = formatUiExternalText(
+    [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
+  );
   return html`
     <div class="settings-row">
       <div class="settings-row__text">
@@ -184,7 +178,7 @@ export function renderChannelAccountRow(params: {
         <span class="settings-row__title">${params.title}</span>
         <span class="settings-row__desc">${factLine}</span>
         ${params.lastError
-          ? html`<span class="settings-row__desc">${params.lastError}</span>`
+          ? html`<span class="settings-row__desc">${formatUiExternalText(params.lastError)}</span>`
           : nothing}
       </div>
       <div class="settings-row__control">
@@ -233,18 +227,11 @@ export function renderSingleAccountChannelCard(params: {
   );
 }
 
-function getChannelAccountCount(
-  key: ChannelKey,
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
-): number {
-  return channelAccounts?.[key]?.length ?? 0;
-}
-
 /** Multi-account channels surface the account count next to the heading. */
 export function resolveChannelAccountCount(
   key: ChannelKey,
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
 ): number | undefined {
-  const count = getChannelAccountCount(key, channelAccounts);
+  const count = resolveChannelAccounts(channelAccounts, key).length;
   return count >= 2 ? count : undefined;
 }

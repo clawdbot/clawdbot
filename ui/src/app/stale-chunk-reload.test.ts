@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
@@ -103,7 +104,7 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("build-a");
   });
 
-  it("never auto-reloads twice for the same build, but recovers on a newer build", async () => {
+  it("never lets a persisted build guard suppress recovery for a newer build", async () => {
     const reload = vi.fn();
     const storage = memoryStorage({ [GUARD_KEY]: "build-a" });
     stubDocumentFetch(new Response(null, { status: 200 }));
@@ -118,7 +119,7 @@ describe("scheduleStaleChunkReload", () => {
     expect(reload).not.toHaveBeenCalled();
     await expect(
       scheduleStaleChunkReload({
-        now: () => 7000,
+        now: () => 2000,
         buildId: "build-b",
         storage,
         reload,
@@ -178,18 +179,100 @@ describe("scheduleStaleChunkReload", () => {
     await expect(
       scheduleStaleChunkReload({
         now: () => 1000,
+        buildId: "build-a",
         storage,
         reload,
       }),
     ).resolves.toBe(false);
-    await expect(scheduleStaleChunkReload({ now: () => 2000, storage, reload })).resolves.toBe(
-      false,
-    );
+    await expect(
+      scheduleStaleChunkReload({ now: () => 2000, buildId: "build-a", storage, reload }),
+    ).resolves.toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await expect(scheduleStaleChunkReload({ now: () => 7000, storage, reload })).resolves.toBe(
-      true,
-    );
+    await expect(
+      scheduleStaleChunkReload({ now: () => 7000, buildId: "build-a", storage, reload }),
+    ).resolves.toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes a newer build immediately after an older build was unreachable", async () => {
+    const reload = vi.fn();
+    const storage = memoryStorage();
+    const fetchMock = stubDocumentFetch(
+      new Response(null, { status: 503 }),
+      new Response(null, { status: 200 }),
+    );
+
+    await expect(
+      scheduleStaleChunkReload({ now: () => 1000, buildId: "build-a", storage, reload }),
+    ).resolves.toBe(false);
+    await expect(
+      scheduleStaleChunkReload({ now: () => 2000, buildId: "build-b", storage, reload }),
+    ).resolves.toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(GUARD_KEY)).toBe("build-b");
+  });
+
+  it("reprobes a newer build after its joined older-build probe fails", async () => {
+    const olderProbe = deferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => olderProbe.promise)
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const reload = vi.fn();
+    const storage = memoryStorage();
+
+    const olderBuild = scheduleStaleChunkReload({
+      now: () => 1000,
+      buildId: "build-a",
+      storage,
+      reload,
+    });
+    const newerBuild = scheduleStaleChunkReload({
+      now: () => 2000,
+      buildId: "build-b",
+      storage,
+      reload,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    olderProbe.resolve(new Response(null, { status: 503 }));
+    await expect(Promise.all([olderBuild, newerBuild])).resolves.toEqual([false, true]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(GUARD_KEY)).toBe("build-b");
+  });
+
+  it("reloads only the newest build after a shared document probe succeeds", async () => {
+    const sharedProbe = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>(async () => sharedProbe.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const reload = vi.fn();
+    const storage = memoryStorage();
+
+    const olderBuild = scheduleStaleChunkReload({
+      now: () => 1000,
+      buildId: "build-a",
+      storage,
+      reload,
+    });
+    const newerBuild = scheduleStaleChunkReload({
+      now: () => 2000,
+      buildId: "build-b",
+      storage,
+      reload,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    sharedProbe.resolve(new Response(null, { status: 200 }));
+    await expect(Promise.all([olderBuild, newerBuild])).resolves.toEqual([false, true]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(GUARD_KEY)).toBe("build-b");
   });
 
   it("settles and aborts a hanging document probe after its deadline", async () => {
@@ -358,6 +441,15 @@ describe("installMissingStylesheetRecovery", () => {
   });
 
   it("shows a reload banner when automatic recovery is unavailable", async () => {
+    const translate = vi.spyOn(i18n, "t").mockImplementation((key) => {
+      if (key === "lazyView.stylesFailed") {
+        return "Localized stylesheet failure";
+      }
+      if (key === "common.reload") {
+        return "Localized reload";
+      }
+      return key;
+    });
     setReadyState("complete");
     const retry = vi.fn(async () => false);
     const uninstall = installMissingStylesheetRecovery({
@@ -369,8 +461,10 @@ describe("installMissingStylesheetRecovery", () => {
       await Promise.resolve();
       const banner = document.querySelector<HTMLElement>('[role="alert"]');
       const reloadButton = banner?.querySelector<HTMLButtonElement>("button");
-      expect(banner?.textContent).toContain("Styles failed to load, so the page may look broken.");
-      expect(reloadButton?.textContent).toBe("Reload");
+      expect(banner?.textContent).toContain("Localized stylesheet failure");
+      expect(reloadButton?.textContent).toBe("Localized reload");
+      expect(translate).toHaveBeenCalledWith("lazyView.stylesFailed", undefined);
+      expect(translate).toHaveBeenCalledWith("common.reload", undefined);
       reloadButton?.click();
       expect(retry).toHaveBeenCalledTimes(1);
       expect(banner?.isConnected).toBe(true);

@@ -1,9 +1,23 @@
 import { ReefAutonomySchema } from "./friend-types.js";
 import { getActiveReef } from "./runtime.js";
 
-export async function handleReefCommand({ args }: { args?: string }): Promise<{ text: string }> {
-  const active = getActiveReef();
+export async function handleReefCommand({
+  args,
+  senderIsOwner,
+}: {
+  args?: string;
+  senderIsOwner?: boolean;
+}): Promise<{ text: string }> {
   const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
+  const changesFriendship =
+    words[0] === "friend" && /^(code|request|remove|block|autonomy)$/.test(words[1] ?? "");
+  const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
+  if ((changesFriendship || decidesReview) && senderIsOwner !== true) {
+    return {
+      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+    };
+  }
+  const active = getActiveReef();
   if (words[0] === "friend" && words[1] === "code") {
     const minted = await active.friends.mintCode();
     return {

@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -74,6 +75,75 @@ class MainActivityTest {
     assertTrue(continued.scrollToLatest)
     assertTrue(continued.state.followingLatest)
     assertFalse(continued.state.hasNewContent)
+  }
+
+  @Test
+  fun chatFollowTracksStreamingGrowthAtLatest() {
+    val messages = listOf(WearChatMessage(id = "user-1", role = "user", text = "Status?", timestamp = 1L))
+    val anchor = wearChatLatestAnchorIndex(1, hasStreaming = true, canAbort = false, hasAssistant = false, hasFailure = false)
+    val first =
+      nextWearThreadFollowForContent(
+        state = WearThreadFollowState(),
+        contentRevision = wearChatContentRevision("session-1", messages, "Read", anchor),
+      )
+    val continued =
+      nextWearThreadFollowForContent(
+        state = first.state,
+        contentRevision = wearChatContentRevision("session-1", messages, "Ready", anchor),
+      )
+
+    assertTrue(first.scrollToLatest)
+    assertTrue(continued.scrollToLatest)
+    assertTrue(continued.state.followingLatest)
+    assertFalse(continued.state.hasNewContent)
+  }
+
+  @Test
+  fun chatFollowPreservesManualScrollForNewContent() {
+    val firstMessage = WearChatMessage(id = "message-1", role = "assistant", text = "First", timestamp = 1L)
+    val initial =
+      nextWearThreadFollowForContent(
+        state = WearThreadFollowState(),
+        contentRevision = wearChatContentRevision("session-1", listOf(firstMessage), null, 6),
+      )
+    val scrolledBack =
+      nextWearThreadFollowForViewport(
+        state = initial.state,
+        atLatest = false,
+        scrollingBackward = true,
+      )
+    val newContent =
+      nextWearThreadFollowForContent(
+        state = scrolledBack,
+        contentRevision =
+          wearChatContentRevision(
+            "session-1",
+            listOf(firstMessage, WearChatMessage(id = "message-2", role = "assistant", text = "Second", timestamp = 2L)),
+            null,
+            7,
+          ),
+      )
+
+    assertFalse(newContent.scrollToLatest)
+    assertFalse(newContent.state.followingLatest)
+    assertTrue(newContent.state.hasNewContent)
+    assertTrue(wearThreadFollowLatest(newContent.state).followingLatest)
+  }
+
+  @Test
+  fun chatFollowTargetsRenderedTrailingAnchor() {
+    assertEquals(
+      -1,
+      wearChatLatestAnchorIndex(0, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = true),
+    )
+    assertEquals(
+      5,
+      wearChatLatestAnchorIndex(1, hasStreaming = false, canAbort = false, hasAssistant = false, hasFailure = false),
+    )
+    assertEquals(
+      10,
+      wearChatLatestAnchorIndex(2, hasStreaming = true, canAbort = true, hasAssistant = true, hasFailure = true),
+    )
   }
 
   @Test
@@ -195,6 +265,92 @@ class MainActivityTest {
 
     assertEquals(WearConversationFailure.ACTION_REJECTED, snapshot?.failure)
     assertNull(snapshot?.sessions?.single()?.title)
+  }
+
+  @Test
+  fun conversationSnapshotExposesPulseOnlyForConnectedCapablePhone() {
+    val pulse =
+      WearAgentPulseSnapshot(
+        tasks =
+          WearAgentPulseTasks(
+            state = WearAgentPulseTaskState.Ready,
+            queued = 2,
+            running = 3,
+            completed = 5,
+            failed = 1,
+            activeAtLimit = false,
+            recentAtLimit = false,
+          ),
+        swarm =
+          WearAgentPulseSwarm(
+            state = WearAgentPulseSwarmState.Active,
+            groups = 1,
+            running = 1,
+            done = 0,
+            failed = 0,
+            phases =
+              listOf(
+                WearAgentPulsePhase(
+                  queued = 2,
+                  running = 1,
+                  done = 0,
+                  failed = 0,
+                  hidden = 0,
+                ),
+              ),
+            morePhases = false,
+          ),
+        approvals =
+          WearAgentPulseApprovals(
+            state = WearAgentPulseApprovalsState.Ready,
+            pending = 2,
+          ),
+        eventSequence = 7L,
+        phoneNodeId = "phone-1",
+        eventStreamId = "epoch-1",
+      )
+    val capable =
+      WearUiState(
+        loading = false,
+        connected = true,
+        phoneNodeId = "phone-1",
+        proxyCapabilities = setOf(WearProxyCapability.AgentPulse),
+        agentPulse = pulse,
+        agentPulseLoading = true,
+        agentPulseFailure = WearConversationFailure.INTERNAL_ERROR,
+      ).toConversationSnapshot()
+
+    assertTrue(capable?.agentPulseSupported == true)
+    assertEquals(pulse, capable?.agentPulse)
+    assertTrue(capable?.agentPulseLoading == true)
+    assertEquals(WearConversationFailure.INTERNAL_ERROR, capable?.agentPulseFailure)
+
+    val offline =
+      WearUiState(
+        loading = false,
+        connected = false,
+        phoneNodeId = "phone-1",
+        proxyCapabilities = setOf(WearProxyCapability.AgentPulse),
+        agentPulse = pulse,
+        agentPulseLoading = true,
+        agentPulseFailure = WearConversationFailure.INTERNAL_ERROR,
+      ).toConversationSnapshot()
+
+    assertFalse(offline?.agentPulseSupported == true)
+    assertNull(offline?.agentPulse)
+    assertFalse(offline?.agentPulseLoading == true)
+    assertNull(offline?.agentPulseFailure)
+
+    val unsupported =
+      WearUiState(
+        loading = false,
+        connected = true,
+        phoneNodeId = "phone-1",
+        agentPulse = pulse,
+      ).toConversationSnapshot()
+
+    assertFalse(unsupported?.agentPulseSupported == true)
+    assertNull(unsupported?.agentPulse)
   }
 
   @Test

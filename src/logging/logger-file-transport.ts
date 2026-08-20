@@ -36,6 +36,7 @@ let scheduledFlush: NodeJS.Immediate | null = null;
 let flushPromise: Promise<void> | null = null;
 let drainGeneration = 0;
 let processExiting = false;
+let processHooksInstalled = false;
 let appendFile: FileLogAppender = appendRegularFile;
 const warnedRotationFiles = new Map<string, number>();
 
@@ -248,20 +249,46 @@ function scheduleFlush(): void {
   });
 }
 
-process.on("beforeExit", () => {
+function handleProcessBeforeExit(): void {
   void flushFileLogQueue();
-});
-process.on("exit", () => {
+}
+
+function handleProcessExit(): void {
   processExiting = true;
   drainFileLogQueueSync();
-});
+}
+
+function installProcessHooks(): void {
+  if (processHooksInstalled) {
+    return;
+  }
+  processHooksInstalled = true;
+  process.on("beforeExit", handleProcessBeforeExit);
+  process.on("exit", handleProcessExit);
+}
+
+function removeProcessHooks(): void {
+  if (!processHooksInstalled) {
+    return;
+  }
+  process.removeListener("beforeExit", handleProcessBeforeExit);
+  process.removeListener("exit", handleProcessExit);
+  processHooksInstalled = false;
+}
+
+// Production installs eagerly so logs emitted by another exit listener are still rescued.
+// Vitest shared workers reload modules, so defer there until file logging is actually used.
+if (process.env.VITEST !== "true") {
+  installProcessHooks();
+}
 
 /** Enqueues one serialized record without waiting for filesystem I/O. */
-export function enqueueFileLog(entry: FileLogQueueEntry): void {
+function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (processExiting) {
     writeEntriesSync([entry]);
     return;
   }
+  installProcessHooks();
   // Keep the newest diagnostics and report every eviction once in the next drain batch.
   if (queue.length >= maxQueuedRecords) {
     const dropped = queue[queueStart];
@@ -278,7 +305,7 @@ export function enqueueFileLog(entry: FileLogQueueEntry): void {
 }
 
 /** Waits until every record currently queued for the async transport has settled. */
-export async function flushFileLogQueue(): Promise<void> {
+async function flushFileLogQueue(): Promise<void> {
   for (;;) {
     if (scheduledFlush) {
       clearImmediate(scheduledFlush);
@@ -296,7 +323,7 @@ export async function flushFileLogQueue(): Promise<void> {
 }
 
 /** Synchronously rescues pending records for process.exit() and crash-adjacent paths. */
-export function drainFileLogQueueSync(): void {
+function drainFileLogQueueSync(): void {
   if (scheduledFlush) {
     clearImmediate(scheduledFlush);
     scheduledFlush = null;
@@ -312,17 +339,28 @@ export function drainFileLogQueueSync(): void {
   writeEntriesSync(entries);
 }
 
-export function setFileLogQueueMaxRecordsForTests(value?: number): void {
+function setFileLogQueueMaxRecordsForTests(value?: number): void {
   maxQueuedRecords = Math.max(1, value ?? DEFAULT_MAX_QUEUED_RECORDS);
 }
 
-export function setFileLogAppenderForTests(value?: FileLogAppender): void {
+function setFileLogAppenderForTests(value?: FileLogAppender): void {
   appendFile = value ?? appendRegularFile;
 }
 
-export function resetFileLogTransportForTests(): void {
+function resetFileLogTransportForTests(): void {
   drainFileLogQueueSync();
+  removeProcessHooks();
+  processExiting = false;
   appendFile = appendRegularFile;
   maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
   warnedRotationFiles.clear();
 }
+
+export const fileLogTransport = {
+  drainSync: drainFileLogQueueSync,
+  enqueue: enqueueFileLog,
+  flush: flushFileLogQueue,
+  resetForTests: resetFileLogTransportForTests,
+  setAppenderForTests: setFileLogAppenderForTests,
+  setMaxQueuedRecordsForTests: setFileLogQueueMaxRecordsForTests,
+};

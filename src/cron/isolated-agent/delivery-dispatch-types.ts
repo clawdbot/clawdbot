@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -27,6 +28,7 @@ export type DispatchCronDeliveryParams = {
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
+  spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
@@ -50,6 +52,7 @@ export type DispatchCronDeliveryState = {
   delivered: boolean;
   deliveryAttempted: boolean;
   deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;

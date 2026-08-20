@@ -98,6 +98,111 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
   });
 
+  it.each([
+    { itemId: "msg_mock_1", text: "" },
+    { itemId: "msg_mock_1", text: " \n " },
+    { itemId: undefined, text: "" },
+    { itemId: undefined, text: " \n " },
+  ])(
+    "preserves an explicit raw empty stop ($itemId) after a settled write",
+    async ({ itemId, text }) => {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+      const priorAssistant = { type: "agentMessage", id: "msg-before-write", text: "" };
+      await projector.handleNotification(forCurrentTurn("item/started", { item: priorAssistant }));
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", { item: priorAssistant }),
+      );
+      const item = {
+        type: "dynamicToolCall",
+        id: "call-write",
+        namespace: null,
+        tool: "write",
+        arguments: { path: "note.txt", content: "written once" },
+        status: "inProgress",
+        contentItems: null,
+        success: null,
+        durationMs: null,
+      };
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      projector.recordDynamicToolCall({
+        callId: item.id,
+        tool: item.tool,
+        arguments: item.arguments,
+      });
+      projector.recordDynamicToolResult({
+        callId: item.id,
+        tool: item.tool,
+        success: true,
+        sideEffectEvidence: true,
+        contentItems: [{ type: "inputText", text: "written once" }],
+      });
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            ...item,
+            status: "completed",
+            contentItems: [{ type: "inputText", text: "written once" }],
+            success: true,
+            durationMs: 1,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "message",
+            ...(itemId ? { id: itemId } : {}),
+            role: "assistant",
+            content: [{ type: "output_text", text }],
+          },
+        }),
+      );
+      await projector.handleNotification(turnCompleted([]));
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual([]);
+      expect(result.lastAssistant).toBeUndefined();
+      expect(result.currentAttemptAssistant).toMatchObject({
+        stopReason: "stop",
+        content: [{ type: "text", text: "" }],
+      });
+      expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+      expect(result.itemLifecycle).toEqual({ startedCount: 2, completedCount: 2, activeCount: 0 });
+      expect(result.messagesSnapshot.filter((message) => message.role === "assistant")).toEqual([
+        expect.objectContaining({ content: [expect.objectContaining({ type: "toolCall" })] }),
+      ]);
+      expect(onAgentEvent.mock.calls.some(([event]) => event.stream === "assistant")).toBe(false);
+    },
+  );
+
+  it.each([
+    { label: "missing content", content: [] },
+    { label: "missing text", content: [{ type: "output_text" }] },
+    { label: "non-text content", content: [{ type: "reasoning", text: "" }] },
+    { label: "commentary", content: [{ type: "output_text", text: "" }], phase: "commentary" },
+    { label: "active tool", content: [{ type: "output_text", text: "" }], active: true },
+  ])("does not fabricate a terminal assistant for $label", async ({ content, phase, active }) => {
+    const projector = await createProjector();
+    if (active) {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "commandExecution", id: "pending-tool", status: "inProgress" },
+        }),
+      );
+    }
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: { type: "message", role: "assistant", ...(phase ? { phase } : {}), content },
+      }),
+    );
+    await projector.handleNotification(turnCompleted([]));
+
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).currentAttemptAssistant,
+    ).toBeUndefined();
+  });
+
   it("streams commentary agent messages as keyed progress events", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -542,7 +647,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it("preserves sessions_yield detection in attempt results", () => {
+  it("preserves accepted session spawns as yield continuation evidence", () => {
     const projector = new CodexAppServerEventProjector(
       {
         prompt: "hello",
@@ -559,8 +664,20 @@ describe("CodexAppServerEventProjector commentary projection", () => {
       TURN_ID,
     );
 
-    const result = projector.buildResult(buildEmptyToolTelemetry(), { yieldDetected: true });
+    const result = projector.buildResult(
+      {
+        ...buildEmptyToolTelemetry(),
+        acceptedSessionSpawns: [
+          { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+        ],
+      },
+      { yieldDetected: true },
+    );
 
     expect(result.yieldDetected).toBe(true);
+    expect(result.acceptedSessionSpawns).toEqual([
+      { runId: "child-run", childSessionKey: "agent:main:subagent:child" },
+    ]);
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 });

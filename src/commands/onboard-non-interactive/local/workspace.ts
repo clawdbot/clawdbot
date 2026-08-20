@@ -18,13 +18,15 @@ export function resolveNonInteractiveWorkspaceDir(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   const env = params.env ?? process.env;
+  const requestedWorkspace = params.opts.workspace?.trim() || undefined;
+  const configuredWorkspace = params.baseConfig.agents?.defaults?.workspace?.trim() || undefined;
   const workspaceOverride = env.OPENCLAW_WORKSPACE_DIR?.trim() || undefined;
   const implicitWorkspaceDir = isDefaultStateDir(env)
     ? params.defaultWorkspaceDir
     : path.join(resolveStateDir(env), "workspace");
   const raw = (
-    params.opts.workspace ??
-    params.baseConfig.agents?.defaults?.workspace ??
+    requestedWorkspace ??
+    configuredWorkspace ??
     workspaceOverride ??
     implicitWorkspaceDir
   ).trim();

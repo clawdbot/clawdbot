@@ -56,23 +56,9 @@ extension CanvasWindowController {
         decisionHandler(.cancel)
     }
 
-    @MainActor
-    func webView(
-        _: WKWebView,
-        decidePolicyFor navigationResponse: WKNavigationResponse,
-        decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
-    {
-        // Revoke only once navigation produces a response. Requests canceled
-        // above leave the original trusted A2UI document active.
-        if navigationResponse.isForMainFrame, let url = navigationResponse.response.url {
-            self.updateA2UITrustForMainFrameNavigation(to: url)
-        }
-        decisionHandler(.allow)
-    }
-
     func webView(_ webView: WKWebView, didCommit _: WKNavigation?) {
         if let url = webView.url {
-            self.updateA2UITrustForMainFrameNavigation(to: url)
+            self.updateFilePollingForCommittedNavigation(to: url)
         }
     }
 

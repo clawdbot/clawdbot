@@ -30,7 +30,7 @@ export type UsageLike = {
   reasoningTokens?: number;
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
-  output_tokens_details?: { reasoning_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // OpenAI Responses reports cached prompt reuse here.
@@ -53,6 +53,14 @@ export type UsageLike = {
   cost?: Partial<Usage["cost"]>;
 };
 
+type CliUsageAliases = {
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  cached?: number;
+  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+};
+
 /** Normalized token counts used by runtime accounting. */
 export type NormalizedUsage = {
   input?: number;
@@ -71,6 +79,18 @@ export type OpenAiChatCompletionsUsage = {
   total_tokens: number;
   prompt_tokens_details?: { cached_tokens: number };
   completion_tokens_details?: { reasoning_tokens: number };
+};
+
+/** OpenAI Responses compatible usage shape. */
+type OpenAiResponsesUsage = {
+  input_tokens: number;
+  input_tokens_details: {
+    cached_tokens: number;
+    cache_write_tokens: number;
+  };
+  output_tokens: number;
+  output_tokens_details: { reasoning_tokens: number };
+  total_tokens: number;
 };
 
 /** Assistant usage snapshot with token counts and computed cost buckets. */
@@ -130,16 +150,28 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   if (!raw) {
     return undefined;
   }
+  const cli = raw as UsageLike & CliUsageAliases;
 
   const cacheRead = normalizeTokenCount(
     raw.cacheRead ??
       raw.cache_read ??
       raw.cache_read_input_tokens ??
+      cli.cached_input_tokens ??
+      cli.cached ??
       raw.cached_tokens ??
       raw.input_tokens_details?.cached_tokens ??
       raw.prompt_tokens_details?.cached_tokens,
   );
+  const cacheWrite = normalizeTokenCount(
+    raw.cacheWrite ??
+      raw.cache_write ??
+      raw.cache_creation_input_tokens ??
+      cli.cache_write_input_tokens ??
+      cli.input_tokens_details?.cache_write_tokens ??
+      cli.prompt_tokens_details?.cache_write_tokens,
+  );
 
+  const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
     raw.input ??
     raw.inputTokens ??
@@ -149,20 +181,30 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.prompt_n ??
     raw.timings?.prompt_n;
 
-  const usesOpenAIStylePromptTotals =
+  const cliCacheReadIncludedInInput =
+    cli.cached_input_tokens !== undefined || cli.cached !== undefined;
+  const openAiCacheReadIncludedInInput =
     raw.cached_tokens !== undefined ||
     raw.input_tokens_details?.cached_tokens !== undefined ||
     raw.prompt_tokens_details?.cached_tokens !== undefined;
+  const cacheWriteIncludedInInput =
+    cli.cache_write_input_tokens !== undefined ||
+    cli.input_tokens_details?.cache_write_tokens !== undefined ||
+    cli.prompt_tokens_details?.cache_write_tokens !== undefined;
 
   // Some providers (shared model runtime OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
   // include cached tokens in the reported prompt total. Normalize both cases
   // to uncached input tokens so downstream prompt-token math does not double-
-  // count cache reads.
+  // count cache reads or writes.
   const rawInput = asFiniteNumber(rawInputValue);
+  const subtractCacheRead =
+    openAiCacheReadIncludedInInput || (directInput === undefined && cliCacheReadIncludedInInput);
   const normalizedInput =
-    rawInput !== undefined && usesOpenAIStylePromptTotals && cacheRead !== undefined
-      ? rawInput - cacheRead
+    rawInput !== undefined
+      ? rawInput -
+        (subtractCacheRead ? (cacheRead ?? 0) : 0) -
+        (directInput === undefined && cacheWriteIncludedInInput ? (cacheWrite ?? 0) : 0)
       : rawInput;
   const input = normalizeTokenCount(normalizedInput);
   const output = normalizeTokenCount(
@@ -173,9 +215,6 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.completion_tokens ??
       raw.predicted_n ??
       raw.timings?.predicted_n,
-  );
-  const cacheWrite = normalizeTokenCount(
-    raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
   const contextPromptTokens =
     raw.contextUsage?.state === "available"
@@ -201,7 +240,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.reasoningTokens ??
       raw.reasoning_tokens ??
       raw.completion_tokens_details?.reasoning_tokens ??
-      raw.output_tokens_details?.reasoning_tokens,
+      raw.output_tokens_details?.reasoning_tokens ??
+      raw.output_tokens_details?.thinking_tokens,
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
@@ -268,6 +308,35 @@ export function toOpenAiChatCompletionsUsage(
     ...(reasoningTokens !== undefined
       ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } }
       : {}),
+  };
+}
+
+/**
+ * Maps normalized usage to OpenAI Responses `usage` fields.
+ *
+ * Responses reports cache reads and writes as subsets of `input_tokens`, so
+ * recombine OpenClaw's separately priced buckets and retain their details.
+ * Reasoning tokens remain a detail of `output_tokens`, not an extra bucket.
+ */
+export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined): OpenAiResponsesUsage {
+  const input = Math.max(0, usage?.input ?? 0);
+  const output = Math.max(0, usage?.output ?? 0);
+  const cacheRead = Math.max(0, usage?.cacheRead ?? 0);
+  const cacheWrite = Math.max(0, usage?.cacheWrite ?? 0);
+  const reasoningTokens = Math.max(0, usage?.reasoningTokens ?? 0);
+  const inputTokens = input + cacheRead + cacheWrite;
+  const componentTotal = inputTokens + output;
+  const aggregateTotal = Math.max(0, usage?.total ?? 0);
+
+  return {
+    input_tokens: inputTokens,
+    input_tokens_details: {
+      cached_tokens: cacheRead,
+      cache_write_tokens: cacheWrite,
+    },
+    output_tokens: output,
+    output_tokens_details: { reasoning_tokens: reasoningTokens },
+    total_tokens: Math.max(componentTotal, aggregateTotal),
   };
 }
 

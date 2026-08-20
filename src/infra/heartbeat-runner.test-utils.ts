@@ -5,8 +5,11 @@ import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
 import { CronService } from "../cron/service.js";
@@ -20,7 +23,7 @@ import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
 // while keeping plugin registry and environment state isolated per test.
-type HeartbeatSessionSeed = Partial<SessionEntry> & {
+type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
@@ -79,7 +82,7 @@ export async function seedHeartbeatScratchForTest(params: {
 export async function seedSessionStore(
   storePath: string,
   sessionKey: string,
-  session: HeartbeatSessionSeed,
+  session: Partial<HeartbeatSessionSeed>,
 ): Promise<void> {
   const {
     deliveryContext,
@@ -113,7 +116,7 @@ export function readSessionStoreForTest<T extends object = HeartbeatSessionSeed>
   storePath: string,
 ): Record<string, T> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry as T]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry as T]),
   );
 }
 

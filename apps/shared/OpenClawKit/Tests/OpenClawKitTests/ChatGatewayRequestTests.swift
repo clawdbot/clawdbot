@@ -4,6 +4,15 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `models list scopes worker catalogs and preserves default scope`() {
+        let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
+        let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
+
+        #expect(worker.method == "models.list")
+        #expect(worker.params["agentId"]?.value as? String == "worker")
+        #expect(defaultAgent.params.isEmpty)
+    }
+
     @Test func `session observation requests encode global subscription and actual visibility`() {
         let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
         let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
@@ -158,6 +167,13 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
         #expect(fork.params["agentId"]?.value as? String == "reviewer")
         #expect(fork.params["fork"]?.value as? Bool == true)
+        #expect(fork.params["forkFrom"] == nil)
+
+        let activeFork = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: "agent:reviewer:telegram:group:1",
+            agentID: "reviewer",
+            fromLastCompleted: true)
+        #expect(activeFork.params["forkFrom"]?.value as? String == "last-completed")
 
         let create = OpenClawChatGatewayRequests.createSession(
             key: "agent:reviewer:new",
@@ -250,10 +266,20 @@ struct ChatGatewayRequestTests {
         let archive = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
+            expectedSessionID: "session-child",
             label: nil,
             category: nil,
             pinned: nil,
             archived: true,
+            unread: nil)
+        let restore = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "agent:main:child",
+            agentID: nil,
+            expectedSessionID: "session-child",
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: false,
             unread: nil)
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
@@ -261,6 +287,10 @@ struct ChatGatewayRequestTests {
 
         #expect(rename.params["label"]?.value is NSNull)
         #expect(archive.params["archived"]?.value as? Bool == true)
+        #expect(archive.params["expectedSessionId"]?.value as? String == "session-child")
+        #expect(archive.timeoutMs == 600_000)
+        #expect(restore.params["expectedSessionId"]?.value as? String == "session-child")
+        #expect(restore.timeoutMs == 15000)
         #expect(fork.method == "sessions.create")
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:main:child")
         #expect(fork.params["fork"]?.value as? Bool == true)
@@ -311,6 +341,18 @@ struct ChatGatewayRequestTests {
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
+    }
+
+    @Test func `send request omits inherited thinking override`() {
+        let inherited = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "global",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "inherit",
+            thinking: nil,
+            idempotencyKey: "send-inherit",
+            attachments: [])
+        #expect(inherited.params["thinking"] == nil)
     }
 
     @Test func `question resolve request preserves answer arrays`() throws {
@@ -443,6 +485,38 @@ struct ChatGatewayPayloadCodecTests {
         #expect(note.kind == "phase")
         #expect(note.text == "Research")
 
+        let lifecycleChanged = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "phase": AnyCodable("end"),
+                "runId": AnyCodable("run-1"),
+                "session": AnyCodable([
+                    "key": AnyCodable("agent:main:main"),
+                    "updatedAt": AnyCodable(30000),
+                    "status": AnyCodable("done"),
+                    "hasActiveRun": AnyCodable(false),
+                    "runtimeMs": AnyCodable(30000),
+                    "outputTokens": AnyCodable(42),
+                    "activeRunIds": AnyCodable([]),
+                ]),
+            ]))
+        guard case let .sessionsChanged(lifecycle) = OpenClawChatGatewayPayloadCodec.event(
+            from: lifecycleChanged)
+        else {
+            Issue.record("expected lifecycle sessionsChanged")
+            return
+        }
+        #expect(lifecycle.reason.isEmpty)
+        #expect(lifecycle.phase == "end")
+        #expect(lifecycle.runId == "run-1")
+        #expect(lifecycle.session?.key == "agent:main:main")
+        #expect(lifecycle.session?.status == "done")
+        #expect(lifecycle.session?.runtimeMs == 30000)
+        #expect(lifecycle.session?.outputTokens == 42)
+        #expect(lifecycle.session?.activeRunIds == [])
+
         let chat = EventFrame(
             type: "event",
             event: "chat",
@@ -478,6 +552,50 @@ struct ChatGatewayPayloadCodecTests {
         #expect(digest.sessionkey == "main")
         #expect(digest.runid == "run-1")
         #expect(digest.revision == 2)
+
+        let task = EventFrame(
+            type: "event",
+            event: "task",
+            payload: AnyCodable([
+                "action": AnyCodable("upserted"),
+                "task": AnyCodable([
+                    "id": AnyCodable("task-1"),
+                    "runtime": AnyCodable("subagent"),
+                    "status": AnyCodable("running"),
+                    "sessionKey": AnyCodable("agent:main:main"),
+                    "lastActivity": AnyCodable("Editing ChatView.swift"),
+                    "diffStat": AnyCodable([
+                        "files": AnyCodable(1),
+                        "added": AnyCodable(8),
+                        "removed": AnyCodable(2),
+                    ]),
+                ]),
+            ]))
+        guard case let .task(.upserted(summary)) = OpenClawChatGatewayPayloadCodec.event(from: task)
+        else {
+            Issue.record("expected task upsert")
+            return
+        }
+        #expect(summary.id == "task-1")
+        #expect(summary.sessionkey == "agent:main:main")
+        #expect(summary.lastactivity == "Editing ChatView.swift")
+        #expect(summary.diffstat?["added"]?.intValue == 8)
+
+        let progressCard = EventFrame(
+            type: "event",
+            event: "progressCard.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "revision": AnyCodable(7),
+            ]))
+        guard case let .progressCardChanged(event) = OpenClawChatGatewayPayloadCodec.event(
+            from: progressCard)
+        else {
+            Issue.record("expected progressCardChanged")
+            return
+        }
+        #expect(event.sessionkey == "agent:main:main")
+        #expect(event.revision.value as? Int == 7)
 
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",

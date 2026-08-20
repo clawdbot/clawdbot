@@ -1,42 +1,39 @@
 import path from "node:path";
-import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { pluginSecretRefSetup } from "openclaw/plugin-sdk/secret-ref-runtime";
+import { createPluginSecretRefSetupCli } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parseVaultSecretId } from "../vault-secret-id.js";
 
-type CommandLike = {
-  command(name: string): CommandLike;
-  description(value: string): CommandLike;
-  option(
-    flags: string,
-    description: string,
-    defaultValueOrParser?: string | ((value: string, previous?: string[]) => string[]),
-    defaultValue?: string[],
-  ): CommandLike;
-  action<TOptions>(fn: (options: TOptions) => void | Promise<void>): CommandLike;
-};
+const VAULT_PROVIDER_ALIAS = "vault";
+type PluginSecretRefSetupCli = ReturnType<typeof createPluginSecretRefSetupCli>;
 
-type VaultExecProviderConfig = {
-  source: "exec";
+function normalizeVaultSecretId(label: string, value: string): string {
+  try {
+    parseVaultSecretId(value);
+    return value;
+  } catch {
+    throw new Error(`Invalid ${label} Vault secret id: ${value}`);
+  }
+}
+
+const vaultSecretRefSetupCli: PluginSecretRefSetupCli = createPluginSecretRefSetupCli({
+  productName: "Vault",
+  secretIdLabel: "Vault secret id",
+  secretIdPlaceholder: "vault-secret-id",
+  defaultProviderAlias: VAULT_PROVIDER_ALIAS,
   pluginIntegration: {
-    pluginId: "vault";
-    integrationId: "vault";
-  };
-};
+    pluginId: "vault",
+    integrationId: "vault",
+  },
+  normalizeSecretId: normalizeVaultSecretId,
+  defaultPlanPath: () =>
+    path.join(resolvePreferredOpenClawTmpDir(), `openclaw-vault-secrets-${process.pid}.json`),
+});
 
-type ProviderSecretMapping = {
-  providerId: string;
-  secretId: string;
-};
-
-type ConfigTargetSecretMapping = {
-  path: string;
-  agentId?: string;
-  secretId: string;
-};
+type CommandLike = Parameters<typeof vaultSecretRefSetupCli.registerSetupCommand>[0];
 
 type RegisterVaultCommandsParams = {
   program: CommandLike;
@@ -48,109 +45,12 @@ type StatusOptions = {
   providerAlias?: string;
 };
 
-type SetupOptions = {
-  planOut?: string;
-  providerAlias?: string;
-  openaiId?: string;
-  anthropicId?: string;
-  openrouterId?: string;
-  providerKey?: string[];
-  target?: string[];
-};
-
-type ProviderStatus = {
-  configured: boolean;
-  source?: string;
-  command?: string;
-  pluginIntegration?: {
-    pluginId: string;
-    integrationId: string;
-  };
-};
-
-const VAULT_PROVIDER_ALIAS = "vault";
-
 function writeLine(message = ""): void {
   process.stdout.write(`${message}\n`);
 }
 
 function writeJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function assertValidProviderAlias(value: string): void {
-  pluginSecretRefSetup.assertValidProviderAlias(value);
-}
-
-function assertValidVaultSecretId(label: string, value: string): void {
-  try {
-    parseVaultSecretId(value);
-  } catch {
-    throw new Error(`Invalid ${label} Vault secret id: ${value}`);
-  }
-}
-
-function readProviderStatus(config: OpenClawConfig, providerAlias: string): ProviderStatus {
-  const provider = config.secrets?.providers?.[providerAlias];
-  if (!isRecord(provider)) {
-    return { configured: false };
-  }
-  const base = {
-    configured: true,
-    source: normalizeOptionalString(provider.source),
-  };
-  if (provider.source !== "exec") {
-    return base;
-  }
-  if ("pluginIntegration" in provider) {
-    return {
-      ...base,
-      pluginIntegration: provider.pluginIntegration,
-    };
-  }
-  return {
-    ...base,
-    command: normalizeOptionalString(provider.command),
-  };
-}
-
-function isVaultIntegrationProvider(value: unknown): boolean {
-  if (!isRecord(value) || value.source !== "exec" || !isRecord(value.pluginIntegration)) {
-    return false;
-  }
-  return (
-    value.pluginIntegration.pluginId === "vault" &&
-    value.pluginIntegration.integrationId === "vault"
-  );
-}
-
-function resolveStatusProviderAlias(config: OpenClawConfig, requestedAlias?: string): string {
-  const explicitAlias = normalizeOptionalString(requestedAlias);
-  if (explicitAlias) {
-    assertValidProviderAlias(explicitAlias);
-    return explicitAlias;
-  }
-  if (readProviderStatus(config, VAULT_PROVIDER_ALIAS).configured) {
-    return VAULT_PROVIDER_ALIAS;
-  }
-  const configuredAliases = Object.entries(config.secrets?.providers ?? {})
-    .filter(([, provider]) => isVaultIntegrationProvider(provider))
-    .map(([alias]) => alias)
-    .toSorted();
-  if (configuredAliases.length > 1) {
-    throw new Error(
-      `Multiple Vault provider aliases are configured (${configuredAliases.join(", ")}). Use --provider-alias <alias>.`,
-    );
-  }
-  return configuredAliases[0] ?? VAULT_PROVIDER_ALIAS;
 }
 
 function resolverScriptPathCandidates(baseUrl: string): [string, string] {
@@ -173,134 +73,11 @@ async function resolveResolverScriptPath(
   return candidates[0];
 }
 
-function buildProviderConfig(): VaultExecProviderConfig {
-  return {
-    source: "exec",
-    pluginIntegration: {
-      pluginId: "vault",
-      integrationId: "vault",
-    },
-  };
-}
-
-function parseTargetSpecifier(value: string): {
-  path: string;
-  agentId?: string;
-} {
-  return pluginSecretRefSetup.parseTargetSpecifier("Vault", value);
-}
-
-function parseProviderKeyMappings(values: string[] | undefined): ProviderSecretMapping[] {
-  return (values ?? []).map((value) => {
-    const separator = value.indexOf("=");
-    if (separator <= 0 || separator === value.length - 1) {
-      throw new Error(
-        `Invalid --provider-key value "${value}". Use <model-provider-id>=<vault-secret-id>.`,
-      );
-    }
-    const providerId = value.slice(0, separator).trim();
-    const secretId = value.slice(separator + 1).trim();
-    pluginSecretRefSetup.assertValidModelProviderId("--provider-key", providerId);
-    assertValidVaultSecretId(`--provider-key ${providerId}`, secretId);
-    return { providerId, secretId };
-  });
-}
-
-function parseConfigTargetMappings(values: string[] | undefined): ConfigTargetSecretMapping[] {
-  return (values ?? []).map((value) => {
-    const separator = value.indexOf("=");
-    if (separator <= 0 || separator === value.length - 1) {
-      throw new Error(
-        `Invalid --target value "${value}". Use <openclaw-config-path>=<vault-secret-id>.`,
-      );
-    }
-    const target = parseTargetSpecifier(value.slice(0, separator).trim());
-    const secretId = value.slice(separator + 1).trim();
-    assertValidVaultSecretId(`--target ${target.path}`, secretId);
-    return Object.assign(
-      { path: target.path, secretId },
-      target.agentId ? { agentId: target.agentId } : {},
-    );
-  });
-}
-
-function collectProviderSecrets(options: {
-  openaiId?: string;
-  anthropicId?: string;
-  openrouterId?: string;
-  providerKey?: string[];
-}): ProviderSecretMapping[] {
-  const providerSecrets: ProviderSecretMapping[] = [];
-  if (options.openaiId) {
-    providerSecrets.push({ providerId: "openai", secretId: options.openaiId });
-  }
-  if (options.anthropicId) {
-    providerSecrets.push({ providerId: "anthropic", secretId: options.anthropicId });
-  }
-  if (options.openrouterId) {
-    providerSecrets.push({ providerId: "openrouter", secretId: options.openrouterId });
-  }
-  providerSecrets.push(...parseProviderKeyMappings(options.providerKey));
-
-  const seen = new Set<string>();
-  for (const entry of providerSecrets) {
-    const normalized = entry.providerId.toLowerCase();
-    if (seen.has(normalized)) {
-      throw new Error(`Duplicate model provider id in Vault setup: ${entry.providerId}`);
-    }
-    seen.add(normalized);
-  }
-  return providerSecrets;
-}
-
-function buildPlan(params: {
-  providerAlias: string;
-  providerConfig: VaultExecProviderConfig;
-  providerSecrets: ProviderSecretMapping[];
-  configTargetSecrets?: ConfigTargetSecretMapping[];
-}) {
-  return pluginSecretRefSetup.buildPlan({ productName: "Vault", ...params });
-}
-
-async function promptOptionalSecretId(label: string): Promise<string | undefined> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return undefined;
-  }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return normalizeOptionalString(await rl.question(`${label} Vault secret id (blank to skip): `));
-  } finally {
-    rl.close();
-  }
-}
-
-async function promptProviderSecrets(options: SetupOptions): Promise<ProviderSecretMapping[]> {
-  const openaiId =
-    normalizeOptionalString(options.openaiId) ?? (await promptOptionalSecretId("OpenAI"));
-  const anthropicId =
-    normalizeOptionalString(options.anthropicId) ?? (await promptOptionalSecretId("Anthropic"));
-  const openrouterId =
-    normalizeOptionalString(options.openrouterId) ?? (await promptOptionalSecretId("OpenRouter"));
-  if (openaiId) {
-    assertValidVaultSecretId("OpenAI", openaiId);
-  }
-  if (anthropicId) {
-    assertValidVaultSecretId("Anthropic", anthropicId);
-  }
-  if (openrouterId) {
-    assertValidVaultSecretId("OpenRouter", openrouterId);
-  }
-  return collectProviderSecrets({
-    ...(openaiId ? { openaiId } : {}),
-    ...(anthropicId ? { anthropicId } : {}),
-    ...(openrouterId ? { openrouterId } : {}),
-    providerKey: options.providerKey,
-  });
-}
-
 async function runStatus(config: OpenClawConfig, options: StatusOptions): Promise<void> {
-  const providerAlias = resolveStatusProviderAlias(config, options.providerAlias);
-  const provider = readProviderStatus(config, providerAlias);
+  const { providerAlias, provider } = vaultSecretRefSetupCli.inspectProvider(
+    config,
+    options.providerAlias,
+  );
   const authMethod = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
   const result = {
     providerAlias,
@@ -346,33 +123,6 @@ async function runStatus(config: OpenClawConfig, options: StatusOptions): Promis
   writeLine(`KV version: ${result.kvVersion}`);
 }
 
-async function runSetup(options: SetupOptions): Promise<void> {
-  const providerAlias = normalizeOptionalString(options.providerAlias) ?? VAULT_PROVIDER_ALIAS;
-  assertValidProviderAlias(providerAlias);
-  const providerSecrets = await promptProviderSecrets(options);
-  const plan = buildPlan({
-    providerAlias,
-    providerConfig: buildProviderConfig(),
-    providerSecrets,
-    configTargetSecrets: parseConfigTargetMappings(options.target),
-  });
-  const planPath =
-    normalizeOptionalString(options.planOut) ??
-    path.join(resolvePreferredOpenClawTmpDir(), `openclaw-vault-secrets-${process.pid}.json`);
-  await pluginSecretRefSetup.writePlanFile({
-    planPath,
-    content: `${JSON.stringify(plan, null, 2)}\n`,
-  });
-  writeLine(`Plan written to ${planPath}`);
-  writeLine(`Targets: ${plan.targets.length}`);
-  writeLine("");
-  writeLine("Next steps:");
-  writeLine(`  openclaw secrets apply --from ${planPath} --dry-run --allow-exec`);
-  writeLine(`  openclaw secrets apply --from ${planPath} --allow-exec`);
-  writeLine("  openclaw secrets audit --check --allow-exec");
-  writeLine("  openclaw secrets reload");
-}
-
 export function registerVaultCommands(params: RegisterVaultCommandsParams): void {
   const vault = params.program.command("vault").description("Manage Vault SecretRefs");
   vault
@@ -381,25 +131,5 @@ export function registerVaultCommands(params: RegisterVaultCommandsParams): void
     .option("--json", "Print JSON status")
     .option("--provider-alias <alias>", "Secret provider alias to inspect")
     .action((options: StatusOptions) => runStatus(params.config, options));
-  vault
-    .command("setup")
-    .description("Create a Vault SecretRef setup plan")
-    .option("--plan-out <path>", "Write the generated secrets apply plan to a path")
-    .option("--provider-alias <alias>", "Secret provider alias to configure", VAULT_PROVIDER_ALIAS)
-    .option("--openai-id <id>", "Vault secret id for models.providers.openai.apiKey")
-    .option("--anthropic-id <id>", "Vault secret id for models.providers.anthropic.apiKey")
-    .option("--openrouter-id <id>", "Vault secret id for models.providers.openrouter.apiKey")
-    .option(
-      "--provider-key <provider=id>",
-      "Vault secret id for any models.providers.<provider>.apiKey target",
-      (value: string, previous: string[] = []) => [...previous, value],
-      [],
-    )
-    .option(
-      "--target <path=id>",
-      "Vault secret id for any known SecretRef target path",
-      (value: string, previous: string[] = []) => [...previous, value],
-      [],
-    )
-    .action((options: SetupOptions) => runSetup(options));
+  vaultSecretRefSetupCli.registerSetupCommand(vault);
 }

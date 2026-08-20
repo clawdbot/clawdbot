@@ -1,4 +1,5 @@
 // Codex tests cover run attempt.native hook relay plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   abortAgentHarnessRun,
@@ -10,8 +11,10 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createEmptyPluginRegistry,
+  createMockPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +23,7 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createResumeHarness,
   createStartedThreadHarness,
@@ -50,6 +54,12 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
   web_search: "disabled",
 });
+
+function createLoopRelayParams(sessionFile: string, workspaceDir: string) {
+  const params = createParams(sessionFile, workspaceDir);
+  params.config = { tools: { loopDetection: { enabled: true } } } as never;
+  return params;
+}
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
@@ -133,7 +143,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -203,7 +213,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createLoopRelayParams(sessionFile, workspaceDir);
     params.messageChannel = "discord";
     params.agentAccountId = "operations";
     params.currentChannelId = "channel:target";
@@ -271,6 +281,136 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("auto-answers defensive yolo command and workspace file approvals at their safe scopes", async () => {
+    const approvalSpy = vi.spyOn(approvalBridge, "handleCodexAppServerApprovalRequest");
+    const beforeToolCall = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const sessionFile = path.join(tempDir, "policy-allow.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-policy-allow");
+    const commandFile = path.join(workspaceDir, "byte-bound-command.mjs");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(commandFile, "process.stdout.write('ok\\n');\n");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "user";
+    params.approvalReviewerDeviceId = "device-tui-reviewer";
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect((startRequest?.params as { approvalPolicy?: string })?.approvalPolicy).toBe("never");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      approvalContext: {
+        trigger: "user",
+        approvalReviewerDeviceId: "device-tui-reviewer",
+      },
+    });
+
+    const commandResponse = await harness.handleServerRequest({
+      id: "request-command-policy-allow",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-policy-allow",
+        command: `node ${commandFile}`,
+        cwd: workspaceDir,
+      },
+    });
+    expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ autoApprove: true }));
+    // Commands backed by mutable file bytes cannot receive reusable approval.
+    expect(commandResponse).toEqual({ decision: "accept" });
+    await expect(
+      harness.handleServerRequest({
+        id: "request-file-policy-allow",
+        method: "item/fileChange/requestApproval",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "patch-policy-allow",
+          reason: "write memory/2026-07-29.md",
+          grantRoot: workspaceDir,
+        },
+      }),
+    ).resolves.toEqual({ decision: "acceptForSession" });
+
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "apply_patch" }),
+      expect.any(Object),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    closeHostCapabilities();
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+  });
+
+  it("fails a defensive unattended yolo approval immediately when the hook requires review", async () => {
+    const onResolution = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(() => ({
+            requireApproval: {
+              title: "Operator review required",
+              description: "Command needs an interactive approver",
+              onResolution,
+            },
+          })),
+        },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "policy-unattended.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-policy-unattended");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "cron";
+    params.onAgentEvent = vi.fn();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    await harness.waitForMethod("turn/start");
+    const startedAtMs = Date.now();
+    const response = await harness.handleServerRequest({
+      id: "request-command-policy-unattended",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-policy-unattended",
+        command: "gh run view 1",
+        cwd: workspaceDir,
+      },
+    });
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(Date.now() - startedAtMs).toBeLessThan(1_000);
+    expect(onResolution).toHaveBeenCalledWith("cancelled");
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          status: "denied",
+          message:
+            "Plugin approval unavailable: cron runs have no approval-capable initiating surface.",
+        }),
+      }),
+    );
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    closeHostCapabilities();
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+  });
+
   it("keeps the native hook relay default floor for short Codex turns", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -278,7 +418,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const relayFloorMs = 30 * 60_000;
 
     const startedAtMs = Date.now();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -306,7 +446,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -371,7 +511,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const explicitTtlMs = 123_456;
 
     const startedAtMs = Date.now();
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -400,7 +540,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       pluginConfig: {
         appServer: {
           mode: "guardian",
@@ -466,7 +606,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createLoopRelayParams(sessionFile, workspaceDir);
     const abortController = new AbortController();
     const attemptTimeoutMs = 45 * 60_000;
     const startupTimeoutMs = attemptTimeoutMs;
@@ -518,7 +658,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
 
-    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const firstRun = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -550,7 +690,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     ).resolves.toMatchObject({ exitCode: 0 });
 
     const secondHarness = createResumeHarness();
-    const secondParams = createParams(sessionFile, workspaceDir);
+    const secondParams = createLoopRelayParams(sessionFile, workspaceDir);
     secondParams.runId = "run-2";
     const secondRun = runCodexAppServerAttempt(secondParams, {
       nativeHookRelay: {
@@ -591,7 +731,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
 
-    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const firstRun = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -611,7 +751,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
 
     const secondHarness = createResumeHarness();
-    const secondParams = createParams(sessionFile, workspaceDir);
+    const secondParams = createLoopRelayParams(sessionFile, workspaceDir);
     secondParams.runId = "run-2";
     const secondRun = runCodexAppServerAttempt(secondParams, {
       nativeHookRelay: {
@@ -644,7 +784,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createResumeHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -708,7 +848,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],
@@ -764,7 +904,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+    const run = runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
       nativeHookRelay: {
         enabled: true,
         events: ["pre_tool_use"],

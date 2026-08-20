@@ -57,7 +57,7 @@ describe("MSTeams reaction validation", () => {
 
 describe("pinMessageMSTeams", () => {
   it("pins a message in a chat via message@odata.bind body", async () => {
-    mockState.postGraphJson.mockResolvedValue({ id: "pinned-1" });
+    mockState.mutateGraphJson.mockResolvedValue({ id: "pinned-1" });
 
     const result = await pinMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -66,9 +66,10 @@ describe("pinMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true, pinnedMessageId: "pinned-1" });
-    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages`,
+      method: "POST",
       body: {
         "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(
           CHAT_ID,
@@ -85,7 +86,7 @@ describe("pinMessageMSTeams", () => {
         messageId: "msg-2",
       }),
     ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
-    expect(mockState.postGraphJson).not.toHaveBeenCalled();
+    expect(mockState.mutateGraphJson).not.toHaveBeenCalled();
   });
 });
 
@@ -120,7 +121,7 @@ describe("unpinMessageMSTeams", () => {
 
 describe("reactMessageMSTeams", () => {
   it("sets a like reaction on a chat message", async () => {
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     const result = await reactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -130,15 +131,17 @@ describe("reactMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      method: "POST",
       body: { reactionType: "👍" },
+      beta: true,
     });
   });
 
   it("sets a reaction on a channel message", async () => {
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     const result = await reactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -148,15 +151,17 @@ describe("reactMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/setReaction",
+      method: "POST",
       body: { reactionType: "❤️" },
+      beta: true,
     });
   });
 
   it("normalizes a case-insensitive reaction name to Unicode", async () => {
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -165,16 +170,18 @@ describe("reactMessageMSTeams", () => {
       reactionType: "LAUGH",
     });
 
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      method: "POST",
       body: { reactionType: "😆" },
+      beta: true,
     });
   });
 
   it("passes through non-well-known reaction types (e.g. Unicode emoji)", async () => {
     // Graph setReaction accepts Unicode values outside the named convenience set.
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -183,10 +190,12 @@ describe("reactMessageMSTeams", () => {
       reactionType: "🎉",
     });
 
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      method: "POST",
       body: { reactionType: "🎉" },
+      beta: true,
     });
   });
 
@@ -195,7 +204,7 @@ describe("reactMessageMSTeams", () => {
       conversationId: "19:dm-chat@thread.tacv2",
       reference: {},
     });
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -205,17 +214,19 @@ describe("reactMessageMSTeams", () => {
     });
 
     expect(mockState.findPreferredDmByUserId).toHaveBeenCalledWith("aad-user-1");
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages/msg-1/setReaction`,
+      method: "POST",
       body: { reactionType: "👍" },
+      beta: true,
     });
   });
 });
 
 describe("unreactMessageMSTeams", () => {
   it("removes a reaction from a chat message", async () => {
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     const result = await unreactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -225,15 +236,17 @@ describe("unreactMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
+      method: "POST",
       body: { reactionType: "😢" },
+      beta: true,
     });
   });
 
   it("removes a reaction from a channel message", async () => {
-    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+    mockState.mutateGraphJson.mockResolvedValue(undefined);
 
     const result = await unreactMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -243,10 +256,12 @@ describe("unreactMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+    expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/unsetReaction",
+      method: "POST",
       body: { reactionType: "😡" },
+      beta: true,
     });
   });
 });

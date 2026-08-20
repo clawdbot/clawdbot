@@ -5,6 +5,26 @@ import { NonEmptyString } from "./primitives.js";
 
 const WorktreeNameSchema = Type.String({ pattern: "^[a-z0-9][a-z0-9-]{0,63}$" });
 
+const WorktreeRunEndCleanupSchema = Type.Union([
+  closedObject({
+    outcome: Type.String({
+      enum: [
+        "removed-lossless",
+        "retained-busy",
+        "retained-dirty",
+        "retained-unpushed",
+        "retained-provisioned-drift",
+      ],
+    }),
+    at: Type.Integer({ minimum: 0 }),
+  }),
+  closedObject({
+    outcome: Type.Literal("failed"),
+    at: Type.Integer({ minimum: 0 }),
+    reason: Type.String({ minLength: 1, maxLength: 500 }),
+  }),
+]);
+
 export const WorktreeRecordSchema = closedObject({
   id: NonEmptyString,
   name: WorktreeNameSchema,
@@ -19,6 +39,7 @@ export const WorktreeRecordSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   lastActiveAt: Type.Integer({ minimum: 0 }),
   removedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  runEndCleanup: Type.Optional(WorktreeRunEndCleanupSchema),
 });
 
 export const WorktreesListParamsSchema = closedObject({});
@@ -39,7 +60,7 @@ export const WorktreesRemoveParamsSchema = closedObject({
 export const WorktreesRemoveResultSchema = closedObject({
   removed: Type.Boolean(),
   snapshotRef: Type.Optional(NonEmptyString),
-  /** Why the pre-removal snapshot failed; present only on forced removals that continued without one. */
+  /** Why the pre-removal snapshot failed; removal may have stopped or continued without one. */
   snapshotError: Type.Optional(NonEmptyString),
 });
 

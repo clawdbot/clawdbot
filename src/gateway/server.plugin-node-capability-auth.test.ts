@@ -1,16 +1,25 @@
 // Plugin node capability auth tests cover scoped canvas/A2UI HTTP and WebSocket
 // routes, preauth budgets, capability paths, and unauthorized upgrade handling.
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { connect, type Socket } from "node:net";
+import fs from "node:fs/promises";
+import { request, type IncomingMessage, type ServerResponse } from "node:http";
+import { connect, createServer, type Socket } from "node:net";
+import os from "node:os";
+import { join as joinPath } from "node:path";
 import type { Duplex } from "node:stream";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } from "./desktop/observe-bridge.js";
 import { PLUGIN_NODE_CAPABILITY_PATH_PREFIX } from "./plugin-node-capability.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { authorizePluginNodeCapabilityRequest } from "./server/plugin-node-capability-auth.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -21,7 +30,7 @@ const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
-const CANVAS_WS_PATH = "/__openclaw__/ws";
+const CANVAS_WS_PATH = "/__openclaw__/test/ws";
 const CANVAS_CAPABILITY_PATH_PREFIX = PLUGIN_NODE_CAPABILITY_PATH_PREFIX;
 
 type CanvasHostHandler = {
@@ -115,6 +124,53 @@ async function expectWsRejected(
       clearTimeout(timer);
       resolve();
     });
+  });
+}
+
+async function requestWsUpgradeResponse(params: {
+  port: number;
+  path: string;
+  headers: Record<string, string>;
+}): Promise<{
+  statusCode: number;
+  headers: IncomingMessage["headers"];
+  body: string;
+  complete: boolean;
+}> {
+  return await new Promise((resolve, reject) => {
+    const req = request({
+      host: "127.0.0.1",
+      port: params.port,
+      path: params.path,
+      headers: {
+        ...params.headers,
+        connection: "Upgrade",
+        upgrade: "websocket",
+        "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+        "sec-websocket-version": "13",
+      },
+    });
+    req.setTimeout(WS_REJECT_TIMEOUT_MS, () => {
+      req.destroy(new Error("timeout"));
+    });
+    req.once("response", (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.once("end", () => {
+        resolve({
+          statusCode: res.statusCode ?? 0,
+          headers: res.headers,
+          body: Buffer.concat(chunks).toString("utf8"),
+          complete: res.complete,
+        });
+      });
+    });
+    req.once("upgrade", (_res, socket) => {
+      socket.destroy();
+      reject(new Error("expected upgrade to reject"));
+    });
+    req.once("error", reject);
+    req.end();
   });
 }
 
@@ -296,6 +352,12 @@ async function withCanvasGatewayHarness(params: {
   listenHost?: string;
   rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
   handleHttpRequest: CanvasHostHandler["handleHttpRequest"];
+  resolvePluginNodeCapabilityRoute?: Parameters<
+    typeof attachGatewayUpgradeHandler
+  >[0]["resolvePluginNodeCapabilityRoute"];
+  desktopSessionRegistry?: Parameters<
+    typeof attachGatewayUpgradeHandler
+  >[0]["desktopSessionRegistry"];
   run: (ctx: {
     listener: Awaited<ReturnType<typeof listen>>;
     clients: Set<GatewayWsClient>;
@@ -341,7 +403,8 @@ async function withCanvasGatewayHarness(params: {
       }
       return canvasHandler.handleHttpRequest(req, res);
     },
-    resolvePluginNodeCapabilityRoute: () => ({ surface: "canvas" }),
+    resolvePluginNodeCapabilityRoute:
+      params.resolvePluginNodeCapabilityRoute ?? (() => ({ surface: "canvas" })),
     resolvedAuth: params.resolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
@@ -356,12 +419,14 @@ async function withCanvasGatewayHarness(params: {
     wss,
     handlePluginUpgrade: async (req, socket, head) =>
       canvasHandler.handleUpgrade(req, socket, head),
-    resolvePluginNodeCapabilityRoute: () => ({ surface: "canvas" }),
+    resolvePluginNodeCapabilityRoute:
+      params.resolvePluginNodeCapabilityRoute ?? (() => ({ surface: "canvas" })),
     clients,
     preauthConnectionBudget: createPreauthConnectionBudget(8),
     resolvedAuth: params.resolvedAuth,
     getResolvedAuth: params.getResolvedAuth,
     rateLimiter: params.rateLimiter,
+    desktopSessionRegistry: params.desktopSessionRegistry,
   });
 
   const listener = await listen(httpServer, params.listenHost);
@@ -374,12 +439,20 @@ async function withCanvasGatewayHarness(params: {
     for (const ws of wss.clients) {
       ws.terminate();
     }
-    await new Promise<void>((resolve) => {
-      canvasWss.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      wss.close(() => resolve());
-    });
+    await withTimeout(
+      new Promise<void>((resolve) => {
+        canvasWss.close(() => resolve());
+      }),
+      SERVER_CLOSE_TIMEOUT_MS,
+      { message: "canvas websocket server close timed out" },
+    );
+    await withTimeout(
+      new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      }),
+      SERVER_CLOSE_TIMEOUT_MS,
+      { message: "gateway websocket server close timed out" },
+    );
     await listener.close();
     params.rateLimiter?.dispose();
   }
@@ -493,6 +566,135 @@ describe("gateway plugin node capability auth", () => {
         },
       });
     }, "openclaw-canvas-auth-test-");
+  }, 60_000);
+
+  test("does not charge a stale bearer when a valid node capability succeeds", async () => {
+    await withLoopbackTrustedProxy(async () => {
+      const rateLimiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      });
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        rateLimiter,
+        handleHttpRequest: allowCanvasHostHttp,
+        run: async ({ listener, clients }) => {
+          const capability = "active-node";
+          clients.add(
+            makeWsClient({
+              connId: "c-active-node",
+              clientIp: "203.0.113.99",
+              role: "node",
+              mode: "node",
+              capability,
+              capabilityExpiresAtMs: Date.now() + 60_000,
+            }),
+          );
+          const proxyHeaders = {
+            authorization: "Bearer stale-token",
+            "x-forwarded-for": "203.0.113.99",
+          };
+
+          const scopedCanvas = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+            { headers: proxyHeaders },
+          );
+          expect(scopedCanvas.status).toBe(200);
+          await expectWsConnected(
+            `ws://127.0.0.1:${listener.port}${scopedCanvasPath(capability, CANVAS_WS_PATH)}`,
+            proxyHeaders,
+          );
+
+          const sharedSecretControl = await fetchCanvas(
+            `http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`,
+            {
+              headers: {
+                authorization: "Bearer test-token",
+                "x-forwarded-for": "203.0.113.99",
+              },
+            },
+          );
+          expect(sharedSecretControl.status).toBe(200);
+        },
+      });
+    });
+  }, 60_000);
+
+  test("revalidates a node capability after awaited bearer auth", async () => {
+    const capability = "active-node";
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      exemptLoopback: false,
+      pruneIntervalMs: 0,
+    });
+    const client = makeWsClient({
+      connId: "c-active-node",
+      clientIp: "203.0.113.99",
+      role: "node",
+      mode: "node",
+      capability,
+      capabilityExpiresAtMs: Date.now() + 60_000,
+    });
+    const result = authorizePluginNodeCapabilityRequest({
+      req: {
+        headers: { authorization: "Bearer stale-token" },
+        socket: { remoteAddress: "127.0.0.1" },
+      } as IncomingMessage,
+      auth: tokenResolvedAuth,
+      trustedProxies: [],
+      allowRealIpFallback: false,
+      clients: new Set([client]),
+      nodeCapability: { surface: "canvas" },
+      capability,
+      rateLimiter,
+    });
+
+    try {
+      client.invalidated = true;
+      await expect(result).resolves.toMatchObject({ ok: false, reason: "token_mismatch" });
+      expect(rateLimiter.check("127.0.0.1", "shared-secret").allowed).toBe(false);
+    } finally {
+      rateLimiter.dispose();
+    }
+  });
+
+  test("does not let node capability fallback bypass missing proxy attribution", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener, clients }) => {
+        const capability = "active-node";
+        clients.add(
+          makeWsClient({
+            connId: "c-active-node",
+            clientIp: "203.0.113.99",
+            role: "node",
+            mode: "node",
+            capability,
+            capabilityExpiresAtMs: Date.now() + 60_000,
+          }),
+        );
+
+        const response = await fetchCanvas(
+          `http://127.0.0.1:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+          {
+            headers: {
+              authorization: "Bearer stale-token",
+              "x-forwarded-for": "203.0.113.99",
+            },
+          },
+        );
+
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({
+          error: { type: "proxy_attribution_required" },
+        });
+      },
+    });
   }, 60_000);
 
   test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
@@ -660,7 +862,24 @@ describe("gateway plugin node capability auth", () => {
           const second = await expectRepeatedCanvasAuthAttemptsRateLimited(listener, headers);
           expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
 
-          await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
+          const upgradeResponse = await requestWsUpgradeResponse({
+            port: listener.port,
+            path: CANVAS_WS_PATH,
+            headers,
+          });
+          const expectedBody = JSON.stringify({
+            error: {
+              message: "Too many failed authentication attempts. Please try again later.",
+              type: "rate_limited",
+            },
+          });
+          expect(upgradeResponse.statusCode).toBe(429);
+          expect(upgradeResponse.headers["retry-after"]).toMatch(/^\d+$/);
+          expect(upgradeResponse.headers["content-length"]).toBe(
+            String(Buffer.byteLength(expectedBody, "utf8")),
+          );
+          expect(upgradeResponse.body).toBe(expectedBody);
+          expect(upgradeResponse.complete).toBe(true);
         },
       });
     });
@@ -696,5 +915,94 @@ describe("gateway plugin node capability auth", () => {
         });
       },
     });
+  }, 60_000);
+
+  test("routes one-shot worker desktop tokens through the real gateway upgrade path", async () => {
+    const root = await fs.mkdtemp(joinPath(await fs.realpath(os.tmpdir()), "ocwd-"));
+    const localSocketPath = joinPath(root, "desktop.sock");
+    const rfbBytes = Buffer.from("RFB 003.008\n");
+    const desktopSockets = new Set<Socket>();
+    const desktopServer = createServer((socket) => {
+      desktopSockets.add(socket);
+      socket.once("close", () => desktopSockets.delete(socket));
+      socket.write(rfbBytes);
+    });
+    await withTimeout(
+      new Promise<void>((resolve, reject) => {
+        desktopServer.once("error", reject);
+        desktopServer.listen(localSocketPath, () => {
+          desktopServer.off("error", reject);
+          resolve();
+        });
+      }),
+      5_000,
+      { message: "desktop unix server listen timed out" },
+    );
+    const release = vi.fn();
+    const desktopSessionRegistry = {
+      attachObserver: () => ({ release }),
+    } as unknown as NonNullable<
+      Parameters<typeof attachGatewayUpgradeHandler>[0]["desktopSessionRegistry"]
+    >;
+    try {
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        handleHttpRequest: async () => false,
+        resolvePluginNodeCapabilityRoute: () => undefined,
+        desktopSessionRegistry,
+        run: async ({ listener }) => {
+          const minted = mintDesktopObserverToken({
+            sourceKey: "worker:boundary",
+            ownerEpoch: 4,
+            control: false,
+            attachment: { kind: "unix-socket", socketPath: localSocketPath },
+          });
+          const url = `ws://127.0.0.1:${listener.port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`;
+          const ws = new WebSocket(url);
+          const received = new Promise<Buffer>((resolve, reject) => {
+            ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
+            ws.once("error", reject);
+          });
+          await expect(
+            withTimeout(received, 5_000, { message: "desktop RFB bytes timed out" }),
+          ).resolves.toEqual(rfbBytes);
+          ws.terminate();
+          await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+          await expectWsRejected(url, {}, 401);
+
+          // A draining Gateway must refuse new desktop observers like every other
+          // core upgrade; otherwise restart/suspension leaks long-lived sockets.
+          const draining = mintDesktopObserverToken({
+            sourceKey: "worker:boundary",
+            ownerEpoch: 4,
+            control: false,
+            attachment: { kind: "unix-socket", socketPath: localSocketPath },
+          });
+          markGatewayRestartDraining();
+          try {
+            await expectWsRejected(
+              `ws://127.0.0.1:${listener.port}${DESKTOP_OBSERVE_PATH}?token=${draining.token}`,
+              {},
+              503,
+            );
+          } finally {
+            resetGatewayWorkAdmission();
+          }
+        },
+      });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      for (const socket of desktopSockets) {
+        socket.destroy();
+      }
+      await withTimeout(
+        new Promise<void>((resolve) => {
+          desktopServer.close(() => resolve());
+        }),
+        5_000,
+        { message: "desktop unix server close timed out" },
+      );
+      await fs.rm(root, { recursive: true, force: true });
+    }
   }, 60_000);
 });

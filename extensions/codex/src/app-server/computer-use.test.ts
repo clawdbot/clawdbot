@@ -1,11 +1,12 @@
-// Codex tests cover computer use plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+// Codex tests cover computer use plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { resolveCodexNativeConfigFenceKey } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const sharedClientMocks = vi.hoisted(() => ({
@@ -28,11 +29,13 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseStatus,
 } from "./computer-use.js";
-import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 type CodexComputerUseRequest = NonNullable<
   NonNullable<Parameters<typeof ensureCodexComputerUse>[0]>["request"]
 >;
+
+const REMOTE_COMPUTER_USE_MARKETPLACE_NAME = "openai-curated-remote";
+const REMOTE_COMPUTER_USE_PLUGIN_ID = "plugins~Plugin_00000000000000000000000000000000";
 
 function expectStatusFields(
   status: CodexComputerUseStatus,
@@ -58,12 +61,7 @@ async function expectSetupErrorStatus(
   expectStatusFields(status, fields);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function requestCalls(
   request: CodexComputerUseRequest,
@@ -976,25 +974,228 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/read");
   });
 
-  it("fails closed instead of installing from a remote-only Codex marketplace", async () => {
-    const request = createRemoteOnlyComputerUseRequest();
+  it("reads installed remote Computer Use plugins by their opaque Codex id", async () => {
+    const request = createComputerUseRequest({
+      installed: true,
+      remoteMarketplace: {
+        name: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginId: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+    });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      installed: true,
+      pluginEnabled: true,
+      marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      tools: ["list_apps"],
+    });
+    expect(request).toHaveBeenCalledWith("plugin/read", {
+      remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+    });
+    expectRequestMethodNotCalled(request, "marketplace/add");
+    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
+    expectRequestMethodNotCalled(request, "plugin/install");
+    expectRequestMethodNotCalled(request, "config/mcpServer/reload");
+  });
+
+  it("reports an uninstalled remote Computer Use plugin without installing it", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      remoteMarketplace: {
+        name: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginId: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+    });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "plugin_not_installed",
+      installed: false,
+      pluginEnabled: false,
+      marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+    });
+    expect(request).toHaveBeenCalledWith("plugin/read", {
+      remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+    });
+    expectRequestMethodNotCalled(request, "marketplace/add");
+    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
+    expectRequestMethodNotCalled(request, "plugin/install");
+    expectRequestMethodNotCalled(request, "config/mcpServer/reload");
+  });
+
+  it("installs a discovered remote Computer Use plugin by its opaque Codex id", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      remoteMarketplace: {
+        name: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginId: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+    });
+
+    const status = await installCodexComputerUse({
+      pluginConfig: {
+        computerUse: { marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      installed: true,
+      pluginEnabled: true,
+      marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      tools: ["list_apps"],
+    });
+    expect(
+      requestCalls(request)
+        .filter(([method]) => method === "plugin/read")
+        .map(([, params]) => params),
+    ).toStrictEqual([
+      {
+        remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+      {
+        remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+    ]);
+    expect(request).toHaveBeenCalledWith("experimentalFeature/enablement/set", {
+      enablement: { plugins: true },
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+    });
+    expect(request).toHaveBeenCalledWith("config/mcpServer/reload", undefined);
+    expectRequestMethodNotCalled(request, "marketplace/add");
+  });
+
+  it("auto-installs discovered remote Computer Use only when explicitly configured", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      remoteMarketplace: {
+        name: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginId: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+    });
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+          marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+    });
+    expectRequestMethodNotCalled(request, "marketplace/add");
+  });
+
+  it("fails closed before reading a remote Computer Use plugin without its opaque id", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      remoteMarketplace: {
+        name: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginId: null,
+      },
+    });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "marketplace_missing",
+      installed: false,
+      pluginEnabled: false,
+    });
+    expectRequestMethodNotCalled(request, "plugin/read");
+    expectRequestMethodNotCalled(request, "plugin/install");
+    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
 
     await expectSetupErrorStatus(
       installCodexComputerUse({
-        pluginConfig: { computerUse: { marketplaceName: "openai-curated" } },
+        pluginConfig: {
+          computerUse: { marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME },
+        },
         request,
       }),
-      {
-        ready: false,
-        reason: "remote_install_unsupported",
-        installed: false,
-        pluginEnabled: false,
-        marketplaceName: "openai-curated",
-        message:
-          "Computer Use is available in remote Codex marketplace openai-curated, but Codex app-server does not support remote plugin install yet. Configure computerUse.marketplaceSource or computerUse.marketplacePath for a local marketplace, then run /codex computer-use install.",
-      },
+      { ready: false, reason: "marketplace_missing" },
     );
+    expectRequestMethodNotCalled(request, "plugin/read");
     expectRequestMethodNotCalled(request, "plugin/install");
+    expectRequestMethodNotCalled(request, "marketplace/add");
+  });
+
+  it("prefers the official remote Computer Use marketplace over unrelated matches", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      remoteMarketplace: {
+        name: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+        pluginId: REMOTE_COMPUTER_USE_PLUGIN_ID,
+      },
+      additionalMarketplaceNames: ["workspace-tools"],
+    });
+
+    const status = await installCodexComputerUse({
+      pluginConfig: { computerUse: {} },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      remoteMarketplaceName: REMOTE_COMPUTER_USE_MARKETPLACE_NAME,
+      pluginName: REMOTE_COMPUTER_USE_PLUGIN_ID,
+    });
+    expectRequestMethodNotCalled(request, "marketplace/add");
   });
 
   it("waits for the default Codex marketplace during install", async () => {
@@ -1051,12 +1252,24 @@ function createComputerUseRequest(params: {
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
   mcpToolsAvailable?: boolean;
+  remoteMarketplace?: {
+    name: string;
+    pluginId?: string | null;
+  };
+  additionalMarketplaceNames?: readonly string[];
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
   let threadStartCalls = 0;
+  const marketplaceName = params.remoteMarketplace?.name ?? "desktop-tools";
+  const marketplacePath = params.remoteMarketplace
+    ? null
+    : `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`;
+  const source = params.remoteMarketplace ? "remote" : "local";
+  const currentPluginSummary = () =>
+    pluginSummary(installed, marketplaceName, enabled, source, params.remoteMarketplace?.pluginId);
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -1075,11 +1288,14 @@ function createComputerUseRequest(params: {
       return {
         marketplaces: marketplaceAvailable
           ? [
+              ...(params.additionalMarketplaceNames ?? []).map((name) =>
+                marketplaceEntry(name, false),
+              ),
               {
-                name: "desktop-tools",
-                path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+                name: marketplaceName,
+                path: marketplacePath,
                 interface: null,
-                plugins: [pluginSummary(installed, "desktop-tools", enabled)],
+                plugins: [currentPluginSummary()],
               },
             ]
           : [],
@@ -1088,12 +1304,19 @@ function createComputerUseRequest(params: {
       };
     }
     if (method === "plugin/read") {
-      expect(requireRecord(requestParams, "plugin read params").pluginName).toBe("computer-use");
+      expect(requestParams).toEqual(
+        params.remoteMarketplace
+          ? {
+              remoteMarketplaceName: marketplaceName,
+              pluginName: params.remoteMarketplace.pluginId,
+            }
+          : { marketplacePath, pluginName: "computer-use" },
+      );
       return {
         plugin: {
-          marketplaceName: "desktop-tools",
-          marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-          summary: pluginSummary(installed, "desktop-tools", enabled),
+          marketplaceName,
+          marketplacePath,
+          summary: currentPluginSummary(),
           description: "Control desktop apps.",
           skills: [],
           apps: [],
@@ -1102,6 +1325,12 @@ function createComputerUseRequest(params: {
       };
     }
     if (method === "plugin/install") {
+      if (params.remoteMarketplace) {
+        expect(requestParams).toEqual({
+          remoteMarketplaceName: marketplaceName,
+          pluginName: params.remoteMarketplace.pluginId,
+        });
+      }
       installed = true;
       enabled = true;
       return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
@@ -1160,46 +1389,6 @@ function createComputerUseRequest(params: {
     if (method === "thread/unsubscribe" || method === "thread/archive") {
       expect(requestParams).toEqual({ threadId: `computer-use-probe-thread-${threadStartCalls}` });
       return undefined;
-    }
-    throw new Error(`unexpected request ${method}`);
-  }) as CodexComputerUseRequest;
-}
-
-function createRemoteOnlyComputerUseRequest(): CodexComputerUseRequest {
-  return vi.fn(async (method: string, requestParams?: unknown) => {
-    if (method === "experimentalFeature/enablement/set") {
-      return { enablement: { plugins: true } };
-    }
-    if (method === "plugin/list") {
-      return {
-        marketplaces: [
-          {
-            name: "openai-curated",
-            path: null,
-            interface: null,
-            plugins: [pluginSummary(false, "openai-curated", false, "remote")],
-          },
-        ],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      };
-    }
-    if (method === "plugin/read") {
-      expect(requestParams).toEqual({
-        remoteMarketplaceName: "openai-curated",
-        pluginName: "computer-use",
-      });
-      return {
-        plugin: {
-          marketplaceName: "openai-curated",
-          marketplacePath: null,
-          summary: pluginSummary(false, "openai-curated", false, "remote"),
-          description: "Control desktop apps.",
-          skills: [],
-          apps: [],
-          mcpServers: ["computer-use"],
-        },
-      };
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
@@ -1434,9 +1623,11 @@ function pluginSummary(
   marketplaceName = "desktop-tools",
   enabled = installed,
   source: "local" | "remote" = "local",
+  remotePluginId?: string | null,
 ) {
   return {
     id: `computer-use@${marketplaceName}`,
+    ...(source === "remote" ? { remotePluginId: remotePluginId ?? null } : {}),
     name: "computer-use",
     source:
       source === "local"

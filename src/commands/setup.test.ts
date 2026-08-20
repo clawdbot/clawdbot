@@ -27,7 +27,7 @@ function createSetupDeps(home: string) {
         dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
       }),
     ),
-    formatConfigPath: (value: string) => value,
+    formatConfigFilePath: (value: string) => value,
     logConfigUpdated: vi.fn(
       (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
         const suffix = opts.suffix ? ` ${opts.suffix}` : "";
@@ -78,7 +78,7 @@ describe("setupCommand", () => {
           defaults: {
             workspace,
           },
-          entries: { main: { default: true, workspace } },
+          entries: { main: {} },
         },
         gateway: {
           mode: "local",
@@ -118,6 +118,29 @@ describe("setupCommand", () => {
     });
   });
 
+  it("emits one structured result for baseline JSON output", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const deps = createSetupDeps(home);
+      const workspace = path.join(home, ".openclaw", "workspace");
+
+      await setupCommand({ workspace, json: true }, runtime, deps);
+
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+        ok: true,
+        configPath: path.join(home, ".openclaw", "openclaw.json"),
+        configStatus: "created",
+        workspaceDir: workspace,
+        sessionsDir: path.join(home, ".openclaw", "sessions"),
+      });
+    });
+  });
+
   it("updates the default entry workspace created by fresh setup", async () => {
     await withTempHome(async (home) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -132,7 +155,8 @@ describe("setupCommand", () => {
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
       ) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(config, "main")).toBe(nextWorkspace);
-      expect(config.agents?.entries?.main?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.defaults?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.entries?.main).toEqual({});
     });
   });
 
@@ -179,7 +203,7 @@ describe("setupCommand", () => {
       );
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
       };
@@ -253,7 +277,7 @@ describe("setupCommand", () => {
       );
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
       };
@@ -285,7 +309,7 @@ describe("setupCommand", () => {
       await fs.writeFile(includePath, JSON.stringify(included));
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: nextWorkspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
       };
@@ -323,7 +347,7 @@ describe("setupCommand", () => {
 
       await setupCommand({ workspace: nextWorkspace }, runtime, {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: nextWorkspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
       });
@@ -360,7 +384,7 @@ describe("setupCommand", () => {
       );
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
       };
@@ -368,7 +392,7 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.entries).toEqual({ main: { default: true } });
+      expect(config.agents?.entries).toEqual({ main: {} });
     });
   });
 

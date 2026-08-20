@@ -63,6 +63,7 @@ function buildPruneConfig(): SandboxConfig {
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
+    dockerTmpfsSource: "configured",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",

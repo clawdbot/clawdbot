@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import * as os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { appendSessionToolTruncationWarning, shortenPath } from "./render-utils.js";
 
@@ -43,6 +45,15 @@ describe("shortenPath", () => {
 
   it("leaves unrelated paths untouched", () => {
     expect(shortenPath("/var/log/syslog")).toBe("/var/log/syslog");
+  });
+
+  it.skipIf(process.platform !== "win32")("shortens real Windows home casing aliases", () => {
+    const homeAlias = home.toUpperCase();
+    expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+
+    expect(shortenPath(path.join(homeAlias, "projects", "app.ts"))).toBe(
+      `~${path.sep}projects${path.sep}app.ts`,
+    );
   });
 
   it("returns an empty string for non-string input", () => {

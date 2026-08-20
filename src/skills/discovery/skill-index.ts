@@ -38,7 +38,7 @@ function isSkillRuntimeVisible(entry: SkillEntry): boolean {
   return entry.exposure?.includeInRuntimeRegistry ?? true;
 }
 
-function isSkillPromptVisible(entry: SkillEntry): boolean {
+export function isSkillPromptVisible(entry: SkillEntry): boolean {
   if (entry.exposure) {
     return entry.exposure.includeInAvailableSkillsPrompt ?? true;
   }
@@ -92,6 +92,7 @@ function createSkillIndexEntry(
     source,
     bundled:
       source === "openclaw-bundled" ||
+      source === "openclaw-custodian" ||
       (source === "unknown" && opts?.bundledNames?.has(name) === true),
     agentAllowed: agentSkillSet === undefined || agentSkillSet.has(name),
     runtimeVisible: isSkillRuntimeVisible(entry),

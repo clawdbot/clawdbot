@@ -103,9 +103,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const spacer = () => defaultRuntime.log("");
 
   const { service, rpc, extraServices } = status;
-  const serviceStatus = service.loaded
+  const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
+  const serviceLoaded = service.loadState.status === "loaded";
+  const serviceStatus = serviceLoaded
     ? okText(service.loadedText)
-    : warnText(service.notLoadedText);
+    : warnText(service.loadState.status === "not-loaded" ? service.notLoadedText : "unknown");
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
   if (status.logFile) {
     defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
@@ -134,6 +136,24 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
     );
   }
+  const hostDesktop = status.hostDesktop ?? {
+    enabled: false,
+    state: "disabled" as const,
+    port: 5900,
+  };
+  const hostDesktopValue =
+    hostDesktop.state === "disabled"
+      ? "disabled"
+      : hostDesktop.state === "managed"
+        ? hostDesktop.managedState === "running"
+          ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
+          : hostDesktop.managedState === "failed"
+            ? `managed · failed: ${hostDesktop.error}`
+            : hostDesktop.managedState === "unknown"
+              ? "managed · runtime state unavailable"
+              : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
+        : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
+  defaultRuntime.log(`${label("Host desktop:")} ${infoText(hostDesktopValue)}`);
   spacer();
 
   if (service.configAudit?.issues.length) {
@@ -269,7 +289,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
 
-  if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
+  if (
+    rpc &&
+    !rpc.ok &&
+    serviceTargetsProbe &&
+    serviceLoaded &&
+    service.runtime?.status === "running"
+  ) {
     // The RPC probe failed while the service is loaded and running. Only the case where
     // the gateway process is up and owns the listening port (health.healthy === true with
     // no stale gateway PIDs, deep status only) is an unambiguous "not warm-up" signal, so it
@@ -361,17 +387,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
+  const serviceInspectionDetail =
+    service.loadState.status === "unknown" ? service.loadState.detail : undefined;
+  if (serviceInspectionDetail) {
+    defaultRuntime.error(errorText(`Service inspection failed: ${serviceInspectionDetail}`));
+    defaultRuntime.error(errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`));
+    spacer();
+  }
+  const systemdUnavailableDetail = serviceInspectionDetail ?? service.runtime?.detail;
   const systemdUnavailable =
     process.platform === "linux" &&
-    rpc?.ok !== true &&
-    isSystemdUnavailableDetail(service.runtime?.detail);
+    (serviceInspectionDetail !== undefined || rpc?.ok !== true) &&
+    isSystemdUnavailableDetail(systemdUnavailableDetail);
   if (systemdUnavailable) {
     const serviceEnv = service.command?.environment ?? process.env;
     const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
       wsl: isWSLEnv(serviceEnv),
-      kind: classifySystemdUnavailableDetail(service.runtime?.detail),
+      kind: classifySystemdUnavailableDetail(systemdUnavailableDetail),
       container,
     })) {
       defaultRuntime.error(errorText(hint));
@@ -404,7 +438,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     )) {
       defaultRuntime.error(errorText(hint));
     }
-  } else if (service.loaded && service.runtime?.status === "stopped") {
+  } else if (serviceLoaded && service.runtime?.status === "stopped") {
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
       errorText(
@@ -475,10 +509,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (
-    service.loaded &&
+    serviceTargetsProbe &&
+    serviceLoaded &&
     service.runtime?.status === "running" &&
     status.port &&
-    status.port.status !== "busy"
+    status.port.status === "free"
   ) {
     defaultRuntime.error(
       errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),
@@ -508,7 +543,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     for (const svc of extraServices) {
       defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints()) {
+    for (const hint of renderGatewayServiceCleanupHints(extraServices)) {
       defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
     }
     spacer();

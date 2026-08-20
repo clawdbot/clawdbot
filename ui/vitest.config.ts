@@ -8,8 +8,11 @@ import { chromium } from "playwright";
 import { defineConfig, defineProject } from "vitest/config";
 import {
   jsdomOptimizedDeps,
+  nonIsolatedRunnerPath,
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
+import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -17,6 +20,10 @@ const workspaceSourceAliases = [
   {
     find: "@openclaw/gateway-client/browser",
     replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
+  },
+  {
+    find: "@openclaw/gateway-client/scope-upgrade",
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/scope-upgrade.ts"),
   },
   {
     find: /^@openclaw\/gateway-protocol\/(.+)$/u,
@@ -92,8 +99,14 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
+  "src/styles/corner-shape.browser.test.ts",
+  "src/styles/cursor-policy.browser.test.ts",
+  "src/styles/chat-file-link-presentation.browser.test.ts",
+  "src/styles/chat-github-link-presentation.browser.test.ts",
+  "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
+  ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
   "src/components/mcp-app-view.test.ts",
   "src/pages/chat/chat-page.test.ts",
 ] as const;
@@ -138,6 +151,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -145,6 +159,12 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit",
+          // isolate:false shares one worker module graph and jsdom window across
+          // files, so the first file to evaluate a component owns it for the rest
+          // of the worker and a later file's vi.mock never reaches production.
+          // The cleanup runner retires that state per file; without it the lane
+          // fails whichever sibling the size sequencer happens to pack together.
+          runner: nonIsolatedRunnerPath,
           include: ["src/**/*.test.ts"],
           exclude: [
             "src/**/*.browser.test.ts",
@@ -157,13 +177,14 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
         test: {
           ...sharedUiTestConfig,
-          // These two tests intentionally replace module exports. Isolate only this tiny
-          // project so the main 339-file suite keeps its isolate:false speed contract.
+          // Reuse the canonical singleton-sensitive list so the package and
+          // root runners isolate the same tests without slowing the main suite.
           isolate: true,
           deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
@@ -173,6 +194,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -180,18 +202,24 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit-node",
+          // No cleanup runner: this project also carries the Playwright-driven
+          // layout tests, whose browser lives in module scope. Resetting the
+          // module graph between files churns that browser and flakes them.
           include: ["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests],
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
         test: {
           ...sharedUiTestConfig,
           name: "browser",
+          // No cleanup runner: it imports node:fs and repo server modules, which
+          // cannot load in browser mode. Browser files own their own teardown.
           include: ["src/**/*.browser.test.ts"],
           exclude: [...nodeDrivenBrowserLayoutTests],
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],

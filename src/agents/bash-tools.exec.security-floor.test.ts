@@ -1,7 +1,7 @@
 /**
  * Exec security floor tests.
- * Verifies tool config and exec-approvals policy combine by tightening
- * security/ask rather than silently broadening execution.
+ * Verifies host approval floors tighten normal exec policy while explicit
+ * full-session authority remains full/off.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -55,6 +55,29 @@ function writeFullAskExecApprovalsFixture(root: string): void {
     defaults: { security: "full", ask: "always" },
     agents: {},
   });
+}
+
+function mockPendingApprovalGateway(): string[] {
+  const calls: string[] = [];
+  vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    calls.push(method);
+    if (method === "exec.approval.request") {
+      return { status: "accepted", id: "approval-id" };
+    }
+    if (method === "exec.approval.waitDecision") {
+      return { decision: null };
+    }
+    return { ok: true };
+  });
+  return calls;
+}
+
+function createAskingAutoReviewer() {
+  return vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "ask",
+    risk: "high",
+    rationale: "test reviewer asks for approval",
+  }));
 }
 
 describe("exec security floor", () => {
@@ -334,17 +357,7 @@ describe("exec security floor", () => {
 
   it("preserves host ask floors for elevated full gateway exec", async () => {
     writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
-    const calls: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      calls.push(method);
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: null };
-      }
-      return { ok: true };
-    });
+    const calls = mockPendingApprovalGateway();
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -362,23 +375,27 @@ describe("exec security floor", () => {
     expect(calls).toContain("exec.approval.request");
   });
 
-  it("honors normalized auto mode before elevated full bypass", async () => {
-    const calls: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      calls.push(method);
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: null };
-      }
-      return { ok: true };
+  it("does not prompt explicit full sessions despite host ask floors", async () => {
+    writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "full",
+      bypassHostApprovalFloors: true,
+      approvalRunningNoticeMs: 0,
     });
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "ask",
-      risk: "high",
-      rationale: "test reviewer asks for approval",
-    }));
+
+    const result = await tool.execute("call-session-full-host-ask-floor", {
+      command: "echo session-full-ok",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text).toContain("session-full-ok");
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("honors normalized auto mode before elevated full bypass", async () => {
+    const calls = mockPendingApprovalGateway();
+    const autoReviewer = createAskingAutoReviewer();
     const tool = createExecTool({
       host: "gateway",
       mode: "auto",
@@ -406,22 +423,8 @@ describe("exec security floor", () => {
   it.each(["on-miss", "off"] as const)(
     "keeps auto review enabled when legacy ask=%s does not strengthen auto mode",
     async (ask) => {
-      const calls: string[] = [];
-      vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-        calls.push(method);
-        if (method === "exec.approval.request") {
-          return { status: "accepted", id: "approval-id" };
-        }
-        if (method === "exec.approval.waitDecision") {
-          return { decision: null };
-        }
-        return { ok: true };
-      });
-      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-        decision: "ask",
-        risk: "high",
-        rationale: "test reviewer asks for approval",
-      }));
+      const calls = mockPendingApprovalGateway();
+      const autoReviewer = createAskingAutoReviewer();
       const tool = createExecTool({
         host: "gateway",
         mode: "auto",

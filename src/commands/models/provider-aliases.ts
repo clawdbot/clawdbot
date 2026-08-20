@@ -1,10 +1,10 @@
 /** Provider alias canonicalization for model catalog rows. */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
 } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest, type PluginManifestModelCatalog } from "../../plugins/manifest.js";
@@ -20,7 +20,7 @@ const sourcePeerModelCatalogCache = new Map<string, PluginManifestModelCatalog |
 function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
   return (
     params.metadataSnapshot?.manifestRegistry.plugins ??
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryCore({
       config: params.cfg,
     }).plugins
   );

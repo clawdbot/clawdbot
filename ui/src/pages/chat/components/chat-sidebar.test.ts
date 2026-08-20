@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { hasUniformLineEndings } from "./chat-sidebar.ts";
 
@@ -82,6 +82,115 @@ describe("markdown sidebar", () => {
     });
     panel.remove();
   });
+
+  it.each(["Enter", " "])("opens focused markdown preview file links with %j", async (key) => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenWorkspaceFile = vi.fn();
+    panel.content = { kind: "markdown", content: "See `ui/src/pages/chat/chat-view.ts:362`" };
+    panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const link = panel.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+    link?.focus();
+    expect(document.activeElement).toBe(link);
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({
+      path: "ui/src/pages/chat/chat-view.ts",
+      line: 362,
+    });
+    panel.remove();
+  });
+
+  it.each(["click", "Ctrl+click", "Enter", " "])(
+    "handles markdown preview session links with %j",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        onOpenSessionLink?: (target: { sessionKey: string; agentId: string }) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+      panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      if (action === "click" || action === "Ctrl+click") {
+        link?.setAttribute("href", "/chat/roboclaw/2139bddb");
+        const modified = action === "Ctrl+click";
+        const event = new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+          ctrlKey: modified,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(!modified);
+        if (modified) {
+          expect(onOpenSessionLink).not.toHaveBeenCalled();
+          panel.remove();
+          return;
+        }
+      } else {
+        link?.focus();
+        const event = new KeyboardEvent("keydown", {
+          key: action,
+          bubbles: true,
+          cancelable: true,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+
+      expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+      panel.remove();
+    },
+  );
+
+  it.each(["click", "Enter"])(
+    "SPA-routes markdown preview session hrefs with %s",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        basePath?: string;
+        content: unknown;
+        onOpenSessionLink?: (target: unknown) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+      const href = `${window.location.origin}/control/dashboard/main/~key/${literalUuid}`;
+      panel.basePath = "/control";
+      panel.content = { kind: "markdown", content: `[Open session](${href})` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>(`a[href^="${window.location.origin}"]`);
+      const event =
+        action === "click"
+          ? new MouseEvent("click", { bubbles: true, button: 0, cancelable: true })
+          : new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      link?.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(onOpenSessionLink).toHaveBeenCalledWith({
+        namespace: "dashboard",
+        pathname: `/control/dashboard/main/~key/${literalUuid}`,
+      });
+      panel.remove();
+    },
+  );
 
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
@@ -189,4 +298,281 @@ describe("markdown sidebar", () => {
     );
     panel.remove();
   });
+});
+
+describe("file sidebar clipboard feedback", () => {
+  const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+  const copyActions = [
+    { label: "Copy path", value: "src/example.ts" },
+    { label: "Copy file contents", value: "const answer = 42;" },
+  ];
+
+  type FilePanel = HTMLElement & {
+    content: unknown;
+    ensureFileEditor: () => Promise<void>;
+    updateComplete: Promise<unknown>;
+  };
+
+  async function mountFilePanel(): Promise<FilePanel> {
+    const panel = document.createElement("openclaw-chat-detail-panel") as FilePanel;
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      content: "const answer = 42;",
+    };
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
+    document.body.append(panel);
+    await panel.updateComplete;
+    return panel;
+  }
+
+  function findCopyButton(panel: FilePanel, label: string): HTMLButtonElement {
+    const button = Array.from(panel.querySelectorAll<HTMLButtonElement>("button")).find(
+      (candidate) => candidate.getAttribute("aria-label") === label,
+    );
+    if (!button) {
+      throw new Error(`Missing sidebar button: ${label}`);
+    }
+    return button;
+  }
+
+  function denyClipboard() {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    const execCommand = vi.fn(() => false);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
+    return { execCommand, writeText };
+  }
+
+  function captureFeedbackTimers() {
+    const schedule = vi.spyOn(globalThis, "setTimeout");
+    return {
+      schedule,
+      run(delay: number, index = 0) {
+        const timerIndex = schedule.mock.calls
+          .map(([, timeout], callIndex) => (timeout === delay ? callIndex : -1))
+          .filter((callIndex) => callIndex >= 0)[index];
+        if (timerIndex === undefined) {
+          throw new Error(`Missing sidebar clipboard reset timer after ${delay}ms`);
+        }
+        const reset = schedule.mock.calls[timerIndex]?.[0];
+        if (typeof reset !== "function") {
+          throw new Error(`Expected sidebar clipboard reset timer after ${delay}ms`);
+        }
+        globalThis.clearTimeout(schedule.mock.results[timerIndex]?.value);
+        reset();
+      },
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    if (originalExecCommand) {
+      Object.defineProperty(document, "execCommand", originalExecCommand);
+    } else {
+      Reflect.deleteProperty(document, "execCommand");
+    }
+    document.body.replaceChildren();
+  });
+
+  it.each(copyActions)(
+    "shows and resets a visible accessible error when $label fails",
+    async ({ label, value }) => {
+      const { execCommand, writeText } = denyClipboard();
+      const panel = await mountFilePanel();
+      const button = findCopyButton(panel, label);
+      const timers = captureFeedbackTimers();
+
+      button.click();
+      await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copy failed"));
+
+      expect(writeText).toHaveBeenCalledWith(value);
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
+
+      timers.run(2_000);
+      await panel.updateComplete;
+
+      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
+  it.each(copyActions)(
+    "preserves and resets successful $label feedback",
+    async ({ label, value }) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const panel = await mountFilePanel();
+      const button = findCopyButton(panel, label);
+      const timers = captureFeedbackTimers();
+
+      button.click();
+      await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copied!"));
+
+      expect(writeText).toHaveBeenCalledWith(value);
+      expect(button.classList.contains("copied")).toBe(true);
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+
+      timers.run(1_500);
+      await panel.updateComplete;
+
+      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(button.classList.contains("copied")).toBe(false);
+    },
+  );
+
+  it.each(copyActions)(
+    "ignores an older successful $label attempt after a failed retry",
+    async ({ label }) => {
+      const { writeText } = denyClipboard();
+      let finishFirstCopy = () => {};
+      writeText.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishFirstCopy = resolve;
+        }),
+      );
+      const panel = await mountFilePanel();
+      const button = findCopyButton(panel, label);
+
+      button.click();
+      button.click();
+      await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copy failed"));
+      finishFirstCopy();
+      await Promise.resolve();
+      await Promise.resolve();
+      await panel.updateComplete;
+
+      expect(writeText).toHaveBeenCalledTimes(2);
+      expect(button.getAttribute("aria-label")).toBe("Copy failed");
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
+    },
+  );
+
+  it("keeps path and contents feedback reset timers independent", async () => {
+    denyClipboard();
+    const panel = await mountFilePanel();
+    const pathButton = findCopyButton(panel, "Copy path");
+    const contentsButton = findCopyButton(panel, "Copy file contents");
+    const timers = captureFeedbackTimers();
+
+    pathButton.click();
+    contentsButton.click();
+    await vi.waitFor(() => {
+      expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
+      expect(contentsButton.getAttribute("aria-label")).toBe("Copy failed");
+    });
+
+    timers.run(2_000);
+    await panel.updateComplete;
+    expect(pathButton.getAttribute("aria-label")).toBe("Copy path");
+    expect(contentsButton.getAttribute("aria-label")).toBe("Copy failed");
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
+
+    timers.run(2_000, 1);
+    await panel.updateComplete;
+    expect(contentsButton.getAttribute("aria-label")).toBe("Copy file contents");
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each(["file selection", "disconnection"])(
+    "ignores a delayed successful copy after %s changes its owner",
+    async (change) => {
+      let finishCopy = () => {};
+      const writeText = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCopy = resolve;
+          }),
+      );
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const panel = await mountFilePanel();
+      const button = findCopyButton(panel, "Copy file contents");
+      const timers = captureFeedbackTimers();
+
+      button.click();
+      if (change === "file selection") {
+        panel.content = {
+          kind: "file",
+          path: "src/next.ts",
+          name: "next.ts",
+          content: "const next = true;",
+        };
+        await panel.updateComplete;
+      } else {
+        panel.remove();
+      }
+      finishCopy();
+      await Promise.resolve();
+      await Promise.resolve();
+      await panel.updateComplete;
+
+      expect(timers.schedule.mock.calls.some(([, delay]) => delay === 1_500)).toBe(false);
+      expect(button.getAttribute("aria-label")).toBe("Copy file contents");
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
+  it.each([
+    { label: "Copy path", failed: true },
+    { label: "Copy file contents", failed: false },
+  ])(
+    "restores idle $label feedback when the same sidebar reconnects",
+    async ({ label, failed }) => {
+      if (failed) {
+        denyClipboard();
+      } else {
+        vi.stubGlobal("navigator", {
+          clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+        });
+      }
+      const panel = await mountFilePanel();
+      const button = findCopyButton(panel, label);
+
+      button.click();
+      await vi.waitFor(() =>
+        expect(button.getAttribute("aria-label")).toBe(failed ? "Copy failed" : "Copied!"),
+      );
+
+      panel.remove();
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      expect(findCopyButton(panel, label)).toBe(button);
+      expect(button.classList.contains("copied")).toBe(false);
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
+  it.each(copyActions)(
+    "ignores an older $label completion after sidebar reconnection",
+    async ({ label }) => {
+      let finishCopy = () => {};
+      const writeText = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCopy = resolve;
+          }),
+      );
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const panel = await mountFilePanel();
+      const button = findCopyButton(panel, label);
+      const timers = captureFeedbackTimers();
+
+      button.click();
+      panel.remove();
+      document.body.append(panel);
+      await panel.updateComplete;
+      finishCopy();
+      await Promise.resolve();
+      await Promise.resolve();
+      await panel.updateComplete;
+
+      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(timers.schedule.mock.calls.some(([, delay]) => delay === 1_500)).toBe(false);
+      expect(panel.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
 });

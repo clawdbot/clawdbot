@@ -1,14 +1,17 @@
 // Resolves image-capable model metadata and credential-bound runtime auth.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
 import {
   applySecretRefHeaderSentinels,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   requireApiKey,
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
-import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "../agents/prepared-model-runtime.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../agents/provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../agents/provider-secret-egress.js";
@@ -101,7 +104,7 @@ async function prepareResolvedImageRuntime(
 ): Promise<PreparedImageRuntime> {
   let model = resolvedModel;
   const modelRuntime = getModelRegistryRuntime(modelRegistry);
-  const apiKeyInfo = await getApiKeyForModel({
+  const apiKeyInfo = await getApiKeyForModelCore({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -131,6 +134,7 @@ async function prepareResolvedImageRuntime(
         modelRegistry,
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
+        preparedModelRuntime: params.preparedModelRuntime as PreparedModelRuntimeSnapshot,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         ...(apiKeyInfo.profileId
           ? { authProfileId: apiKeyInfo.profileId }
@@ -208,13 +212,16 @@ export async function resolveImageRuntime(
     ...(params.profile ? { authProfileId: params.profile } : {}),
     ...(params.preferredProfile ? { preferredProfile: params.preferredProfile } : {}),
   };
+  // Opaque media handles may lack model facts; resolveModelAsync then uses normal discovery.
   const preparedRuntimeLease = params.preparedModelRuntime
-    ? { snapshot: params.preparedModelRuntime, release: () => {} }
+    ? {
+        snapshot: params.preparedModelRuntime as PreparedModelRuntimeSnapshot,
+        release: () => {},
+      }
     : await acquireAgentRunPreparedModelRuntime({
         agentDir: params.agentDir,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config: params.cfg ?? {},
-        inheritedAuthDir: resolveDefaultAgentDir(params.cfg ?? {}),
         ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
       });
   let leaseRetained = false;
@@ -229,6 +236,7 @@ export async function resolveImageRuntime(
       ...runtimeParams,
       agentDir: preparedRuntime.agentDir,
       cfg: preparedRuntime.config,
+      preparedModelRuntime: preparedRuntime,
       ...(preparedWorkspaceDir ? { workspaceDir: preparedWorkspaceDir } : {}),
     };
     // Media request types carry this agent-owned handle opaquely to avoid importing the agent
@@ -236,19 +244,20 @@ export async function resolveImageRuntime(
     const preparedStores = preparedRuntime.createStores() as Required<
       Pick<NonNullable<Parameters<typeof resolveModelAsync>[4]>, "authStorage" | "modelRegistry">
     >;
+    const resolveOptions = {
+      allowBundledStaticCatalogFallback: true,
+      ...preparedStores,
+      preparedModelRuntime: preparedRuntime,
+      skipAgentDiscovery: true,
+      ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
+      ...authProfileOptions,
+    };
     const fastResolved = await resolveModelAsync(
       resolvedRef.provider,
       resolvedRef.model,
       preparedParams.agentDir,
       preparedParams.cfg,
-      {
-        allowBundledStaticCatalogFallback: true,
-        ...preparedStores,
-        skipAgentDiscovery: true,
-        skipProviderRuntimeHooks: true,
-        ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
-        ...authProfileOptions,
-      },
+      { ...resolveOptions, skipProviderRuntimeHooks: true },
     );
     if (fastResolved.model?.input?.includes("image")) {
       const normalizedResolved = await resolveModelAsync(
@@ -256,13 +265,7 @@ export async function resolveImageRuntime(
         resolvedRef.model,
         preparedParams.agentDir,
         preparedParams.cfg,
-        {
-          allowBundledStaticCatalogFallback: true,
-          ...preparedStores,
-          skipAgentDiscovery: true,
-          ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
-          ...authProfileOptions,
-        },
+        resolveOptions,
       );
       if (normalizedResolved.model?.input?.includes("image")) {
         return retainLease(
@@ -281,13 +284,7 @@ export async function resolveImageRuntime(
       resolvedRef.model,
       preparedParams.agentDir,
       preparedParams.cfg,
-      {
-        allowBundledStaticCatalogFallback: true,
-        ...preparedStores,
-        skipAgentDiscovery: true,
-        ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
-        ...authProfileOptions,
-      },
+      resolveOptions,
     );
     const model = requireImageCapableModel({
       model: resolved.model,

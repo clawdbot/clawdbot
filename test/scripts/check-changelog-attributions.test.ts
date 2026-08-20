@@ -8,7 +8,7 @@ import {
   findForbiddenChangelogThanks,
   isForbiddenChangelogThanksHandle,
   requiresExplicitHumanChangelogThanks,
-} from "../../scripts/check-changelog-attributions.mjs";
+} from "../../scripts/check-changelog-attributions.mts";
 
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");
@@ -25,7 +25,7 @@ function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessE
 
 function commandOutput(error: unknown): string {
   const result = error as { stderr?: unknown; stdout?: unknown };
-  return `${String(result.stdout ?? "")}${String(result.stderr ?? "")}`;
+  return `${(result.stdout ?? "") as string}${(result.stderr ?? "") as string}`;
 }
 
 function createRepoWithPrChangelogDiff(entry: string): string {

@@ -118,6 +118,42 @@ describe("plugin-sdk qa-runtime", () => {
     expect(module.isQaRuntimeAvailable()).toBe(false);
   });
 
+  it("rethrows non-absence loader failures that mention the qa-lab runtime path", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+      throw new Error("Failed to evaluate qa-lab/runtime-api.js: invalid runtime export");
+    });
+
+    const module = await import("./qa-runtime.js");
+
+    expect(() => module.isQaRuntimeAvailable()).toThrow(
+      "Failed to evaluate qa-lab/runtime-api.js: invalid runtime export",
+    );
+  });
+
+  it("runs a plugin-owned transport through the private QA suite host", async () => {
+    const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      runLiveTransportQaSuiteCommand,
+    });
+    const module = await import("./qa-runtime.js");
+    const options = { providerMode: "mock-openai" };
+    const selectScenarioIds = vi.fn(() => ["channel-canary"]);
+
+    await module.runLiveTransportQaSuiteCommand({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
+  });
+
   it("registers shared live transport QA CLI options", async () => {
     const module = await import("./qa-runtime.js");
     const run = vi.fn(async () => {});
@@ -126,6 +162,7 @@ describe("plugin-sdk qa-runtime", () => {
     module
       .createLiveTransportQaCliRegistration({
         commandName: "telegram",
+        credentialFileHelp: "Private JSON credential file",
         credentialOptions: {
           sourceDescription: "Credential source for Telegram QA",
           roleDescription: "Credential role for Telegram QA",
@@ -143,6 +180,10 @@ describe("plugin-sdk qa-runtime", () => {
         run,
       })
       .register(qa);
+
+    await qa.parseAsync(["node", "openclaw", "telegram"]);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
+    run.mockClear();
 
     await qa.parseAsync([
       "node",
@@ -172,6 +213,8 @@ describe("plugin-sdk qa-runtime", () => {
       "--fail-fast",
       "--sut-account",
       "sut-2",
+      "--credential-file",
+      "/secure/telegram-qa.json",
       "--credential-source",
       "convex",
       "--credential-role",
@@ -191,32 +234,10 @@ describe("plugin-sdk qa-runtime", () => {
       scenarioIds: ["alpha", "beta"],
       listScenarios: true,
       sutAccountId: "sut-2",
+      credentialFile: "/secure/telegram-qa.json",
       credentialSource: "convex",
       credentialRole: "maintainer",
     });
-  });
-
-  it("builds shared live-lane artifact errors", async () => {
-    const module = await import("./qa-runtime.js");
-
-    expect(
-      module.buildQaLiveLaneArtifactsError({
-        heading: "Matrix QA failed.",
-        details: ["cleanup: ok"],
-        artifacts: {
-          report: "/tmp/report.md",
-          summary: "/tmp/summary.json",
-        },
-      }),
-    ).toBe(
-      [
-        "Matrix QA failed.",
-        "cleanup: ok",
-        "Artifacts:",
-        "- report: /tmp/report.md",
-        "- summary: /tmp/summary.json",
-      ].join("\n"),
-    );
   });
 
   it("shares Docker health parsing across array and jsonl compose output", async () => {

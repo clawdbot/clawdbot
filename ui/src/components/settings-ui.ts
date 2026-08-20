@@ -1,11 +1,14 @@
 // Settings design-language primitives. Every settings surface builds its
 // layout through these helpers so pages cannot drift back into bespoke
-// card/pill markup. Styles live in ui/src/styles/settings.css; rules in
-// ui/docs/settings-design.md.
+// card/pill markup. Styles live in ui/src/styles/settings.css and the shared
+// ui/src/styles/settings-controls.css; rules in ui/docs/design-system/settings-design.md.
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
+import { t } from "../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -43,6 +46,12 @@ export function renderSettingsPage(
       ${children}
     </div>
   `;
+}
+
+export function renderDocsLink(url: string, label: unknown): TemplateResult {
+  return html`<a href=${url} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
+    >${label}</a
+  >`;
 }
 
 /** Section = plain text heading + one group surface containing rows. */
@@ -125,7 +134,7 @@ export function renderSettingsNavRow(
  * title is not associated with the input; prefer renderSettingsToggleRow. */
 export function renderSettingsToggle(props: {
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean) => boolean | void;
   disabled?: boolean;
   ariaLabel: string;
 }): TemplateResult {
@@ -133,10 +142,13 @@ export function renderSettingsToggle(props: {
     <wa-switch
       class="settings-toggle"
       size="s"
-      .checked=${props.checked}
+      .checked=${live(props.checked)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
-        props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+        const target = event.currentTarget as HTMLElement & { checked: boolean };
+        if (props.onChange(target.checked) === false) {
+          target.checked = props.checked;
+        }
       }}
     >
       <span class="settings-control__sr-label">${props.ariaLabel}</span>
@@ -148,12 +160,14 @@ export function renderSettingsToggle(props: {
  * row is clickable and the checkbox gets its accessible name from the title. */
 export function renderSettingsToggleRow(props: {
   title: unknown;
+  ariaLabel?: unknown;
   description?: unknown;
   checked: boolean;
-  onChange: (checked: boolean) => void;
+  onChange: (checked: boolean) => boolean | void;
   /** Runs synchronously during direct activation for effects gated on user activation. */
   onAct?: (checked: boolean) => void;
   disabled?: boolean;
+  actions?: TemplateResult | typeof nothing;
 }): TemplateResult {
   const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
     const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
@@ -188,22 +202,60 @@ export function renderSettingsToggleRow(props: {
           : nothing}
       </div>
       <div class="settings-row__control">
+        ${props.actions ?? nothing}
         <wa-switch
           class="settings-toggle"
           size="s"
-          .checked=${props.checked}
+          .checked=${live(props.checked)}
           ?disabled=${props.disabled ?? false}
           @click=${notifySwitchActivation}
           @keydown=${notifySwitchActivation}
           @change=${(event: Event) => {
-            props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
+            const target = event.currentTarget as HTMLElement & { checked: boolean };
+            if (props.onChange(target.checked) === false) {
+              target.checked = props.checked;
+            }
           }}
         >
-          <span class="settings-control__sr-label">${props.title}</span>
+          <span class="settings-control__sr-label">${props.ariaLabel ?? props.title}</span>
         </wa-switch>
       </div>
     </div>
   `;
+}
+
+export function renderSettingsDefaultState(props: {
+  value: string;
+  overridden: boolean;
+  disabled?: boolean;
+  onReset: () => void;
+}): {
+  description: TemplateResult;
+  action: TemplateResult | typeof nothing;
+} {
+  return {
+    description: html`${t(
+      props.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
+      { value: props.value },
+    )}`,
+    action: props.overridden
+      ? html`
+          <button
+            type="button"
+            class="btn btn--icon"
+            title=${t("configForm.resetToDefault")}
+            aria-label=${t("configForm.resetToDefault")}
+            ?disabled=${props.disabled ?? false}
+            @click=${(event: Event) => {
+              event.stopPropagation();
+              props.onReset();
+            }}
+          >
+            ${icons.refresh}
+          </button>
+        `
+      : nothing,
+  };
 }
 
 export function renderSettingsSegmented<T extends string>(props: {
@@ -220,7 +272,7 @@ export function renderSettingsSegmented<T extends string>(props: {
       class="settings-segmented ${props.className ?? ""}"
       size="s"
       orientation="horizontal"
-      .value=${props.value}
+      .value=${live(props.value)}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
         const value = (event.currentTarget as HTMLElement & { value?: string }).value;
@@ -244,7 +296,7 @@ export function renderSettingsSegmented<T extends string>(props: {
               : ""}"
             appearance="button"
             value=${option.value}
-            .checked=${option.value === props.value}
+            .checked=${live(option.value === props.value)}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
           >
@@ -260,11 +312,12 @@ export function renderSettingsSegmented<T extends string>(props: {
 export function renderSettingsStatus(props: {
   kind: SettingsStatusKind;
   label: unknown;
+  dot?: boolean;
 }): TemplateResult {
   const modifier = props.kind === "muted" ? "" : ` settings-status--${props.kind}`;
   return html`
     <span class="settings-status${modifier}">
-      <span class="settings-status__dot"></span>
+      ${props.dot === false ? nothing : html`<span class="settings-status__dot"></span>`}
       ${props.label}
     </span>
   `;
@@ -285,9 +338,11 @@ export function renderSettingsEmpty(message: unknown): TemplateResult {
 /** Secret text input with an inset reveal toggle — one field, no trailing
  * button, so secret rows line up with plain input rows in the same group. */
 export function renderSettingsSecretInput(props: {
+  ariaLabel: string;
   value: string;
   placeholder?: string;
   visible: boolean;
+  disabled?: boolean;
   showLabel: string;
   hideLabel: string;
   toggleLabel: string;
@@ -299,10 +354,12 @@ export function renderSettingsSecretInput(props: {
       <input
         class="settings-input"
         type=${props.visible ? "text" : "password"}
+        aria-label=${props.ariaLabel}
         autocomplete="off"
         spellcheck="false"
         .value=${props.value}
         placeholder=${props.placeholder ?? ""}
+        ?disabled=${props.disabled ?? false}
         @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
       />
       <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
@@ -311,6 +368,7 @@ export function renderSettingsSecretInput(props: {
           class="settings-secret__toggle"
           aria-label=${props.toggleLabel}
           aria-pressed=${props.visible}
+          ?disabled=${props.disabled ?? false}
           @click=${props.onToggle}
         >
           ${props.visible ? icons.eye : icons.eyeOff}

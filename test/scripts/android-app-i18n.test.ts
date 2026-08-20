@@ -9,7 +9,6 @@ import {
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue,
   selectDeterministicTranslation,
-  selectExactArtifactTranslation,
   selectGeneratedTranslation,
 } from "../../scripts/android-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
@@ -30,10 +29,11 @@ describe("Android app i18n resources", () => {
 
   it("routes compact token suffixes through generated resources", async () => {
     const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{ kind: string; path: string; source: string }>;
+      entries: Array<{ sites: Array<{ kind: string; path: string }>; source: string }>;
     };
     const sources = new Set(["${decimal(count / 1_000_000.0)}M", "${thousands}k"]);
     const entries = inventory.entries
+      .flatMap((entry) => entry.sites.map((site) => ({ ...site, source: entry.source })))
       .filter(
         (entry) => entry.path.endsWith("/ui/chat/ChatTurnRecap.kt") && sources.has(entry.source),
       )
@@ -55,11 +55,11 @@ describe("Android app i18n resources", () => {
     );
     const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
     const baseKeys = [...base.matchAll(/<string name="([^"]+)"/gu)]
-      .map((match) => match[1])
-      .toSorted();
+      .map((match) => match[1] as string)
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
     const basePlaceholders = [...base.matchAll(/%\d+\$[a-z]/giu)]
       .map((match) => match[0])
-      .toSorted();
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {
@@ -77,9 +77,18 @@ describe("Android app i18n resources", () => {
       expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
       for (const tag of stringTags) {
         if (!tag.includes('translatable="false"')) {
-          expect(tag).toContain('tools:ignore="Typos,TypographyDashes,TypographyEllipsis"');
+          expect(tag.match(/\btools:ignore=/gu)).toHaveLength(1);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypos\b[^"]*"/u);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyDashes\b[^"]*"/u);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyEllipsis\b[^"]*"/u);
         }
       }
+      expect(content).toContain(
+        'name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
+      );
+      expect(content).toContain(
+        'name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
+      );
     }
   });
 
@@ -193,20 +202,6 @@ describe("Android app i18n resources", () => {
     const existing = { source: "Sessions", translation: "Sitzungen" };
     expect(selectGeneratedTranslation("Sessions", [], existing)).toBe("Sitzungen");
     expect(selectGeneratedTranslation("Sessions", ["Sesiones"], existing)).toBe("Sesiones");
-  });
-
-  it("selects Wear translations by inventory ID instead of shared English source", () => {
-    const artifacts = new Map([
-      ["native.android.phone", { source: "Connected", translated: "Phone translation" }],
-      ["native.android.wear", { source: "Connected", translated: "Wear translation" }],
-    ]);
-
-    expect(selectExactArtifactTranslation("Connected", "native.android.wear", artifacts)).toBe(
-      "Wear translation",
-    );
-    expect(selectExactArtifactTranslation("Connected", "native.android.missing", artifacts)).toBe(
-      "Connected",
-    );
   });
 
   it("does not reuse a localized resource after its English source changes", () => {

@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { titleForRoute } from "../app-navigation.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
@@ -29,6 +28,7 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   visibleRowCount: number;
   visibleLimit: number;
   collapsedVisibleRowCount: number;
+  renderHeader: boolean;
 };
 
 type SidebarSessionListHost = SessionListHost & {
@@ -45,8 +45,8 @@ type SessionCatalogRenderSnapshot = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  sidebarRowsByKey: ReadonlyMap<string, SidebarRecentSession>;
-  creatorId: string | null;
+  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
+  ownerId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -54,23 +54,21 @@ type SessionCatalogRenderSnapshot = {
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
-  showDraft?: boolean;
   nativeSessionsHaveMore?: boolean;
 }) {
   const { host, section } = params;
-  const showDraft = params.showDraft ?? false;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
-  // zonedVisibleSections removes pinned rows; AppSidebar renders them through
-  // renderPinnedSidebarSession, so every section here has a header.
-  const collapsed = host.collapsedSessionSections.has(section.id);
+  // Pinned rows render in the nav zone; renderHeader records whether this list
+  // section owns collapse UI or sits directly below the global toolbar.
+  const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = section.groups
     ? t("chat.sidebar.groups")
     : section.work
       ? t("chat.sidebar.coding")
       : group
         ? group
-        : t("chat.sidebar.threads");
+        : t("chat.sidebar.otherSessions");
   const zone = section.groups ? "groups" : section.work ? "coding" : group ? "category" : "threads";
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
@@ -80,6 +78,11 @@ function renderSessionSection(params: {
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
+  const newSessionAccess = host.readNewSessionAccess();
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
+  });
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -100,125 +103,110 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${(event: DragEvent) => host.sectionDragOver(event, section.id, group)}
-      @dragleave=${(event: DragEvent) => host.sectionDragLeave(event, section.id, group)}
-      @drop=${(event: DragEvent) => host.sectionDrop(event, section.id, group)}
+      @dragover=${groupWriteAccess.allowed
+        ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
+        : nothing}
+      @dragleave=${groupWriteAccess.allowed
+        ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
+        : nothing}
+      @drop=${groupWriteAccess.allowed
+        ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
+        : nothing}
     >
-      ${renderSidebarSessionSectionHeader({
-        sectionId: section.id,
-        onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
-        onFinishDrag: () => host.finishSidebarSectionDrag(),
-        onContextMenu: group
-          ? (event: MouseEvent) => {
-              event.preventDefault();
-              host.sidebarMenus.openSessionGroupMenu(group, event.clientX, event.clientY, null);
-            }
-          : undefined,
-        content: html`
-          <button
-            type="button"
-            class="sidebar-session-group-toggle"
-            aria-expanded=${String(!collapsed)}
-            aria-label=${label}
-            @click=${() => host.toggleSection(section.id)}
-          >
-            <span class="sidebar-recent-sessions__label-text">${label}</span>
-            <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-              >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-            >
-            ${collapsed && totalRowCount > 0
-              ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
-              : nothing}
-            ${collapsedRunningDot
-              ? html`<span
-                  class="session-run-spinner sidebar-session-group-running"
-                  role="img"
-                  aria-label=${t("sessionsView.activeRun")}
-                  title=${t("sessionsView.activeRun")}
-                ></span>`
-              : nothing}
-            ${collapsedAttentionDot
-              ? html`<span
-                  class="sidebar-session-group-attention"
-                  role="img"
-                  aria-label=${t("sessionsView.attentionRequired")}
-                  title=${t("sessionsView.attentionRequired")}
-                ></span>`
-              : nothing}
-          </button>
-          ${section.id === "ungrouped"
-            ? html`
-                <button
-                  type="button"
-                  class="sidebar-session-group-actions sidebar-session-sort ${host.sessionCreatorFilterActive
-                    ? "sidebar-session-sort--filtered"
-                    : ""}"
-                  title=${t("chat.sidebar.sortSessions")}
-                  aria-label=${t("chat.sidebar.sortSessions")}
-                  aria-haspopup="menu"
-                  aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
-                  @click=${(event: MouseEvent) => {
-                    event.stopPropagation();
-                    host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement);
-                  }}
-                >
-                  ${icons.listFilter}
-                </button>
-                <button
-                  type="button"
-                  class="sidebar-session-group-actions sidebar-new-session"
-                  title=${host.connected
-                    ? t("chat.runControls.newSession")
-                    : t("chat.runControls.newSessionDisconnected")}
-                  aria-label=${t("chat.runControls.newSession")}
-                  ?disabled=${!host.connected}
-                  @click=${(event: MouseEvent) => {
-                    event.stopPropagation();
-                    host.openNewSession();
-                  }}
-                >
-                  ${icons.plus}
-                </button>
-              `
-            : nothing}
-          ${group
-            ? html`
-                <button
-                  type="button"
-                  class="sidebar-session-group-actions"
-                  title=${t("sessionsView.groupMenu", { group })}
-                  aria-label=${t("sessionsView.groupMenu", { group })}
-                  aria-haspopup="menu"
-                  aria-expanded=${String(host.sidebarMenus.sessionGroupMenu?.group === group)}
-                  @click=${(event: MouseEvent) => {
-                    event.stopPropagation();
-                    const trigger = event.currentTarget as HTMLElement;
-                    const rect = trigger.getBoundingClientRect();
-                    host.sidebarMenus.openSessionGroupMenu(
-                      group,
-                      rect.right,
-                      rect.bottom + 4,
-                      trigger,
-                    );
-                  }}
-                >
-                  ${icons.moreHorizontal}
-                </button>
-              `
-            : nothing}
-        `,
-      })}
+      ${section.renderHeader
+        ? renderSidebarSessionSectionHeader({
+            sectionId: section.id,
+            disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
+            onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
+            onFinishDrag: () => host.finishSidebarSectionDrag(),
+            onContextMenu: group
+              ? (event: MouseEvent) => {
+                  event.preventDefault();
+                  host.sidebarMenus.openSessionGroupMenu(group, event.clientX, event.clientY, null);
+                }
+              : undefined,
+            content: html`
+              <button
+                type="button"
+                class="sidebar-session-group-toggle"
+                aria-expanded=${String(!collapsed)}
+                aria-label=${label}
+                @click=${() => host.toggleSection(section.id)}
+              >
+                <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+                  <span class="sidebar-session-group-toggle__icon"
+                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                  >
+                </span>
+                <span class="sidebar-recent-sessions__label-text">${label}</span>
+                ${collapsed && totalRowCount > 0
+                  ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+                  : nothing}
+                ${collapsedRunningDot
+                  ? html`<span
+                      class="session-run-spinner sidebar-session-group-running"
+                      role="img"
+                      aria-label=${t("sessionsView.activeRun")}
+                      title=${t("sessionsView.activeRun")}
+                    ></span>`
+                  : nothing}
+                ${collapsedAttentionDot
+                  ? html`<span
+                      class="sidebar-session-group-attention"
+                      role="img"
+                      aria-label=${t("sessionsView.attentionRequired")}
+                      title=${t("sessionsView.attentionRequired")}
+                    ></span>`
+                  : nothing}
+              </button>
+              ${group
+                ? html`
+                    <button
+                      type="button"
+                      class="sidebar-session-group-actions sidebar-new-session"
+                      title=${newSessionAccess.allowed
+                        ? t("sessionsView.newSessionInGroup", { group })
+                        : newSessionAccess.reason}
+                      aria-label=${t("sessionsView.newSessionInGroup", { group })}
+                      ?disabled=${!newSessionAccess.allowed}
+                      @click=${(event: MouseEvent) => {
+                        event.stopPropagation();
+                        host.openNewSession({ group });
+                      }}
+                    >
+                      ${icons.plus}
+                    </button>
+                    <button
+                      type="button"
+                      class="sidebar-session-group-actions"
+                      title=${t("sessionsView.groupMenu", { group })}
+                      aria-label=${t("sessionsView.groupMenu", { group })}
+                      aria-haspopup="menu"
+                      aria-expanded=${String(host.sidebarMenus.sessionGroupMenu?.group === group)}
+                      @click=${(event: MouseEvent) => {
+                        event.stopPropagation();
+                        const trigger = event.currentTarget as HTMLElement;
+                        const rect = trigger.getBoundingClientRect();
+                        host.sidebarMenus.openSessionGroupMenu(
+                          group,
+                          rect.right,
+                          rect.bottom + 4,
+                          trigger,
+                        );
+                      }}
+                    >
+                      ${icons.moreHorizontal}
+                    </button>
+                  `
+                : nothing}
+            `,
+          })
+        : nothing}
       ${collapsed
         ? nothing
         : html`
-            ${group && totalRowCount === 0
-              ? html`<span class="sidebar-session-empty-hint sidebar-session-empty-placeholder"
-                  >${t("chat.sidebar.noSessionsForAgent")}</span
-                >`
-              : nothing}
-            ${section.rows.length > 0 || showDraft
+            ${section.rows.length > 0
               ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                  ${showDraft ? renderDraftSessionRow() : nothing}
                   ${section.rows.map((session) => renderSessionTree({ host, session }))}
                 </div>`
               : nothing}
@@ -228,21 +216,6 @@ function renderSessionSection(params: {
               nativeSessionsHaveMore: params.nativeSessionsHaveMore ?? false,
             })}
           `}
-    </div>
-  `;
-}
-
-function renderDraftSessionRow() {
-  return html`
-    <div class="sidebar-recent-session sidebar-recent-session--draft">
-      <span class="sidebar-recent-session__link">
-        <span class="sidebar-session-indicator" aria-hidden="true">
-          <span class="sidebar-session-indicator__dot"></span>
-        </span>
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name">${t("newSession.draftRow")}</span>
-        </span>
-      </span>
     </div>
   `;
 }
@@ -303,6 +276,11 @@ function renderSessionCatalog(params: {
   renderer: SessionCatalogGroupsRenderer;
 }) {
   const { host, snapshot, catalog, renderer } = params;
+  const newSessionAccess = host.readNewSessionAccess();
+  const groupWriteAccess = host.readSessionMutationAccess({
+    method: "sessions.groups.put",
+    requiredScope: "operator.write",
+  });
   return html`
     ${renderer({
       catalogs: [catalog],
@@ -315,11 +293,11 @@ function renderSessionCatalog(params: {
       loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
       projectGrouping: snapshot.projectGrouping,
       liveRows: snapshot.liveRows,
-      creatorId: snapshot.creatorId,
+      ownerId: snapshot.ownerId,
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,
-          session: snapshot.sidebarRowsByKey.get(row.key)!,
+          session: snapshot.toSidebarSession(row),
           display,
         }),
       onToggleSection: (sectionId) => host.toggleSection(sectionId),
@@ -330,17 +308,19 @@ function renderSessionCatalog(params: {
       onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
       onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
       onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
-      // aria-expanded must land on the one header whose menu is open, so the
-      // catalog id rides on the trigger's data attribute instead of a global flag.
-      viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
-        ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute(
-            "data-session-catalog-view-menu",
-          ) ?? null)
-        : null,
-      creatorFilterActive: host.sessionCreatorFilterActive,
-      onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
+      viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
+      ownerFilterActive: host.sessionOwnerFilterActive,
+      onOpenViewMenu: (catalogId, trigger, position) => {
+        if (position) {
+          host.sidebarMenus.openCatalogViewMenu(catalogId, position.x, position.y, trigger);
+          return;
+        }
+        host.sidebarMenus.toggleCatalogViewMenu(catalogId, trigger);
+      },
       onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
-      onOpenNewSession: host.onOpenNewSession,
+      onOpenNewSession: (agentId, target) => host.requestOpenNewSession(agentId, target),
+      newSessionDisabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+      sectionDragDisabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
       onNavigate: host.onNavigate,
       catalogOpenTarget: snapshot.catalogOpenTarget,
       terminalAvailable: snapshot.terminalAvailable,
@@ -353,7 +333,6 @@ function renderSessionCatalog(params: {
 function renderSessionListBody(params: {
   host: SidebarSessionListHost;
   sections: RenderableSessionSection[];
-  showDraft: boolean;
   nativeSessionsHaveMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer | null;
@@ -373,14 +352,8 @@ function renderSessionListBody(params: {
         className: "sidebar-session-error sidebar-session-catalog-error",
       })
     : nothing;
-  // Categorized threads still need the global sort and new-thread actions,
-  // which belong to Threads even when that section has no rows of its own.
-  const hasCategorizedThreads = params.sections.some(
-    (section) => Boolean(section.category) && section.totalRowCount > 0,
-  );
   return html`
     ${params.sections.map((section, index) => {
-      const showDraft = section.id === "ungrouped" && params.showDraft;
       if (section.id.startsWith("catalog:")) {
         const catalog = catalogsBySectionId.get(section.id);
         return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
@@ -395,27 +368,16 @@ function renderSessionListBody(params: {
           : nothing}`;
       }
       if (section.id === "work") {
-        // Keep the Coding header visible beside catalog sections just as it
-        // was when those sections were nested inside it.
-        if (
-          section.totalRowCount === 0 &&
-          !(
-            catalogsVisible &&
-            (params.catalogs.catalogs.length > 0 || params.catalogs.refreshStatus.error !== null)
-          )
-        ) {
+        if (section.totalRowCount === 0) {
           return nothing;
         }
         return renderSessionSection({ host, section });
       }
-      // Hide an empty Threads header only when it does not own reachable
-      // actions for categorized threads, collaborators, or an active drag.
+      // Empty Other remains useful only as a collaborator or drag destination.
       if (
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
-        !showDraft &&
         !params.nativeSessionsHaveMore &&
-        !hasCategorizedThreads &&
         !host.sessionOwnershipVisible &&
         host.sessionsStatusFilter === "active" &&
         host.sessionOrganizer.draggingSessionKey === null
@@ -425,7 +387,6 @@ function renderSessionListBody(params: {
       return renderSessionSection({
         host,
         section,
-        showDraft,
         nativeSessionsHaveMore: params.nativeSessionsHaveMore,
       });
     })}
@@ -433,11 +394,46 @@ function renderSessionListBody(params: {
   `;
 }
 
+function renderSessionListToolbar(host: SidebarSessionListHost) {
+  const newSessionAccess = host.readNewSessionAccess();
+  const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
+  return html`
+    <div class="sidebar-session-toolbar">
+      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
+      <button
+        type="button"
+        class="sidebar-session-toolbar__button sidebar-session-sort ${filtered
+          ? "sidebar-session-sort--filtered"
+          : ""}"
+        title=${t("chat.sidebar.sortSessions")}
+        aria-label=${t("chat.sidebar.sortSessions")}
+        aria-haspopup="menu"
+        aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
+        @click=${(event: MouseEvent) =>
+          host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
+      >
+        ${icons.listFilter}
+      </button>
+      <button
+        type="button"
+        class="sidebar-session-toolbar__button sidebar-new-session"
+        title=${newSessionAccess.allowed
+          ? t("chat.runControls.newSession")
+          : newSessionAccess.reason}
+        aria-label=${t("chat.runControls.newSession")}
+        ?disabled=${!newSessionAccess.allowed}
+        @click=${() => host.openNewSession()}
+      >
+        ${icons.plus}
+      </button>
+    </div>
+  `;
+}
+
 export function renderSessionList(params: {
   host: SidebarSessionListHost;
   empty: boolean;
   sections: RenderableSessionSection[];
-  showDraft: boolean;
   nativeSessionsHaveMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer | null;
@@ -452,6 +448,7 @@ export function renderSessionList(params: {
       @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
+      ${renderSessionListToolbar(host)}
       ${host.sessionData.sessionMutationError
         ? html`
             <div
@@ -473,11 +470,10 @@ export function renderSessionList(params: {
             </div>
           `
         : nothing}
-      <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+      <div class="sidebar-recent-sessions">
         ${renderSessionListBody({
           host,
           sections: params.sections,
-          showDraft: params.showDraft,
           nativeSessionsHaveMore: params.nativeSessionsHaveMore,
           catalogs: params.catalogs,
           catalogRenderer: params.catalogRenderer,

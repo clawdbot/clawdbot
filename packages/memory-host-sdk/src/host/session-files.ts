@@ -8,6 +8,7 @@ import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-i
 import {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
+  extractAgentIdFromSessionPath,
   extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
@@ -20,6 +21,7 @@ import {
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   loadTranscriptEventsSync,
+  materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   parseSqliteSessionFileMarker,
   readTranscriptStatsSync,
@@ -29,13 +31,18 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
-import type { MemorySessionSyncTarget } from "./types.js";
-import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
+import type {
+  MemorySessionSyncTarget,
+  MemoryEntryProvenance,
+  MemoryOriginClass,
+  MemorySessionKind,
+} from "./types.js";
 
 export {
   listSessionTranscriptCorpusEntriesForAgent,
@@ -371,15 +378,6 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     .map((entry) => entry.sessionFile);
 }
 
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
 export function sessionPathForFile(absPath: string): string {
   const agentId = extractAgentIdFromSessionPath(absPath);
   return path
@@ -649,6 +647,14 @@ function classifySessionMessageOrigin(
   turnOrigin: MemoryOriginClass,
 ): MemoryOriginClass {
   if (message.role === "assistant") {
+    const openClawMetadata = message["__openclaw"];
+    if (
+      openClawMetadata &&
+      typeof openClawMetadata === "object" &&
+      (openClawMetadata as { turnTainted?: unknown }).turnTainted === true
+    ) {
+      return "untrusted";
+    }
     return turnOrigin === "owner" ? "agent" : turnOrigin;
   }
   const provenance = message.provenance as { kind?: unknown } | undefined;
@@ -774,11 +780,13 @@ export async function buildSessionEntry(
           const records = loadTranscriptEventsSync({
             ...sqliteIdentity,
           });
+          const resetRecallCutoff = resolveSessionResetRecallCutoff(records);
           const raw = serializeTranscriptEvents(records);
           return {
             mtimeMs: opts.updatedAtMs ?? stats.maxSeq,
             path: sessionPathForSessionIdentity(sqliteIdentity.agentId, sqliteIdentity.sessionId),
             raw,
+            resetRecallCutoff,
             size: stats.sizeBytes,
           };
         })()
@@ -814,7 +822,12 @@ export async function buildSessionEntry(
       }
       raw = (
         await retryTransientMemoryRead(
-          () => readRegularFile({ filePath: absPath }),
+          () =>
+            readRegularFile({
+              filePath: isUsageCountedSessionArchiveTranscriptPath(absPath)
+                ? materializeSessionArchiveForRead(absPath)
+                : absPath,
+            }),
           `read session transcript ${absPath}`,
         )
       ).buffer.toString("utf-8");
@@ -953,7 +966,7 @@ export async function buildSessionEntry(
       lineProvenance.push(...renderedLines.map(() => memoryProvenance));
     }
     const content = collected.join("\n");
-    return {
+    const entry: SessionFileEntry = {
       path: memoryPath,
       absPath,
       mtimeMs,
@@ -965,7 +978,9 @@ export async function buildSessionEntry(
           "\n" +
           messageTimestampsMs.join(",") +
           "\n" +
-          JSON.stringify(lineProvenance),
+          JSON.stringify(lineProvenance) +
+          "\n" +
+          JSON.stringify(rawSource?.resetRecallCutoff ?? { state: "absent" }),
       ),
       content,
       lineMap,
@@ -975,6 +990,13 @@ export async function buildSessionEntry(
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
+    Object.defineProperty(entry, Symbol.for("openclaw.memory.sessionResetRecallCutoff"), {
+      configurable: false,
+      enumerable: false,
+      value: rawSource?.resetRecallCutoff ?? { state: "absent" },
+      writable: false,
+    });
+    return entry;
   } catch (err) {
     void logSessionFileReadFailure(absPath, err);
     return null;

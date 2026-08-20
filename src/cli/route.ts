@@ -59,7 +59,6 @@ async function prepareRoutedCommand(params: {
     argv: params.argv,
     jsonOutputMode: params.machineOutput === true || hasFlag(params.argv, "--json"),
     env: process.env,
-    routeMode: true,
   });
   const { VERSION } = await import("../version.js");
   await applyCliExecutionStartupPresentation({

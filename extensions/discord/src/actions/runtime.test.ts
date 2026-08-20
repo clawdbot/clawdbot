@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
@@ -82,7 +82,6 @@ const discordSendMocks = {
   searchMessagesDiscord: vi.fn(async () => ({})),
   sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
-  sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
   sendVoiceMessageDiscord: vi.fn(async () => ({})),
   setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
@@ -124,7 +123,6 @@ const {
   searchMessagesDiscord,
   sendDiscordComponentMessage,
   sendMessageDiscord,
-  sendPollDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
   timeoutMemberDiscord,
@@ -181,6 +179,7 @@ function handleMessagingAction(
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
   options?: {
+    reply?: ChannelMessageActionContext["reply"];
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -1193,31 +1192,6 @@ describe("handleDiscordMessagingAction", () => {
     ).rejects.toThrow(/Discord reactions are disabled/);
   });
 
-  it("parses string booleans for poll options", async () => {
-    await handleMessagingAction(
-      "poll",
-      {
-        to: "channel:123",
-        question: "Lunch?",
-        answers: ["Pizza", "Sushi"],
-        allowMultiselect: "true",
-        durationHours: "24",
-      },
-      enableAllActions,
-    );
-
-    expect(sendPollDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      {
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 2,
-        durationHours: 24,
-      },
-      { cfg: DISCORD_TEST_CFG, content: undefined },
-    );
-  });
-
   it("rejects Discord permission reads for non-allowlisted target channels", async () => {
     const cfg = {
       channels: {
@@ -2071,27 +2045,103 @@ describe("handleDiscordMessagingAction", () => {
     expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 
-  it("sends voice messages from a local file path", async () => {
+  it("sends workspace-relative voice files with trusted host authority instead of forged action data", async () => {
     sendVoiceMessageDiscord.mockClear();
     sendMessageDiscord.mockClear();
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted voice"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-workspace",
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/tmp/forged-root"],
+      readFile: vi.fn(async () => Buffer.from("forged voice")),
+      workspaceDir: "/tmp/forged-root",
+    };
 
     await handleMessagingAction(
       "sendMessage",
       {
         to: "channel:123",
-        path: "/tmp/voice.mp3",
+        path: "./voice.mp3",
         asVoice: true,
         silent: true,
+        mediaAccess: forgedMediaAccess,
       },
       enableAllActions,
+      DISCORD_TEST_CFG,
+      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
     );
 
-    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
+    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "./voice.mp3", {
       cfg: DISCORD_TEST_CFG,
       reply: undefined,
       silent: true,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
     });
+    const voiceOptions = mockObjectArg(sendVoiceMessageDiscord, "sendVoiceMessageDiscord", 0, 2);
+    expect(voiceOptions.mediaAccess).toBe(mediaAccess);
+    expect(voiceOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
+    expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
     expect(sendMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("preserves supported split-only host readers on action voice sends", async () => {
+    const mediaLocalRoots = ["/tmp/agent-workspace"];
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted voice"));
+
+    await handleMessagingAction(
+      "sendMessage",
+      { to: "channel:123", path: "/tmp/agent-workspace/voice.mp3", asVoice: true },
+      enableAllActions,
+      DISCORD_TEST_CFG,
+      { mediaLocalRoots, mediaReadFile },
+    );
+
+    const voiceOptions = mockObjectArg(sendVoiceMessageDiscord, "sendVoiceMessageDiscord", 0, 2);
+    expect(voiceOptions.mediaAccess).toBeUndefined();
+    expect(voiceOptions.mediaLocalRoots).toBe(mediaLocalRoots);
+    expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
+  });
+
+  it("preserves reader-free workspace authority for thread replies and ignores forged action data", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      workspaceDir: "/tmp/agent-workspace",
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/tmp/forged-root"],
+      readFile: vi.fn(async () => Buffer.from("forged report")),
+      workspaceDir: "/tmp/forged-root",
+    };
+
+    await handleMessagingAction(
+      "threadReply",
+      {
+        channelId: "thread-123",
+        content: "thread update",
+        mediaUrl: "./report.md",
+        mediaAccess: forgedMediaAccess,
+      },
+      enableAllActions,
+      DISCORD_TEST_CFG,
+      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
+    );
+
+    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(call[0]).toBe("channel:thread-123");
+    expect(call[1]).toBe("thread update");
+    expect(sendOptions.mediaUrl).toBe("./report.md");
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
+    expect(sendOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(sendOptions.mediaReadFile).toBeUndefined();
+    expect(sendOptions.mediaAccess).not.toHaveProperty("readFile");
+    expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
   });
 
   it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
@@ -2169,6 +2219,49 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
+
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+      replyToId: "source-1",
+      expected: { messageId: "source-1", scope: "first" },
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+      replyToId: "explicit-1",
+      expected: { messageId: "explicit-1", scope: "all" },
+    },
+    {
+      label: "raw custom plugin reply",
+      reply: undefined,
+      replyToId: "custom-1",
+      expected: { messageId: "custom-1", scope: "all" },
+    },
+  ])(
+    "preserves the host-owned or custom $label for component sends",
+    async ({ reply, replyToId, expected }) => {
+      sendDiscordComponentMessage.mockClear();
+
+      await handleMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "hello",
+          components: { blocks: [{ type: "text", text: "Pick one" }] },
+          replyTo: replyToId,
+        },
+        enableAllActions,
+        DISCORD_TEST_CFG,
+        reply ? { reply } : undefined,
+      );
+
+      expect(
+        mockObjectArg(sendDiscordComponentMessage, "sendDiscordComponentMessage", 0, 2),
+      ).toMatchObject({ reply: expected });
+    },
+  );
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
@@ -2449,6 +2542,95 @@ describe("handleDiscordMessagingAction", () => {
       thread,
       warning: "Discord thread was created, but sending the initial message failed.",
       initialMessageError: "missing access",
+    });
+  });
+
+  it("returns delivery progress when Discord only delivers part of the initial content", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("missing access"),
+        {
+          starterMessageDelivered: true,
+          deliveredChunkCount: 1,
+          deliveredMessageIds: ["starter1"],
+          failedChunkDelivery: "unknown",
+          failedChunkIndex: 1,
+          totalChunkCount: 2,
+        },
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning:
+        "Discord thread was created, but delivery of the remaining initial content could not be confirmed.",
+      initialMessageError: "missing access",
+      initialMessageDelivery: {
+        starterMessageDelivered: true,
+        deliveredChunkCount: 1,
+        deliveredMessageIds: ["starter1"],
+        failedChunkDelivery: "unknown",
+        failedChunkIndex: 1,
+        totalChunkCount: 2,
+      },
+    });
+  });
+
+  it("reports unconfirmed delivery when the first initial content chunk is ambiguous", async () => {
+    const thread = { id: "T1", name: "thread", type: 11 };
+    createThreadDiscord.mockRejectedValueOnce(
+      new DiscordThreadInitialMessageError(
+        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
+        new Error("response lost"),
+        {
+          starterMessageDelivered: false,
+          deliveredChunkCount: 0,
+          deliveredMessageIds: [],
+          failedChunkDelivery: "unknown",
+          failedChunkIndex: 0,
+          totalChunkCount: 1,
+        },
+      ),
+    );
+
+    const result = await handleMessagingAction(
+      "threadCreate",
+      {
+        channelId: "C1",
+        name: "thread",
+        content: "Initial post",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toEqual({
+      ok: true,
+      partial: true,
+      thread,
+      warning: "Discord thread was created, but initial message delivery could not be confirmed.",
+      initialMessageError: "response lost",
+      initialMessageDelivery: {
+        starterMessageDelivered: false,
+        deliveredChunkCount: 0,
+        deliveredMessageIds: [],
+        failedChunkDelivery: "unknown",
+        failedChunkIndex: 0,
+        totalChunkCount: 1,
+      },
     });
   });
 });
@@ -2817,11 +2999,40 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(createChannelDiscord).toHaveBeenCalled();
   });
 
-  it("uses thread permissions for Discord sender thread edits", async () => {
+  it.each<{
+    name: string;
+    params: { archived?: boolean; locked?: boolean };
+    previouslyLocked?: boolean;
+    permissions: bigint[];
+  }>([
+    {
+      name: "uses thread permissions for Discord sender thread edits",
+      params: { archived: true },
+      permissions: [PermissionFlagsBits.ManageThreads],
+    },
+    {
+      name: "requires ManageThreads for Discord sender thread unlocks",
+      params: { locked: false },
+      permissions: [PermissionFlagsBits.ManageThreads],
+    },
+    {
+      name: "requires ManageThreads to reopen locked Discord sender threads",
+      params: { archived: false },
+      previouslyLocked: true,
+      permissions: [PermissionFlagsBits.ManageThreads],
+    },
+    {
+      name: "allows SendMessagesInThreads for unlocked Discord sender thread reopens",
+      params: { archived: false },
+      previouslyLocked: false,
+      permissions: [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
+    },
+  ])("$name", async ({ params, previouslyLocked, permissions }) => {
     const threadChannel = {
       id: "T1",
       type: ChannelType.GuildPublicThread,
       guild_id: "G1",
+      ...(previouslyLocked === undefined ? {} : { thread_metadata: { locked: previouslyLocked } }),
     };
     fetchChannelInfoDiscord
       .mockResolvedValueOnce(threadChannel)
@@ -2829,7 +3040,7 @@ describe("handleDiscordGuildAction - channel management", () => {
 
     await handleGuildAction(
       "channelEdit",
-      { channelId: "T1", archived: true, senderUserId: "sender-1" },
+      { channelId: "T1", senderUserId: "sender-1", ...params },
       channelsEnabled,
     );
 
@@ -2837,87 +3048,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       "G1",
       "T1",
       "sender-1",
-      [PermissionFlagsBits.ManageThreads],
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(editChannelDiscord).toHaveBeenCalled();
-  });
-
-  it("requires ManageThreads for Discord sender thread unlocks", async () => {
-    const threadChannel = {
-      id: "T1",
-      type: ChannelType.GuildPublicThread,
-      guild_id: "G1",
-    };
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce(threadChannel)
-      .mockResolvedValueOnce(threadChannel);
-
-    await handleGuildAction(
-      "channelEdit",
-      { channelId: "T1", locked: false, senderUserId: "sender-1" },
-      channelsEnabled,
-    );
-
-    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
-      "G1",
-      "T1",
-      "sender-1",
-      [PermissionFlagsBits.ManageThreads],
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(editChannelDiscord).toHaveBeenCalled();
-  });
-
-  it("requires ManageThreads to reopen locked Discord sender threads", async () => {
-    const threadChannel = {
-      id: "T1",
-      type: ChannelType.GuildPublicThread,
-      guild_id: "G1",
-      thread_metadata: { locked: true },
-    };
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce(threadChannel)
-      .mockResolvedValueOnce(threadChannel);
-
-    await handleGuildAction(
-      "channelEdit",
-      { channelId: "T1", archived: false, senderUserId: "sender-1" },
-      channelsEnabled,
-    );
-
-    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
-      "G1",
-      "T1",
-      "sender-1",
-      [PermissionFlagsBits.ManageThreads],
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(editChannelDiscord).toHaveBeenCalled();
-  });
-
-  it("allows SendMessagesInThreads for unlocked Discord sender thread reopens", async () => {
-    const threadChannel = {
-      id: "T1",
-      type: ChannelType.GuildPublicThread,
-      guild_id: "G1",
-      thread_metadata: { locked: false },
-    };
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce(threadChannel)
-      .mockResolvedValueOnce(threadChannel);
-
-    await handleGuildAction(
-      "channelEdit",
-      { channelId: "T1", archived: false, senderUserId: "sender-1" },
-      channelsEnabled,
-    );
-
-    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
-      "G1",
-      "T1",
-      "sender-1",
-      [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
+      permissions,
       { cfg: DISCORD_TEST_CFG },
     );
     expect(editChannelDiscord).toHaveBeenCalled();

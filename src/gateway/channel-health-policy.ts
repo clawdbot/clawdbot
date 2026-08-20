@@ -1,6 +1,6 @@
 // Gateway channel health policy.
 // Evaluates channel lifecycle snapshots for restart/readiness decisions.
-import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 
 type ChannelHealthSnapshot = {
   running?: boolean;
@@ -15,11 +15,14 @@ type ChannelHealthSnapshot = {
   activeRunStartedAt?: number | null;
   lastEventAt?: number | null;
   lastConnectedAt?: number | null;
+  lastDisconnect?: ChannelAccountSnapshot["lastDisconnect"];
   lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
   ingressUnavailable?: true;
+  lifecycle?: "starting" | "ready" | "recovering" | "blocked" | "stopped";
+  healthState?: string;
   terminalDisconnect?: boolean;
 };
 
@@ -28,9 +31,11 @@ type ChannelHealthEvaluationReason =
   | "unmanaged"
   | "not-running"
   | "terminal-disconnect"
+  | "blocked"
   | "busy"
   | "stuck"
   | "startup-connect-grace"
+  | "reconnect-grace"
   | "disconnected"
   | "stale-socket"
   | "ingress-unavailable";
@@ -47,6 +52,17 @@ export type ChannelHealthPolicy = {
   channelConnectGraceMs: number;
 };
 
+/** Keep channel-authored terminal detail above the shared unhealthy projection. */
+export function resolveChannelHealthState(
+  snapshot: ChannelHealthSnapshot,
+  policy: ChannelHealthPolicy,
+): string | undefined {
+  const evaluation = evaluateChannelHealth(snapshot, policy);
+  return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
+    ? evaluation.reason
+    : snapshot.healthState;
+}
+
 type ChannelRestartReason =
   | "gave-up"
   | "stopped"
@@ -60,6 +76,7 @@ function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
+const CHANNEL_RECONNECT_GRACE_MS = 120_000;
 // Keep these shared between the background health monitor and on-demand readiness
 // probes so both surfaces evaluate channel lifecycle windows consistently.
 export const DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS = 30 * 60_000;
@@ -84,6 +101,25 @@ export function evaluateChannelHealth(
   if (snapshot.ingressUnavailable === true) {
     return { healthy: false, reason: "ingress-unavailable" };
   }
+  if (snapshot.lifecycle === "blocked") {
+    return { healthy: false, reason: "blocked" };
+  }
+  const lastStartAt =
+    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
+      ? snapshot.lastStartAt
+      : null;
+  // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
+  // the window, no progress is indistinguishable from a hang, so inference keeps restart authority.
+  if (
+    (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
+    lastStartAt != null &&
+    policy.now - lastStartAt < policy.channelConnectGraceMs
+  ) {
+    return { healthy: true, reason: "startup-connect-grace" };
+  }
+  if (snapshot.lifecycle === "stopped") {
+    return { healthy: false, reason: "not-running" };
+  }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
@@ -92,10 +128,6 @@ export function evaluateChannelHealth(
       ? Math.max(0, Math.trunc(snapshot.activeRuns))
       : 0;
   const isBusy = snapshot.busy === true || activeRuns > 0;
-  const lastStartAt =
-    typeof snapshot.lastStartAt === "number" && Number.isFinite(snapshot.lastStartAt)
-      ? snapshot.lastStartAt
-      : null;
   const lastRunActivityAt =
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
@@ -134,13 +166,29 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stuck" };
     }
   }
-  if (snapshot.lastStartAt != null) {
-    const upDuration = policy.now - snapshot.lastStartAt;
+  if (snapshot.lifecycle === undefined && lastStartAt != null) {
+    const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
     }
   }
   if (snapshot.connected === false) {
+    const lastDisconnectAt =
+      snapshot.lastDisconnect &&
+      typeof snapshot.lastDisconnect !== "string" &&
+      Number.isFinite(snapshot.lastDisconnect.at)
+        ? snapshot.lastDisconnect.at
+        : null;
+    // A disconnect is current only when its producer recorded it inside this
+    // account lifecycle; patch-merged timestamps from prior runs grant no grace.
+    const disconnectBelongsToLifecycle =
+      lastDisconnectAt != null && (lastStartAt == null || lastDisconnectAt >= lastStartAt);
+    if (
+      disconnectBelongsToLifecycle &&
+      Math.max(0, policy.now - lastDisconnectAt) < CHANNEL_RECONNECT_GRACE_MS
+    ) {
+      return { healthy: true, reason: "reconnect-grace" };
+    }
     return { healthy: false, reason: "disconnected" };
   }
   // App-level events are not socket liveness: quiet Slack/Discord workspaces can

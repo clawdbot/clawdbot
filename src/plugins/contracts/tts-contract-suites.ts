@@ -13,21 +13,15 @@ import {
   setActivePluginRegistry,
 } from "../../plugin-sdk/plugin-test-runtime.js";
 import { withEnv, withEnvAsync, withServer } from "../../plugin-sdk/test-env.js";
-import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
 type TtsCoreModule = typeof import("openclaw/plugin-sdk/speech-core");
 type SummarizeTextDeps = NonNullable<Parameters<TtsCoreModule["summarizeText"]>[1]>;
 
-const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
-  packageName: "@openclaw/speech-core",
-  artifactBasename: "runtime-api.js",
-});
-
 let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimeInitialized = false;
-let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
+let completeWithPreparedSimpleCompletionModel: SummarizeTextDeps["completeWithPreparedSimpleCompletionModel"];
 let prepareSimpleCompletionModelMock: SummarizeTextDeps["prepareSimpleCompletionModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let summarizeTextCore: TtsCoreModule["summarizeText"];
@@ -106,7 +100,7 @@ function asLegacyTtsConfig(value: unknown): OpenClawConfig {
 }
 
 function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
-  return value as unknown as OpenClawConfig;
+  return asLegacyTtsConfig(value);
 }
 
 function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
@@ -143,7 +137,7 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
 
 function createSummarizeTextDeps() {
   return {
-    completeSimple,
+    completeWithPreparedSimpleCompletionModel,
     prepareSimpleCompletionModel: prepareSimpleCompletionModelMock,
     requireApiKey: requireApiKeyMock,
   };
@@ -188,11 +182,8 @@ async function withMockedSpeechFetch(
   audioLength: number,
 ) {
   const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    arrayBuffer: async () => new ArrayBuffer(audioLength),
-  }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn(async () => new Response(new Uint8Array(audioLength)));
+  globalThis.fetch = fetchMock;
   try {
     await run(fetchMock);
   } finally {
@@ -452,9 +443,7 @@ function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
   };
 }
 
-const loadTtsRuntime = createLazyRuntimeModule(
-  () => import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>,
-);
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 
 const loadTtsCore = createLazyRuntimeModule(() => import("../../plugin-sdk/speech-core.js"));
 
@@ -529,10 +518,10 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("../../plugin-sdk/llm.js"));
+  completeWithPreparedSimpleCompletionModel = vi.fn();
   prepareSimpleCompletionModelMock = createPrepareSimpleCompletionModelMock();
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
-  vi.mocked(completeSimple).mockResolvedValue(
+  vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
     mockAssistantMessage([{ type: "text", text: "Summary" }]),
   );
   vi.mocked(requireApiKeyMock).mockImplementation((auth: { apiKey?: string }) => auth.apiKey ?? "");
@@ -567,12 +556,12 @@ export function describeTtsConfigContract() {
         },
         {
           name: "override",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
               edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
-          } as unknown as OpenClawConfig,
+          }),
           expected: "audio-24khz-96kbitrate-mono-mp3",
         },
       ] as const)("$name", ({ cfg, expected, name }) => {
@@ -804,22 +793,22 @@ export function describeTtsConfigContract() {
         },
         {
           name: "config wins over env",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
-          } as unknown as OpenClawConfig,
+          }),
           env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
           expected: "http://my-server:9000/v1",
         },
         {
           name: "config slash trimming",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
               ...baseCfg.tts,
               openai: { baseUrl: "http://my-server:9000/v1///" },
             },
-          } as unknown as OpenClawConfig,
+          }),
           env: { OPENAI_TTS_BASE_URL: undefined },
           expected: "http://my-server:9000/v1",
         },
@@ -887,7 +876,7 @@ export function describeTtsSummarizationContract() {
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue(
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
@@ -901,18 +890,23 @@ export function describeTtsSummarizationContract() {
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimple).toHaveBeenCalledTimes(1);
+      expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      const callArgs = mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0);
       expect(
-        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+        (callArgs[0] as { context?: { messages?: Array<{ role?: string }> } } | undefined)?.context
+          ?.messages?.[0]?.role,
       ).toBe("user");
-      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
-      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
+      expect(
+        (callArgs[0] as { options?: { maxTokens?: number } } | undefined)?.options?.maxTokens,
+      ).toBe(250);
+      expect(
+        (callArgs[0] as { options?: { temperature?: number } } | undefined)?.options?.temperature,
+      ).toBe(0.3);
       expect(requireApiKeyMock).toHaveBeenCalledWith(
         expect.objectContaining({ apiKey: "test-api-key" }),
         "openai",
@@ -930,7 +924,6 @@ export function describeTtsSummarizationContract() {
         cfg,
         provider: "openai",
         modelId: "gpt-4.1-mini",
-        useAsyncModelResolution: true,
       });
     });
 
@@ -946,7 +939,11 @@ export function describeTtsSummarizationContract() {
       await runSummarizeText();
 
       expect(
-        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+        (
+          mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0)[0] as
+            | { model?: { api?: string } }
+            | undefined
+        )?.model?.api,
       ).toBe("openai-completions");
     });
 
@@ -975,7 +972,7 @@ export function describeTtsSummarizationContract() {
         message: mockAssistantMessage([{ type: "text", text: "   " }]),
       },
     ] as const)("throws when summary output is missing or empty: $name", async (testCase) => {
-      vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(testCase.message);
       await expect(runSummarizeText({ text: "text" }), testCase.name).rejects.toThrow(
         "No summary returned",
       );

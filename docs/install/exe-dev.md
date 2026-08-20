@@ -28,7 +28,7 @@ This guide assumes exe.dev's default **exeuntu** image. Map packages accordingly
 Shelley, exe.dev's agent, can install OpenClaw from a prompt:
 
 ```text
-Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw devices approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
+Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Set gateway.controlUi.allowedOrigins to the exact https://<vm-name>.exe.xyz origin, and set gateway.trustedProxies to ["127.0.0.1"] because nginx connects to the Gateway over loopback and overwrites X-Forwarded-For. Pairing is done by "openclaw devices list" and "openclaw devices approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
 ```
 
 ## Manual installation
@@ -103,10 +103,26 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
   </Step>
 
+  <Step title="Trust nginx and allow the public browser origin">
+    Configure the exact public origin and trust only the loopback nginx hop:
+
+    ```bash
+    openclaw config set gateway.controlUi.allowedOrigins '["https://<vm-name>.exe.xyz"]' --strict-json
+    openclaw config set gateway.trustedProxies '["127.0.0.1"]' --strict-json
+    openclaw gateway restart
+    ```
+
+    The browser origin check is fail-closed for public hostnames. The proxy
+    allowlist lets OpenClaw use nginx's overwritten `X-Forwarded-For` value
+    instead of treating every request as if it originated from the loopback
+    proxy. Keep this list limited to proxies you control.
+
+  </Step>
+
   <Step title="Access OpenClaw and approve devices">
     Open `https://<vm-name>.exe.xyz/` (see the Control UI output from onboarding). If it prompts for auth, paste the configured shared secret from the VM.
 
-    This guide uses token auth by default, so retrieve `gateway.auth.token` with `openclaw config get gateway.auth.token`, or generate a new one with `openclaw doctor --n`. If you switched the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
+    This guide uses token auth by default, so run `openclaw gateway auth-token --show` in an interactive terminal to retrieve the configured token. If no token is configured, generate one with `openclaw doctor --generate-gateway-token` and restart the Gateway. If you switched the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
 
     Approve devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser.
 

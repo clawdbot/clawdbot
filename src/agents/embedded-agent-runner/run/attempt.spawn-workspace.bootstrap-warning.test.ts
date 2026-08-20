@@ -1,12 +1,12 @@
 // Coverage for bootstrap warning text in system prompt assembly.
 import { describe, expect, it } from "vitest";
+import { buildBootstrapPromptWarning } from "../../bootstrap-budget-warning.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarningNotice,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 
 describe("runEmbeddedAttempt bootstrap warning prompt assembly", () => {
   it("keeps bootstrap warnings in system context without raw diagnostics", () => {

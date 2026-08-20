@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
+  collectWorkerDeployArtifactErrors,
   listStaticImportSpecifiers,
-} from "../../scripts/check-cli-bootstrap-imports.mjs";
+} from "../../scripts/check-cli-bootstrap-imports.mts";
 
 const tempRoots: string[] = [];
 
@@ -125,6 +126,54 @@ describe("check-cli-bootstrap-imports", () => {
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
       `Gateway run chunk dist/run-gateway.js is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+    ]);
+  });
+
+  it("accepts the self-contained worker deploy artifacts with builtin imports", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      'import fs from "node:fs";\nexport const worker = Boolean(fs);\n',
+    );
+    writeFixture(
+      root,
+      "dist/worker/workspace-rsync-receiver.mjs",
+      'import path from "node:path";\nexport const receiver = Boolean(path);\n',
+    );
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it("rejects worker package imports and dependency manifests", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      [
+        'import "left-pad";',
+        'await import("./lazy.mjs");',
+        '__require("json5");',
+        'createRequire(import.meta.url)("../../package.json");',
+        'moduleNamespace.createRequire(import.meta.url)("@openclaw/fs-safe/temp");',
+      ].join("\n"),
+    );
+    writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", "export {};\n");
+    writeFixture(root, "dist/worker/lazy.mjs", "export {};\n");
+    writeFixture(
+      root,
+      "dist/worker/package.json",
+      `${JSON.stringify({ scripts: { postinstall: "node prepare.js" } })}\n`,
+    );
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "json5" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "left-pad" instead of bundling it.',
+      "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
+      "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
   });
 });

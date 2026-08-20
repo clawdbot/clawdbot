@@ -26,7 +26,7 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     return paths;
   }
   if (Array.isArray(prev) && Array.isArray(next)) {
-    // Arrays can contain object entries (for example memory.qmd.paths/scope.rules);
+    // Arrays can contain object entries (for example agent bindings);
     // compare structurally so identical values are not reported as changed.
     if (isDeepStrictEqual(prev, next)) {
       return [];
@@ -35,22 +35,32 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
   return [prefix || "<root>"];
 }
 
+function projectGatewayReloadBoundaries(config: OpenClawConfig) {
+  return {
+    mcp: { apps: config.mcp?.apps },
+    agents: {
+      ownership: config.agents?.ownership,
+      defaults: { sessionStore: config.agents?.defaults?.sessionStore },
+      entries: config.agents?.entries,
+    },
+    session: {
+      scope: config.session?.scope,
+      store: config.session?.store,
+    },
+  };
+}
+
 /** Preserve startup-only restart boundaries hidden by whole-object config changes. */
 export function diffGatewayReloadPaths(
   prevConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
 ): string[] {
   const changedPaths = diffConfigPaths(prevConfig, nextConfig);
-  if (!changedPaths.includes("mcp")) {
-    return changedPaths;
-  }
-  // Adding or removing the whole `mcp` object collapses to the broad `mcp`
-  // path. Preserve the Apps boundary so the listener still restarts.
-  return [
-    ...changedPaths,
-    ...diffConfigPaths(
-      { mcp: { apps: prevConfig.mcp?.apps } },
-      { mcp: { apps: nextConfig.mcp?.apps } },
-    ),
-  ];
+  const boundaryPaths = diffConfigPaths(
+    projectGatewayReloadBoundaries(prevConfig),
+    projectGatewayReloadBoundaries(nextConfig),
+  );
+  // Preserve only startup/reload ownership boundaries hidden by whole-object
+  // collapse without changing ordinary diff multiplicity or ordering.
+  return [...changedPaths, ...boundaryPaths.filter((path) => !changedPaths.includes(path))];
 }

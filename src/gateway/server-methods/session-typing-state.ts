@@ -1,4 +1,6 @@
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 const TYPING_THROTTLE_MS = 1_000;
 const TYPING_ACTIVE_TTL_MS = 2_500;
@@ -11,8 +13,32 @@ type TypingBroadcastState = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-const typingBroadcastState = new Map<string, TypingBroadcastState>();
-const typingConnections = new Map<string, Map<string, number>>();
+type SessionTypingState = {
+  broadcasts: Map<string, TypingBroadcastState>;
+  connections: Map<string, Map<string, number>>;
+};
+
+function clearSessionTypingStateValue(state: SessionTypingState): void {
+  for (const entry of state.broadcasts.values()) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+  }
+  state.broadcasts.clear();
+  state.connections.clear();
+}
+
+const sessionTypingState = resolveGlobalSingleton<SessionTypingState>(
+  Symbol.for("openclaw.sessionTypingState"),
+  () => ({ broadcasts: new Map(), connections: new Map() }),
+  clearSessionTypingStateValue,
+);
+const typingBroadcastState = sessionTypingState.broadcasts;
+const typingConnections = sessionTypingState.connections;
+
+export function clearSessionTypingState(): void {
+  clearSessionTypingStateValue(sessionTypingState);
+}
 
 export function liveViewerIdentities(sessionKeys: ReadonlySet<string>): Set<string> {
   return new Set(
@@ -129,8 +155,6 @@ export function updateTypingConnections(params: {
   }
   typingConnections.delete(params.key);
   typingConnections.set(params.key, connections);
-  if (typingConnections.size > MAX_TYPING_THROTTLE_KEYS) {
-    typingConnections.delete(typingConnections.keys().next().value ?? "");
-  }
+  pruneMapToMaxSize(typingConnections, MAX_TYPING_THROTTLE_KEYS);
   return true;
 }

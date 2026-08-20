@@ -119,13 +119,77 @@ function requireTransportCall(calls: readonly RequestCall[], index: number): Req
   return call;
 }
 
+function createClientFixture(responses: Record<string, FakeResponse> = {}) {
+  const transport = new FakeTransport(responses);
+  return { transport, oc: new OpenClaw({ transport }) };
+}
+
+function createListFixture() {
+  return createClientFixture({
+    "agents.list": { agents: [] },
+    "sessions.list": { sessions: [] },
+    "tasks.list": { tasks: [] },
+    "models.list": { models: [] },
+    "tools.catalog": { tools: [] },
+    "exec.approval.list": { approvals: [] },
+    "environments.list": { environments: [] },
+  });
+}
+
+function waitForSnapshot(runId: string, fields: Record<string, unknown> = {}) {
+  const snapshot = { status: "timeout", runId, ...fields };
+  return createClientFixture({ "agent.wait": snapshot }).oc.runs.wait(runId);
+}
+
+function createAgentEvent(
+  runId: string,
+  seq: number,
+  ts: number,
+  stream: string,
+  data: Record<string, unknown>,
+): GatewayEvent {
+  return { event: "agent", seq, payload: { runId, stream, ts, data } };
+}
+
+function createChatEvent(
+  runId: string,
+  sessionKey: string,
+  seq: number,
+  state: "delta" | "final",
+  text: string,
+  timestamp: number,
+  options: { deltaText?: string; replace?: true } = {},
+): GatewayEvent {
+  return {
+    event: "chat",
+    seq,
+    payload: {
+      runId,
+      sessionKey,
+      state,
+      ...options,
+      message: { role: "assistant", content: [{ type: "text", text }], timestamp },
+    },
+  };
+}
+
+function createRunEventFixture(runId: string, sessionKey: string, events: readonly GatewayEvent[]) {
+  return createClientFixture({
+    agent: (_params, _options, transport) => {
+      for (const event of events) {
+        transport.emit(event);
+      }
+      return { status: "accepted", runId, sessionKey };
+    },
+  });
+}
+
 describe("OpenClaw SDK", () => {
   it("runs an agent through the Gateway agent method", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       agent: { status: "accepted", runId: "run_123" },
       "agent.wait": { status: "ok", runId: "run_123", sessionKey: "main" },
     });
-    const oc = new OpenClaw({ transport });
     const agent = await oc.agents.get("main");
 
     const run = await agent.run({
@@ -163,10 +227,9 @@ describe("OpenClaw SDK", () => {
   });
 
   it("preserves numeric wait timestamps", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "agent.wait": { status: "ok", runId: "run_numeric", startedAt: 123, endedAt: 456 },
     });
-    const oc = new OpenClaw({ transport });
 
     const result = await oc.runs.wait("run_numeric");
 
@@ -184,17 +247,10 @@ describe("OpenClaw SDK", () => {
   });
 
   it("maps aborted wait snapshots to cancelled even when Gateway status is timeout", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_cancelled",
-        stopReason: "rpc",
-        error: "aborted by operator",
-      },
+    const result = await waitForSnapshot("run_cancelled", {
+      stopReason: "rpc",
+      error: "aborted by operator",
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_cancelled");
 
     expect(result.runId).toBe("run_cancelled");
     expect(result.status).toBe("cancelled");
@@ -202,36 +258,22 @@ describe("OpenClaw SDK", () => {
   });
 
   it("maps restart wait snapshots to cancelled", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_restart",
-        stopReason: "restart",
-        providerStarted: true,
-      },
+    const result = await waitForSnapshot("run_restart", {
+      stopReason: "restart",
+      providerStarted: true,
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_restart");
 
     expect(result.runId).toBe("run_restart");
     expect(result.status).toBe("cancelled");
   });
 
   it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_hard_timeout",
-        stopReason: "rpc",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "provider request timed out",
-      },
+    const result = await waitForSnapshot("run_hard_timeout", {
+      stopReason: "rpc",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      error: "provider request timed out",
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_hard_timeout");
 
     expect(result.runId).toBe("run_hard_timeout");
     expect(result.status).toBe("timed_out");
@@ -239,18 +281,12 @@ describe("OpenClaw SDK", () => {
   });
 
   it("maps provider timeout wait errors to timed_out", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "error",
-        runId: "run_timeout_error",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "provider request timed out",
-      },
+    const result = await waitForSnapshot("run_timeout_error", {
+      status: "error",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      error: "provider request timed out",
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_timeout_error");
 
     expect(result.runId).toBe("run_timeout_error");
     expect(result.status).toBe("timed_out");
@@ -258,17 +294,11 @@ describe("OpenClaw SDK", () => {
   });
 
   it("does not map provider-started wait errors to timed_out without timeout attribution", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "error",
-        runId: "run_provider_error",
-        providerStarted: true,
-        error: "provider authentication failed",
-      },
+    const result = await waitForSnapshot("run_provider_error", {
+      status: "error",
+      providerStarted: true,
+      error: "provider authentication failed",
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_provider_error");
 
     expect(result.runId).toBe("run_provider_error");
     expect(result.status).toBe("failed");
@@ -276,33 +306,20 @@ describe("OpenClaw SDK", () => {
   });
 
   it("does not treat successful provider-started wait snapshots as timed_out", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "ok",
-        runId: "run_provider_started_ok",
-        providerStarted: true,
-      },
+    const result = await waitForSnapshot("run_provider_started_ok", {
+      status: "ok",
+      providerStarted: true,
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_provider_started_ok");
 
     expect(result.runId).toBe("run_provider_started_ok");
     expect(result.status).toBe("completed");
   });
 
   it("maps auth-revoked wait snapshots to cancelled", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_auth_revoked",
-        stopReason: "auth-revoked",
-        error: "provider auth was removed",
-      },
+    const result = await waitForSnapshot("run_auth_revoked", {
+      stopReason: "auth-revoked",
+      error: "provider auth was removed",
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_auth_revoked");
 
     expect(result.runId).toBe("run_auth_revoked");
     expect(result.status).toBe("cancelled");
@@ -310,12 +327,7 @@ describe("OpenClaw SDK", () => {
   });
 
   it("keeps wait-only deadlines non-terminal", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": { status: "timeout", runId: "run_still_active" },
-    });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_still_active");
+    const result = await waitForSnapshot("run_still_active");
 
     expect(result.runId).toBe("run_still_active");
     expect(result.status).toBe("accepted");
@@ -323,17 +335,10 @@ describe("OpenClaw SDK", () => {
   });
 
   it("keeps pending-error wait deadlines non-terminal", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_pending_error",
-        error: "429 RESOURCE_EXHAUSTED",
-        pendingError: true,
-      },
+    const result = await waitForSnapshot("run_pending_error", {
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_pending_error");
 
     expect(result.runId).toBe("run_pending_error");
     expect(result.status).toBe("accepted");
@@ -341,19 +346,12 @@ describe("OpenClaw SDK", () => {
   });
 
   it("keeps provider-attributed pending-error wait deadlines non-terminal", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_pending_provider_error",
-        error: "provider request timed out",
-        pendingError: true,
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
+    const result = await waitForSnapshot("run_pending_provider_error", {
+      error: "provider request timed out",
+      pendingError: true,
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_pending_provider_error");
 
     expect(result.runId).toBe("run_pending_provider_error");
     expect(result.status).toBe("accepted");
@@ -361,17 +359,10 @@ describe("OpenClaw SDK", () => {
   });
 
   it("maps terminal runtime timeout snapshots to timed_out", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_timed_out",
-        stopReason: "timeout",
-        error: "agent runtime timeout",
-      },
+    const result = await waitForSnapshot("run_timed_out", {
+      stopReason: "timeout",
+      error: "agent runtime timeout",
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_timed_out");
 
     expect(result.runId).toBe("run_timed_out");
     expect(result.status).toBe("timed_out");
@@ -379,17 +370,10 @@ describe("OpenClaw SDK", () => {
   });
 
   it("maps terminal timeout snapshots without stop reasons to timed_out", async () => {
-    const transport = new FakeTransport({
-      "agent.wait": {
-        status: "timeout",
-        runId: "run_timed_out",
-        startedAt: 123,
-        endedAt: 456,
-      },
+    const result = await waitForSnapshot("run_timed_out", {
+      startedAt: 123,
+      endedAt: 456,
     });
-    const oc = new OpenClaw({ transport });
-
-    const result = await oc.runs.wait("run_timed_out");
 
     expect(result.runId).toBe("run_timed_out");
     expect(result.status).toBe("timed_out");
@@ -399,10 +383,9 @@ describe("OpenClaw SDK", () => {
   });
 
   it("splits provider-qualified model refs and rejects unsupported run options", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       agent: { status: "accepted", runId: "run_openrouter" },
     });
-    const oc = new OpenClaw({ transport });
 
     await oc.runs.create({
       input: "use a routed model",
@@ -435,10 +418,9 @@ describe("OpenClaw SDK", () => {
   });
 
   it("ceil-converts run timeoutMs to Gateway timeout seconds", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       agent: { status: "accepted", runId: "run_timeout" },
     });
-    const oc = new OpenClaw({ transport });
 
     await oc.runs.create({
       input: "short run",
@@ -479,7 +461,7 @@ describe("OpenClaw SDK", () => {
   });
 
   it("calls artifact Gateway RPCs", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "artifacts.list": { artifacts: [{ id: "artifact_123", type: "image", title: "demo.png" }] },
       "artifacts.get": { artifact: { id: "artifact_123", type: "image", title: "demo.png" } },
       "artifacts.download": {
@@ -488,8 +470,6 @@ describe("OpenClaw SDK", () => {
         data: "aGVsbG8=",
       },
     });
-    const oc = new OpenClaw({ transport });
-
     const artifactList = await oc.artifacts.list({ sessionKey: "agent:main:main" });
     expect(artifactList.artifacts).toEqual([
       { id: "artifact_123", type: "image", title: "demo.png" },
@@ -527,8 +507,7 @@ describe("OpenClaw SDK", () => {
   });
 
   it("requires artifact query scope before calling Gateway", async () => {
-    const transport = new FakeTransport({});
-    const oc = new OpenClaw({ transport });
+    const { transport, oc } = createClientFixture();
 
     await expect(oc.artifacts.list(undefined as never)).rejects.toThrow(
       "oc.artifacts.list requires one of sessionKey, runId, or taskId",
@@ -543,10 +522,9 @@ describe("OpenClaw SDK", () => {
   });
 
   it("invokes tools through the Gateway tools.invoke method", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "tools.invoke": { ok: true, toolName: "demo", output: { value: 1 }, source: "core" },
     });
-    const oc = new OpenClaw({ transport });
 
     const result = await oc.tools.invoke("demo", {
       args: { mode: "test" },
@@ -574,7 +552,7 @@ describe("OpenClaw SDK", () => {
   });
 
   it("calls task ledger Gateway methods", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "tasks.list": {
         tasks: [
           {
@@ -583,6 +561,8 @@ describe("OpenClaw SDK", () => {
             title: "Investigate issue",
             runId: "run_123",
             sessionKey: "agent:main:main",
+            lastActivity: "Editing the registry",
+            diffStat: { files: 2, added: 12, removed: 3 },
           },
         ],
       },
@@ -591,6 +571,8 @@ describe("OpenClaw SDK", () => {
           id: "task_123",
           status: "running",
           title: "Investigate issue",
+          lastActivity: "Running focused tests",
+          diffStat: { files: 2, added: 12, removed: 3 },
         },
       },
       "tasks.cancel": {
@@ -602,8 +584,6 @@ describe("OpenClaw SDK", () => {
         },
       },
     });
-    const oc = new OpenClaw({ transport });
-
     const taskList = await oc.tasks.list({
       status: "running",
       agentId: "main",
@@ -616,6 +596,8 @@ describe("OpenClaw SDK", () => {
         title: "Investigate issue",
         runId: "run_123",
         sessionKey: "agent:main:main",
+        lastActivity: "Editing the registry",
+        diffStat: { files: 2, added: 12, removed: 3 },
       },
     ]);
     const taskGet = await oc.tasks.get("task_123");
@@ -623,6 +605,8 @@ describe("OpenClaw SDK", () => {
       id: "task_123",
       status: "running",
       title: "Investigate issue",
+      lastActivity: "Running focused tests",
+      diffStat: { files: 2, added: 12, removed: 3 },
     });
     const taskCancel = await oc.tasks.cancel("task_123", { reason: "user stopped task" });
     expect(taskCancel.found).toBe(true);
@@ -670,14 +654,12 @@ describe("OpenClaw SDK", () => {
         tunnelStatus: "stopped",
       },
     };
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "environments.list": { environments: [gatewayEnvironment] },
       "environments.status": gatewayEnvironment,
       "environments.create": workerEnvironment,
       "environments.destroy": { ...workerEnvironment, status: "unavailable" },
     });
-    const oc = new OpenClaw({ transport });
-
     await expect(oc.environments.list()).resolves.toEqual({
       environments: [gatewayEnvironment],
     });
@@ -709,17 +691,7 @@ describe("OpenClaw SDK", () => {
   });
 
   it("sends empty params for no-arg Gateway list helpers", async () => {
-    const transport = new FakeTransport({
-      "agents.list": { agents: [] },
-      "sessions.list": { sessions: [] },
-      "tasks.list": { tasks: [] },
-      "models.list": { models: [] },
-      "tools.catalog": { tools: [] },
-      "exec.approval.list": { approvals: [] },
-      "environments.list": { environments: [] },
-    });
-    const oc = new OpenClaw({ transport });
-
+    const { transport, oc } = createListFixture();
     await expect(oc.agents.list()).resolves.toEqual({ agents: [] });
     await expect(oc.sessions.list()).resolves.toEqual({ sessions: [] });
     await expect(oc.tasks.list()).resolves.toEqual({ tasks: [] });
@@ -741,17 +713,7 @@ describe("OpenClaw SDK", () => {
 
   it("preserves explicit null params for Gateway list validation", async () => {
     type ListMethod = (this: unknown, params: unknown) => Promise<unknown>;
-    const transport = new FakeTransport({
-      "agents.list": { agents: [] },
-      "sessions.list": { sessions: [] },
-      "tasks.list": { tasks: [] },
-      "models.list": { models: [] },
-      "tools.catalog": { tools: [] },
-      "exec.approval.list": { approvals: [] },
-      "environments.list": { environments: [] },
-    });
-    const oc = new OpenClaw({ transport });
-
+    const { transport, oc } = createListFixture();
     await (oc.agents.list as unknown as ListMethod).call(oc.agents, null);
     await (oc.sessions.list as unknown as ListMethod).call(oc.sessions, null);
     await (oc.tasks.list as unknown as ListMethod).call(oc.tasks, null);
@@ -773,10 +735,9 @@ describe("OpenClaw SDK", () => {
 
   it("rejects tools.effective without a session key before RPC", async () => {
     type EffectiveMethod = (this: unknown, params?: unknown) => Promise<unknown>;
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "tools.effective": { tools: [] },
     });
-    const oc = new OpenClaw({ transport });
 
     await expect((oc.tools.effective as unknown as EffectiveMethod).call(oc.tools)).rejects.toThrow(
       "oc.tools.effective requires sessionKey",
@@ -810,11 +771,10 @@ describe("OpenClaw SDK", () => {
   });
 
   it("calls exec approval Gateway RPCs with protocol params", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "exec.approval.list": { approvals: [] },
       "exec.approval.resolve": { ok: true },
     });
-    const oc = new OpenClaw({ transport });
 
     await expect(oc.approvals.list()).resolves.toEqual({ approvals: [] });
     const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
@@ -852,12 +812,11 @@ describe("OpenClaw SDK", () => {
   });
 
   it("cancels runs and checks model auth status through current Gateway methods", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       agent: { status: "accepted", runId: "run_without_session" },
       "sessions.abort": { ok: true, status: "aborted", abortedRunId: "run_without_session" },
       "models.authStatus": { providers: [] },
     });
-    const oc = new OpenClaw({ transport });
 
     const run = await oc.runs.create({
       input: "start",
@@ -879,41 +838,11 @@ describe("OpenClaw SDK", () => {
 
   it("replays fast run events emitted before the caller starts iterating", async () => {
     const ts = 1_777_000_000_000;
-    const transport = new FakeTransport({
-      agent: (
-        _params: unknown,
-        _options: GatewayRequestOptions | undefined,
-        fake: FakeTransport,
-      ) => {
-        fake.emit({
-          event: "agent",
-          seq: 1,
-          payload: { runId: "run_fast", stream: "lifecycle", ts, data: { phase: "start" } },
-        });
-        fake.emit({
-          event: "agent",
-          seq: 2,
-          payload: {
-            runId: "run_fast",
-            stream: "assistant",
-            ts: ts + 1,
-            data: { delta: "fast" },
-          },
-        });
-        fake.emit({
-          event: "agent",
-          seq: 3,
-          payload: {
-            runId: "run_fast",
-            stream: "lifecycle",
-            ts: ts + 2,
-            data: { phase: "end" },
-          },
-        });
-        return { status: "accepted", runId: "run_fast", sessionKey: "fast" };
-      },
-    });
-    const oc = new OpenClaw({ transport });
+    const { oc } = createRunEventFixture("run_fast", "fast", [
+      createAgentEvent("run_fast", 1, ts, "lifecycle", { phase: "start" }),
+      createAgentEvent("run_fast", 2, ts + 1, "assistant", { delta: "fast" }),
+      createAgentEvent("run_fast", 3, ts + 2, "lifecycle", { phase: "end" }),
+    ]);
 
     const run = await oc.runs.create({
       input: "finish immediately",
@@ -961,16 +890,9 @@ describe("OpenClaw SDK", () => {
 
   it("rejects run event streams after replaying events when the event pump fails", async () => {
     const failure = new Error("synthetic post-yield transport event failure");
-    const rawEvent: GatewayEvent = {
-      event: "agent",
-      seq: 1,
-      payload: {
-        runId: "run_pump_failure",
-        stream: "lifecycle",
-        ts: 1_777_000_000_050,
-        data: { phase: "start" },
-      },
-    };
+    const rawEvent = createAgentEvent("run_pump_failure", 1, 1_777_000_000_050, "lifecycle", {
+      phase: "start",
+    });
     const transport = new EventsOnlyTransport({
       async *[Symbol.asyncIterator]() {
         yield rawEvent;
@@ -1012,79 +934,15 @@ describe("OpenClaw SDK", () => {
 
   it("does not surface raw chat projection events in per-run streams", async () => {
     const ts = 1_777_000_000_100;
-    const transport = new FakeTransport({
-      agent: (
-        _params: unknown,
-        _options: GatewayRequestOptions | undefined,
-        fake: FakeTransport,
-      ) => {
-        fake.emit({
-          event: "agent",
-          seq: 1,
-          payload: {
-            runId: "run_chat_projection",
-            stream: "lifecycle",
-            ts,
-            data: { phase: "start" },
-          },
-        });
-        fake.emit({
-          event: "agent",
-          seq: 2,
-          payload: {
-            runId: "run_chat_projection",
-            stream: "assistant",
-            ts: ts + 1,
-            data: { delta: "hello" },
-          },
-        });
-        fake.emit({
-          event: "chat",
-          seq: 3,
-          payload: {
-            runId: "run_chat_projection",
-            sessionKey: "chat-projection",
-            state: "delta",
-            deltaText: "hello",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello" }],
-              timestamp: ts + 2,
-            },
-          },
-        });
-        fake.emit({
-          event: "agent",
-          seq: 4,
-          payload: {
-            runId: "run_chat_projection",
-            stream: "lifecycle",
-            ts: ts + 3,
-            data: { phase: "end" },
-          },
-        });
-        fake.emit({
-          event: "chat",
-          seq: 5,
-          payload: {
-            runId: "run_chat_projection",
-            sessionKey: "chat-projection",
-            state: "final",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello" }],
-              timestamp: ts + 4,
-            },
-          },
-        });
-        return {
-          status: "accepted",
-          runId: "run_chat_projection",
-          sessionKey: "chat-projection",
-        };
-      },
-    });
-    const oc = new OpenClaw({ transport });
+    const { oc } = createRunEventFixture("run_chat_projection", "chat-projection", [
+      createAgentEvent("run_chat_projection", 1, ts, "lifecycle", { phase: "start" }),
+      createAgentEvent("run_chat_projection", 2, ts + 1, "assistant", { delta: "hello" }),
+      createChatEvent("run_chat_projection", "chat-projection", 3, "delta", "hello", ts + 2, {
+        deltaText: "hello",
+      }),
+      createAgentEvent("run_chat_projection", 4, ts + 3, "lifecycle", { phase: "end" }),
+      createChatEvent("run_chat_projection", "chat-projection", 5, "final", "hello", ts + 4),
+    ]);
 
     const run = await oc.runs.create({
       input: "stream with chat projection",
@@ -1110,85 +968,24 @@ describe("OpenClaw SDK", () => {
 
   it("normalizes chat-only projection events in per-run streams", async () => {
     const ts = 1_777_000_000_200;
-    const transport = new FakeTransport({
-      agent: (
-        _params: unknown,
-        _options: GatewayRequestOptions | undefined,
-        fake: FakeTransport,
-      ) => {
-        fake.emit({
-          event: "chat",
-          seq: 1,
-          payload: {
-            runId: "run_chat_only",
-            sessionKey: "chat-only",
-            state: "delta",
-            deltaText: "hello",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello" }],
-              timestamp: ts,
-            },
-          },
-        });
-        fake.emit({
-          event: "chat",
-          seq: 2,
-          payload: {
-            runId: "run_chat_only",
-            sessionKey: "chat-only",
-            state: "delta",
-            deltaText: " again",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello again" }],
-              timestamp: ts + 1,
-            },
-          },
-        });
-        fake.emit({
-          event: "chat",
-          seq: 3,
-          payload: {
-            runId: "run_chat_only",
-            sessionKey: "chat-only",
-            state: "delta",
-            deltaText: "reset",
-            replace: true,
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "reset" }],
-              timestamp: ts + 2,
-            },
-          },
-        });
-        fake.emit({
-          event: "chat",
-          seq: 4,
-          payload: {
-            runId: "run_chat_only",
-            sessionKey: "chat-only",
-            state: "final",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "reset" }],
-              timestamp: ts + 3,
-            },
-          },
-        });
-        fake.emit({
-          event: "custom.debug",
-          seq: 5,
-          payload: {
-            runId: "run_chat_only",
-            ts: ts + 4,
-            data: { ok: true },
-          },
-        });
-        return { status: "accepted", runId: "run_chat_only", sessionKey: "chat-only" };
+    const { oc } = createRunEventFixture("run_chat_only", "chat-only", [
+      createChatEvent("run_chat_only", "chat-only", 1, "delta", "hello", ts, {
+        deltaText: "hello",
+      }),
+      createChatEvent("run_chat_only", "chat-only", 2, "delta", "hello again", ts + 1, {
+        deltaText: " again",
+      }),
+      createChatEvent("run_chat_only", "chat-only", 3, "delta", "reset", ts + 2, {
+        deltaText: "reset",
+        replace: true,
+      }),
+      createChatEvent("run_chat_only", "chat-only", 4, "final", "reset", ts + 3),
+      {
+        event: "custom.debug",
+        seq: 5,
+        payload: { runId: "run_chat_only", ts: ts + 4, data: { ok: true } },
       },
-    });
-    const oc = new OpenClaw({ transport });
+    ]);
 
     const run = await oc.runs.create({
       input: "stream with chat-only projection",
@@ -1240,46 +1037,14 @@ describe("OpenClaw SDK", () => {
 
   it("uses chat projection deltaText when present", async () => {
     const ts = 1_777_000_000_300;
-    const transport = new FakeTransport({
-      agent: (
-        _params: unknown,
-        _options: GatewayRequestOptions | undefined,
-        fake: FakeTransport,
-      ) => {
-        fake.emit({
-          event: "chat",
-          seq: 1,
-          payload: {
-            runId: "run_chat_delta_text",
-            sessionKey: "chat-delta-text",
-            state: "delta",
-            deltaText: "hello",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello" }],
-              timestamp: ts,
-            },
-          },
-        });
-        fake.emit({
-          event: "chat",
-          seq: 2,
-          payload: {
-            runId: "run_chat_delta_text",
-            sessionKey: "chat-delta-text",
-            state: "delta",
-            deltaText: " provided",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hello again" }],
-              timestamp: ts + 1,
-            },
-          },
-        });
-        return { status: "accepted", runId: "run_chat_delta_text", sessionKey: "chat-delta-text" };
-      },
-    });
-    const oc = new OpenClaw({ transport });
+    const { oc } = createRunEventFixture("run_chat_delta_text", "chat-delta-text", [
+      createChatEvent("run_chat_delta_text", "chat-delta-text", 1, "delta", "hello", ts, {
+        deltaText: "hello",
+      }),
+      createChatEvent("run_chat_delta_text", "chat-delta-text", 2, "delta", "hello again", ts + 1, {
+        deltaText: " provided",
+      }),
+    ]);
 
     const run = await oc.runs.create({
       input: "stream with chat deltaText",
@@ -1310,8 +1075,7 @@ describe("OpenClaw SDK", () => {
   });
 
   it("uses cumulative text for the first replayed chat projection", async () => {
-    const transport = new FakeTransport({});
-    const oc = new OpenClaw({ transport });
+    const { transport, oc } = createClientFixture();
     const runId = "run_chat_delta_text_replay";
     let text = "";
     let iterator: AsyncIterator<OpenClawEvent> | undefined;
@@ -1330,21 +1094,17 @@ describe("OpenClaw SDK", () => {
       for (let index = 0; index <= 500; index += 1) {
         const deltaText = index === 0 ? "hello" : ` ${index}`;
         text += deltaText;
-        transport.emit({
-          event: "chat",
-          seq: index + 1,
-          payload: {
+        transport.emit(
+          createChatEvent(
             runId,
-            sessionKey: "chat-delta-text-replay",
-            state: "delta",
-            deltaText,
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: 1_777_000_000_300 + index,
-            },
-          },
-        });
+            "chat-delta-text-replay",
+            index + 1,
+            "delta",
+            text,
+            1_777_000_000_300 + index,
+            { deltaText },
+          ),
+        );
       }
 
       await observedLast;
@@ -1364,12 +1124,11 @@ describe("OpenClaw SDK", () => {
   });
 
   it("creates a session and sends a message as a run", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "sessions.create": { key: "session-main", label: "Main" },
       "sessions.send": { status: "accepted", runId: "run_session" },
       "sessions.compact": { ok: true, compacted: true },
     });
-    const oc = new OpenClaw({ transport });
 
     const session = await oc.sessions.create({
       key: "session-main",
@@ -1415,11 +1174,10 @@ describe("OpenClaw SDK", () => {
   });
 
   it("keeps key-only Session.abort compatible by omitting clearQueued", async () => {
-    const transport = new FakeTransport({
+    const { transport, oc } = createClientFixture({
       "sessions.create": { key: "session-main", label: "Main" },
       "sessions.abort": { ok: true, abortedRunId: null, status: "no-active-run" },
     });
-    const oc = new OpenClaw({ transport });
 
     const session = await oc.sessions.create({ key: "session-main" });
     await session.abort();
@@ -1433,76 +1191,39 @@ describe("OpenClaw SDK", () => {
 
   it("normalizes Gateway agent stream events into SDK events", () => {
     const ts = 1_777_000_000_000;
+    const normalize = (seq: number, data: Record<string, unknown>, stream = "lifecycle") =>
+      normalizeGatewayEvent(createAgentEvent("run_1", seq, ts, stream, data));
 
-    const started = normalizeGatewayEvent({
-      event: "agent",
-      seq: 1,
-      payload: { runId: "run_1", stream: "lifecycle", ts, data: { phase: "start" } },
-    });
+    const started = normalize(1, { phase: "start" });
     expect(started.type).toBe("run.started");
     expect(started.runId).toBe("run_1");
     expect(started.data).toEqual({ phase: "start" });
 
-    const assistant = normalizeGatewayEvent({
-      event: "agent",
-      seq: 2,
-      payload: { runId: "run_1", stream: "assistant", ts, data: { delta: "hello" } },
-    });
+    const assistant = normalize(2, { delta: "hello" }, "assistant");
     expect(assistant.type).toBe("assistant.delta");
     expect(assistant.runId).toBe("run_1");
     expect(assistant.data).toEqual({ delta: "hello" });
 
-    const completed = normalizeGatewayEvent({
-      event: "agent",
-      seq: 3,
-      payload: { runId: "run_1", stream: "lifecycle", ts, data: { phase: "end" } },
-    });
+    const completed = normalize(3, { phase: "end" });
     expect(completed.type).toBe("run.completed");
     expect(completed.runId).toBe("run_1");
     expect(completed.data).toEqual({ phase: "end" });
 
-    const aborted = normalizeGatewayEvent({
-      event: "agent",
-      seq: 4,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: { phase: "end", aborted: true },
-      },
-    });
+    const aborted = normalize(4, { phase: "end", aborted: true });
     expect(aborted.type).toBe("run.timed_out");
     expect(aborted.runId).toBe("run_1");
     expect(aborted.data).toEqual({ phase: "end", aborted: true });
 
-    const cancelled = normalizeGatewayEvent({
-      event: "agent",
-      seq: 5,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: { phase: "end", aborted: true, stopReason: "rpc" },
-      },
-    });
+    const cancelled = normalize(5, { phase: "end", aborted: true, stopReason: "rpc" });
     expect(cancelled.type).toBe("run.cancelled");
     expect(cancelled.runId).toBe("run_1");
     expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
 
-    const restartCancelled = normalizeGatewayEvent({
-      event: "agent",
-      seq: 6,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "end",
-          aborted: true,
-          stopReason: "restart",
-          providerStarted: true,
-        },
-      },
+    const restartCancelled = normalize(6, {
+      phase: "end",
+      aborted: true,
+      stopReason: "restart",
+      providerStarted: true,
     });
     expect(restartCancelled.type).toBe("run.cancelled");
     expect(restartCancelled.runId).toBe("run_1");
@@ -1513,20 +1234,11 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const restartErrorCancelled = normalizeGatewayEvent({
-      event: "agent",
-      seq: 7,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "error",
-          aborted: true,
-          stopReason: "restart",
-          error: "agent run aborted for restart",
-        },
-      },
+    const restartErrorCancelled = normalize(7, {
+      phase: "error",
+      aborted: true,
+      stopReason: "restart",
+      error: "agent run aborted for restart",
     });
     expect(restartErrorCancelled.type).toBe("run.cancelled");
     expect(restartErrorCancelled.runId).toBe("run_1");
@@ -1537,21 +1249,12 @@ describe("OpenClaw SDK", () => {
       error: "agent run aborted for restart",
     });
 
-    const hardTimeout = normalizeGatewayEvent({
-      event: "agent",
-      seq: 8,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "end",
-          aborted: true,
-          stopReason: "rpc",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-      },
+    const hardTimeout = normalize(8, {
+      phase: "end",
+      aborted: true,
+      stopReason: "rpc",
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
     expect(hardTimeout.type).toBe("run.timed_out");
     expect(hardTimeout.runId).toBe("run_1");
@@ -1563,20 +1266,11 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const hardTimeoutError = normalizeGatewayEvent({
-      event: "agent",
-      seq: 9,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "error",
-          error: "provider request timed out",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-      },
+    const hardTimeoutError = normalize(9, {
+      phase: "error",
+      error: "provider request timed out",
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
     expect(hardTimeoutError.type).toBe("run.timed_out");
     expect(hardTimeoutError.runId).toBe("run_1");
@@ -1587,19 +1281,10 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const providerStartedError = normalizeGatewayEvent({
-      event: "agent",
-      seq: 10,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "error",
-          error: "provider authentication failed",
-          providerStarted: true,
-        },
-      },
+    const providerStartedError = normalize(10, {
+      phase: "error",
+      error: "provider authentication failed",
+      providerStarted: true,
     });
     expect(providerStartedError.type).toBe("run.failed");
     expect(providerStartedError.runId).toBe("run_1");
@@ -1609,19 +1294,10 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const hardTimeoutEnd = normalizeGatewayEvent({
-      event: "agent",
-      seq: 11,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "end",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
-      },
+    const hardTimeoutEnd = normalize(11, {
+      phase: "end",
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
     expect(hardTimeoutEnd.type).toBe("run.timed_out");
     expect(hardTimeoutEnd.runId).toBe("run_1");
@@ -1631,18 +1307,9 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const providerStartedEnd = normalizeGatewayEvent({
-      event: "agent",
-      seq: 12,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: {
-          phase: "end",
-          providerStarted: true,
-        },
-      },
+    const providerStartedEnd = normalize(12, {
+      phase: "end",
+      providerStarted: true,
     });
     expect(providerStartedEnd.type).toBe("run.completed");
     expect(providerStartedEnd.runId).toBe("run_1");
@@ -1651,16 +1318,7 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const authRevoked = normalizeGatewayEvent({
-      event: "agent",
-      seq: 13,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: { phase: "end", aborted: true, stopReason: "auth-revoked" },
-      },
-    });
+    const authRevoked = normalize(13, { phase: "end", aborted: true, stopReason: "auth-revoked" });
     expect(authRevoked.type).toBe("run.cancelled");
     expect(authRevoked.runId).toBe("run_1");
     expect(authRevoked.data).toEqual({
@@ -1669,16 +1327,7 @@ describe("OpenClaw SDK", () => {
       stopReason: "auth-revoked",
     });
 
-    const timedOut = normalizeGatewayEvent({
-      event: "agent",
-      seq: 14,
-      payload: {
-        runId: "run_1",
-        stream: "lifecycle",
-        ts,
-        data: { phase: "end", stopReason: "timeout" },
-      },
-    });
+    const timedOut = normalize(14, { phase: "end", stopReason: "timeout" });
     expect(timedOut.type).toBe("run.timed_out");
     expect(timedOut.runId).toBe("run_1");
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });

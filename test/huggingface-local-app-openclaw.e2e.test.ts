@@ -165,13 +165,18 @@ async function startFakeOpenAiServer(params: { modelId: string }): Promise<FakeO
   });
   const address = server.address();
   if (!address || typeof address === "string") {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
     throw new Error("fake OpenAI server did not bind a TCP port");
   }
   return {
     baseUrl: `http://127.0.0.1:${(address as AddressInfo).port}/v1`,
     requests,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
   };
 }
 

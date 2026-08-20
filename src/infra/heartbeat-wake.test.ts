@@ -7,7 +7,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-  HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
@@ -359,11 +358,11 @@ describe("heartbeat-wake", () => {
 
     requestHeartbeat({ ...request, coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(handler).toHaveBeenCalledTimes(2);
     expect(handler).toHaveBeenNthCalledWith(1, request);
-    expect(handler).toHaveBeenNthCalledWith(2, request);
+    expect(handler).toHaveBeenNthCalledWith(2, { ...request, retainedWork: true });
   });
 
   it("runs equal-period tasks at staggered anchors by retaining the spaced task", async () => {
@@ -639,20 +638,7 @@ describe("heartbeat-wake", () => {
     });
   });
 
-  it("retries requests-in-flight after the default retry delay", async () => {
-    vi.useFakeTimers();
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    await expectRetryAfterDefaultDelay({
-      handler,
-      initialReason: "interval",
-      expectedRetryReason: "interval",
-    });
-  });
-
-  it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS, HEARTBEAT_SKIP_LANES_BUSY])(
+  it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS])(
     "retries %s after the default retry delay",
     async (reason) => {
       vi.useFakeTimers();
@@ -668,22 +654,26 @@ describe("heartbeat-wake", () => {
     },
   );
 
-  it("keeps retry cooldown even when a sooner request arrives", async () => {
+  it("lets a fresh event run while a scheduled retry observes idle grace", async () => {
     vi.useFakeTimers();
-    const handler = setRetryOnceHeartbeatHandler();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
 
     requestHeartbeat(wake("interval", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(1);
 
-    // Retry is now waiting for 1000ms. This should not preempt cooldown.
     requestHeartbeat(wake("hook:wake", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(998);
-    expect(handler).toHaveBeenCalledTimes(1);
-
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(2);
     expectWakeCall(handler, 1, wake("hook:wake"));
+
+    await vi.advanceTimersByTimeAsync(59_998);
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(handler.mock.calls[2]?.[0]).toEqual({ ...wake("interval"), retainedWork: true });
   });
 
   it("retries thrown handler errors after the default retry delay", async () => {
@@ -844,7 +834,7 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
   });
 
-  it("resets running/scheduled flags when new handler is registered", async () => {
+  it("recovers interrupted wakes when a replacement handler is registered", async () => {
     vi.useFakeTimers();
 
     // Simulate a handler that's mid-execution when SIGUSR1 fires.
@@ -868,14 +858,15 @@ describe("heartbeat-wake", () => {
     const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
 
-    // handlerB should be able to fire (running was reset)
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    // The replacement must handle both the interrupted global barrier and fresh
+    // targeted work. The recovered barrier runs first so the two cannot overlap.
+    requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
-    expect(handlerB).toHaveBeenCalledTimes(1);
+    expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
 
     // Clean up the hanging promise
     resolveHang!();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
   });
 
   it("does not let a stale heartbeat lifecycle release a newer active wake", async () => {
@@ -926,7 +917,7 @@ describe("heartbeat-wake", () => {
   });
 
   it.each([
-    { outcome: "completed", expectedReasons: ["cron:job-b"] },
+    { outcome: "completed", expectedReasons: ["cron:job-a", "cron:job-b"] },
     { outcome: "thrown", expectedReasons: ["cron:job-a", "cron:job-b"] },
     { outcome: "busy", expectedReasons: ["cron:job-a", "cron:job-b"] },
     { outcome: "guarded", expectedReasons: ["cron:job-a", "cron:job-b"] },
@@ -960,10 +951,10 @@ describe("heartbeat-wake", () => {
       for (const target of ["a", "b"]) {
         requestHeartbeat({
           source: "cron",
-          intent: "event",
+          intent: target === "a" ? "task" : "event",
           reason: `cron:job-${target}`,
-          agentId: `agent-${target}`,
-          sessionKey: `agent:agent-${target}:main`,
+          agentId: "main",
+          sessionKey: "agent:main:main",
           coalesceMs: 100,
         });
       }

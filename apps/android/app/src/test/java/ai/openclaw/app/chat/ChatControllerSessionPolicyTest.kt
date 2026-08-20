@@ -7,6 +7,22 @@ import org.junit.Test
 
 class ChatControllerSessionPolicyTest {
   @Test
+  fun sessionMergeRetainsTheLatestObservedDurableIdentity() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        sessionId = "session-a",
+      )
+
+    val retained = mergeChatSessionEntry(existing, existing.copy(updatedAtMs = 2L, sessionId = null))
+    val replaced = mergeChatSessionEntry(retained, existing.copy(updatedAtMs = 3L, sessionId = "session-b"))
+
+    assertEquals("session-a", retained.sessionId)
+    assertEquals("session-b", replaced.sessionId)
+  }
+
+  @Test
   fun applyMainSessionKeyMovesCurrentSessionWhenStillOnDefault() {
     val state =
       applyMainSessionKey(
@@ -181,6 +197,45 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
+  fun sessionMergeRetainsOrReplacesClassificationMetadataAsOneSnapshot() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:telegram:main:direct:491234567890",
+        updatedAtMs = 1L,
+        classification = "direct",
+        accountId = "main",
+        peerKind = "direct",
+        isMain = false,
+        isBackground = false,
+      )
+
+    val retained = mergeChatSessionEntry(existing, ChatSessionEntry(key = existing.key, updatedAtMs = 2L))
+    assertEquals("direct", retained.classification)
+    assertEquals("main", retained.accountId)
+    assertEquals("direct", retained.peerKind)
+    assertEquals(false, retained.isMain)
+    assertEquals(false, retained.isBackground)
+
+    val replaced =
+      mergeChatSessionEntry(
+        existing,
+        ChatSessionEntry(
+          key = existing.key,
+          updatedAtMs = 3L,
+          classification = "subagent",
+          isMain = false,
+          isBackground = true,
+          hasClassificationMetadata = true,
+        ),
+      )
+    assertEquals("subagent", replaced.classification)
+    assertEquals(null, replaced.accountId)
+    assertEquals(null, replaced.peerKind)
+    assertEquals(false, replaced.isMain)
+    assertEquals(true, replaced.isBackground)
+  }
+
+  @Test
   fun sessionMergeReplacesRunMetadataAsOneSnapshot() {
     val existing =
       ChatSessionEntry(
@@ -208,5 +263,44 @@ class ChatControllerSessionPolicyTest {
     assertEquals(null, merged.endedAt)
     assertEquals(null, merged.runtimeMs)
     assertEquals(null, merged.outputTokens)
+  }
+
+  @Test
+  fun activeRunSelectionPrefersAdvertisedOverlapThenDeterministicLocalThenAdvertised() {
+    assertEquals(
+      "local-b",
+      resolvePreferredActiveRunId(
+        localRunIds = listOf("local-a", "local-b"),
+        advertisedRunIds = listOf("server", "local-b", "local-a"),
+      ),
+    )
+    assertEquals(
+      "local-a",
+      resolvePreferredActiveRunId(
+        localRunIds = listOf("local-b", "local-a"),
+        advertisedRunIds = listOf("server"),
+      ),
+    )
+    assertEquals("server", resolvePreferredActiveRunId(emptyList(), listOf("server", "later")))
+  }
+
+  @Test
+  fun activeRunCountIncludesBooleanFallbackWithoutAnId() {
+    assertEquals(
+      1,
+      resolveSelectedActiveRunCount(
+        localRunIds = emptyList(),
+        advertisedRunIds = emptyList(),
+        hasAdvertisedRun = true,
+      ),
+    )
+    assertEquals(
+      3,
+      resolveSelectedActiveRunCount(
+        localRunIds = listOf("local", "overlap"),
+        advertisedRunIds = listOf("overlap", "server"),
+        hasAdvertisedRun = true,
+      ),
+    )
   }
 }

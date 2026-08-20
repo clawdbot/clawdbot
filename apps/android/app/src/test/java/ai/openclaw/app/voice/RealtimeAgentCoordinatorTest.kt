@@ -17,47 +17,26 @@ import org.robolectric.RobolectricTestRunner
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class RealtimeAgentCoordinatorTest {
+  private lateinit var calls: MutableList<GatewayCall>
+
   @Test
   fun `consult correlates the active run and submits its final text`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val working = mutableListOf<RealtimeAgentSession>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") """{"runId":"run-1"}""" else "{}" },
           onWorking = working::add,
         )
       val session = RealtimeAgentSession("relay-1", "session-1")
       coordinator.beginSession(session)
 
-      assertTrue(
-        coordinator.handleToolCall(
-          callId = "call-1",
-          name = "openclaw_agent_consult",
-          args = null,
-          forced = false,
-        ),
-      )
+      assertTrue(coordinator.consult("call-1"))
       runCurrent()
 
       assertEquals(listOf(session), working)
-      assertFalse(
-        coordinator.handleChatEvent(
-          sessionKey = "other-session",
-          runId = "run-1",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"wrong"}"""),
-        ),
-      )
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-1",
-          runId = "run-1",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"done"}"""),
-        ),
-      )
+      assertFalse(coordinator.complete("other-session", "run-1", "wrong"))
+      assertTrue(coordinator.complete("session-1", "run-1", "done"))
       runCurrent()
 
       val consult = calls.single { it.method == "talk.client.toolCall" }
@@ -72,25 +51,16 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `early completion waits for run metadata`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val response = CompletableDeferred<String>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
         )
       coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
-      coordinator.handleToolCall("call-1", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-1")
       runCurrent()
 
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-1",
-          runId = "run-early",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"early"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-1", "run-early", "early"))
       response.complete("""{"runId":"run-early"}""")
       runCurrent()
 
@@ -105,10 +75,8 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `validates tool names and dispatches control without a consult`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method ->
             when (method) {
               "talk.session.steer" -> """{"status":"steered"}"""
@@ -143,11 +111,9 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `forced consult reports working then returns gateway errors`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val errors = mutableListOf<String>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method ->
             if (method == "talk.client.toolCall") error("gateway offline") else "{}"
           },
@@ -155,12 +121,7 @@ class RealtimeAgentCoordinatorTest {
         )
       coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
 
-      coordinator.handleToolCall(
-        callId = "call-1",
-        name = "openclaw_agent_consult",
-        args = null,
-        forced = true,
-      )
+      coordinator.consult("call-1", forced = true)
       runCurrent()
 
       val results = calls.filter { it.method == "talk.session.submitToolResult" }
@@ -174,13 +135,11 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `session replacement quarantines the old run while a call id is reused`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val oldResponse = CompletableDeferred<String>()
       val newResponse = CompletableDeferred<String>()
       var requestCount = 0
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method ->
             if (method != "talk.client.toolCall") {
               "{}"
@@ -192,21 +151,14 @@ class RealtimeAgentCoordinatorTest {
           },
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-shared", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-shared")
       runCurrent()
 
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-main"))
-      coordinator.handleToolCall("call-shared", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-shared")
       runCurrent()
 
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "run-new",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"fresh"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "run-new", "fresh"))
       newResponse.complete("""{"runId":"run-new"}""")
       runCurrent()
 
@@ -216,41 +168,25 @@ class RealtimeAgentCoordinatorTest {
 
       oldResponse.complete("""{"runId":"run-old"}""")
       runCurrent()
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "run-old",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"stale"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "run-old", "stale"))
       assertEquals(1, calls.count { it.method == "talk.session.submitToolResult" })
     }
 
   @Test
   fun `transport reset cancels an old consult before a new gateway session`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val oldResponse = CompletableDeferred<String>()
       val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") oldResponse.await() else "{}" },
           onUnhandledCompletion = unhandled::add,
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
-      coordinator.handleToolCall("call-old-2", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
+      coordinator.consult("call-old-2")
       runCurrent()
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "cached-old-run",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"stale cached"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "cached-old-run", "stale cached"))
 
       coordinator.resetTransport()
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-main"))
@@ -259,42 +195,26 @@ class RealtimeAgentCoordinatorTest {
 
       assertTrue(calls.none { it.method == "talk.session.submitToolResult" })
       assertTrue(unhandled.isEmpty())
-      assertFalse(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "run-old",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"stale"}"""),
-        ),
-      )
+      assertFalse(coordinator.complete("session-main", "run-old", "stale"))
     }
 
   @Test
   fun `transport reset rejects a reused retired run id without stranding the call`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") """{"runId":"shared-run"}""" else "{}" },
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
       runCurrent()
 
       coordinator.resetTransport()
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-main"))
-      coordinator.handleToolCall("call-new", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-new")
       runCurrent()
 
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "shared-run",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"late"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "shared-run", "late"))
       runCurrent()
 
       val result = calls.single { it.method == "talk.session.submitToolResult" }
@@ -306,27 +226,18 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `old session request does not buffer a new session completion`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val oldResponse = CompletableDeferred<String>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") oldResponse.await() else "{}" },
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-old"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
       runCurrent()
 
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-new"))
 
-      assertFalse(
-        coordinator.handleChatEvent(
-          sessionKey = "session-new",
-          runId = "ordinary-run",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"ordinary"}"""),
-        ),
-      )
+      assertFalse(coordinator.complete("session-new", "ordinary-run", "ordinary"))
       oldResponse.complete("""{"runId":"run-old"}""")
       runCurrent()
       assertTrue(calls.none { it.method == "talk.session.submitToolResult" })
@@ -335,26 +246,17 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `session replacement consumes a known old run with the same session key`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") """{"runId":"run-old"}""" else "{}" },
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
       runCurrent()
 
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-main"))
 
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "run-old",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"stale"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "run-old", "stale"))
       runCurrent()
 
       assertTrue(calls.none { it.method == "talk.session.submitToolResult" })
@@ -363,26 +265,17 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `session end retains unresolved correlation and quarantines its final`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val response = CompletableDeferred<String>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
       runCurrent()
 
       coordinator.endSession("relay-old")
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "run-old",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"stale"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "run-old", "stale"))
       response.complete("""{"runId":"run-old"}""")
       runCurrent()
 
@@ -392,17 +285,15 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `session end suppresses a late gateway failure`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val response = CompletableDeferred<String>()
       val errors = mutableListOf<String>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
           onError = errors::add,
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
       runCurrent()
 
       coordinator.endSession("relay-old")
@@ -416,26 +307,17 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `session cleanup releases uncertain early completions`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val response = CompletableDeferred<String>()
       val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
           onUnhandledCompletion = unhandled::add,
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-main"))
-      coordinator.handleToolCall("call-old", "openclaw_agent_consult", null, forced = false)
+      coordinator.consult("call-old")
       runCurrent()
-      assertTrue(
-        coordinator.handleChatEvent(
-          sessionKey = "session-main",
-          runId = "uncertain-run",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"ordinary"}"""),
-        ),
-      )
+      assertTrue(coordinator.complete("session-main", "uncertain-run", "ordinary"))
 
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-main"))
       response.complete("""{"runId":"old-tool-run"}""")
@@ -449,13 +331,11 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `early completion overflow fails pending calls instead of stranding them`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
       val responses = List(3) { CompletableDeferred<String>() }
       var responseIndex = 0
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method ->
             if (method == "talk.client.toolCall") responses[responseIndex++].await() else "{}"
           },
@@ -464,16 +344,11 @@ class RealtimeAgentCoordinatorTest {
         )
       coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
       repeat(3) { index ->
-        coordinator.handleToolCall("call-${index + 1}", "openclaw_agent_consult", null, forced = false)
+        coordinator.consult("call-${index + 1}")
       }
       runCurrent()
       repeat(3) { index ->
-        coordinator.handleChatEvent(
-          sessionKey = "session-1",
-          runId = "run-${index + 1}",
-          state = "final",
-          message = Json.parseToJsonElement("""{"role":"assistant","content":"result-${index + 1}"}"""),
-        )
+        coordinator.complete("session-1", "run-${index + 1}", "result-${index + 1}")
       }
       runCurrent()
       responses.take(2).forEachIndexed { index, response -> response.complete("""{"runId":"run-${index + 1}"}""") }
@@ -496,11 +371,9 @@ class RealtimeAgentCoordinatorTest {
   @Test
   fun `registered runs count against the concurrent call limit`() =
     runTest {
-      val calls = mutableListOf<GatewayCall>()
       var runIndex = 0
       val coordinator =
         coordinator(
-          calls = calls,
           responses = { method ->
             if (method == "talk.client.toolCall") """{"runId":"run-${++runIndex}"}""" else "{}"
           },
@@ -509,7 +382,7 @@ class RealtimeAgentCoordinatorTest {
       coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
 
       repeat(3) { index ->
-        coordinator.handleToolCall("call-${index + 1}", "openclaw_agent_consult", null, forced = false)
+        coordinator.consult("call-${index + 1}")
         runCurrent()
       }
 
@@ -520,23 +393,36 @@ class RealtimeAgentCoordinatorTest {
     }
 
   private fun kotlinx.coroutines.test.TestScope.coordinator(
-    calls: MutableList<GatewayCall>,
     responses: suspend (String) -> String,
     onWorking: (RealtimeAgentSession) -> Unit = {},
     onError: (String) -> Unit = {},
     onUnhandledCompletion: (RealtimeAgentUnhandledCompletion) -> Unit = {},
     maxCachedCompletions: Int = 128,
-  ) = RealtimeAgentCoordinator(
-    parentScope = backgroundScope,
-    requestGateway = { method, params, timeoutMs ->
-      calls += GatewayCall(method, params.orEmpty(), timeoutMs)
-      responses(method)
-    },
-    onWorking = onWorking,
-    onError = { _, message -> onError(message) },
-    onUnhandledCompletion = onUnhandledCompletion,
-    maxCachedCompletions = maxCachedCompletions,
-  )
+  ): RealtimeAgentCoordinator {
+    calls = mutableListOf()
+    return RealtimeAgentCoordinator(
+      parentScope = backgroundScope,
+      requestGateway = { method, params, timeoutMs ->
+        calls += GatewayCall(method, params.orEmpty(), timeoutMs)
+        responses(method)
+      },
+      onWorking = onWorking,
+      onError = { _, message -> onError(message) },
+      onUnhandledCompletion = onUnhandledCompletion,
+      maxCachedCompletions = maxCachedCompletions,
+    )
+  }
+
+  private fun RealtimeAgentCoordinator.consult(
+    callId: String,
+    forced: Boolean = false,
+  ): Boolean = handleToolCall(callId, "openclaw_agent_consult", null, forced)
+
+  private fun RealtimeAgentCoordinator.complete(
+    sessionKey: String,
+    runId: String,
+    text: String,
+  ): Boolean = handleChatEvent(sessionKey, runId, "final", Json.parseToJsonElement("""{"role":"assistant","content":"$text"}"""))
 
   private data class GatewayCall(
     val method: String,

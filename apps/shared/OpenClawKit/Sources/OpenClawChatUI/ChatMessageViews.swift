@@ -2,6 +2,91 @@ import Foundation
 import OpenClawKit
 import SwiftUI
 
+struct ChatSystemNoticeRow: View {
+    let notice: ChatTranscriptRow.SystemNotice
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ChatSystemLine(
+                systemImage: self.notice.systemImage,
+                label: self.notice.label,
+                metric: nil)
+            Text(self.notice.body)
+                .font(OpenClawChatTypography.footnote)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "\(self.notice.label), \(self.notice.body)"))
+    }
+}
+
+struct ChatHistoryDividerRow: View {
+    let divider: ChatTranscriptRow.HistoryDivider
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ChatSystemLine(
+                systemImage: self.divider.systemImage,
+                label: self.divider.label,
+                metric: self.divider.metric)
+            if let description = self.divider.description {
+                Text(description)
+                    .font(OpenClawChatTypography.caption)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        [self.divider.label, self.divider.metric, self.divider.description]
+            .compactMap(\.self)
+            .joined(separator: ", ")
+    }
+}
+
+private struct ChatSystemLine: View {
+    let systemImage: String
+    let label: String
+    let metric: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(OpenClawChatTheme.divider)
+                .frame(height: 1)
+            HStack(spacing: 5) {
+                Image(systemName: self.systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityHidden(true)
+                Text(self.label.uppercased())
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tracking(0.5)
+                if let metric {
+                    Text("·")
+                        .font(OpenClawChatTypography.caption)
+                        .accessibilityHidden(true)
+                    Text(metric)
+                        .font(OpenClawChatTypography.caption)
+                        .monospacedDigit()
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            Rectangle()
+                .fill(OpenClawChatTheme.divider)
+                .frame(height: 1)
+        }
+    }
+}
+
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
     static let bubbleCorner: CGFloat = 18
@@ -219,8 +304,12 @@ struct ChatMessageBubble: View {
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-    let imageArtifactResolverReady: Bool
-    let loadImageArtifact: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
+    let mediaArtifactResolverReady: Bool
+    let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+    let loadMediaArtifact: @MainActor @Sendable (
+        String,
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         if self.isUser {
@@ -264,8 +353,9 @@ struct ChatMessageBubble: View {
             onToggleUserMessageExpanded: self.onToggleUserMessageExpanded,
             inlineWidgetResolverReady: self.inlineWidgetResolverReady,
             inlineWidgetResourceResolver: self.inlineWidgetResourceResolver,
-            imageArtifactResolverReady: self.imageArtifactResolverReady,
-            loadImageArtifact: self.loadImageArtifact)
+            mediaArtifactResolverReady: self.mediaArtifactResolverReady,
+            mediaPlaybackAllowed: self.mediaPlaybackAllowed,
+            loadMediaArtifact: self.loadMediaArtifact)
     }
 }
 
@@ -318,8 +408,12 @@ private struct ChatMessageBody: View {
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-    let imageArtifactResolverReady: Bool
-    let loadImageArtifact: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
+    let mediaArtifactResolverReady: Bool
+    let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+    let loadMediaArtifact: @MainActor @Sendable (
+        String,
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         let text = self.primaryText
@@ -381,8 +475,9 @@ private struct ChatMessageBody: View {
                     AttachmentRow(
                         att: self.visibleInlineAttachments[idx],
                         isUser: self.isUser,
-                        resolverReady: self.imageArtifactResolverReady,
-                        loadImage: self.loadImageArtifact)
+                        resolverReady: self.mediaArtifactResolverReady,
+                        playbackAllowed: self.mediaPlaybackAllowed,
+                        loadMedia: self.loadMediaArtifact)
                 }
             }
 
@@ -493,7 +588,8 @@ private struct ChatMessageBody: View {
                 details: self.message.details,
                 resultText: self.primaryText,
                 isError: self.message.isError ?? false,
-                isPending: false)]
+                isPending: false,
+                liveDiffStat: nil)]
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
         return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults)
@@ -505,16 +601,9 @@ private struct ChatMessageBody: View {
     }
 
     private var primaryText: String {
-        let parts = self.message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind == "text" || kind.isEmpty else { return nil }
-            return content.text
-        }
-        return OpenClawChatMessage.displayText(
-            contentText: parts.joined(separator: "\n"),
-            role: self.message.role,
-            stopReason: self.message.stopReason,
-            errorMessage: self.message.errorMessage)
+        ChatMessageVisibleText.displayText(
+            in: self.message,
+            includeThinking: self.displayOptions.contains(.reasoning))
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
@@ -524,14 +613,14 @@ private struct ChatMessageBody: View {
     private var visibleInlineAttachments: [OpenClawChatMessageContent] {
         var imageCount = 0
         return self.inlineAttachments.filter { attachment in
-            guard attachment.isImageAttachment else { return true }
+            guard attachment.mediaKind == .image else { return true }
             defer { imageCount += 1 }
             return imageCount < 4
         }
     }
 
     private var omittedImageAttachmentCount: Int {
-        max(0, self.inlineAttachments.filter(\.isImageAttachment).count - 4)
+        max(0, self.inlineAttachments.filter { $0.mediaKind == .image }.count - 4)
     }
 
     private var inlineWidgets: [OpenClawChatCanvasPreview] {
@@ -652,15 +741,41 @@ private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
     let resolverReady: Bool
-    let loadImage: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
+    let playbackAllowed: @MainActor @Sendable () -> Bool
+    let loadMedia: @MainActor @Sendable (
+        String,
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
-        if self.att.isImageAttachment, let artifactId = self.normalizedArtifactId {
-            ChatMediaImageAttachment(
-                artifactId: artifactId,
-                label: self.attachmentLabel,
-                resolverReady: self.resolverReady,
-                load: self.loadImage)
+        if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
+            switch kind {
+            case .image:
+                ChatMediaImageAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    resolverReady: self.resolverReady,
+                    load: { try await self.loadMedia($0, .image, nil) })
+            case .audio:
+                ChatMediaAudioAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    durationSeconds: self.att.durationSeconds,
+                    playback: self.att.playback,
+                    resolverReady: self.resolverReady,
+                    playbackAllowed: self.playbackAllowed,
+                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
+            case .video:
+                ChatMediaVideoAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    width: self.att.width,
+                    height: self.att.height,
+                    playback: self.att.playback,
+                    resolverReady: self.resolverReady,
+                    playbackAllowed: self.playbackAllowed,
+                    load: { try await self.loadMedia($0, .video, self.att.playback) })
+            }
         } else {
             self.fallbackRow
         }
@@ -668,7 +783,7 @@ private struct AttachmentRow: View {
 
     private var fallbackRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: self.isAudio ? "waveform" : "paperclip")
+            Image(systemName: self.fallbackIcon)
             Text(self.isAudio ? "Voice note" : self.attachmentLabel)
                 .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
@@ -689,12 +804,21 @@ private struct AttachmentRow: View {
     }
 
     private var isAudio: Bool {
-        self.att.mimeType?.hasPrefix("audio/") == true
+        self.att.mediaKind == .audio
     }
 
-    private var normalizedArtifactId: String? {
+    private var fetchableArtifactId: String? {
+        guard let kind = self.att.mediaKind else { return nil }
         let value = self.att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : value
+        return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
+    }
+
+    private var fallbackIcon: String {
+        switch self.att.mediaKind {
+        case .audio: "waveform"
+        case .video: "video"
+        default: "paperclip"
+        }
     }
 
     private var attachmentLabel: String {
@@ -702,14 +826,6 @@ private struct AttachmentRow: View {
         return values.lazy
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? String(localized: "Attachment")
-    }
-}
-
-extension OpenClawChatMessageContent {
-    fileprivate var isImageAttachment: Bool {
-        self.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "image" ||
-            self.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            .hasPrefix("image/") == true
     }
 }
 
@@ -722,6 +838,7 @@ struct ChatTypingIndicatorBubble: View {
     let showsAssistantAvatar: Bool
     let isClean: Bool
     let runIdentity: String
+    let outputTokens: Int?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -734,7 +851,9 @@ struct ChatTypingIndicatorBubble: View {
             }
 
             HStack(spacing: 9) {
-                ChatWorkingIndicatorContent(runIdentity: self.runIdentity)
+                ChatWorkingIndicatorContent(
+                    runIdentity: self.runIdentity,
+                    outputTokens: self.outputTokens)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -754,16 +873,21 @@ struct ChatTypingIndicatorBubble: View {
 private struct ChatWorkingIndicatorContent: View {
     @State private var startedAt: Date
     let seed: String
+    let outputTokens: Int?
 
-    init(runIdentity: String) {
+    init(runIdentity: String, outputTokens: Int?) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
+        self.outputTokens = outputTokens
     }
 
     var body: some View {
         HStack(spacing: 9) {
             ChatWorkingClawView(seed: self.seed)
-            ChatWorkingStatusText(startedAt: self.startedAt, seed: self.seed)
+            ChatWorkingStatusText(
+                startedAt: self.startedAt,
+                seed: self.seed,
+                outputTokens: self.outputTokens)
         }
     }
 }
@@ -868,7 +992,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
-            lhs.runIdentity == rhs.runIdentity
+            lhs.runIdentity == rhs.runIdentity &&
+            lhs.outputTokens == rhs.outputTokens
     }
 }
 
@@ -973,7 +1098,8 @@ struct ChatPendingToolsBubble: View {
                 details: nil,
                 resultText: nil,
                 isError: false,
-                isPending: true)
+                isPending: true,
+                liveDiffStat: call.diffStat)
         }
     }
 }

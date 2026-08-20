@@ -5,6 +5,7 @@
  */
 import type { ModelCatalogStatus } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 
 /** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
@@ -23,6 +24,10 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
+  /** Config-authored reasoning override; internal provenance, never project to clients. */
+  configuredReasoning?: boolean;
+  /** Concrete runtime owner of thinking policy; internal and never project to clients. */
+  thinkingPolicyProvider?: string;
   input?: ModelInputType[];
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
@@ -37,6 +42,8 @@ export type ModelCatalogEntry = {
 export type ModelCatalogSnapshot = {
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
+  /** Provider-owned outcome of each live catalog request in this generation. */
+  providerOutcomes?: readonly ProviderCatalogOutcome[];
   /** Static provider-hook rows captured alongside the full lifecycle generation. */
   staticEntries?: ModelCatalogEntry[];
   /**

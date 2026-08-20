@@ -39,6 +39,20 @@ type QaChannelPayloadSendContext = Pick<
   | "mediaReadFile"
 >;
 
+function createQaChannelMessageReceipt(
+  ctx: Pick<QaChannelPayloadSendContext, "replyToId" | "threadId" | "to">,
+  messageId: string,
+  kind: "media" | "text",
+) {
+  const { threadId } = resolveQaTargetThread({ target: ctx.to, threadId: ctx.threadId });
+  return createMessageReceiptFromOutboundResults({
+    results: [{ channel: QA_CHANNEL_ID, messageId }],
+    threadId,
+    replyToId: ctx.replyToId ?? undefined,
+    kind,
+  });
+}
+
 async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
   const text = ctx.payload.text ?? ctx.text;
   const mediaUrls = Array.from(
@@ -54,6 +68,7 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
     accountId: ctx.accountId,
     to: ctx.to,
     text,
+    isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
@@ -69,12 +84,11 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
         });
   return {
     messageId: result.messageId,
-    receipt: createMessageReceiptFromOutboundResults({
-      results: [{ channel: QA_CHANNEL_ID, messageId: result.messageId }],
-      threadId: ctx.threadId == null ? undefined : String(ctx.threadId),
-      replyToId: ctx.replyToId ?? undefined,
-      kind: mediaUrls.length > 0 ? "media" : "text",
-    }),
+    receipt: createQaChannelMessageReceipt(
+      ctx,
+      result.messageId,
+      mediaUrls.length > 0 ? "media" : "text",
+    ),
   };
 }
 
@@ -102,16 +116,9 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
       });
-      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-      const replyToId = ctx.replyToId ?? undefined;
       return {
         messageId: result.messageId,
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: QA_CHANNEL_ID, messageId: result.messageId }],
-          threadId,
-          replyToId,
-          kind: "text",
-        }),
+        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "text"),
       };
     },
     media: async (ctx) => {
@@ -129,12 +136,7 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
       });
       return {
         messageId: result.messageId,
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: QA_CHANNEL_ID, messageId: result.messageId }],
-          threadId: ctx.threadId == null ? undefined : String(ctx.threadId),
-          replyToId: ctx.replyToId ?? undefined,
-          kind: "media",
-        }),
+        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "media"),
       };
     },
   },
@@ -223,6 +225,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   outbound: {
     base: {
       deliveryMode: "direct",
+      sendTextOnlyErrorPayloads: true,
       sendPayload: async (ctx) => {
         const result = await sendQaChannelMessagePayload(ctx);
         return { channel: QA_CHANNEL_ID, messageId: result.messageId };

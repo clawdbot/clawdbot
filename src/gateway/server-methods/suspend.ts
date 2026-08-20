@@ -35,6 +35,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
     const requestId = params.requestId.trim();
     const result = prepareGatewaySuspend({
       requestId,
+      terminalPolicy: params.terminalPolicy ?? "preserve",
       pauseScheduling: () => context.cron.pauseScheduling(),
       resumeScheduling: () => context.cron.resumeScheduling(),
       inspect: createGatewayServerActiveWorkInspectors(context),

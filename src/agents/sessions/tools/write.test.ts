@@ -113,6 +113,58 @@ describe("write tool", () => {
     expect(result.content[0]?.type).toBe("text");
   });
 
+  it("rejects a delegated write that resolves without creating the file", async () => {
+    const filePath = await createTempPath("missing.txt");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}),
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "expected\n" }, undefined),
+    ).rejects.toThrow("Write verification failed");
+    await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects a delegated write that leaves stale same-size content", async () => {
+    const filePath = await createTempPath("stale.txt");
+    await fs.writeFile(filePath, "stale\n", "utf-8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}),
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "fresh\n" }, undefined),
+    ).rejects.toThrow("Write verification failed");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("stale\n");
+  });
+
+  it("rejects a delegated write that leaves a non-file target", async () => {
+    const filePath = await createTempPath("directory");
+    await fs.mkdir(filePath);
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}),
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "expected\n" }, undefined),
+    ).rejects.toThrow("Write verification failed");
+  });
+
+  it("verifies delegated writes by their persisted UTF-8 bytes", async () => {
+    const filePath = await createTempPath("surrogate.txt");
+    const content = "unpaired \ud800 surrogate\n";
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations((absolutePath, requestedContent) =>
+        fs.writeFile(absolutePath, requestedContent, "utf-8"),
+      ),
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content }, undefined),
+    ).resolves.toMatchObject({ details: { changed: true, created: true } });
+    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+  });
+
   it("writes file URL paths through the shared session path resolver", async () => {
     const filePath = await createTempPath("notes.md");
     const tool = createWriteTool(tmpDir);
@@ -271,13 +323,13 @@ describe("write tool", () => {
   it("reports an overwrite without a fabricated diff when the old file is too large", async () => {
     const filePath = await createTempPath("large.txt");
     await fs.writeFile(filePath, "x".repeat(1024 * 1024 + 1), "utf-8");
-    let readCalled = false;
+    let readCount = 0;
     const operations = createRecoverableOperations((absolutePath, content) =>
       fs.writeFile(absolutePath, content, "utf-8"),
     );
-    operations.readFile = async () => {
-      readCalled = true;
-      throw new Error("oversized pre-write read");
+    operations.readFile = async (absolutePath) => {
+      readCount += 1;
+      return fs.readFile(absolutePath);
     };
     const tool = createWriteTool(tmpDir, { operations });
 
@@ -287,7 +339,7 @@ describe("write tool", () => {
       undefined,
     );
 
-    expect(readCalled).toBe(false);
+    expect(readCount).toBe(1);
     expect(result.details).toEqual({ changed: true, created: false });
   });
 
@@ -306,23 +358,20 @@ describe("write tool", () => {
     expect(result.details).toEqual({ changed: true, created: false });
   });
 
-  it("does not guess creation status when the pre-write stat is unavailable", async () => {
+  it("rejects success when the post-write stat is unavailable", async () => {
     await createTempPath("unknown.txt");
     const operations: WriteOperations = {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile: (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+      readFile: (absolutePath) => fs.readFile(absolutePath),
       statFile: async () => {
         throw new Error("remote stat unavailable");
       },
     };
     const tool = createWriteTool(tmpDir, { operations });
 
-    const result = await tool.execute(
-      "call-1",
-      { path: "unknown.txt", content: "new\n" },
-      undefined,
-    );
-
-    expect(result.details).toEqual({ changed: true });
+    await expect(
+      tool.execute("call-1", { path: "unknown.txt", content: "new\n" }, undefined),
+    ).rejects.toThrow("Write verification failed");
   });
 });

@@ -70,13 +70,26 @@ Disable it on the node if needed:
 
 ## Run (foreground)
 
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
+single-use join URL or the same setup code forms as `--pair`, then runs this
+node-host runtime.
+
 ```bash
 openclaw node run --host <gateway-host> --port 18789
+```
+
+Or paste a short-lived node setup link from the Control UI Devices page:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
 ```
 
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
+- `--pair <code-or-url>`: Read the Gateway endpoint, bootstrap token, TLS mode,
+  and optional certificate pin from a setup code or `oc-pair://` URL. Explicit
+  gateway flags override values from `--pair`.
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
@@ -87,6 +100,12 @@ Options:
 
 ## Gateway auth for node host
 
+`--pair` uses a 10-minute single-use bootstrap token for the first connection.
+After pairing, reconnects use the durable device credential. The setup link
+does not pre-approve `system.run`; normal node approval and SSH verification
+remain in force. `node install --pair` is intentionally unavailable because a
+short-lived bearer setup link must not be persisted in service arguments.
+
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
 - `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD` are checked first.
@@ -95,6 +114,16 @@ Options:
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, node auth resolution fails closed (no remote fallback masking).
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+
+For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` together before `openclaw connect`, `openclaw node
+run`, or `openclaw node install`. The node stores env SecretRefs under its
+canonical `gateway.cloudflareAccess.clientId` and `clientSecret` connection
+keys. Installed services keep the values in the managed service environment
+file, not in service arguments or inline supervisor definitions. Access
+credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
+resolution while credential-free plaintext node routes remain unchanged. See
+[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
 
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
@@ -126,6 +155,12 @@ Options:
 - `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
 
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
+
 Manage the service:
 
 ```bash
@@ -139,6 +174,9 @@ openclaw node uninstall
 Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
+`node start` and `node restart` print install hints and exit nonzero when no
+managed node service is installed; run `openclaw node install` first. Stopping
+an absent service remains a successful no-op.
 
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
@@ -260,4 +298,5 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
+- [Connect a machine](/cli/connect)
 - [Nodes](/nodes)

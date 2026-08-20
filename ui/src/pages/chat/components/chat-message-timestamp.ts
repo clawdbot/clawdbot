@@ -1,11 +1,7 @@
 import { html } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import {
-  formatCompactTokenCount,
-  formatTimeAgo,
-  resolveUiHourCycleOptions,
-} from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
 
 type ChatTimestampDisplay = {
   label: string;
@@ -23,10 +19,8 @@ function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay 
     };
   }
 
-  const hourCycle = resolveUiHourCycleOptions();
   return {
     label: date.toLocaleString([], {
-      ...hourCycle,
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -35,7 +29,6 @@ function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay 
       timeZoneName: "short",
     }),
     title: date.toLocaleString([], {
-      ...hourCycle,
       weekday: "long",
       month: "long",
       day: "numeric",
@@ -168,7 +161,12 @@ export function extractGroupMeta(
       cacheWrite += callCacheWrite;
       maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
     }
-    const c = m.cost as Record<string, number> | undefined;
+    // Producers write cost nested under usage.cost (the AssistantMessage
+    // shape); a bare message.cost never exists, so reading only it left the
+    // popover's $ line permanently dead.
+    const c =
+      (usage as { cost?: { total?: number } } | undefined)?.cost ??
+      (m.cost as Record<string, number> | undefined);
     if (c?.total) {
       cost += c.total;
     }
@@ -220,7 +218,7 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
 
   // Cost
   if (meta.cost > 0) {
-    parts.push(html`<span class="msg-meta__cost">$${meta.cost.toFixed(4)}</span>`);
+    parts.push(html`<span class="msg-meta__cost">${formatCost(meta.cost)}</span>`);
   }
 
   // Context %
@@ -260,7 +258,7 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
     >
       <summary
         class="msg-meta__summary"
-        aria-label=${`Message context for ${display.title}`}
+        aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
         @click=${pinMessageMetaPreview}
       >
         ${renderChatTimestamp(timestamp, true)}

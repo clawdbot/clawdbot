@@ -8,10 +8,10 @@ import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
 
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
@@ -151,12 +151,13 @@ function formatDeviceCodeError(params: {
     : `${params.prefix}: HTTP ${params.status}`;
 }
 
-async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
+async function readOpenAICodexDeviceBody(response: Response, timeoutMs: number): Promise<string> {
   return await readResponseTextLimited(
     response,
     response.ok
       ? OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES
       : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
+    { chunkTimeoutMs: timeoutMs },
   );
 }
 
@@ -185,7 +186,7 @@ async function runOpenAICodexDeviceRequest(params: {
     return {
       ok: response.ok,
       status: response.status,
-      bodyText: await readOpenAICodexDeviceBody(response),
+      bodyText: await readOpenAICodexDeviceBody(response, params.timeoutMs),
     };
   } finally {
     await release();
@@ -396,7 +397,7 @@ async function exchangeOpenAICodexDeviceCode(params: {
 
   const expires =
     resolveExpiresAtMsFromDurationSeconds(body?.expires_in) ??
-    resolveCodexAccessTokenExpiry(access) ??
+    resolveOpenAICodexAccessTokenExpiry(access) ??
     Date.now();
 
   return {

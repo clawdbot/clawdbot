@@ -1,7 +1,8 @@
-// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -39,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayAuthTokenForService: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
+  isDefaultInstallIdentity: vi.fn(() => true),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   needsNodeRuntimeMigration: vi.fn(() => false),
@@ -49,10 +51,19 @@ const mocks = vi.hoisted(() => ({
   readWindowsProcessArgsSync: vi.fn(),
   readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
   runExec: vi.fn(),
+  findSystemdGatewayInstallation: vi.fn().mockResolvedValue({ kind: "none" }),
+  isSystemUnitActiveAndEnabled: vi.fn().mockResolvedValue(false),
+  uninstallUserSystemdGatewayUnit: vi.fn().mockResolvedValue({
+    unitName: "openclaw-gateway.service",
+    unitPath: "",
+    removed: true,
+    disabled: true,
+  }),
   note: vi.fn(),
 }));
 
 vi.mock("../config/paths.js", () => ({
+  isDefaultInstallIdentity: mocks.isDefaultInstallIdentity,
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
@@ -106,6 +117,9 @@ vi.mock("../daemon/schtasks.js", () => ({
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUnitActive: mocks.isSystemdUnitActive,
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
+  findSystemdGatewayInstallation: mocks.findSystemdGatewayInstallation,
+  isSystemUnitActiveAndEnabled: mocks.isSystemUnitActiveAndEnabled,
+  uninstallUserSystemdGatewayUnit: mocks.uninstallUserSystemdGatewayUnit,
 }));
 
 vi.mock("../infra/windows-port-pids.js", () => ({
@@ -133,12 +147,14 @@ import {
   extraGatewayServiceToHealthFinding,
   extraGatewayServiceToRepairEffects,
   maybeRepairGatewayServiceConfig,
+  maybeResolveDuelingSystemdGatewayScopes,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalPlatform = process.platform;
+const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
 const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 const originalParentSupportsConfigWrite =
   process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
@@ -293,12 +309,7 @@ function createGatewayCommand(entrypoint: string) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
   const call = mock.mock.calls[index];
@@ -419,8 +430,10 @@ function setupGatewayTokenRepairScenario() {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.isDefaultInstallIdentity.mockReturnValue(true);
     mocks.readRuntime.mockResolvedValue({ status: "unknown" });
     mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue(null);
     mocks.needsNodeRuntimeMigration.mockReturnValue(false);
@@ -442,6 +455,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
       configurable: true,
     });
     mockProcessPlatform(originalPlatform);
+    if (originalGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
+    }
     if (originalUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
@@ -484,6 +502,21 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     expectNoteContaining("6144 MiB", "Gateway heap");
     expectNoteContaining("adaptive default", "Gateway heap");
+  });
+
+  it("skips service audit and rewrite for a non-default install identity", async () => {
+    mocks.isDefaultInstallIdentity.mockReturnValue(false);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.readCommand).not.toHaveBeenCalled();
+    expect(mocks.auditGatewayServiceConfig).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+    expectNoteContaining(
+      "service management skipped: non-default state dir or config path",
+      "Gateway",
+    );
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
@@ -1098,7 +1131,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
         OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway Work",
       },
     });
@@ -1106,8 +1138,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1115,16 +1147,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
     await runNonInteractiveRepair({ updateInProgress: true });
 
     expectNoteContaining(
-      "Gateway service was installed by an older OpenClaw version.",
+      "Gateway service entrypoint differs from the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -1145,16 +1175,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "0";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
-      },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1162,9 +1190,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1184,15 +1210,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       programArguments: gatewayProgramArguments,
       environment: {
         OPENCLAW_GATEWAY_TOKEN: "stale-token",
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
       },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1242,14 +1267,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readWindowsProcessArgsSync.mockReturnValue(args);
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.25" },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1257,7 +1282,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.5.26" },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1291,7 +1316,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
           programArguments: gatewayProgramArguments,
           environment: {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
-            OPENCLAW_SERVICE_VERSION: "2026.5.25",
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
@@ -1307,9 +1331,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
           workingDirectory: "/tmp",
-          environment: {
-            OPENCLAW_SERVICE_VERSION: "2026.5.26",
-          },
+          environment: {},
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
         mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue({
@@ -1390,7 +1412,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
           programArguments: gatewayProgramArguments,
           environment: {
             OPENCLAW_GATEWAY_TOKEN: "stale-token",
-            OPENCLAW_SERVICE_VERSION: "2026.5.25",
           },
         });
         mocks.auditGatewayServiceConfig.mockResolvedValue({
@@ -1406,9 +1427,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         mocks.buildGatewayInstallPlan.mockResolvedValue({
           programArguments: gatewayProgramArguments,
           workingDirectory: "/tmp",
-          environment: {
-            OPENCLAW_SERVICE_VERSION: "2026.5.26",
-          },
+          environment: {},
         });
         mocks.readRuntime.mockResolvedValue({ status: "running" });
 
@@ -1436,16 +1455,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
     process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION = "1";
     mocks.readCommand.mockResolvedValue({
       programArguments: gatewayProgramArguments,
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.25",
-      },
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
     });
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: false,
       issues: [
         {
-          code: "gateway-service-version-mismatch",
-          message: "Gateway service was installed by an older OpenClaw version.",
+          code: "gateway-entrypoint-mismatch",
+          message: "Gateway service entrypoint differs from the current install.",
           level: "recommended",
         },
       ],
@@ -1453,9 +1470,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
-      environment: {
-        OPENCLAW_SERVICE_VERSION: "2026.5.26",
-      },
+      environment: {},
     });
     mocks.readRuntime.mockResolvedValue({ status: "stopped" });
 
@@ -1714,6 +1729,41 @@ describe("maybeScanExtraGatewayServices", () => {
       "system",
     );
     expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
+  });
+
+  it("renders cleanup hints only for the detected extra macOS gateway", async () => {
+    mockProcessPlatform("darwin");
+    const extraService = {
+      platform: "darwin" as const,
+      label: "com.example.openclaw-gateway",
+      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+      scope: "user" as const,
+      legacy: false,
+    };
+    mocks.findExtraGatewayServices.mockResolvedValue([extraService]);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([
+      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+    ]);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalledWith([extraService]);
+    expectNoteContaining("com.example.openclaw-gateway", "Cleanup hints");
+    expectNoNoteContaining("ai.openclaw.gateway", "Cleanup hints");
+  });
+
+  it("does not render generic cleanup hints for legacy gateway services", async () => {
+    setupLegacyMacService();
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), {
+      ...makeDoctorPrompts(),
+      confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+    });
+
+    expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalledWith([]);
+    expectNoNoteContaining("ai.openclaw.gateway", "Cleanup hints");
   });
 
   it("threads deep scans through structured extra gateway service detection", async () => {
@@ -2047,6 +2097,158 @@ describe("maybeScanExtraGatewayServices", () => {
         "Legacy gateway services removed. Installing OpenClaw gateway next.",
       );
     });
+  });
+});
+
+describe("maybeResolveDuelingSystemdGatewayScopes", () => {
+  const duelingInstallation = {
+    kind: "dueling" as const,
+    user: {
+      scope: "user" as const,
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    },
+    system: {
+      scope: "system" as const,
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findSystemdGatewayInstallation.mockResolvedValue({ kind: "none" });
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+    delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
+  });
+
+  afterEach(() => {
+    mockProcessPlatform(originalPlatform);
+    delete process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
+  });
+
+  it("removes the user-scope unit and keeps the system unit when confirmed", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+    mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
+      unitName: "openclaw-gateway.service",
+      unitPath: duelingInstallation.user.unitPath,
+      removed: true,
+      disabled: true,
+    });
+    const runtime = makeDoctorIo();
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(runtime, prompter);
+
+    expect(mocks.uninstallUserSystemdGatewayUnit).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+    );
+  });
+
+  it("emits cleanup hints and does not remove anything when declined", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+    mocks.renderGatewayServiceCleanupHints.mockReturnValue([
+      "systemctl --user disable --now openclaw-gateway.service",
+      "rm ~/.config/systemd/user/openclaw-gateway.service",
+    ]);
+    const prompter = makeDoctorPrompts();
+    prompter.confirmRuntimeRepair = vi.fn().mockResolvedValue(false);
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalled();
+  });
+
+  it("skips removal and prompts nothing when service repair is externally managed", async () => {
+    mockProcessPlatform("linux");
+    process.env.OPENCLAW_SERVICE_REPAIR_POLICY = "external";
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      EXTERNAL_SERVICE_REPAIR_NOTE,
+      "Gateway cleanup skipped",
+    );
+  });
+
+  it("keeps the user unit when the system unit is enabled but not running", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(false);
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("not both running and enabled at boot"),
+      "Gateway cleanup needs an owner decision",
+    );
+  });
+
+  it("tells the operator to stop the unit when systemctl could not disable it", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+    mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
+      unitName: "openclaw-gateway.service",
+      unitPath: duelingInstallation.user.unitPath,
+      removed: true,
+      disabled: false,
+    });
+    const runtime = makeDoctorIo();
+
+    await maybeResolveDuelingSystemdGatewayScopes(runtime, makeDoctorPrompts());
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("systemctl --user disable --now openclaw-gateway.service"),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("sole gateway manager"));
+  });
+
+  it("fails closed when the system unit ownership probe errors", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockRejectedValue(new Error("systemctl wedged"));
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for a single-scope (user-only) install", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue({
+      kind: "user",
+      user: duelingInstallation.user,
+    });
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on non-Linux platforms", async () => {
+    mockProcessPlatform("darwin");
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.findSystemdGatewayInstallation).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

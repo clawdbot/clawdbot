@@ -7,6 +7,7 @@ import type {
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { formatUiError } from "../format-error.ts";
 import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
@@ -28,8 +29,10 @@ type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListen
 
 export class GatewayBoardProvider implements BoardProvider {
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
+  private readonly loadErrorSignal = new ValueSignal<string | null>(null);
   private readonly eventStream = new EventStream<BoardCommandEvent>();
   private client: BoardGatewayClient;
   private readonly retiredClients = new WeakSet<BoardGatewayClient>();
@@ -37,6 +40,7 @@ export class GatewayBoardProvider implements BoardProvider {
   private unsubscribe: (() => void) | undefined;
   private refreshLoop: Promise<void> | undefined;
   private refreshRequested = false;
+  private userRefreshRequested = false;
   private readonly changedWidgets = new Set<string>();
   private stateGeneration = 0;
   private connected = false;
@@ -56,6 +60,7 @@ export class GatewayBoardProvider implements BoardProvider {
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(sessionKey));
     this.snapshot$ = this.snapshotSignal;
+    this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
     this.client = client;
     this.connected = connected;
@@ -71,6 +76,9 @@ export class GatewayBoardProvider implements BoardProvider {
     }
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
+    if (!connected) {
+      this.wakeRetryDelay?.();
+    }
     if (client === this.client) {
       if (connectionActivated) {
         void this.activate();
@@ -86,6 +94,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.changedWidgets.clear();
     this.appViews.clear();
     this.snapshotLoaded = false;
+    this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
     this.subscribe(client);
     if (connected) {
@@ -112,6 +121,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.clientGeneration += 1;
     this.stateGeneration += 1;
     this.refreshRequested = false;
+    this.userRefreshRequested = false;
     this.changedWidgets.clear();
     this.appViews.clear();
     this.wakeRetryDelay?.();
@@ -139,32 +149,25 @@ export class GatewayBoardProvider implements BoardProvider {
     });
   }
 
-  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
-    const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = normalizeBoardWidgetTitle(input.title);
-    await this.mutate(
-      "board.widget.put",
-      {
-        sessionKey: this.sessionKey,
-        name,
-        ...(title ? { title } : {}),
-        content: { kind: "canvas-doc", docId: input.docId },
-        ...(input.tabId || input.size || input.after
-          ? {
-              placement: {
-                ...(input.tabId ? { tabId: input.tabId } : {}),
-                ...(input.size ? { size: input.size } : {}),
-                ...(input.after ? { after: input.after } : {}),
-              },
-            }
-          : {}),
-      },
-      name,
-    );
+  pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    return this.pinBoardWidget(input, input.name ?? canvasWidgetNameForDocument(input.docId), {
+      kind: "canvas-doc",
+      docId: input.docId,
+    });
   }
 
-  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+  pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    return this.pinBoardWidget(input, input.name ?? mcpAppWidgetNameForViewId(input.viewId), {
+      kind: "mcp-app",
+      viewId: input.viewId,
+    });
+  }
+
+  private async pinBoardWidget(
+    input: BoardPinWidgetInput | BoardPinMcpAppInput,
+    name: string,
+    content: { kind: "canvas-doc"; docId: string } | { kind: "mcp-app"; viewId: string },
+  ): Promise<void> {
     const title = normalizeBoardWidgetTitle(input.title);
     await this.mutate(
       "board.widget.put",
@@ -172,7 +175,7 @@ export class GatewayBoardProvider implements BoardProvider {
         sessionKey: this.sessionKey,
         name,
         ...(title ? { title } : {}),
-        content: { kind: "mcp-app", viewId: input.viewId },
+        content,
         ...(input.tabId || input.size || input.after
           ? {
               placement: {
@@ -196,7 +199,7 @@ export class GatewayBoardProvider implements BoardProvider {
   }
 
   refreshWidgetFrame(name: string): Promise<void> {
-    return this.requestRefresh(name);
+    return this.requestRefresh(name, true);
   }
 
   async widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
@@ -265,18 +268,19 @@ export class GatewayBoardProvider implements BoardProvider {
     );
   }
 
-  private requestRefresh(changedWidget?: string): Promise<void> {
+  private requestRefresh(changedWidget?: string, userRequested = false): Promise<void> {
     if (this.disposed) {
       return Promise.resolve();
     }
     this.refreshRequested = true;
+    this.userRefreshRequested ||= userRequested;
     if (changedWidget) {
       this.changedWidgets.add(changedWidget);
     }
     this.wakeRetryDelay?.();
     this.refreshLoop ??= this.runRefreshLoop().finally(() => {
       this.refreshLoop = undefined;
-      if (this.refreshRequested) {
+      if (this.refreshRequested && (this.connected || this.userRefreshRequested)) {
         void this.requestRefresh();
       }
     });
@@ -290,6 +294,14 @@ export class GatewayBoardProvider implements BoardProvider {
         this.refreshRequested = false;
         return;
       }
+      // Preserve pending board changes without polling a disconnected client;
+      // the next attached live connection owns the replacement refresh.
+      if (!this.connected && !this.userRefreshRequested) {
+        return;
+      }
+      // A manual refresh permits one offline request, never a follow-up after
+      // that request completes and discovers a disconnected Gateway.
+      this.userRefreshRequested = false;
       const changedWidgets = new Set(this.changedWidgets);
       this.changedWidgets.clear();
       const client = this.client;
@@ -305,6 +317,9 @@ export class GatewayBoardProvider implements BoardProvider {
           this.refreshRequested = true;
           continue;
         }
+        // A completed request satisfies any manual refresh that joined it;
+        // only a newer board change should require a follow-up request.
+        this.userRefreshRequested = false;
         if (stateGeneration !== this.stateGeneration) {
           this.refreshRequested = true;
           for (const name of changedWidgets) {
@@ -321,7 +336,7 @@ export class GatewayBoardProvider implements BoardProvider {
         this.refreshRequested = false;
         this.setSnapshot(snapshot, changedWidgets);
         retry.delayMs = 1_000;
-      } catch {
+      } catch (error) {
         if (this.disposed) {
           return;
         }
@@ -329,8 +344,15 @@ export class GatewayBoardProvider implements BoardProvider {
         if (client !== this.client) {
           continue;
         }
+        this.setLoadError(formatUiError(error));
         for (const name of changedWidgets) {
           this.changedWidgets.add(name);
+        }
+        if (!this.connected) {
+          if (this.userRefreshRequested) {
+            continue;
+          }
+          return;
         }
         const delayMs = retry.delayMs;
         // Carry backoff across failed loop iterations; successful refreshes reset it above.
@@ -439,6 +461,13 @@ export class GatewayBoardProvider implements BoardProvider {
     this.appViews.prune(widgets);
     this.snapshotLoaded = true;
     this.snapshotSignal.set({ ...snapshot, widgets });
+    this.setLoadError(null);
+  }
+
+  private setLoadError(error: string | null): void {
+    if (this.loadErrorSignal.value !== error) {
+      this.loadErrorSignal.set(error);
+    }
   }
 }
 

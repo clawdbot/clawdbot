@@ -1,4 +1,5 @@
 // Cron status/list/add command registration and create-payload normalization.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,8 +12,8 @@ import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
 import { listCronJobsFromGateway } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -32,10 +33,8 @@ import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("status")
-      .description("Show cron scheduler status")
-      .option("--json", "Output JSON", false)
+    createCronOutputCommand(cron, "status")
+      .description("Show automations scheduler status")
       .action(async (opts) => {
         try {
           const res = await callGatewayFromCli("cron.status", opts, {});
@@ -51,7 +50,7 @@ export function registerCronListCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("list")
-      .description("List cron jobs")
+      .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
       .option("--json", "Output JSON", false)
@@ -61,6 +60,9 @@ export function registerCronListCommand(cron: Command) {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
+          if (typeof opts.agent === "string" && !agentId) {
+            throw new Error("--agent must not be blank");
+          }
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
           }
@@ -81,10 +83,8 @@ export function registerCronListCommand(cron: Command) {
 
 export function registerCronAddCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("add")
-      .alias("create")
-      .description("Add a cron job")
+    createCronOutputCommand(cron, "add")
+      .description("Add an automation")
       .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
       .argument("[message]", "Agent message when using a positional schedule")
       .option("--name <name>", "Job name")
@@ -95,7 +95,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
-      .option("--session <target>", "Session target (main|isolated)")
+      .option("--session <target>", "Session target (main|isolated|current|session:<id>)")
       .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option(
@@ -160,7 +160,6 @@ export function registerCronAddCommand(cron: Command) {
       .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
-      .option("--json", "Output JSON", false)
       .action(
         async (
           nameArg: string | undefined,
@@ -224,7 +223,7 @@ export function registerCronAddCommand(cron: Command) {
               const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new Error(
-                  "Pass the cron job message either positionally or with --message, not both.",
+                  "Pass the automation message either positionally or with --message, not both.",
                 );
               }
               const message = optionMessage ?? positionalMessage ?? "";
@@ -252,13 +251,11 @@ export function registerCronAddCommand(cron: Command) {
                 };
               }
               if (scriptPath) {
-                const scriptTimeoutSeconds = parseStrictPositiveIntOrUndefined(
-                  opts.scriptTimeoutSeconds,
-                );
+                const scriptTimeoutSeconds = parseStrictPositiveInteger(opts.scriptTimeoutSeconds);
                 if (opts.scriptTimeoutSeconds !== undefined && scriptTimeoutSeconds === undefined) {
                   throw new Error("Invalid --script-timeout-seconds (must be a positive integer).");
                 }
-                const scriptToolBudget = parseStrictPositiveIntOrUndefined(opts.scriptToolBudget);
+                const scriptToolBudget = parseStrictPositiveInteger(opts.scriptToolBudget);
                 if (opts.scriptToolBudget !== undefined && scriptToolBudget === undefined) {
                   throw new Error("Invalid --script-tool-budget (must be a positive integer).");
                 }
@@ -270,7 +267,7 @@ export function registerCronAddCommand(cron: Command) {
                   toolsAllow,
                 };
               }
-              const timeoutSeconds = parseStrictPositiveIntOrUndefined(opts.timeoutSeconds);
+              const timeoutSeconds = parseStrictPositiveInteger(opts.timeoutSeconds);
               if (opts.timeoutSeconds !== undefined && timeoutSeconds === undefined) {
                 throw new Error("Invalid --timeout-seconds (must be a positive integer).");
               }
@@ -282,7 +279,7 @@ export function registerCronAddCommand(cron: Command) {
                     ? opts.outputTimeoutSeconds
                     : undefined);
                 const noOutputTimeoutSeconds =
-                  parseStrictPositiveIntOrUndefined(rawNoOutputTimeoutSeconds);
+                  parseStrictPositiveInteger(rawNoOutputTimeoutSeconds);
                 if (
                   rawNoOutputTimeoutSeconds !== undefined &&
                   noOutputTimeoutSeconds === undefined
@@ -291,7 +288,7 @@ export function registerCronAddCommand(cron: Command) {
                     "Invalid --no-output-timeout-seconds (must be a positive integer).",
                   );
                 }
-                const outputMaxBytes = parseStrictPositiveIntOrUndefined(opts.outputMaxBytes);
+                const outputMaxBytes = parseStrictPositiveInteger(opts.outputMaxBytes);
                 if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
                   throw new Error("Invalid --output-max-bytes (must be a positive integer).");
                 }
@@ -435,7 +432,7 @@ export function registerCronAddCommand(cron: Command) {
             const positionalName = hasScheduleFlag ? normalizeOptionalString(nameArg) : undefined;
             if (optionName && positionalName && optionName !== positionalName) {
               throw new Error(
-                "Pass the cron job name either positionally or with --name, not both.",
+                "Pass the automation name either positionally or with --name, not both.",
               );
             }
             const name = optionName ?? positionalName ?? "";
@@ -480,7 +477,7 @@ export function registerCronAddCommand(cron: Command) {
               defaultRuntime.error(
                 theme.warn(
                   "No --agent specified; the job will run with the configured default agent. " +
-                    "Specify --agent to choose a specific agent.",
+                    "Specify --agent to choose a specific agent, or set agents.defaults.systemAgent.agentId.",
                 ),
               );
             }

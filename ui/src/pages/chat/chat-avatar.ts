@@ -1,7 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
   resolveLocalUserAvatarText,
@@ -12,6 +12,7 @@ import {
   identityAvatarClass,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
+  type IdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
@@ -22,6 +23,8 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
+import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -33,7 +36,7 @@ export function renderChatAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   user?: { name?: string | null; avatar?: string | null },
-  basePath?: string,
+  resourceBasePath?: string,
   authToken?: string | null,
   sender?: SenderIdentity | null,
 ) {
@@ -41,34 +44,12 @@ export function renderChatAvatar(
   // Attributed multi-user messages show the author's own avatar (profile
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
-    const label = formatSenderLabel(sender) ?? "";
-    const view = resolveIdentityAvatarView(sender);
-    const initialsAvatar = html`<div
-      class="chat-avatar user chat-avatar--sender-initials"
-      style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
-      aria-label="${label}"
-    >
-      ${view.fallback.initials}
-    </div>`;
-    if (!view.imageUrl) {
-      return initialsAvatar;
-    }
-    // The derived route may 404 (no upload, no Gravatar); swap to initials
-    // instead of a broken image. Lit reuses DOM parts, so a load must clear a
-    // prior sender's error state.
-    return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
-      ${renderIdentityAvatarImage({
-        view,
-        fallbackSelector: ".chat-avatar-slot",
-        className: "chat-avatar user",
-        alt: label,
-      })}${initialsAvatar}
-    </span>`;
+    return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
   }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
-  const assistantFallbackAvatar = assistantAvatarFallbackUrl(basePath ?? "");
+  const assistantFallbackAvatar = assistantAvatarFallbackUrl(resourceBasePath ?? "");
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -119,11 +100,19 @@ export function renderChatAvatar(
           : "other";
 
   if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
+    const imageUrl = resolveAvatarImageUrl(userAvatarUrl) ?? userAvatarUrl;
+    return renderUserAvatarSlot(
+      {
+        fallback: resolveAvatarInitials({ name: userName }),
+        imageUrl,
+        pending: typeof imageUrl !== "string",
+      },
+      userName,
+    );
   }
 
   if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+    return html`<div class="chat-avatar ${className}" role="img" aria-label="${userName}">
       ${userAvatarText}
     </div>`;
   }
@@ -144,7 +133,7 @@ export function renderChatAvatar(
       />`;
     }
     if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
+      return html`<div class="chat-avatar ${className}" role="img" aria-label="${assistantName}">
         ${assistantAvatarText}
       </div>`;
     }
@@ -166,6 +155,33 @@ export function renderChatAvatar(
   return html`<div class="chat-avatar ${className}">${initial}</div>`;
 }
 
+/**
+ * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
+ * stale configured URL); swap to initials instead of a broken image. Lit
+ * reuses DOM parts, so a load must clear a prior identity's error state.
+ */
+function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
+  const initialsAvatar = html`<div
+    class="chat-avatar user chat-avatar--sender-initials"
+    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    role="img"
+    aria-label="${label}"
+  >
+    ${view.fallback.initials}
+  </div>`;
+  if (!view.imageUrl) {
+    return initialsAvatar;
+  }
+  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+    ${renderIdentityAvatarImage({
+      view,
+      fallbackSelector: ".chat-avatar-slot",
+      className: "chat-avatar user",
+      alt: label,
+    })}${initialsAvatar}
+  </span>`;
+}
+
 function isAvatarUrl(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
@@ -174,7 +190,7 @@ function isAvatarUrl(value: string): boolean {
 type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
-  basePath: string;
+  resourceBasePath: string;
   chatAvatarReason?: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -256,10 +272,8 @@ function shouldApplyChatAvatarResult(
   );
 }
 
-function buildAvatarMetaUrl(basePath: string, agentId: string): string {
-  const base = normalizeBasePath(basePath);
-  const encoded = encodeURIComponent(agentId);
-  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
+function buildAvatarMetaUrl(resourceBasePath: string, agentId: string): string {
+  return `${buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)}?meta=1`;
 }
 
 function clearChatAvatarUrl(host: ChatAvatarHost) {
@@ -430,7 +444,7 @@ async function fetchChatAvatarSnapshot(
 ): Promise<ChatAvatarSnapshot | null> {
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
-  const url = buildAvatarMetaUrl(host.basePath, agentId);
+  const url = buildAvatarMetaUrl(host.resourceBasePath, agentId);
   const metaController = new AbortController();
   const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
   let data: {

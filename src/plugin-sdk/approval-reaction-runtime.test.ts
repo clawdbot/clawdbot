@@ -7,12 +7,16 @@ import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   APPROVAL_REACTION_BINDINGS,
   buildApprovalPendingPromptPayload,
+  buildApprovalReactionDeliveredBindingMarker,
   buildApprovalReactionPendingContentForRequest,
   buildApprovalReactionPromptPayloadForRequest,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
+  readApprovalReactionDecisionList,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionPresentationBinding,
   resolveApprovalReactionDecision,
   resolveTypedApprovalReactionTarget,
   shouldSuppressLocalNativeExecApprovalPrompt,
@@ -73,6 +77,74 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       resolveApprovalReactionDecision({
         reactionKey: "1️⃣",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts only complete, unique typed approval decision lists", () => {
+    expect(readApprovalReactionDecisionList(["deny", "allow-once"])).toEqual([
+      "deny",
+      "allow-once",
+    ]);
+    for (const invalid of [[], ["allow-once", "allow-once"], ["always"], "deny"]) {
+      expect(readApprovalReactionDecisionList(invalid)).toBeNull();
+    }
+  });
+
+  it("fails closed when typed approval presentation or delivery marker disagrees", () => {
+    const metadata = {
+      approvalId: "plugin:approval-123",
+      approvalSlug: "approval-123",
+      approvalKind: "plugin" as const,
+      allowedDecisions: ["allow-once", "deny"] as const,
+    };
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: metadata.allowedDecisions.map((decision) => ({
+            label: decision,
+            action: {
+              type: "approval" as const,
+              approvalId: metadata.approvalId,
+              approvalKind: metadata.approvalKind,
+              decision,
+            },
+          })),
+        },
+      ],
+    };
+    const payload = {
+      presentation,
+      channelData: {
+        execApproval: metadata,
+        privateBinding: buildApprovalReactionDeliveredBindingMarker({
+          ...metadata,
+          allowedDecisions: [...metadata.allowedDecisions],
+        }),
+      },
+    };
+    expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
+    expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
+    expect(
+      readApprovalReactionDeliveredBinding({
+        payload,
+        channelDataKey: "privateBinding",
+        requireApprovalSlug: true,
+      }),
+    ).toMatchObject(metadata);
+    const invalidPayload = {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        execApproval: { ...metadata, allowedDecisions: ["allow-once", "allow-once"] },
+      },
+    };
+    expect(readApprovalReactionPresentationBinding({ payload: invalidPayload })).toBeNull();
+    expect(
+      readApprovalReactionDeliveredBinding({
+        payload: invalidPayload,
+        channelDataKey: "privateBinding",
       }),
     ).toBeNull();
   });

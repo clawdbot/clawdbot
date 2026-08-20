@@ -4,6 +4,7 @@ import {
   normalizeBatchBaseUrl,
   type BatchHttpClientConfig,
 } from "./batch-utils.js";
+import { formatErrorMessage } from "./error-utils.js";
 import { hashText } from "./hash.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import {
@@ -44,7 +45,7 @@ export async function uploadBatchJsonlFile(params: {
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
         const text = await readMemoryHostResponseTextSnippet(fileRes, { signal: params.signal });
-        throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
+        throw new Error(`${params.errorPrefix}: ${fileRes.status} ${formatErrorMessage(text)}`);
       }
       return (await readResponseJsonWithLimit(fileRes, {
         errorPrefix: params.errorPrefix,

@@ -7,9 +7,10 @@ import {
   resolveAgentDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type {
-  MemorySyncParams,
-  MemorySyncProgressUpdate,
+import {
+  MEMORY_CHUNKING_VERSION,
+  type MemorySyncParams,
+  type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -173,10 +174,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     // the vector extension before text and FTS indexing can proceed.
     const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
     const meta = this.readMeta();
-    const targetArchiveFiles = await this.combineTargetArchiveFiles({
-      sessions: params?.sessions,
-      archiveFiles: params?.archiveFiles,
-    });
+    // Resolve and index a targeted session against one corpus snapshot. A reset
+    // between separate enumerations could otherwise replace the chosen identity.
+    const targetSessionSync = this.hasRequestedTargetSessionSync(params)
+      ? await this.resolveTargetSessionSyncPlan({
+          sessions: params?.sessions,
+          archiveFiles: params?.archiveFiles,
+        })
+      : null;
+    const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
     const hasTargetArchiveFiles = targetArchiveFiles !== null;
     if (this.hasRequestedTargetSessionSync(params) && !hasTargetArchiveFiles) {
       return;
@@ -236,6 +242,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
+    // Source hashes do not reflect chunk boundaries, so an implementation
+    // upgrade must rebuild the shadow index instead of attempting dirty sync.
+    const needsChunkingVersionReindex =
+      meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
@@ -243,6 +253,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
+      needsChunkingVersionReindex ||
       (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
       (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
@@ -264,9 +275,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         reason: params?.reason,
         progress: progress ?? undefined,
         sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+        sessionsReconcileDirty: this.sessionsReconcileDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
         syncArchiveFiles: async (targetedParams) => {
-          await this.syncArchiveFiles(targetedParams);
+          await this.syncArchiveFiles({
+            ...targetedParams,
+            corpusEntries: targetSessionSync?.corpusEntries,
+          });
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
         activateFallbackProvider: async (reason) => {
@@ -590,6 +605,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        chunkingVersion: MEMORY_CHUNKING_VERSION,
         ftsTokenizer: this.settings.store.fts.tokenizer,
         provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
       };

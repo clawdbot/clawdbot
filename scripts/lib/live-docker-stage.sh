@@ -1,5 +1,58 @@
 #!/usr/bin/env bash
 
+openclaw_live_stage_mounted_auth() {
+  if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" = "1" ]; then
+    return 0
+  fi
+
+  local auth_path
+  local auth_dirs=()
+  local auth_files=()
+  IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
+  IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+  if ((${#auth_dirs[@]} > 0)); then
+    for auth_path in "${auth_dirs[@]}"; do
+      [ -n "$auth_path" ] || continue
+      if [ -d "/host-auth/$auth_path" ]; then
+        mkdir -p "$HOME/$auth_path"
+        cp -R "/host-auth/$auth_path/." "$HOME/$auth_path"
+        chmod -R u+rwX "$HOME/$auth_path" || true
+      fi
+    done
+  fi
+  if ((${#auth_files[@]} > 0)); then
+    for auth_path in "${auth_files[@]}"; do
+      [ -n "$auth_path" ] || continue
+      if [ -f "/host-auth-files/$auth_path" ]; then
+        mkdir -p "$(dirname "$HOME/$auth_path")"
+        cp "/host-auth-files/$auth_path" "$HOME/$auth_path"
+        chmod u+rw "$HOME/$auth_path" || true
+      fi
+    done
+  fi
+}
+
+openclaw_live_run_setup_command() {
+  local timeout_seconds="${1:?setup timeout seconds required}"
+  local label="${2:?setup label required}"
+  shift 2
+
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  else
+    echo "timeout command not found; cannot bound ${label} after ${timeout_seconds}s" >&2
+    return 127
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "${timeout_seconds}s" "$@"
+  else
+    "$timeout_bin" "${timeout_seconds}s" "$@"
+  fi
+}
+
 openclaw_live_stage_source_tree() {
   local dest_dir="${1:?destination directory required}"
   local stage_mode="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}"

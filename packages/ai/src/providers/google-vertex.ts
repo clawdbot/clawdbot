@@ -5,6 +5,7 @@ import {
   type HttpOptions,
   ResourceScope,
 } from "@google/genai";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -63,7 +64,10 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
   const base = buildBaseOptions(model, options, undefined);
   return streamGoogleVertex(model, context, {
     ...base,
-    thinking: buildGoogleSimpleThinking(model, options),
+    thinking: buildGoogleSimpleThinking(model, options, {
+      includeGemma4ThinkingLevel: true,
+      useFlashLiteBudgets: true,
+    }),
   } satisfies GoogleVertexOptions);
 };
 
@@ -152,7 +156,9 @@ function isPlaceholderApiKey(apiKey: string): boolean {
 
 function resolveProject(options?: GoogleVertexOptions): string {
   const project =
-    options?.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
+    normalizeOptionalString(options?.project) ||
+    normalizeOptionalString(process.env.GOOGLE_CLOUD_PROJECT) ||
+    normalizeOptionalString(process.env.GCLOUD_PROJECT);
   if (!project) {
     throw new Error(
       "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
@@ -162,7 +168,9 @@ function resolveProject(options?: GoogleVertexOptions): string {
 }
 
 function resolveLocation(options?: GoogleVertexOptions): string {
-  const location = options?.location || process.env.GOOGLE_CLOUD_LOCATION;
+  const location =
+    normalizeOptionalString(options?.location) ||
+    normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
   if (!location) {
     throw new Error(
       "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",

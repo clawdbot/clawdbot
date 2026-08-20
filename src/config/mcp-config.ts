@@ -1,6 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes MCP server config for runtime launch and validation.
-import { stableStringify } from "../agents/stable-stringify.js";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
@@ -11,7 +10,8 @@ import {
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
+import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -21,32 +21,24 @@ type McpArgvRestoreResult =
   | { ok: true; server: Record<string, unknown> }
   | { ok: false; error: string };
 
-type ConfigMcpReadResult =
-  | {
-      ok: true;
-      path: string;
-      config: OpenClawConfig;
-      mcpServers: ConfigMcpServers;
-      baseHash?: string;
-    }
-  | { ok: false; path: string; error: string };
-
-type ConfigMcpWriteResult =
-  | {
-      ok: true;
-      path: string;
-      config: OpenClawConfig;
-      mcpServers: ConfigMcpServers;
-      removed?: boolean;
-      updated?: boolean;
-    }
-  | { ok: false; path: string; error: string };
-
-/** Include/exclude tool selection stored for a configured MCP server. */
-type McpServerToolSelection = {
-  include?: string[];
-  exclude?: string[];
+type ConfigMcpSuccess = {
+  path: string;
+  config: OpenClawConfig;
+  mcpServers: ConfigMcpServers;
 };
+type ConfigMcpFailure = { ok: false; path: string; error: string };
+type ConfigMcpReadResult = (ConfigMcpSuccess & { ok: true; baseHash?: string }) | ConfigMcpFailure;
+type ConfigMcpWriteResult =
+  | (ConfigMcpSuccess & { ok: true; removed?: boolean; updated?: boolean })
+  | ConfigMcpFailure;
+
+type LoadedConfigMcpServers = Extract<ConfigMcpReadResult, { ok: true }>;
+type McpConfigMutation = {
+  name: string;
+  previous?: Record<string, unknown>;
+  next?: Record<string, unknown>;
+};
+type McpConfigMutationHook = (mutation: McpConfigMutation) => Promise<void>;
 
 function normalizeToolSelectionList(value: readonly string[] | undefined): string[] | undefined {
   if (!value) {
@@ -81,10 +73,7 @@ function restoreMcpServerArgvSentinels(params: {
   ) {
     return {
       ok: false,
-      error:
-        'Cannot restore MCP args containing "' +
-        REDACTED_SENTINEL +
-        '" without the same original argv shape.',
+      error: `Cannot restore MCP args containing "${REDACTED_SENTINEL}" without the same original argv shape.`,
     };
   }
 
@@ -92,10 +81,7 @@ function restoreMcpServerArgvSentinels(params: {
   if (incomingArgs.some((arg, index) => arg !== displayedArgs[index])) {
     return {
       ok: false,
-      error:
-        'Cannot restore MCP args containing "' +
-        REDACTED_SENTINEL +
-        '" after argv changed. Replace every redacted value explicitly before editing args.',
+      error: `Cannot restore MCP args containing "${REDACTED_SENTINEL}" after argv changed. Replace every redacted value explicitly before editing args.`,
     };
   }
   return {
@@ -126,11 +112,64 @@ export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
   };
 }
 
+async function commitConfiguredMcpServers(params: {
+  loaded: LoadedConfigMcpServers;
+  servers: ConfigMcpServers;
+  errorLabel: string;
+  success?: { removed?: boolean; updated?: boolean };
+  independentlyOwnedName?: string;
+  mutation?: { name: string; onCommitted?: McpConfigMutationHook };
+}): Promise<ConfigMcpWriteResult> {
+  const next = structuredClone(params.loaded.config);
+  if (Object.keys(params.servers).length > 0) {
+    next.mcp = { ...next.mcp, servers: params.servers };
+  } else if (next.mcp) {
+    delete next.mcp.servers;
+    if (Object.keys(next.mcp).length === 0) {
+      delete next.mcp;
+    }
+  }
+
+  const validated = validateConfigObjectWithPlugins(next);
+  if (!validated.ok) {
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
+    return {
+      ok: false,
+      path: params.loaded.path,
+      error: `Config invalid after MCP ${params.errorLabel} (${issue.path}: ${issue.message}).`,
+    };
+  }
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    baseHash: params.loaded.baseHash,
+  });
+  if (params.mutation?.onCommitted) {
+    const previous = params.loaded.mcpServers[params.mutation.name];
+    const nextServer = params.servers[params.mutation.name];
+    await params.mutation.onCommitted({
+      name: params.mutation.name,
+      ...(previous ? { previous } : {}),
+      ...(nextServer ? { next: nextServer } : {}),
+    });
+  }
+  if (params.independentlyOwnedName) {
+    markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
+  }
+  return {
+    ok: true,
+    path: params.loaded.path,
+    config: validated.config,
+    mcpServers: params.servers,
+    ...params.success,
+  };
+}
+
 async function updateConfiguredMcpServerConfig(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
   errorLabel: string;
   recordIndependentOwner?: boolean;
+  onCommitted?: McpConfigMutationHook;
 }): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
@@ -142,57 +181,35 @@ async function updateConfiguredMcpServerConfig(params: {
     return loaded;
   }
   if (!Object.hasOwn(loaded.mcpServers, name)) {
-    return {
-      ok: true,
-      path: loaded.path,
-      config: loaded.config,
-      mcpServers: loaded.mcpServers,
-      updated: false,
-    };
+    const { baseHash: _baseHash, ...unchanged } = loaded;
+    return { ...unchanged, updated: false };
   }
 
-  const next = structuredClone(loaded.config);
-  const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
   servers[name] = params.update({ ...servers[name] });
-  next.mcp = {
-    ...next.mcp,
+  return commitConfiguredMcpServers({
+    loaded,
     servers,
-  };
-
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = expectDefined(validated.issues[0], "issues entry at 0");
-    return {
-      ok: false,
-      path: loaded.path,
-      error: `Config invalid after MCP ${params.errorLabel} (${issue.path}: ${issue.message}).`,
-    };
-  }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    baseHash: loaded.baseHash,
+    errorLabel: params.errorLabel,
+    success: { updated: true },
+    independentlyOwnedName: params.recordIndependentOwner === false ? undefined : name,
+    mutation: { name, onCommitted: params.onCommitted },
   });
-  if (params.recordIndependentOwner !== false) {
-    markClawMcpServerIndependentlyOwned(name);
-  }
-  return {
-    ok: true,
-    path: loaded.path,
-    config: validated.config,
-    mcpServers: servers,
-    updated: true,
-  };
 }
 
-export async function updateConfiguredMcpServerTools(params: {
-  name: string;
-  tools: McpServerToolSelection | null;
-  recordIndependentOwner?: boolean;
-}): Promise<ConfigMcpWriteResult> {
+async function updateConfiguredMcpServerTools(
+  params: {
+    name: string;
+    tools: McpServerToolFilterConfig | null;
+    recordIndependentOwner?: boolean;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
     recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "tool selection update",
+    onCommitted,
     update: (server) => {
       if (params.tools === null) {
         delete server.toolFilter;
@@ -213,26 +230,33 @@ export async function updateConfiguredMcpServerTools(params: {
   });
 }
 
-export async function updateConfiguredMcpServer(params: {
-  name: string;
-  update: (server: Record<string, unknown>) => Record<string, unknown>;
-  recordIndependentOwner?: boolean;
-}): Promise<ConfigMcpWriteResult> {
+async function updateConfiguredMcpServer(
+  params: {
+    name: string;
+    update: (server: Record<string, unknown>) => Record<string, unknown>;
+    recordIndependentOwner?: boolean;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
     recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "configure",
+    onCommitted,
     update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
   });
 }
 
-export async function setConfiguredMcpServer(params: {
-  name: string;
-  server: unknown;
-  createOnly?: boolean;
-  recordIndependentOwner?: boolean;
-  expectedServer?: Record<string, unknown>;
-}): Promise<ConfigMcpWriteResult> {
+async function setConfiguredMcpServer(
+  params: {
+    name: string;
+    server: unknown;
+    createOnly?: boolean;
+    recordIndependentOwner?: boolean;
+    expectedServer?: Record<string, unknown>;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
     return { ok: false, path: "", error: "MCP server name is required." };
@@ -284,7 +308,7 @@ export async function setConfiguredMcpServer(params: {
   const restored = restoreRedactedValues(
     { mcp: { servers: { [name]: argvRestored.server } } },
     { mcp: { servers: loaded.mcpServers } },
-    buildConfigSchema().uiHints,
+    buildConfigSchemaCore().uiHints,
   );
   if (!restored.ok) {
     return {
@@ -301,42 +325,24 @@ export async function setConfiguredMcpServer(params: {
     return { ok: false, path: loaded.path, error: "MCP server config must be a JSON object." };
   }
 
-  const next = structuredClone(loaded.config);
-  const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
   servers[name] = canonicalizeConfiguredMcpServer(restoredServer);
-  next.mcp = {
-    ...next.mcp,
+  return commitConfiguredMcpServers({
+    loaded,
     servers,
-  };
-
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = expectDefined(validated.issues[0], "issues entry at 0");
-    return {
-      ok: false,
-      path: loaded.path,
-      error: `Config invalid after MCP set (${issue.path}: ${issue.message}).`,
-    };
-  }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    baseHash: loaded.baseHash,
+    errorLabel: "set",
+    independentlyOwnedName: params.recordIndependentOwner === false ? undefined : name,
+    mutation: { name, onCommitted },
   });
-  if (params.recordIndependentOwner !== false) {
-    markClawMcpServerIndependentlyOwned(name);
-  }
-  return {
-    ok: true,
-    path: loaded.path,
-    config: validated.config,
-    mcpServers: servers,
-  };
 }
 
-export async function unsetConfiguredMcpServer(params: {
-  name: string;
-  expectedServer?: Record<string, unknown>;
-}): Promise<ConfigMcpWriteResult> {
+async function unsetConfiguredMcpServer(
+  params: {
+    name: string;
+    expectedServer?: Record<string, unknown>;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
     return { ok: false, path: "", error: "MCP server name is required." };
@@ -347,13 +353,8 @@ export async function unsetConfiguredMcpServer(params: {
     return loaded;
   }
   if (!Object.hasOwn(loaded.mcpServers, name)) {
-    return {
-      ok: true,
-      path: loaded.path,
-      config: loaded.config,
-      mcpServers: loaded.mcpServers,
-      removed: false,
-    };
+    const { baseHash: _baseHash, ...unchanged } = loaded;
+    return { ...unchanged, removed: false };
   }
   const loadedServer = loaded.mcpServers[name];
   if (
@@ -369,39 +370,21 @@ export async function unsetConfiguredMcpServer(params: {
     };
   }
 
-  const next = structuredClone(loaded.config);
-  const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
+  const servers = normalizeConfiguredMcpServers(loaded.config.mcp?.servers);
   delete servers[name];
-  if (Object.keys(servers).length > 0) {
-    next.mcp = {
-      ...next.mcp,
-      servers,
-    };
-  } else if (next.mcp) {
-    delete next.mcp.servers;
-    if (Object.keys(next.mcp).length === 0) {
-      delete next.mcp;
-    }
-  }
-
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = expectDefined(validated.issues[0], "issues entry at 0");
-    return {
-      ok: false,
-      path: loaded.path,
-      error: `Config invalid after MCP unset (${issue.path}: ${issue.message}).`,
-    };
-  }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    baseHash: loaded.baseHash,
+  return commitConfiguredMcpServers({
+    loaded,
+    servers,
+    errorLabel: "unset",
+    success: { removed: true },
+    mutation: { name, onCommitted },
   });
-  return {
-    ok: true,
-    path: loaded.path,
-    config: validated.config,
-    mcpServers: servers,
-    removed: true,
-  };
 }
+
+/** Low-level config writers; production mutations must use the agents-owned lifecycle facade. */
+export const mcpConfigInternal = {
+  set: setConfiguredMcpServer,
+  unset: unsetConfiguredMcpServer,
+  update: updateConfiguredMcpServer,
+  updateTools: updateConfiguredMcpServerTools,
+};

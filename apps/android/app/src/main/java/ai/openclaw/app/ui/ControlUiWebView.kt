@@ -1,15 +1,18 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.R
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import android.annotation.SuppressLint
+import android.content.Context
+import android.content.res.Configuration
+import android.view.ContextThemeWrapper
 import android.view.View
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -31,47 +34,59 @@ internal fun ControlUiWebView(
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
-  val webViewRef = remember { arrayOfNulls<WebView>(1) }
+  val darkAppearance = LocalResolvedAppearanceIsDark.current
 
-  DisposableEffect(Unit) {
-    onDispose {
-      val webView = webViewRef[0] ?: return@onDispose
-      webView.stopLoading()
-      webView.destroy()
-      webViewRef[0] = null
-    }
+  // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
+  // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
+  // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
+  // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
+  key(darkAppearance) {
+    AndroidView(
+      modifier = modifier,
+      factory = {
+        val webView = WebView(controlUiWebViewContext(context, darkAppearance))
+        val webSettings = webView.settings
+        webSettings.setAllowContentAccess(false)
+        webSettings.setAllowFileAccess(false)
+        webSettings.setAllowFileAccessFromFileURLs(false)
+        webSettings.setAllowUniversalAccessFromFileURLs(false)
+        webSettings.setSafeBrowsingEnabled(true)
+        webSettings.javaScriptEnabled = true
+        webSettings.domStorageEnabled = true
+        webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        webSettings.builtInZoomControls = false
+        webSettings.displayZoomControls = false
+        webSettings.setSupportZoom(false)
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+          WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
+        }
+        webView.overScrollMode = View.OVER_SCROLL_NEVER
+        // The native gateway connection already established this route's trust.
+        // Reuse only that exact accepted fingerprint; every other SSL error cancels.
+        // The same client protects both terminal and dashboard pages.
+        webView.webViewClient = ControlUiWebViewClient(page)
+        installControlUiAuthScript(webView, page)
+        webView.loadUrl(url)
+        webView
+      },
+      onRelease = { webView ->
+        webView.stopLoading()
+        webView.destroy()
+      },
+    )
   }
+}
 
-  AndroidView(
-    modifier = modifier,
-    factory = {
-      val webView = WebView(context)
-      val webSettings = webView.settings
-      webSettings.setAllowContentAccess(false)
-      webSettings.setAllowFileAccess(false)
-      webSettings.setAllowFileAccessFromFileURLs(false)
-      webSettings.setAllowUniversalAccessFromFileURLs(false)
-      webSettings.setSafeBrowsingEnabled(true)
-      webSettings.javaScriptEnabled = true
-      webSettings.domStorageEnabled = true
-      webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-      webSettings.builtInZoomControls = false
-      webSettings.displayZoomControls = false
-      webSettings.setSupportZoom(false)
-      if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-        WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
-      }
-      webView.overScrollMode = View.OVER_SCROLL_NEVER
-      // The native gateway connection already established this route's trust.
-      // Reuse only that exact accepted fingerprint; every other SSL error cancels.
-      // The same client protects both terminal and dashboard pages.
-      webView.webViewClient = ControlUiWebViewClient(page)
-      installControlUiAuthScript(webView, page)
-      webView.loadUrl(url)
-      webViewRef[0] = webView
-      webView
-    },
-  )
+private fun controlUiWebViewContext(
+  context: Context,
+  darkAppearance: Boolean,
+): Context {
+  val configuration = Configuration(context.resources.configuration)
+  val nightMode = if (darkAppearance) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+  configuration.uiMode = (configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or nightMode
+  // WebView derives prefers-color-scheme from the host theme's isLightTheme value.
+  // Reapplying the app's DayNight theme to this resolved configuration keeps that value authoritative.
+  return ContextThemeWrapper(context.createConfigurationContext(configuration), R.style.Theme_OpenClawNode)
 }
 
 /**

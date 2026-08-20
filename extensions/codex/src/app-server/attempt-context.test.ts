@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   clearMemoryPluginState,
@@ -93,6 +93,7 @@ describe("Codex app-server attempt context", () => {
       workspaceBootstrapContext: {
         bootstrapFiles: [],
         contextFiles: [],
+        inheritsAgentWorkspace: false,
         promptContextFiles: [],
       },
       skillsPrompt: "",
@@ -194,6 +195,49 @@ describe("Codex app-server attempt context", () => {
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inherits agent workspace instructions when Codex executes in another folder", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-execution-workspace-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Canonical agent instructions");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical agent soul");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Canonical agent memory");
+    await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: ["memory_search", "memory_get"],
+      });
+
+      expect(context.threadDeveloperInstructions).toContain("Canonical agent instructions");
+      expect(context.threadDeveloperInstructions).toContain(
+        "OpenClaw Agent Workspace Instructions",
+      );
+      expect(context.threadDeveloperInstructions).toContain(path.join(workspaceDir, "AGENTS.md"));
+      expect(context.threadDeveloperInstructions).not.toContain("Canonical agent soul");
+      expect(context.threadDeveloperInstructions).not.toContain("Execution project instructions");
+      expect(context.threadDeveloperInstructions).not.toContain(
+        path.join(executionDir, "AGENTS.md"),
+      );
+      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
+      expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
+      expect(context.memoryToolRouted).toBe(true);
+      expect(context.promptContext).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
     }
   });
 

@@ -1,17 +1,26 @@
 // Agents add tests cover agent creation, workspace setup, channel binding, and onboarding integration.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createQueuedWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+
+type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
+type EnsureWorkspaceAndSessions = typeof import("./onboard-helpers.js").ensureWorkspaceAndSessions;
+type PrepareAuthChoice = typeof import("./auth-choice.js").prepareAuthChoice;
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -19,6 +28,7 @@ const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
 );
 const createAgentMock = vi.hoisted(() => vi.fn());
+const checkAgentCreationGateMock = vi.hoisted(() => vi.fn());
 const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
     await writeConfigFileMock(params.nextConfig);
@@ -69,15 +79,40 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
 }));
+const pluginLifecycleMocks = vi.hoisted(() => {
+  const state = { active: false };
+  return {
+    state,
+    withPluginLifecycleLease: vi.fn(async (_options, run: () => Promise<unknown>) => {
+      state.active = true;
+      try {
+        return await run();
+      } finally {
+        state.active = false;
+      }
+    }),
+  };
+});
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
+}));
 const authChoiceMocks = vi.hoisted(() => ({
-  applyAuthChoice: vi.fn(),
+  prepareAuthChoice: vi.fn<PrepareAuthChoice>(),
   warnIfModelConfigLooksOff: vi.fn(async () => {}),
 }));
+const authProfileMocks = vi.hoisted(() => ({
+  persistBatch: vi.fn(),
+}));
+const authPromptMocks = vi.hoisted(() => ({
+  promptAuthChoiceGrouped: vi.fn(async () => "fixture-auth"),
+}));
 const onboardChannelsMocks = vi.hoisted(() => ({
-  setupChannels: vi.fn(async (config: Record<string, unknown>) => config),
+  setupChannels: vi.fn<SetupChannels>(async (config) => config),
 }));
 const onboardHelpersMocks = vi.hoisted(() => ({
-  ensureWorkspaceAndSessions: vi.fn(async () => {}),
+  ensureWorkspaceAndSessions: vi.fn<EnsureWorkspaceAndSessions>(async () => ({
+    bootstrapPending: false,
+  })),
 }));
 
 vi.mock("../config/config.js", async () => ({
@@ -87,7 +122,13 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../agents/agent-create.js", () => ({ createAgent: createAgentMock }));
+vi.mock("../agents/agent-create.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-create.js")>(
+    "../agents/agent-create.js",
+  )),
+  checkAgentCreationGate: checkAgentCreationGateMock,
+  createAgent: createAgentMock,
+}));
 
 vi.mock("../plugins/install-record-commit.js", async () => ({
   ...(await vi.importActual<typeof import("../plugins/install-record-commit.js")>(
@@ -101,9 +142,26 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: pluginLifecycleMocks.withPluginLifecycleLease,
+}));
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: terminalMocks.isTerminalInteractive,
+}));
+
 vi.mock("./auth-choice.js", () => ({
-  applyAuthChoice: authChoiceMocks.applyAuthChoice,
+  prepareAuthChoice: authChoiceMocks.prepareAuthChoice,
   warnIfModelConfigLooksOff: authChoiceMocks.warnIfModelConfigLooksOff,
+}));
+
+vi.mock("./auth-choice-prompt.js", () => ({
+  promptAuthChoiceGrouped: authPromptMocks.promptAuthChoiceGrouped,
+}));
+
+vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
+  persistAuthProfileBatch: authProfileMocks.persistBatch,
 }));
 
 vi.mock("./onboard-channels.js", () => ({
@@ -115,7 +173,11 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { agentsAddCommand, testing } from "./agents.commands.add.js";
+import { agentsAddCommand } from "./agents.commands.add.js";
+
+const { persistAuthProfileBatch } = await vi.importActual<
+  typeof import("../agents/auth-profiles/upsert-with-lock.js")
+>("../agents/auth-profiles/upsert-with-lock.js");
 
 const runtime = createTestRuntime();
 const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
@@ -139,10 +201,19 @@ describe("agents add command", () => {
     replaceConfigFileMock.mockClear();
     commitConfigWithPendingPluginInstallsMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
+    checkAgentCreationGateMock.mockReset().mockResolvedValue(undefined);
     createAgentMock.mockReset();
     createAgentMock.mockImplementation(
-      async (params: { name: string; workspace: string; bindingSpecs?: string[] }) => {
-        const agentId = params.name.toLowerCase();
+      async (params: {
+        name?: string;
+        workspace?: string;
+        entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
+        bindingSpecs?: string[];
+        stagedConfig?: Record<string, unknown>;
+        prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
+      }) => {
+        const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
+        const agentId = (params.entry?.id ?? name).toLowerCase();
         if (agentId === "openclaw" || agentId === "crestodian") {
           return { status: "error", reason: "reserved-id", agentId };
         }
@@ -153,13 +224,15 @@ describe("agents add command", () => {
               match: { channel: params.bindingSpecs[0].split(":")[0] },
             }
           : undefined;
+        await params.prepareConfigCommit?.();
         return {
           status: "created" as const,
           agentId,
-          name: params.name,
-          workspace: params.workspace,
-          agentDir: `/tmp/agent-${agentId}`,
+          name,
+          workspace: params.workspace ?? params.entry?.workspace ?? `/tmp/workspace-${agentId}`,
+          agentDir: params.entry?.agentDir ?? `/tmp/agent-${agentId}`,
           bootstrapPending: true,
+          config: params.stagedConfig ?? {},
           ...(binding
             ? {
                 bindingResult: {
@@ -175,8 +248,13 @@ describe("agents add command", () => {
       },
     );
     wizardMocks.createClackPrompter.mockClear();
-    authChoiceMocks.applyAuthChoice.mockClear();
+    pluginLifecycleMocks.withPluginLifecycleLease.mockClear();
+    pluginLifecycleMocks.state.active = false;
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
+    authChoiceMocks.prepareAuthChoice.mockReset();
     authChoiceMocks.warnIfModelConfigLooksOff.mockClear();
+    authPromptMocks.promptAuthChoiceGrouped.mockClear();
+    authProfileMocks.persistBatch.mockReset().mockImplementation(persistAuthProfileBatch);
     onboardChannelsMocks.setupChannels.mockClear();
     onboardHelpersMocks.ensureWorkspaceAndSessions.mockClear();
     runtime.log.mockClear();
@@ -192,10 +270,74 @@ describe("agents add command", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
   }
 
+  async function seedAgentAuthStore(
+    root: string,
+    agentId: string,
+    store: AuthProfileStore,
+  ): Promise<string> {
+    const agentDir = path.join(root, "agents", agentId, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    saveAuthProfileStore(store, agentDir);
+    return agentDir;
+  }
+
+  function setConfigSnapshot(config: Record<string, unknown>): void {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config,
+      sourceConfig: config,
+    });
+  }
+
+  function useFreshAgentWizard(params: { workspaceDir: string; confirmValues?: boolean[] }) {
+    const wizard = createQueuedWizardPrompter({
+      textValues: ["work", params.workspaceDir],
+      confirmValues: params.confirmValues,
+    });
+    wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+    return wizard;
+  }
+
+  function useExistingAgentWizard(workspaceDir = "/tmp/workspace-work") {
+    const wizard = createQueuedWizardPrompter({
+      textValues: [workspaceDir],
+      confirmValues: [true, false],
+    });
+    wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+    return wizard;
+  }
+
+  function stageGuidedAuth(
+    profiles: Array<{ profileId: string; credential: AuthProfileCredential }> = [
+      {
+        profileId: "openai:primary",
+        credential: { type: "api_key", provider: "openai", key: "sk-primary" },
+      },
+    ],
+  ): void {
+    authChoiceMocks.prepareAuthChoice.mockImplementationOnce(async ({ config }) => ({
+      config: {
+        ...config,
+        auth: { profiles: { "openai:primary": { provider: "openai", mode: "api_key" } } },
+      },
+      authProfiles: profiles,
+      persistAuthProfiles: async () => {},
+    }));
+  }
+
+  function stageChannelPostWriteHook(run: ChannelOnboardingPostWriteHook["run"]): void {
+    onboardChannelsMocks.setupChannels.mockImplementationOnce(
+      async (config, _runtime, _prompter, options) => {
+        options?.onPostWriteHook?.({ channel: "matrix", accountId: "ops", run });
+        return config;
+      },
+    );
+  }
+
   it("requires --workspace when flags are present", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: true });
+    await agentsAddCommand({ name: "Work" }, runtime, { hasAutomationFlags: true });
 
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
@@ -209,7 +351,7 @@ describe("agents add command", () => {
     readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
 
     await agentsAddCommand({ name: "Work", nonInteractive: true }, runtime, {
-      hasFlags: false,
+      hasAutomationFlags: false,
     });
 
     expect(runtime.error).toHaveBeenCalledOnce();
@@ -225,7 +367,9 @@ describe("agents add command", () => {
     async (name) => {
       readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
 
-      await agentsAddCommand({ name, workspace: "/tmp/reserved" }, runtime, { hasFlags: true });
+      await agentsAddCommand({ name, workspace: "/tmp/reserved" }, runtime, {
+        hasAutomationFlags: true,
+      });
 
       expect(runtime.error).toHaveBeenCalledWith(
         `"${name}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
@@ -234,6 +378,33 @@ describe("agents add command", () => {
       expect(writeConfigFileMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: {} } } },
+      sourceConfig: { agents: { entries: { main: {} } } },
+    });
+    const prompter = {
+      intro: vi.fn(),
+      text: vi.fn(),
+      confirm: vi.fn(),
+      note: vi.fn(),
+      outro: vi.fn(),
+    };
+    wizardMocks.createClackPrompter.mockReturnValue(prompter);
+
+    await agentsAddCommand({ name: "агент✨" }, runtime);
+
+    expect(prompter.outro).toHaveBeenCalledWith(
+      'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    );
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(checkAgentCreationGateMock).not.toHaveBeenCalled();
+    expect(createAgentMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
 
   it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
     "rejects reserved system-agent id %s from an interactive positional argument",
@@ -272,22 +443,57 @@ describe("agents add command", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { json: false, output: process.stdout },
+    { json: true, output: process.stderr },
+  ])(
+    "refuses the interactive wizard without a usable terminal (json=$json)",
+    async ({ json, output }) => {
+      readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+      terminalMocks.isTerminalInteractive.mockReturnValue(false);
+      wizardMocks.createClackPrompter.mockReturnValue({
+        intro: vi.fn(),
+        text: vi.fn().mockRejectedValue(new WizardCancelledError()),
+        confirm: vi.fn(),
+        note: vi.fn(),
+        outro: vi.fn(),
+      });
+
+      await agentsAddCommand({ json }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledWith(output);
+      expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
+      expect(createAgentMock).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the explicit agent target and skips catalog validation", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
       config: { agents: { list: [{ id: "main", default: true }] } },
       sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
     });
-    wizardMocks.createClackPrompter.mockReturnValue({
+    const prompter = {
       intro: vi.fn(),
       text: vi.fn().mockResolvedValueOnce("Jon").mockResolvedValueOnce("/tmp/openclaw-jon"),
       confirm: vi.fn().mockResolvedValue(false),
       note: vi.fn(),
       outro: vi.fn(),
-    });
+    };
+    wizardMocks.createClackPrompter.mockReturnValue(prompter);
 
     await agentsAddCommand({}, runtime);
 
+    expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledOnce();
+    expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledWith(process.stdout);
+    expect(wizardMocks.createClackPrompter).toHaveBeenCalledWith(process.stdout);
+    expect(prompter.intro).toHaveBeenCalledWith("Add OpenClaw agent");
     expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledOnce();
     expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
       expect.objectContaining({ agents: expect.any(Object) }),
@@ -297,186 +503,497 @@ describe("agents add command", () => {
         validateCatalog: false,
       }),
     );
-    expect(onboardHelpersMocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      "/tmp/openclaw-jon",
-      runtime,
-      expect.objectContaining({ agentId: "jon" }),
+    expect(checkAgentCreationGateMock).toHaveBeenCalledWith("jon");
+    expect(createAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ id: "jon", workspace: "/tmp/openclaw-jon" }),
+        stagedConfig: expect.any(Object),
+        transformConfig: transformConfigWithPendingPluginInstallsMock,
+      }),
     );
   });
 
-  it("copies only portable auth profiles when seeding a new agent store", async () => {
-    await withAgentsAddStateRoot("openclaw-agents-add-auth-copy-", async (root) => {
-      const sourceAgentDir = path.join(root, "main", "agent");
-      const destAgentDir = path.join(root, "work", "agent");
-      await fs.mkdir(sourceAgentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
+  it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
+    const config = { agents: { entries: { work: { id: "work" } } } };
+    setConfigSnapshot(config);
+    const wizard = createQueuedWizardPrompter({
+      textValues: ["/tmp/workspace-work"],
+      confirmValues: [true, false],
+    });
+    wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+    onboardChannelsMocks.setupChannels.mockImplementationOnce(
+      async (nextConfig, wizardRuntime, _prompter, options) => {
+        wizardRuntime.log("channel log");
+        options?.onPostWriteHook?.({
+          channel: "matrix",
+          accountId: "ops",
+          run: async ({ runtime: hookRuntime }) => hookRuntime.log("hook log"),
+        });
+        return nextConfig;
+      },
+    );
+    onboardHelpersMocks.ensureWorkspaceAndSessions.mockImplementationOnce(
+      async (_workspace, workspaceRuntime) => {
+        workspaceRuntime.log("workspace log");
+        return { bootstrapPending: false };
+      },
+    );
+
+    await agentsAddCommand({ name: "work", json: true }, runtime);
+
+    expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledWith(process.stderr);
+    expect(wizardMocks.createClackPrompter).toHaveBeenCalledWith(process.stderr);
+    expect(runtime.error.mock.calls.map(([message]) => message)).toEqual([
+      "channel log",
+      "workspace log",
+      "hook log",
+    ]);
+    expect(runtime.log).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      agentId: "work",
+      name: "work",
+      workspace: "/tmp/workspace-work",
+      agentDir: expect.stringContaining("/agents/work/agent"),
+    });
+  });
+
+  it("surfaces the canonical main gate before guided auth or workspace side effects", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { robby: { id: "robby" } } } },
+      sourceConfig: { agents: { entries: { robby: { id: "robby" } } } },
+    });
+    const prompter = {
+      intro: vi.fn(),
+      text: vi.fn(),
+      confirm: vi.fn(),
+      note: vi.fn(),
+      outro: vi.fn(),
+    };
+    wizardMocks.createClackPrompter.mockReturnValue(prompter);
+    checkAgentCreationGateMock.mockResolvedValueOnce({
+      status: "error",
+      reason: "legacy-session-migration-required",
+      agentId: "main",
+      message: "Run openclaw doctor --fix, then retry.",
+    });
+
+    await agentsAddCommand({ name: "main" }, runtime);
+
+    expect(checkAgentCreationGateMock).toHaveBeenCalledWith("main");
+    expect(prompter.outro).toHaveBeenCalledWith("Run openclaw doctor --fix, then retry.");
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(authChoiceMocks.prepareAuthChoice).not.toHaveBeenCalled();
+    expect(createAgentMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["legacy-main", "state-db"] as const)(
+    "reports only auth profiles persisted to the new agent store with %s shared auth",
+    async (location) => {
+      await withAgentsAddStateRoot("openclaw-agents-add-auth-copy-", async (root) => {
+        const destAgentDir = path.join(root, "agents", "work", "agent");
+        const workspaceDir = path.join(root, "workspace-work");
+        const sourceStore: AuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:default": {
+            "openai:api-key": {
               type: "api_key",
               provider: "openai",
               key: "sk-test",
             },
-            "openai:backup": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-backup",
-            },
-            "github-copilot:default": {
-              type: "token",
-              provider: "github-copilot",
-              token: "gho-test",
-            },
-            "openai:oauth": {
-              type: "oauth",
-              provider: "openai",
-              access: "codex-access",
-              refresh: "codex-refresh",
-              expires: Date.now() + 60_000,
-            },
-          },
-          order: {
-            openai: ["openai:oauth", "openai:backup", "openai:default"],
-            "github-copilot": ["github-copilot:default"],
-          },
-          lastGood: { openai: "openai:default" },
-          usageStats: { "openai:default": { lastUsed: 1_000 } },
-        },
-        sourceAgentDir,
-      );
-
-      const result = await testing.copyPortableAuthProfiles({
-        sourceAgentDir,
-        destAgentDir,
-      });
-
-      expect(result).toEqual({ copied: 3, skipped: 1 });
-      const copied = loadPersistedAuthProfileStore(destAgentDir);
-      expect(Object.keys(copied?.profiles ?? {}).toSorted()).toEqual([
-        "github-copilot:default",
-        "openai:backup",
-        "openai:default",
-      ]);
-      expect(copied?.order).toEqual({
-        openai: ["openai:backup", "openai:default"],
-        "github-copilot": ["github-copilot:default"],
-      });
-      expect(copied?.lastGood).toBeUndefined();
-      expect(copied?.usageStats).toBeUndefined();
-      expect(resolveAuthProfileOrder({ store: copied!, provider: "openai" })).toEqual([
-        "openai:backup",
-        "openai:default",
-      ]);
-    });
-  });
-
-  it("copies portable Codex OAuth profiles inline", async () => {
-    await withAgentsAddStateRoot("openclaw-agents-add-oauth-copy-", async (root) => {
-      const sourceAgentDir = path.join(root, "main", "agent");
-      const destAgentDir = path.join(root, "work", "agent");
-      const expires = Date.now() + 60_000;
-      await fs.mkdir(sourceAgentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
             "openai:oauth": {
               type: "oauth",
               provider: "openai",
               access: "codex-copy-access-token",
               refresh: "codex-copy-refresh-token",
-              expires,
-              copyToAgents: true,
-            },
-          },
-        },
-        sourceAgentDir,
-      );
-
-      const result = await testing.copyPortableAuthProfiles({
-        sourceAgentDir,
-        destAgentDir,
-      });
-
-      expect(result).toEqual({ copied: 1, skipped: 0 });
-      const copied = loadPersistedAuthProfileStore(destAgentDir);
-      const credential = copied?.profiles["openai:oauth"];
-      expect(credential).toStrictEqual({
-        type: "oauth",
-        provider: "openai",
-        access: "codex-copy-access-token",
-        refresh: "codex-copy-refresh-token",
-        expires,
-        copyToAgents: true,
-      });
-    });
-  });
-
-  it("skips unresolved OAuth profiles when seeding a new agent store", async () => {
-    await withAgentsAddStateRoot("openclaw-agents-add-oauth-ref-skip-", async (root) => {
-      const sourceAgentDir = path.join(root, "main", "agent");
-      const destAgentDir = path.join(root, "work", "agent");
-      const profileId = "openai:oauth";
-      const ref = {
-        source: "openclaw-credentials" as const,
-        provider: "openai" as const,
-        id: "0123456789abcdef0123456789abcdef",
-      };
-      await fs.mkdir(sourceAgentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            [profileId]: {
-              type: "oauth",
-              provider: "openai",
-              copyToAgents: true,
               expires: Date.now() + 60_000,
-              oauthRef: ref,
+              copyToAgents: true,
             },
           },
-        } as never,
-        sourceAgentDir,
-      );
-      const result = await testing.copyPortableAuthProfiles({
-        sourceAgentDir,
-        destAgentDir,
+        };
+        if (location === "state-db") {
+          writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+          saveAuthProfileStore(sourceStore);
+        } else {
+          await seedAgentAuthStore(root, "main", sourceStore);
+        }
+        setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+        const wizard = useFreshAgentWizard({ workspaceDir, confirmValues: [true, false] });
+
+        await agentsAddCommand({}, runtime);
+
+        expect(Object.keys(loadPersistedAuthProfileStore(destAgentDir)?.profiles ?? {})).toEqual([
+          "openai:api-key",
+        ]);
+        expect(wizard.note).toHaveBeenCalledWith(
+          'Copied 1 portable auth profile from "main". OAuth profiles stay shared from "main" unless this agent signs in separately.',
+          "Auth profiles",
+        );
       });
+    },
+  );
 
-      expect(result).toEqual({ copied: 0, skipped: 1 });
-      expect(loadPersistedAuthProfileStore(destAgentDir)).toBeNull();
-    });
-  });
-
-  it("does not claim skipped OAuth profiles stay shared from a non-main source agent", () => {
-    expect(
-      testing.formatSkippedOAuthProfilesMessage({
-        sourceAgentId: "default-work",
-        sourceIsInheritedMain: false,
-      }),
-    ).toBe(
-      'OAuth profiles were not copied from "default-work"; sign in separately for this agent.',
-    );
-    expect(
-      testing.formatSkippedOAuthProfilesMessage({
-        sourceAgentId: "main",
-        sourceIsInheritedMain: true,
-      }),
-    ).toBe('OAuth profiles stay shared from "main" unless this agent signs in separately.');
-  });
-
-  describe("non-interactive config mutation", () => {
-    it("delegates creation to the canonical service", async () => {
+  it("fails before config mutation when the source auth store is unreadable", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-unreadable-", async (root) => {
+      const sourceAgentDir = path.join(root, "agents", "main", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      await fs.mkdir(sourceAgentDir, { recursive: true });
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(sourceAgentDir));
+      database.exec(
+        "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
+      );
+      database.close();
       readConfigFileSnapshotMock.mockResolvedValue({
         ...baseConfigSnapshot,
         config: { agents: { list: [{ id: "main", default: true }] } },
         sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
       });
+      const prompter = {
+        intro: vi.fn(),
+        text: vi.fn().mockResolvedValueOnce("work").mockResolvedValueOnce(workspaceDir),
+        confirm: vi.fn().mockResolvedValue(false),
+        note: vi.fn(),
+        outro: vi.fn(),
+      };
+      wizardMocks.createClackPrompter.mockReturnValue(prompter);
 
-      await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
-        hasFlags: true,
+      await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
+        /auth profile store .* is unreadable; run .*doctor --fix/i,
+      );
+
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+      expect(prompter.outro).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not copy accepted portable auth when the guided wizard is cancelled", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-cancel-", async (root) => {
+      const destAgentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      await seedAgentAuthStore(root, "main", {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:api-key": { type: "api_key", provider: "openai", key: "sk-test" },
+        },
       });
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      const wizard = useFreshAgentWizard({ workspaceDir });
+      wizard.confirm.mockResolvedValueOnce(true).mockRejectedValueOnce(new WizardCancelledError());
+
+      await agentsAddCommand({}, runtime);
+
+      await expect(fs.stat(destAgentDir)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(createAgentMock).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it("does not persist prepared provider auth when a later prompt is cancelled", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-cancel-provider-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
+      stageGuidedAuth();
+      authChoiceMocks.warnIfModelConfigLooksOff.mockRejectedValueOnce(new WizardCancelledError());
+
+      await agentsAddCommand({}, runtime);
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+      expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+      expect(createAgentMock).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it("keeps guided auth while applying portable profiles without overwriting", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-guided-", async (root) => {
+      const destAgentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      await seedAgentAuthStore(root, "main", {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "portable-conflict",
+          },
+          "openai:portable": {
+            type: "api_key",
+            provider: "openai",
+            key: "portable-retained",
+          },
+        },
+        order: { openai: ["openai:api-key", "openai:portable"] },
+      });
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      const wizard = createQueuedWizardPrompter({
+        textValues: ["work", workspaceDir],
+        confirmValues: [true, true],
+        selectValues: ["openai", "openai-api-key"],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+      stageGuidedAuth([
+        {
+          profileId: "openai:api-key",
+          credential: { type: "api_key", provider: "openai", key: "guided-wins" },
+        },
+        {
+          profileId: "openai:guided",
+          credential: { type: "api_key", provider: "openai", key: "guided-retained" },
+        },
+      ]);
+
+      await agentsAddCommand({}, runtime);
+
+      const persisted = loadPersistedAuthProfileStore(destAgentDir);
+      expect(persisted?.profiles).toMatchObject({
+        "openai:api-key": { key: "guided-wins" },
+        "openai:portable": { key: "portable-retained" },
+        "openai:guided": { key: "guided-retained" },
+      });
+      expect(persisted?.order?.openai).toEqual(["openai:api-key", "openai:portable"]);
+      expect(wizard.note).toHaveBeenCalledWith(
+        'Copied 2 portable auth profiles from "main".',
+        "Auth profiles",
+      );
+    });
+  });
+
+  it("persists staged provider auth only at the agent config commit edge", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-create-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
+      stageGuidedAuth();
+      createAgentMock.mockImplementationOnce(
+        async (params: {
+          stagedConfig?: Record<string, unknown>;
+          prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
+        }) => {
+          expect(pluginLifecycleMocks.state.active).toBe(true);
+          expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+          await params.prepareConfigCommit?.();
+          return {
+            status: "created" as const,
+            agentId: "work",
+            name: "work",
+            workspace: workspaceDir,
+            agentDir,
+            bootstrapPending: true,
+            config: params.stagedConfig ?? {},
+          };
+        },
+      );
+
+      await agentsAddCommand({}, runtime);
+
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:primary"]).toMatchObject({
+        key: "sk-primary",
+      });
+      expect(authProfileMocks.persistBatch).toHaveBeenCalledOnce();
+      expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.any(Object),
+        expect.objectContaining({
+          pendingAuthProfiles: [expect.objectContaining({ profileId: "openai:primary" })],
+        }),
+      );
+      expect(createAgentMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stagedConfig: expect.objectContaining({ auth: expect.any(Object) }),
+          prepareConfigCommit: expect.any(Function),
+        }),
+      );
+    });
+  });
+
+  it("publishes no agent when staged provider auth cannot persist atomically", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-persist-failure-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      const profiles = ["first", "second"].map((name) => ({
+        profileId: `openai:${name}`,
+        credential: { type: "api_key" as const, provider: "openai", key: `sk-${name}` },
+      }));
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
+      stageGuidedAuth(profiles);
+      authProfileMocks.persistBatch.mockRejectedValueOnce(
+        new Error("injected auth batch persistence failure"),
+      );
+
+      await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
+        "injected auth batch persistence failure",
+      );
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+      expect(createAgentMock).toHaveBeenCalledOnce();
+      expect(commitConfigWithPendingPluginInstallsMock).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("retains existing-agent auth after config publication when later output fails", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-existing-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({
+        agents: { entries: { work: { id: "work", workspace: workspaceDir, agentDir } } },
+      });
+      const wizard = createQueuedWizardPrompter({
+        textValues: [workspaceDir],
+        confirmValues: [true, true],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+      stageGuidedAuth();
+      wizard.outro.mockRejectedValueOnce(new Error("injected late failure"));
+
+      await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(
+        "injected late failure",
+      );
+
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:primary"]).toMatchObject({
+        key: "sk-primary",
+      });
+      expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig: expect.objectContaining({ auth: expect.any(Object) }),
+        }),
+      );
+      expect(createAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rolls existing-agent auth back when config publication fails", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-existing-rollback-", async (root) => {
+      const agentDir = path.join(root, "agents", "work", "agent");
+      const workspaceDir = path.join(root, "workspace-work");
+      setConfigSnapshot({
+        agents: { entries: { work: { id: "work", workspace: workspaceDir, agentDir } } },
+      });
+      const wizard = createQueuedWizardPrompter({
+        textValues: [workspaceDir],
+        confirmValues: [true, true],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+      stageGuidedAuth();
+      commitConfigWithPendingPluginInstallsMock.mockRejectedValueOnce(
+        new Error("injected config publication failure"),
+      );
+
+      await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(
+        "injected config publication failure",
+      );
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+      expect(createAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs channel post-write hooks only after fresh agent creation", async () => {
+    const hook = vi.fn(async () => {});
+    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+    useFreshAgentWizard({ workspaceDir: "/tmp/workspace-work", confirmValues: [false] });
+    stageChannelPostWriteHook(hook);
+
+    await agentsAddCommand({}, runtime);
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(createAgentMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("passes canonical created config to fresh-agent post-write hooks", async () => {
+    const persistedConfig = {
+      agents: { entries: { work: { id: "work", workspace: "/tmp/canonical-workspace" } } },
+      plugins: { installs: {} },
+    };
+    const hook = vi.fn(async () => {});
+    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+    useFreshAgentWizard({ workspaceDir: "/tmp/staged-workspace", confirmValues: [false] });
+    stageChannelPostWriteHook(hook);
+    createAgentMock.mockResolvedValueOnce({
+      status: "created",
+      agentId: "work",
+      name: "work",
+      workspace: "/tmp/canonical-workspace",
+      agentDir: "/tmp/agent-work",
+      bootstrapPending: true,
+      config: persistedConfig,
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({ cfg: persistedConfig }));
+  });
+
+  it("does not run channel post-write hooks when fresh agent creation fails", async () => {
+    const hook = vi.fn(async () => {});
+    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+    useFreshAgentWizard({ workspaceDir: "/tmp/workspace-work", confirmValues: [false] });
+    stageChannelPostWriteHook(hook);
+    createAgentMock.mockResolvedValueOnce({
+      status: "error",
+      reason: "write-failed",
+      agentId: "work",
+      message: "controlled create failure",
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it("provisions an existing agent workspace before committing its update and running hooks", async () => {
+    const config = { agents: { entries: { work: { id: "work" } } } };
+    const hook = vi.fn(async () => {});
+    setConfigSnapshot(config);
+    useExistingAgentWizard();
+    stageChannelPostWriteHook(hook);
+
+    await agentsAddCommand({ name: "work" }, runtime);
+
+    expect(
+      onboardHelpersMocks.ensureWorkspaceAndSessions.mock.invocationCallOrder[0]!,
+    ).toBeLessThan(commitConfigWithPendingPluginInstallsMock.mock.invocationCallOrder[0]!);
+    expect(commitConfigWithPendingPluginInstallsMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not commit an existing-agent update when workspace provisioning fails", async () => {
+    const config = { agents: { entries: { work: { id: "work" } } } };
+    setConfigSnapshot(config);
+    useExistingAgentWizard();
+    onboardHelpersMocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(
+      new Error("controlled mkdir failure"),
+    );
+
+    await expect(agentsAddCommand({ name: "work" }, runtime)).rejects.toThrow(
+      /workspace provisioning.*agent "work".*controlled mkdir failure/i,
+    );
+
+    expect(commitConfigWithPendingPluginInstallsMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  describe("non-interactive config mutation", () => {
+    it("creates with explicit non-interactive inputs without a usable terminal", async () => {
+      readConfigFileSnapshotMock.mockResolvedValue({
+        ...baseConfigSnapshot,
+        config: { agents: { list: [{ id: "main", default: true }] } },
+        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
+      });
+      terminalMocks.isTerminalInteractive.mockReturnValue(false);
+
+      await agentsAddCommand(
+        { name: "Work", workspace: "/tmp/work", nonInteractive: true },
+        runtime,
+        { hasAutomationFlags: false },
+      );
 
       expect(createAgentMock).toHaveBeenCalledWith({
         name: "Work",
@@ -486,6 +1003,7 @@ describe("agents add command", () => {
       expect(transformConfigWithPendingPluginInstallsMock).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
+      expect(terminalMocks.isTerminalInteractive).not.toHaveBeenCalled();
     });
 
     it("reports a duplicate rejected by the canonical service", async () => {
@@ -502,7 +1020,7 @@ describe("agents add command", () => {
       });
 
       await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
-        hasFlags: true,
+        hasAutomationFlags: true,
       });
 
       expect(writeConfigFileMock).not.toHaveBeenCalled();
@@ -534,7 +1052,7 @@ describe("agents add command", () => {
       await agentsAddCommand(
         { name: "Work", workspace: "/tmp/work", bind: ["telegram"], json: true },
         runtime,
-        { hasFlags: true },
+        { hasAutomationFlags: true },
       );
 
       const payload = JSON.parse(String(runtime.log.mock.calls.at(-1)?.[0])) as {

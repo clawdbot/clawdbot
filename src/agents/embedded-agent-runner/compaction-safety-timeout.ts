@@ -5,7 +5,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import { withTimeout } from "../../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../../node-host/with-timeout.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
@@ -47,7 +47,7 @@ export async function compactWithSafetyTimeout<T>(
     }
   };
 
-  return await withTimeout(
+  return await runAbortableTimeout(
     async (timeoutSignal) => {
       let timeoutListener: (() => void) | undefined;
       let externalAbortListener: (() => void) | undefined;

@@ -5,11 +5,12 @@ import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   getBootstrapChannelPlugin: (
-    await import("./message-action-test-fixtures.js")
+    await import("./message-action-runner.test-support.js")
   ).createPinboardMessageActionBootstrapRegistryMock(),
 }));
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isDeliverableMessageChannel: (value: string) => ["workspace", "forum"].includes(value),
   normalizeMessageChannel: (value?: string | null) =>
     typeof value === "string" ? value.trim().toLowerCase() : undefined,
@@ -302,6 +303,97 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/requires a target/);
   });
 
+  it("does not inject heartbeat sender sentinel as inferred target", () => {
+    // The non-deliverable sender sentinel must not become @heartbeat.
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("does not inject heartbeat sentinel from currentMessagingTarget", () => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("still infers a real ambient route when not the heartbeat sentinel", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {},
+      toolContext: {
+        currentChannelId: "telegram:12345",
+        currentChannelProvider: "telegram",
+      },
+    });
+    expect(normalized.target).toBe("telegram:12345");
+  });
+
+  it.each([
+    "agent:main:subagent:worker",
+    "agent:main:cron:job:run:turn",
+    "channel:agent:main:subagent:worker",
+    "channel:agent:main:main",
+  ])("does not infer internal session %s as a message target", (currentChannelId) => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord" },
+        toolContext: {
+          currentChannelId,
+          currentChannelProvider: "discord",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("uses a real current messaging target instead of an internal session channel", () => {
+    expect(
+      normalizeMessageActionInput({
+        action: "send",
+        args: { channel: "discord" },
+        toolContext: {
+          currentChannelId: "agent:main:subagent:worker",
+          currentMessagingTarget: "channel:123456789012345678",
+          currentChannelProvider: "discord",
+        },
+      }),
+    ).toMatchObject({
+      channel: "discord",
+      target: "channel:123456789012345678",
+      to: "channel:123456789012345678",
+    });
+  });
+
+  it("preserves an explicitly supplied target shaped like an internal session", () => {
+    expect(
+      normalizeMessageActionInput({
+        action: "send",
+        args: {
+          channel: "discord",
+          target: "agent:main:subagent:worker",
+        },
+      }),
+    ).toMatchObject({
+      channel: "discord",
+      target: "agent:main:subagent:worker",
+      to: "agent:main:subagent:worker",
+    });
+  });
+
   it.each([
     { name: "a nonempty targets array", targets: ["C_TARGET"] },
     { name: "an empty targets array", targets: [] },
@@ -370,5 +462,19 @@ describe("normalizeMessageActionInput", () => {
         },
       }),
     ).toThrow(/conflicting target and delivery alias/);
+  });
+
+  it("allows a trusted direct operator to use an opaque resource without a conversation", () => {
+    expect(
+      normalizeMessageActionInput({
+        action: "unpin",
+        args: { channel: "pinboard", messageId: "om_123" },
+        targetAliasSpec: {
+          aliases: ["messageId", "chatId"],
+          deliveryTargetAliases: ["chatId"],
+        },
+        allowResourceOnly: true,
+      }),
+    ).toEqual({ channel: "pinboard", messageId: "om_123" });
   });
 });

@@ -1,7 +1,6 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
 
@@ -41,6 +40,72 @@ describe("perplexity web search provider", () => {
         });
       },
     );
+  });
+
+  it.each([
+    { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
+    {
+      name: "chat completions",
+      webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
+    },
+  ])("does not start an already canceled $name request", async ({ webSearch }) => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockResolvedValue({ results: [] });
+    const tool = createPerplexityWebSearchProvider().createTool({
+      config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("Perplexity caller canceled"));
+
+    await expect(
+      tool.execute({ query: "perplexity pre-canceled" }, { signal: controller.signal }),
+    ).rejects.toThrow("Perplexity caller canceled");
+    expect(withTrustedWebSearchEndpointMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "native Search API", webSearch: { apiKey: "pplx-test" } },
+    {
+      name: "chat completions",
+      webSearch: { apiKey: "pplx-test", baseUrl: "https://api.perplexity.ai" },
+    },
+  ])("cancels an in-flight $name request", async ({ name, webSearch }) => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockImplementation(
+      async (params: { signal?: AbortSignal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          if (!params.signal) {
+            reject(new Error("Perplexity request lost caller cancellation"));
+            return;
+          }
+          params.signal.addEventListener("abort", () => reject(params.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const tool = createPerplexityWebSearchProvider().createTool({
+      config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    const result = tool.execute(
+      { query: `perplexity in-flight cancellation ${name}` },
+      { signal: controller.signal },
+    );
+
+    await vi.waitFor(() => expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce());
+    controller.abort(new Error("Perplexity request canceled in flight"));
+
+    await expect(result).rejects.toThrow("Perplexity request canceled in flight");
+    expect(withTrustedWebSearchEndpointMock.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    withTrustedWebSearchEndpointMock.mockReset();
   });
 
   it("infers provider routing from api key prefixes", () => {
@@ -208,35 +273,5 @@ describe("perplexity web search provider", () => {
         );
       },
     );
-  });
-
-  it("reports malformed Search API JSON with a stable provider error", async () => {
-    await expect(
-      testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity Search"),
-    ).rejects.toThrow("Perplexity Search: malformed JSON response");
-  });
-
-  it("reports malformed chat completion JSON with a stable provider error", async () => {
-    await expect(
-      testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
-    ).rejects.toThrow("Perplexity: malformed JSON response");
-  });
-
-  it("bounds successful Perplexity JSON bodies before parsing", async () => {
-    const streamed = createStreamingResponse({
-      chunkCount: 32,
-      chunkSize: 1024 * 1024,
-      text: "x",
-      headers: { "content-type": "application/json" },
-    });
-    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
-
-    await expect(
-      testing.readPerplexityJsonResponse(streamed.response, "Perplexity Search"),
-    ).rejects.toThrow("Perplexity Search: JSON response exceeds 16777216 bytes");
-
-    expect(streamed.getReadCount()).toBeLessThan(32);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });

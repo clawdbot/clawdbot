@@ -1,13 +1,13 @@
 // Auth-choice plugin provider tests cover loaded provider setup, plugin install, and credential routing.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   applyAuthChoiceLoadedPluginProvider,
   prepareAuthChoiceLoadedPluginProvider,
   runProviderPluginAuthMethod,
 } from "../plugins/provider-auth-choice.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderPlugin, ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.types.js";
 
 type ResolveProviderInstallCatalogEntry =
@@ -43,10 +43,9 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
 
-const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
+const persistAuthProfileBatch = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
-  upsertAuthProfile,
-  upsertAuthProfileWithLock: upsertAuthProfile,
+  persistAuthProfileBatch,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
@@ -109,6 +108,15 @@ const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
 const LOCAL_API_KEY = "local-provider-key";
 const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
 const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
+
+function expectPersistedProfile(profileId: string, credential: AuthProfileCredential): void {
+  expect(persistAuthProfileBatch).toHaveBeenCalledWith(
+    expect.objectContaining({
+      profiles: [{ profileId, credential }],
+      agentDir: "/tmp/agent",
+    }),
+  );
+}
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -254,7 +262,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         },
       },
     ]);
-    expect(upsertAuthProfile).not.toHaveBeenCalled();
+    expect(persistAuthProfileBatch).not.toHaveBeenCalled();
 
     await prepared?.persistAuthProfiles([
       {
@@ -268,15 +276,11 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     ]);
     await prepared?.persistAuthProfiles();
 
-    expect(upsertAuthProfile).toHaveBeenCalledOnce();
-    expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: LOCAL_PROFILE_ID,
-      credential: {
-        type: "api_key",
-        provider: LOCAL_PROVIDER_ID,
-        key: "test-key",
-      },
-      agentDir: "/tmp/agent",
+    expect(persistAuthProfileBatch).toHaveBeenCalledOnce();
+    expectPersistedProfile(LOCAL_PROFILE_ID, {
+      type: "api_key",
+      provider: LOCAL_PROVIDER_ID,
+      key: "test-key",
     });
   });
 
@@ -376,14 +380,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result?.config.models?.providers?.["remote-alpha"]?.models?.[0]?.input).toContain(
       "image",
     );
-    expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "remote-alpha:default",
-      credential: {
-        type: "api_key",
-        provider: "remote-alpha",
-        key: "sk-remote-alpha-test",
-      },
-      agentDir: "/tmp/agent",
+    expectPersistedProfile("remote-alpha:default", {
+      type: "api_key",
+      provider: "remote-alpha",
+      key: "sk-remote-alpha-test",
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
   });
@@ -401,14 +401,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
     });
-    expect(upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: LOCAL_PROFILE_ID,
-      credential: {
-        type: "api_key",
-        provider: LOCAL_PROVIDER_ID,
-        key: LOCAL_API_KEY,
-      },
-      agentDir: "/tmp/agent",
+    expectPersistedProfile(LOCAL_PROFILE_ID, {
+      type: "api_key",
+      provider: LOCAL_PROVIDER_ID,
+      key: LOCAL_API_KEY,
     });
     expect(runProviderModelSelectedHook).toHaveBeenCalledOnce();
     const [hookParams] = runProviderModelSelectedHook.mock
@@ -621,6 +617,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
           },
         },
       },
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
       runtime: {} as ApplyAuthChoiceParams["runtime"],
       prompter: {
         note,
@@ -644,6 +641,9 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(note).toHaveBeenCalledWith(
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
+    );
+    expect(persistAuthProfileBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ stateDir: "/tmp/openclaw-state" }),
     );
     expect(events).toEqual(["note", "lock"]);
   });

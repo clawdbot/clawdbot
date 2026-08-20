@@ -16,24 +16,22 @@ const hasVersionFlag = (argv: readonly string[]) =>
 
 export function resolveCliExecutionStartupContext(params: {
   argv: string[];
-  protocolCommandPath?: string[];
+  commandPath?: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
 }) {
-  // Resolve argv once so startup policy, routing, and bootstrap share the same command path.
   const invocation = resolveCliArgvInvocation(params.argv);
-  const { commandPath } = invocation;
+  // Commander owns the action path after parsing option values. Route-first
+  // callers omit it and keep using raw argv discovery.
+  const commandPath = params.commandPath ?? invocation.commandPath;
   return {
     invocation,
     commandPath,
     startupPolicy: resolveCliStartupPolicy({
       argv: params.argv,
       commandPath,
-      protocolCommandPath: params.protocolCommandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,
-      routeMode: params.routeMode,
     }),
   };
 }
@@ -71,6 +69,7 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }) {
@@ -85,6 +84,9 @@ export async function ensureCliExecutionBootstrap(params: {
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
+    ...((params.validateConfigOnly ?? params.startupPolicy.validateConfigOnly)
+      ? { validateConfigOnly: true }
+      : {}),
     ...(params.skipPristineStartupStateMigrations
       ? { skipPristineStartupStateMigrations: true }
       : {}),

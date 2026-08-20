@@ -40,7 +40,7 @@ describe("bundled setup config migrations", () => {
     ]);
   });
 
-  test("rewrites legacy canvasHost into plugin-owned config", () => {
+  test("rewrites legacy canvasHost into the surviving plugin-owned switch", () => {
     const result = runMigration({
       canvasHost: {
         enabled: false,
@@ -49,7 +49,9 @@ describe("bundled setup config migrations", () => {
       },
     } as OpenClawConfig);
 
-    expect(result.changes).toEqual(["migrated canvasHost to plugins.entries.canvas.config.host"]);
+    expect(result.changes).toEqual([
+      "Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled.",
+    ]);
     expect(result.config).toEqual({
       plugins: {
         entries: {
@@ -57,8 +59,6 @@ describe("bundled setup config migrations", () => {
             config: {
               host: {
                 enabled: false,
-                root: "~/legacy-canvas",
-                liveReload: false,
               },
             },
           },

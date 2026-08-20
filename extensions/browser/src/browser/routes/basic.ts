@@ -41,7 +41,11 @@ function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
 }
 
-async function probeChromeMcpPageReady(profileCtx: ProfileContext, timeoutMs: number) {
+async function probeChromeMcpPageReady(
+  profileCtx: ProfileContext,
+  timeoutMs: number,
+  signal: AbortSignal,
+) {
   const abort = new AbortController();
   const timer = setTimeout(() => {
     abort.abort(new Error(`Chrome MCP page-readiness probe timed out after ${timeoutMs}ms.`));
@@ -49,9 +53,10 @@ async function probeChromeMcpPageReady(profileCtx: ProfileContext, timeoutMs: nu
   try {
     return await profileCtx.isReachable(timeoutMs, {
       ephemeral: true,
-      signal: abort.signal,
+      signal: AbortSignal.any([signal, abort.signal]),
     });
   } catch {
+    signal.throwIfAborted();
     return false;
   } finally {
     clearTimeout(timer);
@@ -150,6 +155,7 @@ async function buildBrowserStatus(
         const statusStartedAtMs = Date.now();
         const transportReady = await profileCtx.isTransportAvailable(
           STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
+          signal,
         );
         if (!transportReady) {
           return [false, false, false] as const;
@@ -160,13 +166,14 @@ async function buildBrowserStatus(
         const pageReachable = await probeChromeMcpPageReady(
           profileCtx,
           remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
+          signal,
         );
         return [transportReady, transportReady, pageReachable] as const;
       })()
     : await (async () => {
         const [http, ready] = await Promise.all([
-          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
-          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
+          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS, signal),
+          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS, signal),
         ]);
         // For managed CDP profiles, the transport check already includes a WS
         // handshake against the page, so pageReady mirrors cdpReady.
@@ -281,7 +288,11 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
       };
     }
-    const snap = await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 });
+    const snap = await snapshotAria({
+      wsUrl: tab.wsUrl,
+      ...(tab.wsLookup ? { lookup: tab.wsLookup } : {}),
+      limit: 25,
+    });
     return {
       id: "live-snapshot",
       label: "Live snapshot",

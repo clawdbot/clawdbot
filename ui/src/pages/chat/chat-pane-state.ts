@@ -6,6 +6,7 @@ type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatQueueModeOverride?: GatewaySessionRow["queueMode"];
   selectedChatSessionArchived: boolean;
+  selectedChatSessionIncognito: boolean;
 };
 
 export function applySelectedSessionProjection(
@@ -16,12 +17,14 @@ export function applySelectedSessionProjection(
     return false;
   }
   state.selectedChatSessionArchived = session.archived === true;
+  state.selectedChatSessionIncognito = session.incognito === true;
   state.chatQueueModeOverride = session.queueMode;
   state.chatEffectiveQueueMode = session.effectiveQueueMode;
   return true;
 }
 
 const MAX_TRACKED_SESSION_ROWS = 256;
+const CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export class SessionParticipationTracker {
   private readonly lastBlocked = new Map<string, boolean>();
@@ -94,6 +97,7 @@ export async function resolveChatArtifactDownload(
   const result = await state.client.request<ArtifactDownloadResult | null>(
     "artifacts.download",
     params,
+    { timeoutMs: CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS },
   );
   const url = typeof result?.url === "string" ? result.url.trim() : "";
   if (!url) {

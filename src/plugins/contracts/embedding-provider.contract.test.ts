@@ -5,7 +5,6 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { getRegisteredEmbeddingProvider } from "../embedding-providers.js";
 
 describe("embedding provider registration", () => {
   it("keeps public SDK helpers read-only so plugins cannot bypass manifest ownership", () => {
@@ -31,8 +30,7 @@ describe("embedding provider registration", () => {
         });
       },
     });
-
-    expect(getRegisteredEmbeddingProvider("forbidden")).toBeUndefined();
+    expect(registry.registry.embeddingProviders).toStrictEqual([]);
     const diagnostic = registry.registry.diagnostics.find(
       (entry) => entry.pluginId === "not-embedding",
     );
@@ -59,10 +57,9 @@ describe("embedding provider registration", () => {
         });
       },
     });
-
-    const provider = getRegisteredEmbeddingProvider("embedding-owner");
-    expect(provider?.adapter.id).toBe("embedding-owner");
-    expect(provider?.ownerPluginId).toBe("embedding-owner");
+    const provider = registry.registry.embeddingProviders[0];
+    expect(provider?.provider.id).toBe("embedding-owner");
+    expect(provider?.pluginId).toBe("embedding-owner");
     expect(registry.registry.embeddingProviders).toHaveLength(1);
     expect(registry.registry.plugins[0]?.embeddingProviderIds).toContain("embedding-owner");
   });
@@ -94,6 +91,34 @@ describe("embedding provider registration", () => {
     );
     expect(diagnostic?.message).toBe(
       "embedding provider already registered: shared (owner: first-owner)",
+    );
+  });
+
+  it("keeps core embedding provider ids reserved", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "core-shadow",
+      name: "Core Shadow",
+      contracts: {
+        embeddingProviders: ["openai-compatible"],
+      },
+      register(api) {
+        api.registerEmbeddingProvider({
+          id: "openai-compatible",
+          create: async () => ({ provider: null }),
+        });
+      },
+    });
+
+    expect(registry.registry.embeddingProviders).toStrictEqual([]);
+    const diagnostic = registry.registry.diagnostics.find(
+      (entry) => entry.pluginId === "core-shadow",
+    );
+    expect(diagnostic?.message).toBe(
+      "embedding provider already registered: openai-compatible (owner: core)",
     );
   });
 });

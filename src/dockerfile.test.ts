@@ -1,4 +1,5 @@
 // Tests Dockerfile metadata and expected install commands.
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,9 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
+const composeSetupScriptPath = join(repoRoot, "scripts/e2e/compose-setup.sh");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
   repoRoot,
@@ -19,7 +22,53 @@ function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
 }
 
+function resolveOptionalAptPackages(dockerfile: string, env: NodeJS.ProcessEnv): string {
+  const assignment = collapseDockerContinuations(dockerfile).match(
+    /\bpackages="(\$\{OPENCLAW_IMAGE_APT_PACKAGES:-\$OPENCLAW_DOCKER_APT_PACKAGES\})";/u,
+  )?.[1];
+  if (!assignment) {
+    throw new Error("Dockerfile optional apt package assignment is missing");
+  }
+  const script = `packages="${assignment}"; printf '%s' "$packages"`;
+  return execFileSync("/bin/sh", ["-c", script], {
+    encoding: "utf8",
+    env,
+  });
+}
+
 describe("Dockerfile", () => {
+  it("runs the built port-aware Gateway liveness probe", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const compose = await readFile(dockerComposePath, "utf8");
+
+    expect(dockerfile).toContain('CMD ["node", "dist/docker-healthcheck.js"]');
+    expect(dockerfile).not.toContain("127.0.0.1:18789/healthz");
+    expect(compose).toContain('"dist/docker-healthcheck.js"');
+    expect(compose).not.toContain("127.0.0.1:18789/healthz");
+  });
+
+  it("executes the documented Compose health command and validates JSON envelopes", async () => {
+    const docs = await readFile(dockerInstallDocsPath, "utf8");
+    const composeSetup = await readFile(composeSetupScriptPath, "utf8");
+    const gatewayHealthCommand =
+      'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"';
+
+    expect(docs).toContain(`docker compose exec openclaw-gateway sh -lc '${gatewayHealthCommand}'`);
+    expect(docs).not.toContain('node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"');
+    expect(composeSetup).toContain(
+      `"\${COMPOSE[@]}" exec -T openclaw-gateway sh -lc '${gatewayHealthCommand}'`,
+    );
+    expect(composeSetup.match(/gateway health --token "\$TOKEN" --json/g)).toHaveLength(2);
+    expect(composeSetup).toContain('assert_gateway_health_json "gateway service"');
+    expect(composeSetup).toContain('assert_gateway_health_json "CLI sidecar"');
+    expect(composeSetup).toContain('--detail "gateway:documentedHealthCommand=passed"');
+    expect(composeSetup).toContain('--detail "gateway:healthJsonEnvelope=passed"');
+    expect(composeSetup).toContain('--detail "cli:healthJsonEnvelope=passed"');
+    expect(composeSetup).not.toContain('dist/index.js health --token "$TOKEN"');
+    expect(composeSetup).toContain('-v "$PROJECT_DIR:/target"');
+    expect(composeSetup).toContain("rm -rf /target/* /target/.[!.]* /target/..?*");
+  });
+
   it("does not force an external Dockerfile frontend pull", async () => {
     for (const path of dockerSetupDockerfilePaths) {
       const dockerfile = await readFile(join(repoRoot, path), "utf8");
@@ -80,6 +129,38 @@ describe("Dockerfile", () => {
       "ca-certificates curl git hostname lsof openssl procps python3 tini",
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
+  });
+
+  it.runIf(process.platform !== "win32").each([
+    {
+      name: "preferred packages",
+      env: { OPENCLAW_IMAGE_APT_PACKAGES: "python3 wget" },
+      expected: "python3 wget",
+    },
+    {
+      name: "legacy packages when the preferred argument is empty",
+      env: {
+        OPENCLAW_IMAGE_APT_PACKAGES: "",
+        OPENCLAW_DOCKER_APT_PACKAGES: "git curl jq",
+      },
+      expected: "git curl jq",
+    },
+    {
+      name: "no packages when both arguments are absent",
+      env: {},
+      expected: "",
+    },
+    {
+      name: "preferred packages when both arguments are present",
+      env: {
+        OPENCLAW_IMAGE_APT_PACKAGES: "python3",
+        OPENCLAW_DOCKER_APT_PACKAGES: "git",
+      },
+      expected: "python3",
+    },
+  ])("resolves optional apt package args: $name", async ({ env, expected }) => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(resolveOptionalAptPackages(dockerfile, env)).toBe(expected);
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
@@ -370,6 +451,11 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
     );
+    const pluginPruneIndex = dockerfile.indexOf("node scripts/prune-docker-plugin-dist.mjs");
+    const grammyImportIndex = dockerfile.indexOf(
+      `node --input-type=module -e 'await import("grammy")'`,
+    );
+    expect(grammyImportIndex).toBeGreaterThan(pluginPruneIndex);
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
@@ -466,8 +552,8 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Build and push amd64 browser image");
     expect(workflow).toContain("Build and push arm64 browser image");
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
-    expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${GHCR_IMAGE}:${image_version}-browser"');
+    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${image_version}-browser"');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -491,20 +577,30 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Login to Docker Hub");
     expect(workflow).toContain('images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")');
     expect(workflow).toContain("DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-amd64");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-arm64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-amd64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-arm64");
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
-  it("validates release tags before immutable Docker publication", async () => {
+  it("validates immutable release identity before Docker publication", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
-    expect(workflow).toContain("Existing stable, extended-stable, or beta release tag");
+    expect(workflow).toContain("workflow_call:");
+    expect(workflow).toContain("Immutable stable, extended-stable, or beta release tag");
+    expect(workflow).toContain("Full immutable commit SHA resolved from tag");
     expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
+    expect(workflow).toContain('! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$');
+    expect(workflow).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
+    expect(workflow).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(workflow).toContain('! "${IMAGE_TAG_SUFFIX}" =~ ^-r[0-9]{8}$');
+    expect(workflow).toContain('"v${package_version}" != "${RELEASE_TAG}"');
+    expect(workflow).toContain("^v${package_version}-[1-9][0-9]*$");
+    expect(workflow).not.toContain("workflow_dispatch:");
+    expect(workflow).not.toContain("push:\n");
     expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-slim");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-browser");
     expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
     expect(workflow).not.toContain("needs.resolve_release_policy.outputs.default_aliases");
     expect(workflow).not.toContain("needs.resolve_release_policy.outputs.slim_aliases");

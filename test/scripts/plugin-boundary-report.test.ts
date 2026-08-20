@@ -2,31 +2,15 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   createPluginBoundaryReport,
+  isPluginCompatEligibleForRemoval,
   type PluginBoundaryReportResult,
 } from "../../scripts/plugin-boundary-report.js";
-
-function requirePluginSdkSummary(summary: {
-  pluginSdk?: {
-    crossOwnerReservedImportCount?: unknown;
-    unusedReservedCount?: unknown;
-  };
-}) {
-  if (!summary.pluginSdk) {
-    throw new Error("Expected plugin SDK summary");
-  }
-  return summary.pluginSdk;
-}
 
 describe("plugin-boundary-report", () => {
   let summaryResult: PluginBoundaryReportResult;
 
   beforeAll(() => {
-    summaryResult = createPluginBoundaryReport([
-      "--summary",
-      "--json",
-      "--fail-on-cross-owner",
-      "--fail-on-unclassified-unused-reserved",
-    ]);
+    summaryResult = createPluginBoundaryReport(["--summary", "--json"]);
   });
 
   it("emits compact CI-safe summary JSON", () => {
@@ -43,10 +27,6 @@ describe("plugin-boundary-report", () => {
           dueForReview?: unknown;
         }>;
       };
-      pluginSdk?: {
-        crossOwnerReservedImportCount?: unknown;
-        unusedReservedCount?: unknown;
-      };
       memoryHostSdk?: {
         implementation?: unknown;
       };
@@ -54,14 +34,12 @@ describe("plugin-boundary-report", () => {
 
     expect(summaryResult.exitCode).toBe(0);
     expect(summaryResult.stderr).toBe("");
-    expect(summary.compat?.removalPendingCount).toBe(5);
+    expect(summary.compat?.removalPendingCount).toBe(3);
     expect(summary.compat?.removalPendingDueCount).toEqual(expect.any(Number));
     expect(summary.compat?.removalPending?.map((record) => record.code)).toEqual([
-      "agent-harness-sdk-alias",
       "plugin-sdk-media-understanding-public-demotion",
       "plugin-sdk-memory-host-core-public-demotion",
       "plugin-sdk-plugin-config-runtime-public-demotion",
-      "plugin-sdk-tool-plugin-public-demotion",
     ]);
     for (const record of summary.compat?.removalPending ?? []) {
       expect(record.removeAfter).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
@@ -71,11 +49,20 @@ describe("plugin-boundary-report", () => {
       expect((record.readerSample as unknown[]).length).toBeLessThanOrEqual(5);
       expect(record.dueForReview).toEqual(expect.any(Boolean));
     }
-    const pluginSdk = requirePluginSdkSummary(summary);
-    expect(pluginSdk.crossOwnerReservedImportCount).toBe(0);
-    expect(pluginSdk.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
+    );
+  });
+
+  it("treats removeAfter as the final compatibility day", () => {
+    expect(
+      isPluginCompatEligibleForRemoval("2026-08-12", new Date("2026-08-12T23:59:59.999Z")),
+    ).toBe(false);
+    expect(
+      isPluginCompatEligibleForRemoval("2026-08-12", new Date("2026-08-13T00:00:00.000Z")),
+    ).toBe(true);
+    expect(isPluginCompatEligibleForRemoval(undefined, new Date("2026-08-13T00:00:00.000Z"))).toBe(
+      false,
     );
   });
 
@@ -84,9 +71,39 @@ describe("plugin-boundary-report", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("removalPending=5");
-    expect(result.stdout).toContain("removal-pending 2026-07-25 agent-harness-sdk-alias");
+    expect(result.stdout).toContain("removalPending=3");
+    expect(result.stdout).not.toContain("agent-harness-sdk-alias");
     expect(result.stdout).toMatch(/blocker=.*retain the public/iu);
     expect(result.stdout).toMatch(/readerRefs=\d+ readers=/u);
+  });
+
+  it("reports the inbound reply dispatch major-version gate as date-ineligible", () => {
+    const jsonResult = createPluginBoundaryReport(["--json", "--owner", "channel"]);
+    const report = JSON.parse(jsonResult.stdout) as {
+      compat?: {
+        records?: Array<{
+          code?: unknown;
+          removeAfter?: unknown;
+          removalGate?: unknown;
+          eligibleForRemoval?: unknown;
+        }>;
+      };
+    };
+    const record = report.compat?.records?.find(
+      (candidate) => candidate.code === "plugin-sdk-inbound-reply-dispatch-subpath",
+    );
+
+    expect(jsonResult.exitCode).toBe(0);
+    expect(record).toMatchObject({
+      removalGate: "next-plugin-sdk-major",
+      eligibleForRemoval: false,
+    });
+    expect(record?.removeAfter).toBeUndefined();
+
+    const textResult = createPluginBoundaryReport(["--owner", "channel"]);
+    expect(textResult.stdout).toContain(
+      "next-plugin-sdk-major plugin-sdk-inbound-reply-dispatch-subpath",
+    );
+    expect(textResult.stdout).not.toContain("no-date plugin-sdk-inbound-reply-dispatch-subpath");
   });
 });

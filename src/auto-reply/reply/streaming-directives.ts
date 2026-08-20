@@ -26,16 +26,12 @@ type ConsumeOptions = {
   silentToken?: string;
 };
 
-type SplitTrailingDirectiveOptions = {
-  final?: boolean;
-};
-
+// TRANSITIONAL(marker-retirement): streaming tail-buffering exists only because
+// live drafts still carry inline markers mid-run. Delete alongside the marker
+// parser when the visibleReplies default flips to "message_tool".
 // Holds back incomplete inline directive tails so parseChunk only ever sees
 // complete reply/audio tags.
-export const splitTrailingDirective = (
-  text: string,
-  options: SplitTrailingDirectiveOptions = {},
-): { text: string; tail: string } => {
+export const splitTrailingDirective = (text: string): { text: string; tail: string } => {
   let bufferStart = text.length;
   let trimTextBeforeTail = false;
 
@@ -50,17 +46,6 @@ export const splitTrailingDirective = (
   if (text.endsWith("[") && text.length - 1 < bufferStart) {
     bufferStart = text.length - 1;
     trimTextBeforeTail = true;
-  }
-
-  if (options.final) {
-    if (bufferStart >= text.length) {
-      return { text, tail: "" };
-    }
-
-    return {
-      text: text.slice(0, bufferStart),
-      tail: text.slice(bufferStart),
-    };
   }
 
   // Keep a possible final-reply MEDIA directive out of partial streaming
@@ -130,21 +115,34 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
+  let pendingSeparator = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
 
   const reset = () => {
     pendingTail = "";
+    pendingSeparator = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
+    const hadPendingTail = pendingTail.length > 0;
+    const heldSeparator = pendingSeparator;
     let combined = `${pendingTail}${raw ?? ""}`;
     pendingTail = "";
+    pendingSeparator = "";
 
     if (!options.final) {
       const split = splitTrailingDirective(combined);
+      if (split.tail) {
+        const tailStart = combined.length - split.tail.length;
+        const separator = combined.slice(split.text.length, tailStart);
+        // The separator is not part of a possible directive. Hold it separately
+        // so valid completions keep existing streaming behavior while a final
+        // malformed tail can be restored verbatim.
+        pendingSeparator = split.text ? separator : `${heldSeparator}${separator}`;
+      }
       combined = split.text;
       pendingTail = split.tail;
     }
@@ -154,6 +152,9 @@ export function createStreamingDirectiveAccumulator() {
     }
 
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
+    if (hadPendingTail && heldSeparator && parsed.text.startsWith("[")) {
+      parsed.text = `${heldSeparator}${parsed.text}`;
+    }
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
     const sawCurrent =
       activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent === true;

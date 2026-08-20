@@ -2,6 +2,7 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -15,16 +16,19 @@ import {
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
-import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
-import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
-import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
+import type { GatewayServiceLoadState } from "../daemon/service-types.js";
 import {
-  formatPortDiagnostics,
-  inspectPortConnections,
-  inspectPortUsage,
-  isExpectedGatewayListeners,
-  type PortConnection,
-} from "../infra/ports.js";
+  describeGatewayServiceRestart,
+  readGatewayServiceState,
+  resolveGatewayService,
+} from "../daemon/service.js";
+import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
+import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
+import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../gateway/net.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import { formatPortDiagnostics, isExpectedGatewayListeners } from "../infra/ports-format.js";
+import { inspectPortConnections, inspectPortUsage } from "../infra/ports-inspect.js";
+import type { PortConnection } from "../infra/ports-types.js";
 import {
   formatGatewayRestartHandoffDiagnostic,
   readGatewayRestartHandoffSync,
@@ -53,7 +57,9 @@ import { healthCommand } from "./health.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
   | { status: "skipped" }
+  | { status: "not-loaded" }
   | { status: "repaired" }
+  | { status: "system-launchdaemon-blocked"; detail: string }
   | { status: "gui-session-unavailable"; detail: string };
 
 function noteGatewayRuntime(
@@ -101,7 +107,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairExternal) {
     note(EXTERNAL_SERVICE_REPAIR_NOTE, `${params.title} LaunchAgent`);
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   const shouldFix = await confirmDoctorServiceRepair(params.prompter, {
@@ -109,25 +115,31 @@ async function maybeRepairLaunchAgentBootstrap(params: {
     initialValue: true,
   });
   if (!shouldFix) {
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   params.runtime.log(`Bootstrapping ${params.title} LaunchAgent...`);
   const repair = await repairLaunchAgentBootstrap({ env: params.env });
   if (!repair.ok) {
+    if (
+      repair.status === "system-launchdaemon-conflict" ||
+      repair.status === "system-launchdaemon-unverifiable"
+    ) {
+      return { status: "system-launchdaemon-blocked", detail: repair.detail };
+    }
     if (repair.status === "gui-session-unavailable") {
       return { status: "gui-session-unavailable", detail: repair.detail };
     }
     params.runtime.error(
       `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`,
     );
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   const verified = await isLaunchAgentLoaded({ env: params.env });
   if (!verified) {
     params.runtime.error(`${params.title} LaunchAgent still not loaded after repair.`);
-    return { status: "skipped" };
+    return { status: "not-loaded" };
   }
 
   note(`${params.title} LaunchAgent repaired.`, `${params.title} LaunchAgent`);
@@ -178,6 +190,20 @@ async function maybeReportEstablishedGatewayClients(params: {
   }
 }
 
+async function noteGatewayServiceInspectionFailure(
+  loadState: Extract<GatewayServiceLoadState, { status: "unknown" }>,
+): Promise<void> {
+  const lines = [`Gateway service status could not be determined: ${loadState.detail}`];
+  if (process.platform === "linux") {
+    const kind = classifySystemdUnavailableDetail(loadState.detail);
+    if (kind) {
+      lines.push(...renderSystemdUnavailableHints({ wsl: await isWSL(), kind }));
+    }
+  }
+  lines.push(`Run ${formatCliCommand("openclaw gateway status --deep")} and retry doctor.`);
+  note(lines.join("\n"), "Gateway");
+}
+
 /**
  * Repairs or diagnoses the local gateway service after the health check fails.
  *
@@ -193,6 +219,10 @@ export async function maybeRepairGatewayDaemon(params: {
   healthOk: boolean;
   healthSkipped?: boolean;
 }) {
+  if (!isDefaultInstallIdentity(process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients({
       cfg: params.cfg,
@@ -207,29 +237,28 @@ export async function maybeRepairGatewayDaemon(params: {
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
   const service = resolveGatewayService();
+  const restartGatewayService = async () => {
+    try {
+      return await service.restart({
+        env: process.env,
+        stdout: process.stdout,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      note(`Gateway service restart failed: ${detail}`, "Gateway");
+      return null;
+    }
+  };
   const isLocalDarwinGateway =
     process.platform === "darwin" && params.cfg.gateway?.mode !== "remote";
-  // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
+  const serviceState = await readGatewayServiceState(service, { env: process.env });
+  if (serviceState.loadState.status === "unknown") {
+    await noteGatewayServiceInspectionFailure(serviceState.loadState);
+    return;
   }
-  let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
-  const command = params.options.deep
-    ? await Promise.resolve(service.readCommand(process.env)).catch(() => null)
-    : null;
-  const serviceEnv = command?.environment
-    ? ({
-        ...process.env,
-        ...command.environment,
-      } satisfies NodeJS.ProcessEnv)
-    : process.env;
-  const shouldReadRuntime = loaded || isLocalDarwinGateway;
-  if (shouldReadRuntime) {
-    serviceRuntime = await service.readRuntime(serviceEnv).catch(() => undefined);
-  }
+  let loaded = serviceState.loadState.status === "loaded";
+  let serviceRuntime = serviceState.runtime;
+  const serviceEnv = serviceState.env;
   if (params.options.deep) {
     const handoff = readGatewayRestartHandoffSync(serviceEnv);
     if (handoff) {
@@ -257,25 +286,45 @@ export async function maybeRepairGatewayDaemon(params: {
       prompter: params.prompter,
       serviceRepairExternal,
     });
+    if (gatewayRepair.status === "not-loaded") {
+      return;
+    }
+    if (gatewayRepair.status === "system-launchdaemon-blocked") {
+      note(gatewayRepair.detail, "Gateway");
+      return;
+    }
     if (gatewayRepair.status === "gui-session-unavailable") {
       serviceRuntime = {
         status: "unknown",
         detail: gatewayRepair.detail || serviceRuntime?.detail,
-        missingSupervision: true,
         missingGuiSession: true,
       };
     }
     if (gatewayRepair.status === "repaired") {
-      loaded = await service.isLoaded({ env: process.env });
-      if (loaded) {
-        serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+      const repairedState = await readGatewayServiceState(service, { env: process.env });
+      if (repairedState.loadState.status === "unknown") {
+        await noteGatewayServiceInspectionFailure(repairedState.loadState);
+        return;
       }
+      loaded = repairedState.loadState.status === "loaded";
+      serviceRuntime = repairedState.runtime;
     }
+  }
+
+  if (isLocalDarwinGateway && serviceRuntime?.systemLaunchDaemon) {
+    noteGatewayRuntime(serviceRuntime, process.env);
+    return;
   }
 
   if (params.cfg.gateway?.mode !== "remote") {
     const port = resolveGatewayPort(params.cfg, process.env);
-    const diagnostics = await inspectPortUsage(port);
+    const bindHost = await resolveGatewayBindHost(
+      params.cfg.gateway?.bind ?? "loopback",
+      params.cfg.gateway?.customBindHost,
+    );
+    const diagnostics = await inspectPortUsage(port, {
+      probeHosts: resolveGatewayRequiredListenHosts(bindHost),
+    });
     await maybeReportEstablishedGatewayClients({
       cfg: params.cfg,
       deep: params.options.deep ?? false,
@@ -299,21 +348,11 @@ export async function maybeRepairGatewayDaemon(params: {
       isLocalDarwinGateway &&
       (serviceRuntime?.missingGuiSession ||
         serviceRuntime?.missingSupervision ||
-        serviceRuntime?.cachedLabel)
+        serviceRuntime?.cachedLabel ||
+        serviceRuntime?.systemLaunchDaemon)
     ) {
       noteGatewayRuntime(serviceRuntime, process.env);
       return;
-    }
-    if (process.platform === "linux") {
-      const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
-      if (!systemdAvailable) {
-        const wsl = await isWSL();
-        note(
-          renderSystemdUnavailableHints({ wsl, kind: "generic_unavailable" }).join("\n"),
-          "Gateway",
-        );
-        return;
-      }
     }
     note("Gateway service not installed.", "Gateway");
     if (params.cfg.gateway?.mode !== "remote") {
@@ -416,10 +455,10 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (start) {
-      const restartResult = await service.restart({
-        env: process.env,
-        stdout: process.stdout,
-      });
+      const restartResult = await restartGatewayService();
+      if (!restartResult) {
+        return;
+      }
       const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
       if (!restartStatus.scheduled) {
         await sleep(1500);
@@ -473,10 +512,10 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (restart) {
-      const restartResult = await service.restart({
-        env: process.env,
-        stdout: process.stdout,
-      });
+      const restartResult = await restartGatewayService();
+      if (!restartResult) {
+        return;
+      }
       const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
       if (restartStatus.scheduled) {
         note(restartStatus.message, "Gateway");
@@ -486,16 +525,10 @@ export async function maybeRepairGatewayDaemon(params: {
       try {
         await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
       } catch (err) {
-        const message = String(err);
-        if (message.includes("gateway closed")) {
-          const closedDiagnostic = formatGatewayClosedDiagnostic(err);
-          if (closedDiagnostic) {
-            note(closedDiagnostic, "Gateway");
-            note(params.gatewayDetailsMessage, "Gateway connection");
-          } else {
-            note("Gateway not running.", "Gateway");
-            note(params.gatewayDetailsMessage, "Gateway connection");
-          }
+        const closedDiagnostic = formatGatewayClosedDiagnostic(err);
+        if (closedDiagnostic) {
+          note(closedDiagnostic, "Gateway");
+          note(params.gatewayDetailsMessage, "Gateway connection");
         } else {
           params.runtime.error(formatHealthCheckFailure(err));
         }

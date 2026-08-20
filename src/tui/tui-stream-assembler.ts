@@ -1,6 +1,7 @@
 // Assembles streamed backend events into TUI-visible messages.
 import {
   composeThinkingAndContent,
+  extractAssistantAttachmentText,
   extractContentFromMessage,
   extractThinkingFromMessage,
   resolveFinalAssistantText,
@@ -215,27 +216,35 @@ export class TuiStreamAssembler {
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
     // Late finals must not insert an evicted run and displace a live stream.
     const state = this.runs.get(runId) ?? this.createRunState();
-    const streamedDisplayText = state.displayText;
+    const streamedContentText = state.contentText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
     this.updateRunState(state, message, showThinking, {
       boundaryDropMode: "streamed-only",
     });
-    const finalComposed = state.displayText;
     const shouldKeepStreamedText =
       streamedSawNonTextContentBlocks &&
       isDroppedBoundaryTextBlockSubset({
         streamedTextBlocks,
         finalTextBlocks: state.contentBlocks,
       });
-    const finalText = resolveFinalAssistantText({
-      finalText: shouldKeepStreamedText ? streamedDisplayText : finalComposed,
-      streamedText: streamedDisplayText,
+    const responseText = resolveFinalAssistantText({
+      finalText: shouldKeepStreamedText ? streamedContentText : state.contentText,
+      streamedText: streamedContentText,
       errorMessage,
+      attachmentText: extractAssistantAttachmentText(message),
+    });
+    // Thinking is optional presentation around the selected response content;
+    // it must not hide errors or attachments when the final has no text.
+    const omitEmptyPlaceholder = responseText === "(no output)" && Boolean(state.thinkingText);
+    const finalText = composeThinkingAndContent({
+      thinkingText: state.thinkingText,
+      contentText: omitEmptyPlaceholder ? "" : responseText,
+      showThinking,
     });
 
     this.runs.delete(runId);
-    return finalText;
+    return finalText || "(no output)";
   }
 
   /** Drops stored stream state for an aborted or discarded run. */

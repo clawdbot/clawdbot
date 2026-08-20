@@ -1,4 +1,6 @@
 // Line plugin module implements gateway behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import {
@@ -17,6 +19,10 @@ const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.r
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
   startAccount: async (ctx) => {
     const account = ctx.account;
+    const statusSink = createAccountStatusSink({
+      accountId: account.accountId,
+      setStatus: ctx.setStatus,
+    });
     const token = account.channelAccessToken.trim();
     const secret = account.channelSecret.trim();
     if (!token) {
@@ -29,6 +35,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
         `LINE webhook mode requires a non-empty channel secret for account "${account.accountId}".`,
       );
     }
+    statusSink({ lifecycle: "starting" });
 
     let lineBotLabel = "";
     try {
@@ -55,8 +62,11 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       accountId: account.accountId,
       config: ctx.cfg,
       runtime: ctx.runtime,
+      buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       abortSignal: ctx.abortSignal,
       webhookPath: account.config.webhookPath,
+      statusSink,
     });
   },
   logoutAccount: async ({ accountId, cfg }) => {

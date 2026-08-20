@@ -67,7 +67,34 @@ describe("attempt prompt preflight", () => {
     });
   });
 
-  it("falls back to compaction when mid-turn tool-result truncation cannot help", () => {
+  it("admits a retry without changing history when persisted truncation cannot help", () => {
+    const toolResult = makeToolResultMessage("already capped tool output");
+    const sessionManager = createSessionManagerWithMessage(toolResult);
+    const messagesBefore = sessionManager.buildSessionContext().messages;
+    const replaceSessionMessages = vi.fn();
+    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+      attempt,
+      request: { ...request, route: "truncate_tool_results_only" },
+      sessionAgentId: "test",
+      sessionManager,
+      prePromptMessageCount: 4,
+      replaceSessionMessages,
+    });
+
+    expect(outcome.preflightRecovery).toEqual(
+      expect.objectContaining({
+        route: "truncate_tool_results_only",
+        source: "mid-turn",
+        handled: true,
+        truncatedCount: 0,
+      }),
+    );
+    expect(outcome.promptError).toBeUndefined();
+    expect(replaceSessionMessages).not.toHaveBeenCalled();
+    expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
+  });
+
+  it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },

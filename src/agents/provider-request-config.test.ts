@@ -2,9 +2,13 @@
 import { describe, expect, it } from "vitest";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   applyPreparedRuntimeAuthToModel,
+  attachModelProviderRequestRouteFacts,
   buildProviderRequestDispatcherPolicy,
+  getModelProviderRequestRouteFacts,
+  inheritModelProviderRequestRouteFacts,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
@@ -12,8 +16,63 @@ import {
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "./provider-request-config.js";
+import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+function buildProviderMetadataOwners(
+  endpoints: NonNullable<PluginMetadataSnapshotOwnerMaps["providerEndpoints"]> = [],
+  requests: NonNullable<PluginMetadataSnapshotOwnerMaps["providerRequests"]> = new Map(),
+): PluginMetadataSnapshotOwnerMaps {
+  const empty = new Map<string, readonly string[]>();
+  return {
+    channels: empty,
+    channelConfigs: empty,
+    providers: empty,
+    modelCatalogProviders: empty,
+    cliBackends: empty,
+    setupProviders: empty,
+    commandAliases: empty,
+    contracts: empty,
+    providerEndpoints: endpoints,
+    providerRequests: requests,
+  };
+}
 
 describe("provider request config", () => {
+  it("carries lifecycle plugin metadata ownership through model projections", () => {
+    const owners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerEndpoints: [],
+      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
+    };
+    const prepared = attachModelProviderRequestRouteFacts(
+      makeProviderModelFixture<"openai-completions">({
+        provider: "prepared",
+        api: "openai-completions",
+        baseUrl: "https://prepared.example/v1",
+        id: "prepared-model",
+      }),
+      owners,
+    );
+    const projected = inheritModelProviderRequestRouteFacts(prepared, {
+      ...prepared,
+      id: "projected-model",
+    });
+
+    expect(getModelProviderRequestRouteFacts(prepared)?.providerMetadataOwners).toBe(owners);
+    expect(getModelProviderRequestRouteFacts(projected)?.providerMetadataOwners).toBe(owners);
+    expect(getModelProviderRequestRouteFacts(projected)?.capabilities.knownProviderFamily).toBe(
+      "prepared-family",
+    );
+  });
+
   it("applies prepared runtime auth without retaining stale credential headers", () => {
     const model = {
       provider: "microsoft-foundry",
@@ -100,8 +159,6 @@ describe("provider request config", () => {
 
     expect(resolved.proxy).toEqual({ configured: false });
     expect(resolved.tls).toEqual({ configured: false });
-    expect(resolved.policy.endpointClass).toBe("openrouter");
-    expect(resolved.policy.attributionProvider).toBe("openrouter");
     expect(resolved.extraHeaders).toEqual({
       configured: false,
       headers: undefined,
@@ -591,14 +648,87 @@ describe("provider request config", () => {
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
     expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
-    expect(resolved.policy.endpointClass).toBe("openai-public");
+    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(false);
+    expect(resolved.capabilities.endpointClass).toBe("openai-public");
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
     expect(resolved.headers?.authorization).toBe("Bearer test-key");
     expect(resolved.headers?.originator).toBe("openclaw");
     expect(typeof resolved.headers?.version).toBe("string");
     expect(resolved.headers?.["User-Agent"]).toMatch(/^openclaw\//);
     expect(resolved.headers?.["X-Custom"]).toBe("1");
+  });
+
+  it.each([
+    {
+      name: "OpenAI core",
+      provider: "openai",
+      api: "openai-responses" as const,
+      baseUrl: "https://prepared-openai.example/v1",
+      owners: buildProviderMetadataOwners([
+        { endpointClass: "openai-public", hosts: ["prepared-openai.example"] },
+      ]),
+    },
+    {
+      name: "Anthropic core",
+      provider: "anthropic",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://prepared-anthropic.example/v1",
+      owners: buildProviderMetadataOwners([
+        { endpointClass: "anthropic-public", hosts: ["prepared-anthropic.example"] },
+      ]),
+    },
+    {
+      name: "plugin provider",
+      provider: "acme-plugin",
+      api: "openai-completions" as const,
+      baseUrl: "https://inference.acme.example/v1",
+      owners: buildProviderMetadataOwners(
+        [{ endpointClass: "nvidia-native", hosts: ["inference.acme.example"] }],
+        new Map([["acme-plugin", { family: "acme-family" }]]),
+      ),
+    },
+    {
+      name: "manifest fallback",
+      provider: "openrouter",
+      api: "openai-completions" as const,
+      baseUrl: "https://openrouter.ai/api/v1",
+      owners: undefined,
+    },
+  ])("keeps $name outbound headers and SSRF policy byte-identical", (testCase) => {
+    const model = makeProviderModelFixture({
+      provider: testCase.provider,
+      api: testCase.api,
+      baseUrl: testCase.baseUrl,
+      id: `${testCase.provider}-model`,
+    });
+    const preparedModel = attachModelProviderRequestRouteFacts(model, testCase.owners);
+    const common = {
+      provider: testCase.provider,
+      api: testCase.api,
+      baseUrl: testCase.baseUrl,
+      capability: "llm" as const,
+      transport: "stream" as const,
+      callerHeaders: { "X-Caller": "same" },
+      providerHeaders: { Authorization: "Bearer redacted" },
+    };
+    const before = resolveProviderRequestPolicyConfig({
+      ...common,
+      ...(testCase.owners ? { providerMetadataOwners: testCase.owners } : {}),
+    });
+    const after = resolveProviderRequestPolicyConfig({
+      ...common,
+      routeFacts: getModelProviderRequestRouteFacts(preparedModel),
+    });
+    const ssrfPolicy = (resolved: typeof before) =>
+      resolveProviderTransportSsrFPolicy({
+        baseUrl: testCase.baseUrl,
+        url: `${testCase.baseUrl}/responses`,
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        trustConfiguredBaseUrlOrigin: resolved.trustConfiguredBaseUrlOrigin,
+      });
+
+    expect(JSON.stringify(after.headers)).toBe(JSON.stringify(before.headers));
+    expect(JSON.stringify(ssrfPolicy(after))).toBe(JSON.stringify(ssrfPolicy(before)));
   });
 
   it("does not convert implicit loopback model requests into broad private-network trust", () => {
@@ -611,7 +741,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(true);
   });
 
   it("keeps explicit private-network denial for loopback model requests", () => {
@@ -625,7 +755,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(true);
+    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(false);
   });
 
   it("does not auto-allow non-loopback private model-provider hosts", () => {
@@ -638,7 +768,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(true);
   });
 
   it.each([
@@ -672,7 +802,7 @@ describe("provider request config", () => {
       transport: "stream",
     });
 
-    expect(resolved.policy.endpointClass).toBe(entry.expectedEndpointClass);
-    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+    expect(resolved.capabilities.endpointClass).toBe(entry.expectedEndpointClass);
+    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(true);
   });
 });

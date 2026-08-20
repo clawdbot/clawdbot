@@ -103,7 +103,7 @@ export function createSafeGatewayRestartPreflight(
 }
 
 /** Schedule a gateway restart after collecting tracked active-work blockers. */
-export function requestSafeGatewayRestart(
+export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
     delayMs?: number;

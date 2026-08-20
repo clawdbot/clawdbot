@@ -16,10 +16,6 @@ export function registerDiscordSubagentHooks(api: OpenClawPluginApi): void {
     const { recoverDiscordSubagentProgress } = await loadDiscordSubagentProgressModule();
     await recoverDiscordSubagentProgress(api);
   });
-  api.on("subagent_progress", async (event) => {
-    const { handleDiscordSubagentProgress } = await loadDiscordSubagentProgressModule();
-    await handleDiscordSubagentProgress(api, event);
-  });
   api.on("subagent_ended", async (event) => {
     const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
     handleDiscordSubagentEnded(event);

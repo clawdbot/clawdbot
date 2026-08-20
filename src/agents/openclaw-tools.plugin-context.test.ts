@@ -108,6 +108,15 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.conversationRecall).toEqual(conversationRecall);
   });
 
+  it("forwards host-prepared active project keys", () => {
+    const activeProjectKeys = ["github.com/OpenClaw/OpenClaw"];
+    const result = resolveOpenClawPluginToolInputs({
+      options: { config: {} as never, activeProjectKeys },
+    });
+
+    expect(result.context.activeProjectKeys).toBe(activeProjectKeys);
+  });
+
   it("forwards runtime-owned active model metadata", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {
@@ -337,19 +346,44 @@ describe("openclaw plugin tool context", () => {
     expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", {});
   });
 
-  it("does not inject messageThreadId defaults for missing params objects", async () => {
+  it.each([
+    {
+      name: "does not inject messageThreadId defaults for missing params objects",
+      toolName: "plugin-message-thread-default",
+      property: "messageThreadId",
+      propertySchema: { type: "number" as const },
+      ambientThreadId: "77",
+      params: undefined,
+    },
+    {
+      name: "does not infer string thread ids for tools that declare thread parameters",
+      toolName: "plugin-string-thread-default",
+      property: "threadId",
+      propertySchema: { type: "string" as const },
+      ambientThreadId: "77",
+      params: {},
+    },
+    {
+      name: "preserves explicit thread params when ambient defaults exist",
+      toolName: "plugin-thread-override",
+      property: "threadId",
+      propertySchema: { type: "string" as const },
+      ambientThreadId: "111.222",
+      params: { threadId: "explicit" },
+    },
+  ])("$name", async (row) => {
     const executeMock = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "ok" }],
       details: {},
     }));
     const tool: AnyAgentTool = {
-      name: "plugin-message-thread-default",
-      label: "plugin-message-thread-default",
+      name: row.toolName,
+      label: row.toolName,
       description: "test",
       parameters: {
         type: "object",
         properties: {
-          messageThreadId: { type: "number" },
+          [row.property]: row.propertySchema,
         },
       },
       execute: executeMock,
@@ -357,67 +391,11 @@ describe("openclaw plugin tool context", () => {
 
     const [wrapped] = applyPluginToolDeliveryDefaults({
       tools: [tool],
-      deliveryContext: { threadId: "77" },
+      deliveryContext: { threadId: row.ambientThreadId },
     });
 
-    await wrapped?.execute("call-1", undefined);
+    await wrapped?.execute("call-1", row.params);
 
-    expect(executeMock).toHaveBeenCalledWith("call-1", undefined);
-  });
-
-  it("does not infer string thread ids for tools that declare thread parameters", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const tool: AnyAgentTool = {
-      name: "plugin-string-thread-default",
-      label: "plugin-string-thread-default",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-        },
-      },
-      execute: executeMock,
-    };
-
-    const [wrapped] = applyPluginToolDeliveryDefaults({
-      tools: [tool],
-      deliveryContext: { threadId: "77" },
-    });
-
-    await wrapped?.execute("call-1", {});
-
-    expect(executeMock).toHaveBeenCalledWith("call-1", {});
-  });
-
-  it("preserves explicit thread params when ambient defaults exist", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const tool: AnyAgentTool = {
-      name: "plugin-thread-override",
-      label: "plugin-thread-override",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-        },
-      },
-      execute: executeMock,
-    };
-
-    const [wrapped] = applyPluginToolDeliveryDefaults({
-      tools: [tool],
-      deliveryContext: { threadId: "111.222" },
-    });
-
-    await wrapped?.execute("call-1", { threadId: "explicit" });
-
-    expect(executeMock).toHaveBeenCalledWith("call-1", { threadId: "explicit" });
+    expect(executeMock).toHaveBeenCalledWith("call-1", row.params);
   });
 });

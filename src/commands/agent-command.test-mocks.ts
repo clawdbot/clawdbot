@@ -10,6 +10,10 @@ vi.mock("../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin,
 }));
 
+vi.mock("../agents/runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+}));
+
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
     subsystem: "test",
@@ -63,7 +67,12 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
 }));
 
 vi.mock("../agents/model-selection.js", () => {
@@ -272,7 +281,7 @@ vi.mock("../agents/model-selection.js", () => {
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
@@ -288,13 +297,29 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
+vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: vi.fn(() => undefined),
 }));
+
+vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../skills/loading/workspace-skill-loader.js")
+  >("../skills/loading/workspace-skill-loader.js");
+  return {
+    filterWorkspaceSkills: (entries: unknown[]) => entries,
+    loadMergedWorkspaceSkills: vi.fn(() => []),
+    loadVisibleSkills: vi.fn(() => []),
+    loadWorkspaceSkills: vi.fn(() => []),
+    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
+  };
+});
 
 vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/bundle-commands.js", () => ({
+  loadEnabledClaudeBundleCommands: vi.fn(() => []),
 }));
 
 vi.mock("../skills/discovery/agent-filter.js", () => ({

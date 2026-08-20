@@ -1,4 +1,4 @@
-// Qa Lab tests cover suite.summary json plugin behavior.
+// QA Lab tests cover suite.summary json plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import { buildQaSuiteSummaryJson } from "./suite.js";
@@ -23,6 +23,7 @@ describe("buildQaSuiteSummaryJson", () => {
 
   it("records provider/model/mode so parity gates can verify labels", () => {
     const json = buildQaSuiteSummaryJson(baseParams);
+    expect(json.run.status).toBe("completed");
     expect(json.run.startedAt).toBe("2026-04-11T00:00:00.000Z");
     expect(json.run.finishedAt).toBe("2026-04-11T00:05:00.000Z");
     expect(json.run.providerMode).toBe("mock-openai");
@@ -41,9 +42,16 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.scenarioIds).toBeNull();
   });
 
+  it("distinguishes an in-progress artifact from terminal suite output", () => {
+    const json = buildQaSuiteSummaryJson({ ...baseParams, status: "running" });
+
+    expect(json.run.status).toBe("running");
+  });
+
   it("records Crabline channel-driver metadata when selected", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
+      channelDriver: "crabline",
       channelDriverSelection: {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
@@ -58,14 +66,15 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
   });
 
-  it("records declarative non-Crabline channel-driver metadata", () => {
+  it("records realized non-Crabline channel metadata", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
+      channel: "telegram",
       channelDriver: "live",
     });
 
     expect(json.run.channelDriver).toBe("live");
-    expect(json.run.channel).toBeNull();
+    expect(json.run.channel).toBe("telegram");
     expect(json.run.channelCapabilityMatrixPath).toBeNull();
     expect(json.run.channelDriverSmokePath).toBeNull();
   });

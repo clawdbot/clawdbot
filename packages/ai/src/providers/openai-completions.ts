@@ -10,24 +10,31 @@ import type {
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import {
-  applyProviderReportedUsageCost,
-  calculateCost,
-  clampThinkingLevel,
-} from "../model-utils.js";
-import { convertMessages } from "../openai-completions-messages.js";
+import { clampThinkingLevel } from "../model-utils.js";
+import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  createOpenAIResponseHook,
+  isOpenAICompletionsThinkingEnabled,
+  parseOpenAICompletionsUsage,
+  readOpenAICompletionsContentDeltas,
+  readOpenAICompletionsReasoningBatch,
+  type OpenAICompletionsContentDelta,
+  type OpenAICompletionsTextSource,
+} from "../transports/openai-transport-shared.js";
+import {
+  transportAbortError,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  Message,
   Model,
   SimpleStreamOptions,
   StreamFunction,
@@ -39,14 +46,16 @@ import type {
 import {
   clearPendingCommentaryText,
   rememberPendingCommentaryTags,
+  tagInterruptedTextPhases,
   tagPendingCommentaryText,
+  tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { formatProviderError } from "../utils/provider-error.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import {
   createFirstStreamEventAbortController,
@@ -58,6 +67,10 @@ import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import {
+  createOpenAICompletionsToolCallDeltaNormalizer,
+  finalizeOpenAICompletionsToolCalls,
+} from "./openai-completions-tool-calls.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   resolveOpenAICompletionsResponseFormat,
@@ -70,27 +83,6 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-
-/**
- * Check if conversation messages contain tool calls or tool results.
- * This is needed because Anthropic (via proxy) requires the tools param
- * to be present when messages include tool_calls or tool role messages.
- */
-function hasToolHistory(messages: Message[]): boolean {
-  for (const msg of messages) {
-    if (msg.role === "toolResult") {
-      return true;
-    }
-    if (msg.role === "assistant") {
-      // Assistant content can be a raw string from transcript replay; a string
-      // never carries tool calls, so it should not count toward tool history.
-      if (Array.isArray(msg.content) && msg.content.some((block) => block.type === "toolCall")) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 export { convertMessages } from "../openai-completions-messages.js";
@@ -162,6 +154,12 @@ export const streamOpenAICompletions: StreamFunction<
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = resolveOpenAICompletionsCompat(model);
+      const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
+      const shouldEmitReasoning = Boolean(
+        model.reasoning &&
+        options?.reasoningEffort &&
+        isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
+      );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
@@ -182,11 +180,13 @@ export const streamOpenAICompletions: StreamFunction<
           requestOptions,
         )
         .withResponse();
-      await options?.onResponse?.(
-        { status: response.status, headers: headersToRecord(response.headers) },
-        model,
-      );
-      stream.push({ type: "start", partial: output });
+      const hookedOpenAIStream = withProviderResponseHook({
+        stream: openaiStream,
+        signal: firstEventAbort.signal,
+        abort: firstEventAbort.abort,
+        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        onReady: () => stream.push({ type: "start", partial: output }),
+      });
 
       interface StreamingToolCallBlock extends ToolCall {
         partialArgs?: string;
@@ -198,11 +198,15 @@ export const streamOpenAICompletions: StreamFunction<
       >[number];
 
       let textBlock: TextContent | null = null;
+      let textBlockSource: OpenAICompletionsTextSource | undefined;
       let thinkingBlock: ThinkingContent | null = null;
+      let pendingInterruptedTextBlock: TextContent | null = null;
+      let confirmedInterruptedTextBlock: TextContent | null = null;
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
+      const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
       const pendingReasoningDetailsByToolCallId = new Map<string, string>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
@@ -210,6 +214,7 @@ export const streamOpenAICompletions: StreamFunction<
       // *_end event is emitted exactly once.
       const finishedBlocks = new Set<StreamingBlock>();
       const contentIndices = new WeakMap<StreamingBlock, number>();
+      let explicitVisibleTextBlocks: Set<TextContent> | undefined;
       const appendBlock = (block: StreamingBlock) => {
         contentIndices.set(block, blocks.length);
         blocks.push(block);
@@ -249,10 +254,6 @@ export const streamOpenAICompletions: StreamFunction<
             partial: output,
           });
         } else if (block.type === "toolCall") {
-          // Finalize in-place and strip the scratch buffers so replay only
-          // carries parsed arguments.
-          delete block.partialArgs;
-          delete block.streamIndex;
           stream.push({
             type: "toolcall_end",
             contentIndex,
@@ -261,9 +262,24 @@ export const streamOpenAICompletions: StreamFunction<
           });
         }
       };
-      const ensureTextBlock = () => {
+      const finishTextBlock = () => {
+        if (!textBlock) {
+          return;
+        }
+        finishBlock(textBlock);
+        textBlock = null;
+        textBlockSource = undefined;
+      };
+      const ensureTextBlock = (source: OpenAICompletionsTextSource | undefined) => {
+        if (textBlock && textBlockSource !== source) {
+          finishTextBlock();
+        }
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
+          textBlockSource = source;
+          if (source === "reasoning_detail") {
+            (explicitVisibleTextBlocks ??= new Set()).add(textBlock);
+          }
           appendBlock(textBlock);
           stream.push({
             type: "text_start",
@@ -273,12 +289,12 @@ export const streamOpenAICompletions: StreamFunction<
         }
         return textBlock;
       };
-      const ensureThinkingBlock = (thinkingSignature: string) => {
+      const ensureThinkingBlock = (thinkingSignature: string | undefined) => {
         if (!thinkingBlock) {
           thinkingBlock = {
             type: "thinking",
             thinking: "",
-            thinkingSignature,
+            ...(thinkingSignature ? { thinkingSignature } : {}),
           };
           appendBlock(thinkingBlock);
           stream.push({
@@ -300,10 +316,14 @@ export const streamOpenAICompletions: StreamFunction<
           thinkingBlock = null;
         }
       };
-      const appendTextDelta = (delta: string) => {
+      const appendTextDelta = (delta: string, source?: OpenAICompletionsTextSource) => {
         sealNativeReasoningBeforeText();
-        const block = ensureTextBlock();
+        const block = ensureTextBlock(source);
         block.text += delta;
+        if (pendingInterruptedTextBlock && delta.trim()) {
+          confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
+          pendingInterruptedTextBlock = null;
+        }
         stream.push({
           type: "text_delta",
           contentIndex: getContentIndex(block),
@@ -311,7 +331,7 @@ export const streamOpenAICompletions: StreamFunction<
           partial: output,
         });
       };
-      const appendThinkingDelta = (thinkingSignature: string, delta: string) => {
+      const appendThinkingDelta = (thinkingSignature: string | undefined, delta: string) => {
         const block = ensureThinkingBlock(thinkingSignature);
         block.thinking += delta;
         stream.push({
@@ -320,6 +340,24 @@ export const streamOpenAICompletions: StreamFunction<
           delta,
           partial: output,
         });
+      };
+      const appendReasoningDeltas = (reasoningDeltas: readonly OpenAICompletionsContentDelta[]) => {
+        for (const reasoningDelta of reasoningDeltas) {
+          if (reasoningDelta.kind === "thinking") {
+            if (!shouldEmitReasoning) {
+              continue;
+            }
+            finishTextBlock();
+            const signature = reasoningDelta.signature;
+            const thinkingSignature =
+              model.provider === "opencode-go" && signature === "reasoning"
+                ? "reasoning_content"
+                : signature;
+            appendThinkingDelta(thinkingSignature, reasoningDelta.text);
+          } else {
+            appendTextDelta(reasoningDelta.text, reasoningDelta.source);
+          }
+        }
       };
       const ensureToolCallBlock = (toolCall: StreamingToolCallDelta) => {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -377,8 +415,39 @@ export const streamOpenAICompletions: StreamFunction<
           }
         }
       };
+      const sealTextBeforeReasoning = () => {
+        if (!textBlock && !reasoningTagTextPartitioner.hasPending()) {
+          return;
+        }
+        flushPartitionedContent();
+        if (!textBlock) {
+          return;
+        }
+        // Resumed reasoning makes the preceding visible text interim. Preserve
+        // the candidate boundary only if later text confirms a final answer.
+        if (textBlockSource !== "reasoning_detail" && textBlock.text.trim()) {
+          pendingInterruptedTextBlock = textBlock;
+        }
+        finishTextBlock();
+      };
+      const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
+        if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
+          output.openclawDelivery = {
+            ...output.openclawDelivery,
+            textPhaseRequiresTerminal: true,
+          };
+        }
+        if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
+          reasoningTagTextPartitioner.markStrict();
+        }
+        // Let following text finish syntax already owned by the Markdown
+        // parser; otherwise packet batching cannot erase a lane boundary.
+        if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
+          sealTextBeforeReasoning();
+        }
+      };
 
-      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(hookedOpenAIStream, {
         provider: model.provider,
         api: model.api,
         model: model.id,
@@ -404,7 +473,9 @@ export const streamOpenAICompletions: StreamFunction<
           output.responseModel ||= chunk.model;
         }
         if (chunk.usage) {
-          output.usage = parseChunkUsage(chunk.usage, model);
+          output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
+            includeReasoningTokens: false,
+          });
         }
 
         const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -415,10 +486,12 @@ export const streamOpenAICompletions: StreamFunction<
         // Fallback: some providers (e.g., Moonshot) return usage
         // in choice.usage instead of the standard chunk.usage
         const choiceUsage = (
-          choice as typeof choice & { usage?: Parameters<typeof parseChunkUsage>[0] }
+          choice as typeof choice & { usage?: Parameters<typeof parseOpenAICompletionsUsage>[0] }
         ).usage;
         if (!chunk.usage && choiceUsage) {
-          output.usage = parseChunkUsage(choiceUsage, model);
+          output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
+            includeReasoningTokens: false,
+          });
         }
 
         if (choice.finish_reason) {
@@ -433,100 +506,99 @@ export const streamOpenAICompletions: StreamFunction<
         // Some OpenAI-compatible endpoints deliver a full `message` instead of
         // `delta` (including refusal-only turns with content: null). Normalize
         // the same way the managed agent transport does.
-        const choiceDelta =
+        const rawChoiceDelta =
           choice.delta ??
           (choice as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
-        if (choiceDelta) {
-          // Some endpoints return reasoning in reasoning_content (llama.cpp),
-          // or reasoning (other openai compatible endpoints)
-          // Use the first non-empty reasoning field to avoid duplication
-          // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-          const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-          const deltaFields = choiceDelta as Record<string, unknown>;
-          const shouldEmitReasoning = Boolean(model.reasoning && options?.reasoningEffort);
-          let foundReasoningField: string | null = null;
-          for (const field of reasoningFields) {
-            const value = deltaFields[field];
-            if (typeof value === "string" && value.length > 0) {
-              foundReasoningField = field;
-              break;
-            }
-          }
-          if (foundReasoningField) {
-            reasoningTagTextPartitioner.markStrict();
-          }
-          if (shouldEmitReasoning && foundReasoningField) {
-            const delta = deltaFields[foundReasoningField];
-            if (typeof delta === "string" && delta.length > 0) {
-              const thinkingSignature =
-                model.provider === "opencode-go" && foundReasoningField === "reasoning"
-                  ? "reasoning_content"
-                  : foundReasoningField;
-              appendThinkingDelta(thinkingSignature, delta);
-            }
-          }
-          if (
-            choiceDelta.content !== null &&
-            choiceDelta.content !== undefined &&
-            choiceDelta.content.length > 0
-          ) {
-            appendPartitionedContent(choiceDelta.content, Boolean(foundReasoningField));
-          }
-
-          // Chat Completions can put safety/structured-output refusals in a
-          // top-level `refusal` field with content null. Surface that as
-          // visible text so the assistant turn is not empty.
-          const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
-          if (refusalText.length > 0) {
-            appendPartitionedContent(refusalText, Boolean(foundReasoningField));
-          }
-
-          if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
-            flushPartitionedContent();
-            // The tool-call lane is also a reasoning boundary; seal the thought
-            // before toolcall_start so thinking_end never trails the action.
-            sealNativeReasoningBeforeText();
-            rememberPendingCommentaryTags(
-              provisionalCommentaryTags,
-              tagPendingCommentaryText(output.content),
+        if (rawChoiceDelta) {
+          for (const normalizedDelta of normalizeToolCallDeltas(
+            rawChoiceDelta,
+            choice.finish_reason,
+          )) {
+            const choiceDelta = normalizedDelta.delta;
+            const deltaFields = choiceDelta as Record<string, unknown>;
+            const reasoningBatch = readOpenAICompletionsReasoningBatch(
+              deltaFields,
+              visibleReasoningDetailTypes,
             );
-            for (const toolCall of choiceDelta.tool_calls) {
-              const block = ensureToolCallBlock(toolCall);
-              if (!block.id && toolCall.id) {
-                block.id = toolCall.id;
-                toolCallBlocksById.set(toolCall.id, block);
-                rememberFirstToolCallById(toolCall.id, block);
-              }
-              if (!block.name && toolCall.function?.name) {
-                block.name = toolCall.function.name;
-              }
-
-              let delta = "";
-              if (toolCall.function?.arguments) {
-                delta = toolCall.function.arguments;
-                block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-                block.arguments = parseStreamingJson(block.partialArgs);
-              }
-              stream.push({
-                type: "toolcall_delta",
-                contentIndex: getContentIndex(block),
-                delta,
-                partial: output,
-              });
+            const reasoningDeltas = reasoningBatch.deltas;
+            const hasReasoningThinking = reasoningBatch.hasThinking;
+            const contentDeltas = readOpenAICompletionsContentDeltas(
+              choiceDelta.content,
+              choiceDelta.refusal,
+              reasoningBatch.mirroredThinking,
+            );
+            const lastVisibleTextIndex = contentDeltas.findLastIndex(
+              (delta) => delta.kind === "text",
+            );
+            const hasSameChunkVisibleText =
+              reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
+            if (hasReasoningThinking) {
+              beginReasoning(hasSameChunkVisibleText, true);
+              appendReasoningDeltas(reasoningDeltas);
             }
-          }
+            for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
+              if (contentDelta.kind === "thinking") {
+                const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
+                beginReasoning(hasLaterVisibleText);
+                if (shouldEmitReasoning) {
+                  appendThinkingDelta(contentDelta.signature, contentDelta.text);
+                }
+              } else {
+                appendPartitionedContent(contentDelta.text, hasReasoningThinking);
+              }
+            }
+            if (!hasReasoningThinking) {
+              appendReasoningDeltas(reasoningDeltas);
+            }
 
-          const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
-            .reasoning_details;
-          if (Array.isArray(reasoningDetails)) {
-            for (const detail of reasoningDetails) {
-              if (isEncryptedReasoningDetail(detail)) {
-                const serializedDetail = JSON.stringify(detail);
-                const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
-                if (matchingToolCall) {
-                  matchingToolCall.thoughtSignature = serializedDetail;
-                } else {
-                  pendingReasoningDetailsByToolCallId.set(detail.id, serializedDetail);
+            const toolCallDeltas = normalizedDelta.toolCalls;
+            if (toolCallDeltas.length > 0) {
+              flushPartitionedContent();
+              // The tool-call lane is also a reasoning boundary; seal the thought
+              // before toolcall_start so thinking_end never trails the action.
+              sealNativeReasoningBeforeText();
+              rememberPendingCommentaryTags(
+                provisionalCommentaryTags,
+                tagPendingCommentaryText(output.content),
+              );
+              for (const toolCall of toolCallDeltas) {
+                const block = ensureToolCallBlock(toolCall);
+                if (!block.id && toolCall.id) {
+                  block.id = toolCall.id;
+                  toolCallBlocksById.set(toolCall.id, block);
+                  rememberFirstToolCallById(toolCall.id, block);
+                }
+                if (!block.name && toolCall.function?.name) {
+                  block.name = toolCall.function.name;
+                }
+
+                let delta = "";
+                if (toolCall.function?.arguments) {
+                  delta = toolCall.function.arguments;
+                  block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
+                  block.arguments = parseStreamingJson(block.partialArgs);
+                }
+                stream.push({
+                  type: "toolcall_delta",
+                  contentIndex: getContentIndex(block),
+                  delta,
+                  partial: output,
+                });
+              }
+            }
+
+            const reasoningDetails = (choiceDelta as { reasoning_details?: unknown })
+              .reasoning_details;
+            if (Array.isArray(reasoningDetails)) {
+              for (const detail of reasoningDetails) {
+                if (isEncryptedReasoningDetail(detail)) {
+                  const serializedDetail = JSON.stringify(detail);
+                  const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
+                  if (matchingToolCall) {
+                    matchingToolCall.thoughtSignature = serializedDetail;
+                  } else {
+                    pendingReasoningDetailsByToolCallId.set(detail.id, serializedDetail);
+                  }
                 }
               }
             }
@@ -536,35 +608,53 @@ export const streamOpenAICompletions: StreamFunction<
 
       flushPartitionedContent();
 
-      for (const block of blocks) {
-        finishBlock(block);
-      }
+      let terminalError: Error | undefined;
       if (options?.signal?.aborted) {
-        throw transportAbortError(options.signal);
+        terminalError = transportAbortError(options.signal);
+      } else if (output.stopReason === "aborted") {
+        terminalError = new Error("Request was aborted");
+      } else if (output.stopReason === "error") {
+        terminalError = new Error(output.errorMessage || "Provider returned an error stop reason");
+      } else if (!hasFinishReason) {
+        terminalError = new Error("Stream ended without finish_reason");
       }
 
-      if (output.stopReason === "aborted") {
-        throw new Error("Request was aborted");
-      }
-      if (output.stopReason === "error") {
-        throw new Error(output.errorMessage || "Provider returned an error stop reason");
-      }
-      if (!hasFinishReason) {
-        throw new Error("Stream ended without finish_reason");
+      if (terminalError) {
+        for (const block of blocks) {
+          if (block.type !== "toolCall") {
+            finishBlock(block);
+          }
+        }
+        throw terminalError;
       }
 
-      const hasToolCalls = output.content.some((block) => block.type === "toolCall");
-      const hasVisibleText = output.content.some(
-        (block) => block.type === "text" && block.text.trim().length > 0,
-      );
-      if (output.stopReason === "toolUse" && !hasToolCalls) {
-        output.stopReason = "stop";
+      finalizeOpenAICompletionsToolCalls(output);
+      if (output.stopReason === "aborted" || output.stopReason === "error") {
+        for (const block of blocks) {
+          if (block.type !== "toolCall") {
+            finishBlock(block);
+          }
+        }
+        throw new Error(
+          output.errorMessage ||
+            (output.stopReason === "aborted"
+              ? "Request was aborted"
+              : "Provider returned an invalid tool call"),
+        );
       }
-      if (output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
-        output.stopReason = "toolUse";
+      if (output.stopReason !== "toolUse" && confirmedInterruptedTextBlock) {
+        tagInterruptedTextPhases(
+          output.content,
+          confirmedInterruptedTextBlock,
+          explicitVisibleTextBlocks,
+        );
       }
-      if (hasToolCalls && output.stopReason !== "toolUse") {
-        output.content = output.content.filter((block) => block.type !== "toolCall");
+      // Tool completion is irreversible: confirm the terminal before closing
+      // blocks, then preserve their original text/thinking/tool event order.
+      for (const block of blocks) {
+        if (block.type !== "toolCall" || output.stopReason === "toolUse") {
+          finishBlock(block);
+        }
       }
       if (output.stopReason !== "toolUse") {
         clearPendingCommentaryText(provisionalCommentaryTags);
@@ -576,21 +666,18 @@ export const streamOpenAICompletions: StreamFunction<
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      const terminal = projectProviderError(error, options?.signal);
+      Object.assign(output, terminal);
+      finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+      clearPendingCommentaryText(provisionalCommentaryTags);
+      tagUnresolvedTextAsCommentary(output);
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // Streaming scratch buffers are only used during parsing; never persist them.
         delete (block as { partialArgs?: string }).partialArgs;
         delete (block as { streamIndex?: number }).streamIndex;
       }
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatProviderError(error);
-      // Some providers via OpenRouter give additional information in this field.
-      const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
-        ?.raw;
-      if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
-        output.errorMessage += `\n${rawMetadata}`;
-      }
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     } finally {
       firstEventAbort?.dispose();
@@ -784,13 +871,13 @@ function buildParams(
     toolProjection = converted.projection;
     if (converted.tools.length > 0) {
       params.tools = converted.tools;
-    } else if (hasToolHistory(context.messages)) {
+    } else if (hasToolCallHistory(context.messages)) {
       params.tools = [];
     }
     if (compat.zaiToolStream && converted.tools.length > 0) {
       params.tool_stream = true;
     }
-  } else if (hasToolHistory(context.messages)) {
+  } else if (hasToolCallHistory(context.messages)) {
     // Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
     params.tools = [];
   }
@@ -1052,7 +1139,7 @@ function convertTools(
   const projection = projectOpenAITools(tools);
   return {
     projection,
-    tools: projection.tools.map((tool) => ({
+    tools: sortPromptCacheToolsByName(projection.tools).map((tool) => ({
       type: "function",
       function: {
         name: tool.name,
@@ -1063,45 +1150,6 @@ function convertTools(
       },
     })),
   };
-}
-
-function parseChunkUsage(
-  rawUsage: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    prompt_cache_hit_tokens?: number;
-    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-    cost?: unknown;
-  },
-  model: Model<"openai-completions">,
-): AssistantMessage["usage"] {
-  const promptTokens = rawUsage.prompt_tokens || 0;
-  const cacheReadTokens =
-    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
-
-  // Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
-  // tokens (hits). OpenAI does not document or emit cache_write_tokens, but
-  // OpenRouter-compatible providers can include it as a separate write count.
-  // OpenRouter's own provider/tests affirm the separate mapping:
-  // https://github.com/OpenRouterTeam/ai-sdk-provider/pull/409
-  // Do not subtract writes from cached_tokens, otherwise spec-compliant
-  // providers are under-reported. DS4 mirrors this contract too:
-  // https://github.com/antirez/ds4/pull/29
-  const input = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
-  // OpenAI completion_tokens already includes reasoning_tokens.
-  const outputTokens = rawUsage.completion_tokens || 0;
-  const usage: AssistantMessage["usage"] = {
-    input,
-    output: outputTokens,
-    cacheRead: cacheReadTokens,
-    cacheWrite: cacheWriteTokens,
-    totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  calculateCost(model, usage);
-  applyProviderReportedUsageCost(usage, rawUsage.cost);
-  return usage;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

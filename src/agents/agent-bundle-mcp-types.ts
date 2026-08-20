@@ -5,8 +5,11 @@ import type {
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
+import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
@@ -37,10 +40,9 @@ export type McpServerCatalog = {
   };
   requestTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
-  toolFilter?: {
-    include?: string[];
-    exclude?: string[];
-  };
+  toolFilter?: McpServerToolFilterConfig;
+  deniedToolNames?: string[];
+  codexApprovalMode?: McpCodexToolApprovalMode;
 };
 
 /** MCP tool entry after server-name sanitization and schema normalization. */
@@ -54,6 +56,8 @@ export type McpCatalogTool = {
   fallbackDescription: string;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  deniedBySession?: true;
+  codexAnnotations?: McpCodexToolAnnotations;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -62,7 +66,17 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  /** Listed tools hidden only by the session override, retained for read-only inventory. */
+  sessionDeniedTools?: McpCatalogTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
+};
+
+/** Transient requester sign-in surface kept outside the remembered live catalog. */
+export type RequesterMcpConnect = {
+  catalog: McpToolCatalog;
+  authorizedServerNames: readonly string[];
+  configFingerprint: string;
+  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
 };
 
 export type McpToolCatalogDiagnostic = {
@@ -92,6 +106,7 @@ export type SessionMcpRuntime = {
   configFingerprint: string;
   /** Present when this runtime is keyed by requester-scoped connection identity. */
   requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
   /**
    * True when the named server's connection is requester-scoped. App views for
    * such servers stay fail-closed: views outlive the requester-authenticated
@@ -111,6 +126,8 @@ export type SessionMcpRuntime = {
   getCatalog: () => Promise<McpToolCatalog>;
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
   peekCatalog: () => McpToolCatalog | null;
+  /** Returns the configured request timeout for a server from the connected session, without touching the catalog. */
+  getServerRequestTimeoutMs?: (serverName: string) => number | undefined;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
   listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
@@ -138,6 +155,7 @@ export type SessionMcpRuntimeManager = {
     requesterSenderId?: string | null;
     agentAccountId?: string | null;
     messageChannel?: string | null;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime>;
   /**
    * Requester-scoped partition only — never creates static transports.
@@ -153,6 +171,7 @@ export type SessionMcpRuntimeManager = {
     requesterSenderId?: string | null;
     agentAccountId?: string | null;
     messageChannel?: string | null;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread

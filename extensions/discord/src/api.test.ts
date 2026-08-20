@@ -338,6 +338,35 @@ describe("fetchDiscord", () => {
     expect(String(error)).toContain("Discord API /users/@me/guilds returned malformed JSON");
   });
 
+  it("rejects malformed UTF-8 in otherwise valid Discord JSON", async () => {
+    let response: Response | undefined;
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('[{"id":"guild-');
+      res.write(Buffer.from([0xff]));
+      res.end('","name":"Guild"}]');
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`, (nextResponse) => {
+        response = nextResponse;
+      });
+
+      await expect(
+        requestDiscord("/users/@me/guilds", "test", {
+          retry: { attempts: 1 },
+        }),
+      ).rejects.toThrow("Discord API /users/@me/guilds returned malformed JSON");
+      expect(response?.bodyUsed).toBe(true);
+      console.log(
+        `[discord requestDiscord loopback proof] malformed UTF-8: rejected=true body_used=${response?.bodyUsed}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("returns under-cap requestDiscord responses from a real loopback HTTP server", async () => {
     const payload = { id: "channel-42", name: "loopback", type: 0 };
     let contentLength: string | null | undefined;
@@ -368,6 +397,86 @@ describe("fetchDiscord", () => {
       expect(contentLength).toBeNull();
       console.log(
         `[discord requestDiscord loopback proof] normal path: returned=${JSON.stringify(result)} content_length=${contentLength ?? "none"}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("redacts reflected bot credentials from non-JSON error bodies", async () => {
+    const uniqueSecret = "discord-loopback-secret";
+    const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
+    let authorization: string | undefined;
+    const server = createServer((req, res) => {
+      authorization = req.headers.authorization;
+      res.writeHead(502, { "content-type": "text/html" });
+      res.end(
+        `<html><body>proxy failure Authorization: ${authorization}; request rejected</body></html>`,
+      );
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`);
+
+      const error = await requestDiscord("/gateway/bot", token, {
+        retry: { attempts: 1 },
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(DiscordApiError);
+      expect(authorization).toBe(`Bot ${token}`);
+      const message = String(error);
+      expect(message).toContain("Discord API /gateway/bot failed (502)");
+      expect(message).toContain("proxy failure");
+      expect(message).toContain("Authorization: Bot");
+      expect(message).not.toContain(token);
+      expect(message).not.toContain(uniqueSecret);
+      expect(message).not.toContain("<html");
+      console.log(
+        `[discord credential redaction proof] format=html status=502 authorization_received=${authorization === `Bot ${token}`} token_present=${message.includes(token)} unique_fragment_present=${message.includes(uniqueSecret)} detail=${message}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("redacts reflected bot credentials from JSON error messages", async () => {
+    const uniqueSecret = "discord-json-loopback-secret";
+    const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
+    let authorization: string | undefined;
+    const server = createServer((req, res) => {
+      authorization = req.headers.authorization;
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          message: `proxy failure Authorization: ${authorization}; request rejected`,
+          retry_after: 0,
+          global: false,
+          code: 20_028,
+        }),
+      );
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`);
+
+      const error = await requestDiscord("/gateway/bot", token, {
+        retry: { attempts: 1 },
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(DiscordApiError);
+      expect(authorization).toBe(`Bot ${token}`);
+      expect((error as DiscordApiError).retryAfter).toBe(0);
+      const message = String(error);
+      expect(message).toContain("Discord API /gateway/bot failed (429)");
+      expect(message).toContain("proxy failure");
+      expect(message).toContain("Authorization: Bot");
+      expect(message).toContain("retry after 0.0s");
+      expect(message).not.toContain(token);
+      expect(message).not.toContain(uniqueSecret);
+      console.log(
+        `[discord credential redaction proof] format=json status=429 authorization_received=${authorization === `Bot ${token}`} token_present=${message.includes(token)} unique_fragment_present=${message.includes(uniqueSecret)} retry_after=${(error as DiscordApiError).retryAfter} detail=${message}`,
       );
     } finally {
       await closeServer(server);

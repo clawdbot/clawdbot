@@ -19,11 +19,14 @@ const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-
 export type InternalRealtimeVoiceProviderCapabilities = RealtimeVoiceProviderCapabilities & {
   /** The provider owns agent delegation instead of exposing client-side function tools. */
   handlesAgentConsult?: boolean;
+  /** The provider can keep browser media direct while exposing its control wire to Gateway. */
+  supportsGatewayControl?: boolean;
 };
 
 export type InternalRealtimeVoiceBrowserSessionCreateRequest =
   RealtimeVoiceBrowserSessionCreateRequest & {
     agentId: string;
+    ownerConnId?: string;
     workspaceDir: string;
     initialItems: Array<{
       role: "user" | "assistant";
@@ -40,9 +43,26 @@ type InternalRealtimeVoiceProviderApi = {
   resolveBrowserSessionCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
+    agentId?: string;
     /** Effective per-session model after request overrides. */
     model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
+  isGatewayRelayConfigured?: (ctx: {
+    cfg?: OpenClawConfig;
+    providerConfig: RealtimeVoiceProviderConfig;
+    agentId?: string;
+  }) => boolean | undefined;
+  resolveGatewayRelayCapabilities?: (ctx: {
+    cfg?: OpenClawConfig;
+    providerConfig: RealtimeVoiceProviderConfig;
+    model?: string;
+  }) => InternalRealtimeVoiceProviderCapabilities;
+  validateGatewayRelayLaunch?: (ctx: {
+    cfg?: OpenClawConfig;
+    providerConfig: RealtimeVoiceProviderConfig;
+    model?: string;
+    autoRespondToAudio?: boolean;
+  }) => string | undefined;
   cancelBrowserSession?: (
     request: InternalRealtimeVoiceBrowserSessionCreateRequest,
     session: RealtimeVoiceBrowserSession,
@@ -67,29 +87,70 @@ export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   agentId?: string;
-}): boolean {
-  return (
-    readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
-      cfg: params.cfg,
-      providerConfig: params.providerConfig,
-      agentId: params.agentId,
-    }) === true
-  );
+}): boolean | undefined {
+  return readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+    agentId: params.agentId,
+  });
 }
 
 export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
   model?: string;
 }): InternalRealtimeVoiceProviderCapabilities | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
     {
       cfg: params.cfg,
       providerConfig: params.providerConfig,
+      agentId: params.agentId,
       model: params.model,
     },
   );
+}
+
+export function isInternalRealtimeVoiceGatewayRelayConfigured(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
+}): boolean | undefined {
+  return readInternalRealtimeVoiceProviderApi(params.provider)?.isGatewayRelayConfigured?.({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+    agentId: params.agentId,
+  });
+}
+
+export function resolveInternalRealtimeVoiceGatewayRelayCapabilities(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  model?: string;
+}): InternalRealtimeVoiceProviderCapabilities | undefined {
+  return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveGatewayRelayCapabilities?.({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+    model: params.model,
+  });
+}
+
+export function resolveInternalRealtimeVoiceGatewayRelayLaunchError(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  model?: string;
+  autoRespondToAudio?: boolean;
+}): string | undefined {
+  return readInternalRealtimeVoiceProviderApi(params.provider)?.validateGatewayRelayLaunch?.({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+    model: params.model,
+    autoRespondToAudio: params.autoRespondToAudio,
+  });
 }
 
 export async function cancelInternalRealtimeVoiceBrowserSession(params: {

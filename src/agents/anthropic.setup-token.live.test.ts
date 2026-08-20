@@ -18,7 +18,7 @@ import {
   saveAuthProfileStore,
 } from "./auth-profiles.js";
 import { isLiveTestEnabled, readLiveTestConfig } from "./live-test-helpers.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
@@ -205,7 +205,7 @@ describeLive("live anthropic setup-token", () => {
           );
         }
 
-        const apiKeyInfo = await getApiKeyForModel({
+        const apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
           profileId: tokenSource.profileId,

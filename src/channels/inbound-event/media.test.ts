@@ -1,7 +1,8 @@
 // Inbound event media tests cover channel media attachment normalization.
+import path from "node:path";
 import { kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasStagedMediaFacts,
   normalizeMediaFacts,
@@ -19,8 +20,19 @@ import {
   formatInboundMediaUnavailableText,
   toHistoryMediaEntries,
   toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
 } from "./media.js";
+
+const { probeMediaFilesWithinBudget } = vi.hoisted(() => ({
+  probeMediaFilesWithinBudget: vi.fn(),
+}));
+
+vi.mock("../../media/media-probe.js", () => ({ probeMediaFilesWithinBudget }));
+
+beforeEach(() => {
+  probeMediaFilesWithinBudget.mockReset();
+});
 
 type MergeMatrixSource = MediaFactLegacyProjection & {
   media?: readonly MediaFactInput[];
@@ -303,6 +315,55 @@ const stagedMediaMergeMatrix: Array<{
 ];
 
 describe("channel inbound media facts", () => {
+  it("probes local audio and video facts without probing images or URL-only media", async () => {
+    probeMediaFilesWithinBudget.mockResolvedValueOnce([
+      { durationMs: 1500 },
+      { durationMs: 2500, width: 1280, height: 720 },
+    ]);
+
+    await expect(
+      toInboundMediaFactsWithMetadata([
+        { path: "/tmp/voice.ogg", contentType: "audio/ogg" },
+        { path: "/tmp/clip.mp4", kind: "video" },
+        { path: "/tmp/photo.png", contentType: "image/png" },
+        { url: "https://example.test/remote.mp3", contentType: "audio/mpeg" },
+      ]),
+    ).resolves.toEqual([
+      expect.objectContaining({ path: "/tmp/voice.ogg", durationMs: 1500 }),
+      expect.objectContaining({
+        path: "/tmp/clip.mp4",
+        durationMs: 2500,
+        width: 1280,
+        height: 720,
+      }),
+      expect.objectContaining({ path: "/tmp/photo.png" }),
+      expect.objectContaining({ url: "https://example.test/remote.mp3" }),
+    ]);
+    expect(probeMediaFilesWithinBudget).toHaveBeenCalledWith(
+      [
+        { filePath: path.resolve("/tmp/voice.ogg"), kind: "audio" },
+        { filePath: path.resolve("/tmp/clip.mp4"), kind: "video" },
+      ],
+      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
+    );
+  });
+
+  it("passes the full local candidate list to the bounded batch helper", async () => {
+    probeMediaFilesWithinBudget.mockImplementation(async (inputs: readonly unknown[]) =>
+      inputs.map((_, index) => (index < 8 ? { durationMs: 1000 } : {})),
+    );
+    const facts = await toInboundMediaFactsWithMetadata(
+      Array.from({ length: 10 }, (_, index) => ({
+        path: `/tmp/voice-${index}.ogg`,
+        contentType: "audio/ogg",
+      })),
+    );
+
+    expect(probeMediaFilesWithinBudget.mock.calls[0]?.[0]).toHaveLength(10);
+    expect(facts.slice(0, 8).every((fact) => fact.durationMs === 1000)).toBe(true);
+    expect(facts.slice(8).every((fact) => fact.durationMs === undefined)).toBe(true);
+  });
+
   it("formats media placeholder text with kind precedence and normalized MIME fallback", () => {
     expect(
       formatMediaPlaceholderText([

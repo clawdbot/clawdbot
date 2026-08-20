@@ -69,7 +69,10 @@ export async function createNodeRelayBackend(params: {
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
-  let invokeId: string | undefined;
+  let resolveDispatchReady!: (invokeId: string) => void;
+  const dispatchReady = new Promise<string>((resolve) => {
+    resolveDispatchReady = resolve;
+  });
   let dataCallback: ((data: string) => void) | undefined;
   let exitCallback: ((exit: TerminalBackendExit) => void) | undefined;
   const pendingData = new BoundedBuffer<string>(
@@ -91,9 +94,7 @@ export async function createNodeRelayBackend(params: {
       timeoutMs: 0,
       idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
       signal: abort.signal,
-      onInvokeId: (id) => {
-        invokeId = id;
-      },
+      onDispatchReady: resolveDispatchReady,
       onProgress: (chunk) => {
         if (!chunk) {
           return;
@@ -120,14 +121,14 @@ export async function createNodeRelayBackend(params: {
       }
       return exit;
     });
-  // NodeRegistry invokes onInvokeId synchronously after a successful send, before its first await.
-  // Failure paths resolve the result instead; keeping that callback synchronous is load-bearing.
-  await Promise.resolve();
-  if (!invokeId) {
-    const exit = await result;
-    throw new Error(exit.error ?? "failed to start node terminal invoke");
-  }
-  const activeInvokeId = invokeId;
+  // Pairing-generation validation is asynchronous. Open only after the exact
+  // admitted connection is dispatch-ready; a pre-dispatch failure wins instead.
+  const activeInvokeId = await Promise.race([
+    dispatchReady,
+    result.then((exit) => {
+      throw new Error(exit.error ?? "failed to start node terminal invoke");
+    }),
+  ]);
   const send = (payload: unknown) => params.registry.sendInvokeInput(activeInvokeId, payload);
   return {
     write(data) {

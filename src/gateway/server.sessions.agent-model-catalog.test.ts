@@ -5,10 +5,10 @@ import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSelectedGlobalSessionStore } = setupGatewaySessionsTestHarness();
+const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };
 const workModel = { id: "work-only", name: "Work Model", provider: "work-provider" };

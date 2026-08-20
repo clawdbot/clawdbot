@@ -17,7 +17,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -29,7 +29,7 @@ import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-  evaluateChannelHealth,
+  resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -449,7 +449,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         }
       }
       const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
-      const snapshot = await buildChannelAccountSnapshot({
+      const snapshot = await resolveChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
@@ -475,14 +475,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
       if (snapshot.lastOutboundAt == null) {
         snapshot.lastOutboundAt = activity.outboundAt;
       }
-      const health = evaluateChannelHealth(snapshot, {
+      const healthState = resolveChannelHealthState(snapshot, {
         channelId,
         now: Date.now(),
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      if (!health.healthy) {
-        snapshot.healthState = health.reason;
+      if (healthState !== undefined) {
+        snapshot.healthState = healthState;
       }
       return { accountId, account, snapshot };
     };
@@ -510,6 +510,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
             await buildAccountSnapshot(channelId, plugin, accountId, defaultAccountId),
         ),
         limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
+        onTaskError: (error, index) => {
+          const accountId = accountIds[index] ?? `account ${index + 1}`;
+          statusWarnings.push(`${channelId}:${accountId} status failed: ${formatForLog(error)}`);
+        },
       });
       const accounts: ChannelAccountSnapshot[] = [];
       for (const result of results) {
@@ -572,6 +576,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),
       limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : selectedPlugins.length || 1,
+      onTaskError: (error, index) => {
+        const channelId = statusPlugins[index]?.id ?? `channel ${index + 1}`;
+        statusWarnings.push(`${channelId} channel status failed: ${formatForLog(error)}`);
+      },
     });
     for (const result of channelResults) {
       if (result) {
@@ -582,7 +590,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     if (statusWarnings.length > 0) {
       payload.partial = true;
-      payload.warnings = statusWarnings.slice(0, 50);
+      payload.warnings = statusWarnings.toSorted().slice(0, 50);
     }
 
     respond(true, payload, undefined);

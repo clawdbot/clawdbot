@@ -1,31 +1,37 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
-import { sha256Hex } from "../../infra/crypto-digest.js";
-import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
-import { root } from "../../infra/fs-safe.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { FsSafeError, root, type ReadResult, type Root } from "../../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { logWarn } from "../../logger.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideWorkspace,
   assertWorkspaceSkillSupportPathSetIsFileOnly,
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
-  readWorkspaceSkillFile,
-  readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
-import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import {
+  cleanupSkillProposalGenerations,
+  discardSkillProposalGeneration,
+  proposalBundleRelativePath,
+  resolveSkillWorkshopStateDir,
+  stageSkillProposalGeneration,
+} from "./proposal-generation.js";
+import { hashSkillProposalContent } from "./proposal-hash.js";
+import { reconcileInterruptedSkillProposalApply } from "./reconcile-transition.js";
+import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertProposalId,
   MAX_PROPOSAL_SUPPORT_FILES,
   PROPOSAL_DRAFT_FILE,
 } from "./store-record.js";
+import { appendSkillProposalEvent, type NewSkillProposalEvent } from "./store-sqlite-event.js";
 import {
   insertProposal,
   parseSkillProposalRow,
@@ -42,37 +48,41 @@ import {
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
 import {
+  commitPendingSkillProposalTransition,
+  readCommittedSkillProposalTransition,
+} from "./store-sqlite-transition.js";
+import { withSkillProposalTargetLock } from "./target-lock.js";
+import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,
-  SKILL_WORKSHOP_ROLLBACK_SCHEMA,
+  type PreparedSkillProposalSupportFile,
   type SkillProposalManifest,
   type SkillProposalManifestEntry,
   type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalRollback,
-  type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
+  type SkillProposalEvent,
 } from "./types.js";
 
-const WORKSHOP_REL_DIR = "skill-workshop";
-const PROPOSALS_REL_DIR = path.join(WORKSHOP_REL_DIR, "proposals");
 const MAX_PROPOSAL_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
-const TARGET_LEASE_MS = 60_000;
-const TARGET_LEASE_WAIT_MS = 5_000;
 export {
   MAX_PROPOSAL_SUPPORT_FILES,
-  parseSkillProposalRecord,
-  parseSkillProposalRollback,
+  validateSkillProposalRecord,
+  validateSkillProposalRollback,
 } from "./store-record.js";
-export { readSkillProposalRollback, writeSkillProposalRollback } from "./store-sqlite-rollback.js";
+export { hashSkillProposalContent } from "./proposal-hash.js";
+export { readSkillProposalRollback };
+export { withSkillProposalTargetLock };
 
 type SkillProposalLookupScope = {
   agentId?: string;
   workspaceDir?: string;
 };
 
-export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
-  content: string;
+type SkillProposalReadOptions = {
+  config?: OpenClawConfig;
+  reconcile?: boolean;
 };
 
 /** Creates a stable proposal id from skill name, date, and random suffix. */
@@ -83,10 +93,6 @@ export function createSkillProposalId(name: string, now = new Date()): string {
   return `${normalized.slice(0, 60)}-${date}-${suffix}`;
 }
 
-export function hashSkillProposalContent(content: string): string {
-  return sha256Hex(content);
-}
-
 function contentSizeBytes(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
@@ -95,15 +101,6 @@ function assertSkillProposalContentSize(content: string): void {
   if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
-}
-
-function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): string {
-  return path.resolve(options.stateDir ?? resolveStateDir(options.env));
-}
-
-function proposalRelativeDir(proposalId: string): string {
-  assertProposalId(proposalId);
-  return path.join(PROPOSALS_REL_DIR, proposalId);
 }
 
 export function prepareSkillProposalSupportFiles(
@@ -178,42 +175,59 @@ function isStoredProposalVisible(row: SkillProposalRow, scope: SkillProposalLook
   );
 }
 
+export class SkillProposalDraftMissingError extends Error {
+  constructor(
+    readonly proposalId: string,
+    options?: ErrorOptions,
+  ) {
+    super(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`, options);
+  }
+}
+
 export async function readSkillProposal(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
   scope: SkillProposalLookupScope = {},
+  readOptions: SkillProposalReadOptions = {},
 ): Promise<SkillProposalReadResult | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
-  await reconcileInterruptedApply(proposalId, options);
-  stored = readStoredProposal(proposalId, options);
-  if (!stored || !isStoredProposalVisible(stored.row, scope)) {
-    return null;
+  if (readOptions.reconcile === false) {
+    return await readSkillProposalBundle(stored.record, options);
   }
-  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
-  const draft = await stateRoot.read(
-    path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE),
-    {
-      hardlinks: "reject",
-      maxBytes: MAX_PROPOSAL_BYTES,
-      symlinks: "reject",
+  if (await reconcileInterruptedApply(proposalId, options, readOptions.config)) {
+    stored = readStoredProposal(proposalId, options);
+    if (!stored || !isStoredProposalVisible(stored.row, scope)) {
+      return null;
+    }
+  }
+  return await withSkillProposalTargetLock(
+    stored.record,
+    async () => {
+      const current = readStoredProposal(proposalId, options);
+      return current && isStoredProposalVisible(current.row, scope)
+        ? await readSkillProposalBundle(current.record, options)
+        : null;
     },
+    options,
   );
-  return { record: stored.record, content: draft.buffer.toString("utf8") };
 }
 
 export async function readSkillProposalRecord(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
   scope: SkillProposalLookupScope = {},
+  readOptions: SkillProposalReadOptions = {},
 ): Promise<SkillProposalRecord | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
-  await reconcileInterruptedApply(proposalId, options);
+  if (readOptions.reconcile !== false) {
+    await reconcileInterruptedApply(proposalId, options, readOptions.config);
+  }
   stored = readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
 }
@@ -225,26 +239,16 @@ export async function writeSkillProposal(params: {
   workspaceDir: string;
   ownerAgentId?: string;
   maxPending: number;
+  event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+}): Promise<SkillProposalEvent> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
   ensureSkillWorkshopSchema(params.store);
-  const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
-  const relativeDir = proposalRelativeDir(params.record.id);
-  await stateRoot.mkdir(relativeDir);
-  await stateRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {
-    encoding: "utf8",
-  });
-  for (const file of params.supportFiles ?? []) {
-    await stateRoot.write(path.join(relativeDir, file.path), file.content, {
-      encoding: "utf8",
-      mkdir: true,
-    });
-  }
+  await stageSkillProposalGeneration(params);
 
   try {
-    runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
         const existing = executeSqliteQueryTakeFirstSync(
@@ -273,63 +277,93 @@ export async function writeSkillProposal(params: {
           ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
           workspaceDir: params.workspaceDir,
         });
+        return appendSkillProposalEvent(db, params.event);
       },
       databaseOptions(params.store),
       { operationLabel: "skill-workshop.proposal.create" },
     );
   } catch (error) {
-    await removePathWithinRoot({
-      rootDir: resolveSkillWorkshopStateDir(params.store),
-      relativePath: relativeDir,
-      recursive: true,
-    }).catch(() => undefined);
+    const committed = readCommittedSkillProposalTransition({
+      record: params.record,
+      event: params.event,
+      store: params.store,
+    });
+    if (committed) {
+      return committed.event;
+    }
+    const authoritative = readStoredProposal(params.record.id, params.store);
+    if (authoritative?.row.record_json === JSON.stringify(params.record)) {
+      throw new Error("Created Skill Workshop proposal is missing its committed event.", {
+        cause: error,
+      });
+    }
+    await discardSkillProposalGeneration(params.record, params.store).catch(() => undefined);
     throw error;
   }
 }
 
 export async function replaceSkillProposalDraft(params: {
+  expected: SkillProposalRecord;
   record: SkillProposalRecord;
-  previousSupportFiles?: readonly SkillProposalSupportFile[];
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
+  event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
-}): Promise<void> {
+}): Promise<SkillProposalEvent> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
-  const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
-  const relativeDir = proposalRelativeDir(params.record.id);
-  await stateRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {
-    encoding: "utf8",
+  await cleanupSkillProposalGenerations(params.expected, params.store).catch((error: unknown) => {
+    logWarn(`skill-workshop: failed to clean unowned proposal generations: ${String(error)}`);
   });
-  const nextSupportPaths = new Set<string>();
-  for (const file of params.supportFiles ?? []) {
-    nextSupportPaths.add(file.path);
-    await stateRoot.write(path.join(relativeDir, file.path), file.content, {
-      encoding: "utf8",
-      mkdir: true,
+  await stageSkillProposalGeneration(params);
+
+  let commit;
+  try {
+    commit = commitPendingSkillProposalTransition({
+      expected: params.expected,
+      record: params.record,
+      event: params.event,
+      store: params.store,
+      operationLabel: "skill-workshop.revision.commit",
+      invalidateRollback: true,
     });
-  }
-  for (const file of params.previousSupportFiles ?? []) {
-    const filePath = normalizeWorkspaceSkillSupportPath(file.path);
-    if (!nextSupportPaths.has(filePath)) {
-      await stateRoot.remove(path.join(relativeDir, filePath)).catch(() => undefined);
+  } catch (error) {
+    const committed = readCommittedSkillProposalTransition({
+      record: params.record,
+      event: params.event,
+      store: params.store,
+    });
+    if (!committed) {
+      const authoritative = readStoredProposal(params.record.id, params.store);
+      if (authoritative?.row.record_json === JSON.stringify(params.record)) {
+        throw new Error("Revised Skill Workshop proposal is missing its committed event.", {
+          cause: error,
+        });
+      }
+      await discardSkillProposalGeneration(params.record, params.store).catch(() => undefined);
+      throw error;
     }
+    commit = committed;
   }
-  await updateSkillProposalRecord({
-    record: params.record,
-    store: params.store,
-    invalidateRollback: true,
+  if (commit.state === "conflict") {
+    await discardSkillProposalGeneration(params.record, params.store).catch(() => undefined);
+    throw new Error("Skill proposal changed before revision commit.");
+  }
+  await cleanupSkillProposalGenerations(params.record, params.store).catch((error: unknown) => {
+    logWarn(`skill-workshop: failed to retire prior proposal generation: ${String(error)}`);
   });
+  return commit.event;
 }
 
 export async function updateSkillProposalRecord(params: {
   record: SkillProposalRecord;
   store?: SkillWorkshopStoreOptions;
   invalidateRollback?: boolean;
-}): Promise<void> {
+  event?: NewSkillProposalEvent;
+}): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
   ensureSkillWorkshopSchema(params.store);
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
       const current = executeSqliteQueryTakeFirstSync(
@@ -351,29 +385,10 @@ export async function updateSkillProposalRecord(params: {
         );
       }
       updateProposal(db, current, params.record);
+      return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
     },
     databaseOptions(params.store),
     { operationLabel: "skill-workshop.proposal.update" },
-  );
-}
-
-export async function withSkillProposalTargetLock<T>(
-  record: SkillProposalRecord,
-  fn: () => Promise<T>,
-  options: SkillWorkshopStoreOptions = {},
-): Promise<T> {
-  ensureSkillWorkshopSchema(options);
-  return await withOpenClawStateLease(
-    {
-      scope: "skill-workshop-target",
-      key: hashSkillProposalContent(record.target.skillFile),
-      database: { scope: "shared", options: databaseOptions(options) },
-      leaseMs: TARGET_LEASE_MS,
-      waitMs: TARGET_LEASE_WAIT_MS,
-      leaseLabel: "Skill Workshop target lease",
-      operationLabel: "skill-workshop.target-lease",
-    },
-    async () => await fn(),
   );
 }
 
@@ -432,104 +447,46 @@ export async function readSkillProposalManifest(
 async function reconcileInterruptedApply(
   proposalId: string,
   options: SkillWorkshopStoreOptions,
+  config?: OpenClawConfig,
 ): Promise<boolean> {
   const stored = readStoredProposal(proposalId, options);
   if (!stored || stored.record.status !== "pending") {
     return false;
   }
-  const rollback = await readSkillProposalRollback(proposalId, options);
-  if (
-    !rollback ||
-    rollback.action !== stored.record.kind ||
-    path.resolve(rollback.targetSkillFile) !== path.resolve(stored.record.target.skillFile)
-  ) {
+  // Avoid acquiring the target lock on ordinary reads. Apply and revise reread
+  // proposals while already holding that lock.
+  if (!(await readSkillProposalRollback(proposalId, options))) {
     return false;
   }
   let draftContent: string;
   try {
     const stateRoot = await root(resolveSkillWorkshopStateDir(options));
     const draft = await stateRoot.read(
-      path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE),
+      proposalBundleRelativePath(stored.record, PROPOSAL_DRAFT_FILE),
       { hardlinks: "reject", maxBytes: MAX_PROPOSAL_BYTES, symlinks: "reject" },
     );
     draftContent = draft.buffer.toString("utf8");
   } catch {
     return false;
   }
-  if (hashSkillProposalContent(draftContent) !== stored.record.draftHash) {
-    return false;
-  }
-  let proposedContent: string;
-  try {
-    proposedContent = stripProposalFrontmatterForSkill(draftContent);
-  } catch {
-    return false;
-  }
-  try {
-    const targetContent = await readWorkspaceSkillFile(stored.record.target.skillFile);
-    if (
-      targetContent === null ||
-      hashSkillProposalContent(targetContent) !== hashSkillProposalContent(proposedContent)
-    ) {
-      return false;
-    }
-    for (const file of stored.record.supportFiles ?? []) {
-      const targetSupportContent = await readWorkspaceSupportFile({
-        skillDir: stored.record.target.skillDir,
-        relativePath: file.path,
-      });
-      if (
-        targetSupportContent === null ||
-        hashSkillProposalContent(targetSupportContent) !== file.hash
-      ) {
-        return false;
-      }
-    }
-  } catch {
-    return false;
-  }
-  const now = new Date().toISOString();
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .selectAll()
-          .where("proposal_id", "=", proposalId),
-      );
-      const record = current ? parseSkillProposalRow(current) : null;
-      if (
-        !current ||
-        !record ||
-        current.record_json !== stored.row.record_json ||
-        record.status !== "pending"
-      ) {
-        return false;
-      }
-      updateProposal(db, current, {
-        ...record,
-        status: "applied",
-        updatedAt: now,
-        appliedAt: now,
-      });
-      return true;
-    },
-    databaseOptions(options),
-    { operationLabel: "skill-workshop.apply.reconcile" },
-  );
+  return await reconcileInterruptedSkillProposalApply({
+    record: stored.record,
+    expectedRecordJson: stored.row.record_json,
+    draftContent,
+    workspaceDir: stored.row.workspace_dir,
+    ...(config ? { config } : {}),
+    store: options,
+  });
 }
 
-export async function readProposalSupportFiles(
+async function readProposalSupportFiles(
   record: SkillProposalRecord,
-  options: SkillWorkshopStoreOptions = {},
+  stateRoot: Root,
 ): Promise<PreparedSkillProposalSupportFile[]> {
-  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
   const out: PreparedSkillProposalSupportFile[] = [];
   for (const file of record.supportFiles ?? []) {
     const filePath = normalizeWorkspaceSkillSupportPath(file.path);
-    const read = await stateRoot.read(path.join(proposalRelativeDir(record.id), filePath), {
+    const read = await stateRoot.read(proposalBundleRelativePath(record, filePath), {
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
       symlinks: "reject",
@@ -546,28 +503,30 @@ export async function readProposalSupportFiles(
   return out;
 }
 
-export function createSkillProposalRollback(params: {
-  proposalId: string;
-  targetSkillFile: string;
-  action: "create" | "update";
-  previousContent?: string;
-  supportFiles?: SkillProposalRollback["supportFiles"];
-}): SkillProposalRollback {
+async function readSkillProposalBundle(
+  record: SkillProposalRecord,
+  options: SkillWorkshopStoreOptions,
+): Promise<SkillProposalReadResult> {
+  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
+  let draft: ReadResult;
+  try {
+    draft = await stateRoot.read(proposalBundleRelativePath(record, PROPOSAL_DRAFT_FILE), {
+      hardlinks: "reject",
+      maxBytes: MAX_PROPOSAL_BYTES,
+      symlinks: "reject",
+    });
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "not-found") {
+      throw new SkillProposalDraftMissingError(record.id, { cause: error });
+    }
+    throw error;
+  }
+  const supportFiles = await readProposalSupportFiles(record, stateRoot);
   return {
-    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-    proposalId: params.proposalId,
-    writtenAt: new Date().toISOString(),
-    targetSkillFile: params.targetSkillFile,
-    action: params.action,
-    ...(params.previousContent !== undefined
-      ? {
-          previousContent: params.previousContent,
-          previousContentHash: hashSkillProposalContent(params.previousContent),
-        }
-      : {}),
-    ...(params.supportFiles && params.supportFiles.length > 0
-      ? { supportFiles: params.supportFiles }
-      : {}),
+    record,
+    revisionHash: hashSkillProposalRevision(record),
+    content: draft.buffer.toString("utf8"),
+    ...(supportFiles.length > 0 ? { supportFiles } : {}),
   };
 }
 

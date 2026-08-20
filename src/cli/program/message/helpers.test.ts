@@ -1,7 +1,8 @@
 // Message program helper tests cover message command helper behavior and mocks.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const messageCommandMock = vi.fn(async () => {});
+const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
@@ -16,10 +17,16 @@ vi.mock("../../../globals.js", () => ({
   setVerbose: vi.fn(),
 }));
 
-vi.mock("../../plugin-registry.js", () => ({
-  ensurePluginRegistryLoaded: vi.fn(),
+const loadPluginRegistryHandleMock = vi.fn(() => ({ gatewayHandlers: {} }));
+vi.mock("../../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../../../plugins/channel-plugin-ids.js", () => ({
+  resolveConfiguredChannelPluginIds: () => ["configured-channel"],
+  resolveDiscoverableScopedChannelPluginIds: (params: { channelIds: string[] }) =>
+    params.channelIds,
 }));
-const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
+vi.mock("../../../plugins/loader.js", () => ({
+  loadPluginRegistryHandle: loadPluginRegistryHandleMock,
+}));
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
@@ -45,7 +52,7 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   runGlobalGatewayStopSafely: runGlobalGatewayStopSafelyMock,
 }));
 
-const exitMock = vi.fn((): never => {
+const exitMock = vi.fn((_code: number): never => {
   throw new Error("exit");
 });
 const errorMock = vi.fn();
@@ -96,12 +103,7 @@ function expectNoAccountFieldInPassedOptions() {
   expect(passedOpts).not.toHaveProperty("account");
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectMessageCommandOptions(expected: Record<string, unknown>, callIndex = 0): void {
   const call = (messageCommandMock.mock.calls as unknown[][])[callIndex];
@@ -120,6 +122,12 @@ function expectMessageCommandOptions(expected: Record<string, unknown>, callInde
   }
 }
 
+function expectRegistryLoad(pluginIds: string[]): void {
+  expect(loadPluginRegistryHandleMock).toHaveBeenCalledWith(
+    expect.objectContaining({ onlyPluginIds: pluginIds, throwOnLoadError: true }),
+  );
+}
+
 describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -129,7 +137,7 @@ describe("runMessageAction", () => {
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
     runGlobalGatewayStopSafelyMock.mockClear();
-    exitMock.mockClear().mockImplementation((): never => {
+    exitMock.mockClear().mockImplementation((_code: number): never => {
       throw new Error("exit");
     });
   });
@@ -137,10 +145,7 @@ describe("runMessageAction", () => {
   it("calls exit(0) after successful message delivery", async () => {
     await runSendAction();
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
   });
@@ -148,18 +153,13 @@ describe("runMessageAction", () => {
   it("loads configured channel plugins when no target channel is known yet", async () => {
     await runSendAction({ channel: undefined });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expectRegistryLoad(["configured-channel"]);
   });
 
   it("narrows plugin loading from a channel-prefixed target", async () => {
     await runSendAction({ channel: undefined, target: "discord:channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
   });
 
   it("skips local plugin preload for any gateway-owned scoped channel action", async () => {
@@ -167,7 +167,7 @@ describe("runMessageAction", () => {
 
     await runSendAction({ target: "channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
       channel: "discord",
@@ -187,10 +187,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["telegram"],
-    });
+    expectRegistryLoad(["telegram"]);
     expectMessageCommandOptions({
       action: "broadcast",
       targets: ["telegram:1", "telegram:2"],
@@ -209,10 +206,7 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
     expectMessageCommandOptions({ action: "custom-action" });
   });
 
@@ -221,16 +215,13 @@ describe("runMessageAction", () => {
 
     await runSendAction({ target: "channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["discord"],
-    });
+    expectRegistryLoad(["discord"]);
   });
 
   it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
       target: "telegram:12345",
@@ -250,7 +241,7 @@ describe("runMessageAction", () => {
       forceDocument: true,
     });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expectMessageCommandOptions({
       action: "send",
       channel: "telegram",
@@ -273,10 +264,7 @@ describe("runMessageAction", () => {
       dryRun: true,
     });
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-      onlyChannelIds: ["telegram"],
-    });
+    expectRegistryLoad(["telegram"]);
     expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
@@ -290,21 +278,42 @@ describe("runMessageAction", () => {
       }),
     ).rejects.toThrow("exit");
 
-    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expectRegistryLoad(["configured-channel"]);
   });
 
   it("exits with failure when plugin registry loading fails before dispatch", async () => {
-    vi.mocked(ensurePluginRegistryLoaded).mockImplementationOnce(() => {
+    loadPluginRegistryHandleMock.mockImplementationOnce(() => {
       throw new Error("plugin load failed");
     });
 
     await runSendAction();
 
     expect(messageCommandMock).not.toHaveBeenCalled();
-    expect(errorMock).toHaveBeenCalledWith("Error: plugin load failed");
+    expect(errorMock).toHaveBeenCalledWith("plugin load failed");
     expect(exitMock).toHaveBeenCalledOnce();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
+  it("rejects conflicting poll visibility flags before loading channel plugins", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("poll", {
+        channel: "telegram",
+        target: "123",
+        pollQuestion: "Ship it?",
+        pollOption: ["Yes", "No"],
+        pollAnonymous: true,
+        pollPublic: true,
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).toHaveBeenCalledWith(
+      "--poll-anonymous and --poll-public are mutually exclusive.",
+    );
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);
   });
@@ -368,8 +377,8 @@ describe("runMessageAction", () => {
     await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(errorMock).toHaveBeenCalledWith(`${flag} must be a ${kind} integer.`);
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
     expect(exitMock).not.toHaveBeenCalledWith(0);
@@ -393,7 +402,7 @@ describe("runMessageAction", () => {
     ).rejects.toThrow("exit");
 
     const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(errorMock).toHaveBeenCalledWith(`${flag} must be a ${kind} integer.`);
     expect(messageCommandMock).not.toHaveBeenCalled();
     expect(exitMock).toHaveBeenCalledWith(1);
   });
@@ -487,7 +496,7 @@ describe("runMessageAction", () => {
     messageCommandMock.mockRejectedValueOnce(new Error("send failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("Error: send failed");
+    expect(errorMock).toHaveBeenCalledWith("send failed");
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(1);
   });
@@ -501,12 +510,49 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(1);
   });
 
+  it("runs gateway_stop hooks before exit(1) for a failed broadcast result", async () => {
+    const order: string[] = [];
+    hasHooksMock.mockReturnValueOnce(true);
+    messageCommandMock.mockResolvedValueOnce({
+      kind: "broadcast",
+      channel: "telegram",
+      action: "broadcast",
+      handledBy: "core",
+      payload: {
+        results: [
+          { channel: "telegram", to: "123", ok: true },
+          { channel: "telegram", to: "456", ok: false, error: "delivery failed" },
+        ],
+      },
+      dryRun: false,
+    });
+    runGatewayStopMock.mockImplementationOnce(async () => {
+      order.push("stop");
+    });
+    exitMock.mockImplementationOnce((code: number): never => {
+      order.push(`exit:${code}`);
+      throw new Error("exit");
+    });
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        channel: "telegram",
+        targets: ["123", "456"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(order).toEqual(["stop", "exit:1"]);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
   it("logs gateway_stop failure and still exits with success code", async () => {
     hasHooksMock.mockReturnValueOnce(true);
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenCalledWith("gateway_stop hook failed: hook failed");
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
@@ -516,30 +562,9 @@ describe("runMessageAction", () => {
     runGatewayStopMock.mockRejectedValueOnce(new Error("hook failed"));
     await runSendAction();
 
-    expect(errorMock).toHaveBeenNthCalledWith(1, "Error: send failed");
-    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: Error: hook failed");
+    expect(errorMock).toHaveBeenNthCalledWith(1, "send failed");
+    expect(errorMock).toHaveBeenNthCalledWith(2, "gateway_stop hook failed: hook failed");
     expect(exitMock).toHaveBeenCalledWith(1);
-  });
-
-  it("does not call exit(0) when the action throws", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    await runSendAction();
-
-    // exit should only be called once with code 1, never with 0
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).not.toHaveBeenCalledWith(0);
-  });
-
-  it("does not call exit(0) if the error path returns", async () => {
-    messageCommandMock.mockRejectedValueOnce(new Error("boom"));
-    exitMock.mockClear().mockImplementation(() => undefined as never);
-    const runMessageAction = createRunMessageAction();
-    await expect(runMessageAction("send", baseSendOptions)).resolves.toBeUndefined();
-
-    expect(errorMock).toHaveBeenCalledWith("Error: boom");
-    expect(exitMock).toHaveBeenCalledOnce();
-    expect(exitMock).toHaveBeenCalledWith(1);
-    expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
   it("passes action and maps account to accountId", async () => {

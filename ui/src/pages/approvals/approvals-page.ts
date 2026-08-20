@@ -18,15 +18,18 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
-import { renderSettingsPage } from "../../components/settings-ui.ts";
+import { renderDocsLink, renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
+const APPROVALS_DOCS_URL = "https://docs.openclaw.ai/tools/exec-approvals";
 
 function formatResolvedAt(timestampMs: number): string {
   return new Intl.DateTimeFormat(i18n.getLocale(), {
@@ -131,6 +134,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private requestGeneration = 0;
   private hasLoaded = false;
+  private historyRefreshPending = false;
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.gateway,
     (gateway) => {
@@ -139,29 +143,55 @@ class ApprovalsPage extends OpenClawLightDomElement {
       // gateway's rows/cursor/error so stale history is not shown and "Load more"
       // cannot append across sources. Mirrors the client-change reset below.
       if (this.gatewaySource !== gateway) {
-        this.requestGeneration += 1;
-        this.loading = false;
-        this.loadingMore = false;
-        this.hasLoaded = false;
-        this.items = [];
-        this.nextCursor = null;
-        this.error = null;
+        this.resetHistory(true);
       }
       this.gatewaySource = gateway;
       this.applyGatewaySnapshot(gateway.snapshot);
-      return gateway.subscribe((snapshot) => {
+      const stopSnapshots = gateway.subscribe((snapshot) => {
         if (this.gatewaySource === gateway && this.context.gateway === gateway) {
           this.applyGatewaySnapshot(snapshot);
         }
       });
+      const stopEvents = gateway.subscribeEvents((event) => {
+        if (
+          this.gatewaySource !== gateway ||
+          this.context.gateway !== gateway ||
+          !this.approvalsAccess ||
+          !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
+          !parseApprovalResolvedEvent(event.event, event.payload)
+        ) {
+          return;
+        }
+        this.historyRefreshPending = true;
+        if (!this.loading && !this.loadingMore) {
+          void this.loadPage(true);
+        }
+      });
+      return () => {
+        stopSnapshots();
+        stopEvents();
+      };
     },
   );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.requestGeneration += 1;
+    this.resetHistory(false);
     this.gatewaySource = null;
     super.disconnectedCallback();
+  }
+
+  private resetHistory(clearData: boolean) {
+    this.requestGeneration += 1;
+    this.loading = false;
+    this.loadingMore = false;
+    this.historyRefreshPending = false;
+    if (clearData) {
+      this.hasLoaded = false;
+      this.items = [];
+      this.nextCursor = null;
+      this.error = null;
+    }
   }
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
@@ -173,17 +203,9 @@ class ApprovalsPage extends OpenClawLightDomElement {
     this.approvalsAccess = nextApprovalsAccess;
     if (clientChanged || approvalAccessChanged) {
       this.client = snapshot.client;
-      this.requestGeneration += 1;
-      this.items = [];
-      this.nextCursor = null;
-      this.error = null;
-      this.hasLoaded = false;
-      this.loading = false;
-      this.loadingMore = false;
+      this.resetHistory(true);
     } else if (connectionChanged) {
-      this.requestGeneration += 1;
-      this.loading = false;
-      this.loadingMore = false;
+      this.resetHistory(false);
       if (snapshot.phase === "connected") {
         this.hasLoaded = false;
       }
@@ -219,6 +241,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       return;
     }
     if (reset) {
+      this.historyRefreshPending = false;
       this.loading = true;
     } else {
       this.loadingMore = true;
@@ -250,13 +273,16 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.hasLoaded = true;
     } catch (error) {
       if (isCurrent()) {
-        this.error = String(error);
+        this.error = formatUiError(error);
         this.hasLoaded = true;
       }
     } finally {
       if (isCurrent()) {
         this.loading = false;
         this.loadingMore = false;
+        if (this.historyRefreshPending) {
+          void this.loadPage(true);
+        }
       }
     }
   }
@@ -330,7 +356,10 @@ class ApprovalsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderSettingsPage(
       html`
-        <p class="settings-page__intro">${t("approvalHistory.description")}</p>
+        <p class="settings-page__intro">
+          ${t("approvalHistory.description")}
+          ${renderDocsLink(APPROVALS_DOCS_URL, t("common.learnMore"))}
+        </p>
         ${!this.connected
           ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
           : nothing}

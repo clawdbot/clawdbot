@@ -1,4 +1,4 @@
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
@@ -101,31 +101,4 @@ function resolveChatSendRouting(
     ...(selectedAgentId ? { selectedAgentId } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
-}
-
-export async function requestSkillWorkshopRevisionChatSend(
-  state: ChatState,
-  params: {
-    proposalId: string;
-    instructions: string;
-    runId: string;
-    sessionKey?: string;
-    agentId?: string;
-    targetAgentId?: string;
-  },
-): Promise<ChatSendAck> {
-  const routing = resolveChatSendRouting(state, {
-    sessionKey: params.sessionKey,
-    agentId: params.targetAgentId,
-  });
-  const payload = await state.client!.request("skills.proposals.requestRevision", {
-    ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
-    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
-    proposalId: params.proposalId,
-    instructions: params.instructions,
-    sessionKey: routing.sessionKey,
-    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
-    idempotencyKey: params.runId,
-  });
-  return normalizeChatSendAck(payload, params.runId);
 }

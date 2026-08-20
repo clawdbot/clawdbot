@@ -1,5 +1,8 @@
 // Feishu plugin module implements conversation id behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as normalizeText,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FeishuGroupSessionScope =
   | "group"
@@ -24,14 +27,6 @@ export function resolveConfiguredFeishuGroupSessionScope(params: {
     params.feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
   );
-}
-
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 export function buildFeishuConversationId(params: {

@@ -7,11 +7,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
   normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
+  resolvePolicyPluginActivationState,
 } from "../plugins/config-policy.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
-  isPluginMetadataSnapshotCompatible,
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -45,28 +43,6 @@ function sanitizeAgentSettingsSnapshot(settings: AgentSettingsSnapshot): AgentSe
 
 function sanitizeProjectSettings(settings: AgentSettingsSnapshot): AgentSettingsSnapshot {
   return sanitizeAgentSettingsSnapshot(settings);
-}
-
-function canReuseUnscopedCurrentPluginMetadataSnapshot(config: OpenClawConfig): boolean {
-  // Unscoped snapshots are only reusable when config does not introduce
-  // workspace-local plugin load paths that would change the registry contents.
-  return normalizePluginsConfigWithResolver(config.plugins).loadPaths.length === 0;
-}
-
-function resolveUnscopedCurrentPluginMetadataSnapshot(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): PluginMetadataSnapshot | undefined {
-  if (!canReuseUnscopedCurrentPluginMetadataSnapshot(params.config)) {
-    return undefined;
-  }
-  return getCurrentPluginMetadataSnapshot({
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    allowWorkspaceScopedSnapshot: true,
-    requireDefaultDiscoveryContext: true,
-  });
 }
 
 function loadBundleSettingsFile(params: {
@@ -111,29 +87,12 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
   const env = params.env ?? process.env;
   const providedSnapshot = params.pluginMetadataSnapshot;
   const metadataSnapshot =
-    providedSnapshot &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: providedSnapshot,
+    providedSnapshot ??
+    loadPluginMetadataSnapshot({
+      workspaceDir,
       config,
       env,
-      workspaceDir,
-    })
-      ? providedSnapshot
-      : (getCurrentPluginMetadataSnapshot({
-          config,
-          env,
-          workspaceDir,
-        }) ??
-        resolveUnscopedCurrentPluginMetadataSnapshot({
-          config,
-          env,
-          workspaceDir,
-        }) ??
-        loadPluginMetadataSnapshot({
-          workspaceDir,
-          config,
-          env,
-        }));
+    });
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return {};
@@ -150,7 +109,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
     if (record.format !== "bundle" || settingsFiles.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,

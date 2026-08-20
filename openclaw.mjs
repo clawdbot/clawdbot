@@ -7,51 +7,17 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isSupportedOpenClawNodeVersion } from "./node-version.mjs";
 
-const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
-const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
-const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
 const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
-
-const parseNodeVersion = (rawVersion) => {
-  const [majorRaw = "0", minorRaw = "0", patchRaw = "0"] = rawVersion.split(".");
-  return {
-    major: Number(majorRaw),
-    minor: Number(minorRaw),
-    patch: Number(patchRaw),
-  };
-};
-
-const isAtLeastNodeVersion = (version, minimum) => {
-  if (version.major !== minimum.major) {
-    return version.major > minimum.major;
-  }
-  if (version.minor !== minimum.minor) {
-    return version.minor > minimum.minor;
-  }
-  return version.patch >= minimum.patch;
-};
-
-const isSupportedNodeVersion = (version) => {
-  if (version.major === MIN_NODE_22.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_22);
-  }
-  if (version.major === MIN_NODE_24.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_24);
-  }
-  if (version.major === MIN_NODE_25.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_25);
-  }
-  return version.major > MIN_NODE_25.major;
-};
 
 const ensureSupportedRuntimeVersion = () => {
   if (process.versions.bun) {
     // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
     // rejecting Bun outright so capable Bun builds can run OpenClaw.
-    let hasNodeSqlite = false;
+    let hasNodeSqlite;
     try {
       hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
     } catch {
@@ -66,7 +32,7 @@ const ensureSupportedRuntimeVersion = () => {
     );
     process.exit(1);
   }
-  if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
+  if (isSupportedOpenClawNodeVersion(process.versions.node)) {
     return;
   }
 
@@ -463,8 +429,7 @@ const hasLauncherContainerTarget = (argv) => {
     return true;
   }
   const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (const arg of args) {
     if (!arg || arg === "--") {
       return false;
     }
@@ -658,8 +623,8 @@ function resolveLauncherCommit() {
     return envCommit;
   }
   return (
-    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
     formatLauncherCommit(readLauncherJson("./package.json")?.githead)
   );

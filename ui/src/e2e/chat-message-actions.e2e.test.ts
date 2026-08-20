@@ -17,6 +17,41 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
+const transportPreviewLimit = 8_000;
+
+// Neutral filler line repeated to push the fixture past the transport
+// preview limit without embedding stale implementation narrative; the
+// heading, list, code block, and path sample below exercise Markdown
+// rendering, while the repeated line only pads length.
+const FULL_ASSISTANT_CONTENT_FILLER_LINE =
+  "Repeat neutral filler text to exceed the transport preview limit while staying deterministic and readable.\n";
+
+const realisticFullAssistantContent = `# Deployment report
+
+## Summary
+
+- service: payment-gateway
+- environment: production
+- status: completed
+
+## Rollout steps
+
+1. Build the release artifact and run smoke tests.
+2. Deploy to the canary pool and watch the error budget.
+3. Promote to the full fleet.
+
+~~~ts
+export function verifyRollout(serviceName: string): Promise<boolean> {
+  return healthCheck(serviceName);
+}
+~~~
+
+Reference: src/services/payment-gateway/deploy.ts:88
+
+${FULL_ASSISTANT_CONTENT_FILLER_LINE.repeat(75)}
+## Final verification
+
+All health checks passed and the rollout is complete.`;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -26,6 +61,19 @@ async function screenshot(page: Page, fileName: string): Promise<void> {
     return;
   }
   await page.screenshot({ animations: "disabled", path: path.join(artifactDir, fileName) });
+}
+
+async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
+  await page.emulateMedia({ colorScheme: mode });
+  await page.evaluate((nextMode) => {
+    const root = document.documentElement;
+    root.dataset.themeMode = nextMode;
+    root.dataset.themeResolved = nextMode;
+    root.classList.toggle("wa-light", nextMode === "light");
+    root.classList.toggle("wa-dark", nextMode === "dark");
+    root.style.colorScheme = nextMode;
+  }, mode);
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
 async function expectHoverTooltip(button: Locator, text: string): Promise<void> {
@@ -121,6 +169,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
   it("offers Reply inline and mirrors every assistant action in the context menu", async () => {
     const context = await browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       recordVideo: captureUiProof
         ? { dir: path.join(artifactDir, "video"), size: { height: 900, width: 1440 } }
@@ -135,7 +184,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
     const messageText = "Reply and context menu action proof.";
     const privateThinking = "private reply reasoning";
     const visibleThinkingAnswer = "Visible reply context only.";
-    await installMockGateway(page, {
+    const fullAssistantContent = realisticFullAssistantContent;
+    const truncatedPreview = `${fullAssistantContent.slice(0, transportPreviewLimit)}\n...(truncated)...`;
+    expect(fullAssistantContent.length).toBeGreaterThan(transportPreviewLimit);
+    const gateway = await installMockGateway(page, {
       historyMessages: [
         {
           role: "assistant",
@@ -160,14 +212,35 @@ describeControlUiE2e("Control UI chat message actions", () => {
           timestamp: Date.now() + 2,
           __openclaw: { id: "assistant-thinking-proof", seq: 3 },
         },
+        {
+          role: "user",
+          content: [{ type: "text", text: "Keep the truncated message separate." }],
+          timestamp: Date.now() + 3,
+          __openclaw: { id: "user-truncated-separator", seq: 4 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: truncatedPreview }],
+          timestamp: Date.now() + 4,
+          __openclaw: { id: "assistant-full-message", seq: 5 },
+        },
       ],
+      methodResponses: {
+        "chat.message.get": {
+          ok: true,
+          message: { role: "assistant", content: fullAssistantContent },
+        },
+      },
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+      await setThemeMode(page, "dark");
       const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
-      await expectHoverTooltip(page.getByRole("button", { name: "New thread" }), "New thread");
+      await expectHoverTooltip(
+        page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
+        "New session",
+      );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
         `Open command palette (${commandPaletteShortcut})`,
@@ -234,22 +307,22 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const inlineActions = group.locator(".chat-group-footer-actions button");
       expect(
         await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
-      ).toEqual(["Reply to message", "Hide message", "Open in canvas", "Copy as markdown"]);
+      ).toEqual(["Reply to message", "Copy as markdown"]);
       for (const button of await inlineActions.all()) {
-        const label = await button.getAttribute("aria-label");
-        await expectHoverColor(button, label === "Hide message" ? "--danger" : "--accent");
+        await expectHoverColor(button, "--accent");
       }
       const replyButton = group.getByRole("button", { name: "Reply to message" });
       await expectHoverTooltip(replyButton, "Reply");
       await screenshot(page, "01-inline-actions.png");
 
+      await group.hover();
       await replyButton.click();
       const replyPreview = page.locator(".chat-reply-preview");
       await replyPreview.waitFor({ state: "visible" });
       expect(await replyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
         messageText,
       );
-      await screenshot(page, "02-reply-preview.png");
+      await screenshot(page, "03-reply-preview.png");
       await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       const menu = page.locator(".chat-reply-context-menu");
@@ -283,11 +356,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
         "Copy",
         "Reply",
-        "Hide message",
-        "Open in canvas",
         "Copy as markdown",
       ]);
-      await screenshot(page, "03-selected-text-context-menu.png");
+      await screenshot(page, "04-selected-text-context-menu.png");
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -298,29 +369,63 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await menu.waitFor({ state: "visible" });
       expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
         "Reply",
-        "Hide message",
-        "Open in canvas",
         "Copy as markdown",
       ]);
       expect(
         await menu.getByRole("menuitem", { name: "Reply to message" }).locator("svg").count(),
       ).toBe(0);
-      await screenshot(page, "04-context-menu.png");
+      await screenshot(page, "05-context-menu.png");
 
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(messageText);
 
-      await bubble.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Open in canvas" }).click();
-      const markdownSidebar = page.locator(".sidebar-markdown");
-      await markdownSidebar.getByText(messageText, { exact: true }).waitFor({ state: "visible" });
+      const fullTextBubble = page.locator('.chat-bubble[data-entry-id="assistant-full-message"]');
+      const fullTextGroup = fullTextBubble.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
+      );
+      const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
+      expect(fullMessageRequest.params).toMatchObject({
+        sessionKey: "main",
+        messageId: "assistant-full-message",
+        maxChars: 500_000,
+      });
+      const fullTail = fullTextBubble.getByRole("heading", { name: "Final verification" });
+      await fullTail.waitFor({ state: "visible" });
+      expect(await fullTextBubble.getByRole("button", { name: "Show more" }).count()).toBe(0);
+      expect(await fullTextBubble.getByRole("button", { name: "Show less" }).count()).toBe(0);
+      await fullTail.scrollIntoViewIfNeeded();
+      await screenshot(page, "07-full-message-dark.png");
 
-      await bubble.click({ button: "right" });
-      await page.getByRole("menuitem", { name: "Hide message" }).click();
-      await page.locator(".chat-delete-confirm").getByRole("button", { name: "Hide" }).click();
-      await expect.poll(() => group.count()).toBe(0);
+      await fullTextGroup.hover();
+      await fullTextGroup.getByRole("button", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(fullAssistantContent);
+      await fullTextGroup.getByRole("button", { name: "Reply to message" }).click();
+      const fullTextReplyPreview = page.locator(".chat-reply-preview");
+      await expect
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toContain("# Deployment report");
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await fullTextBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(fullAssistantContent);
+      await fullTextBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toContain("# Deployment report");
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await setThemeMode(page, "light");
+      await fullTail.scrollIntoViewIfNeeded();
+      await screenshot(page, "08-full-message-light.png");
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
     } finally {
       await context.close();
     }

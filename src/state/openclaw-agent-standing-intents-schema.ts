@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 export const STANDING_INTENTS_TABLE = "standing_intents";
 export const STANDING_INTENTS_FTS_TABLE = "standing_intents_fts";

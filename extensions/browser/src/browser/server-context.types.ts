@@ -63,8 +63,8 @@ type BrowserProfileActions = {
     targetId?: string,
     options?: EnsureTabAvailableOptions,
   ) => Promise<BrowserTab>;
-  isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
+  isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
   isReachable: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
@@ -76,7 +76,7 @@ type BrowserProfileActions = {
   ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
-  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };

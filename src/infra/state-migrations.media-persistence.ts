@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -17,18 +18,21 @@ import {
   hasMeaningfulRetiredMediaCarrier,
 } from "../media/media-facts.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { assertOpenClawAgentSchemaContains } from "../state/openclaw-agent-db-schema-helpers.js";
-import { migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema } from "../state/openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema,
+} from "../state/openclaw-agent-db-schema.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -39,6 +43,7 @@ import { replaceFileAtomicSync } from "./replace-file.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import { resolveAgentDatabaseMigrationTargets } from "./state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const PREVIOUS_MEDIA_SCHEMA_VERSION = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
@@ -79,10 +84,6 @@ type ArchiveSourceSnapshot = {
   sha256: string;
   size: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function transformTranscriptEvent(event: TranscriptEvent): {
   changed: boolean;
@@ -303,7 +304,7 @@ function createMigrationDatabaseHandle(
   };
 }
 
-function migrateRegisteredDatabase(params: {
+function migrateAgentDatabase(params: {
   agentId: string;
   beforeTransaction?: () => void;
   pathname: string;
@@ -316,7 +317,7 @@ function migrateRegisteredDatabase(params: {
       pathname: params.pathname,
     });
     let userVersion = readSqliteUserVersion(database);
-    if (userVersion < PREVIOUS_MEDIA_SCHEMA_VERSION) {
+    if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
       migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(database, {
         agentId: params.agentId,
         path: params.pathname,
@@ -339,6 +340,14 @@ function migrateRegisteredDatabase(params: {
       throw new Error(
         `${params.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${userVersion}`,
       );
+    }
+    if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+      // Doctor can encounter a current-version database before newly additive schema exists.
+      // Converge it through the canonical agent-schema owner before media validation.
+      ensureOpenClawAgentDatabaseSchema(database, {
+        agentId: params.agentId,
+        path: params.pathname,
+      });
     }
     // Remove after 2026-10-12: drop the v15-to-v16 media cutover once schema 16 is the support floor.
     if (userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION) {
@@ -473,10 +482,10 @@ function archiveSourceMatches(filePath: string, expected: ArchiveSourceSnapshot)
 }
 
 function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
-  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-  if (lines.length === 1 && lines[0] === "") {
+  if (content === "") {
     return [];
   }
+  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
   return lines.map((line, index) => {
     if (!line) {
       throw new Error(`${filePath} contains a blank JSONL record at line ${index + 1}`);
@@ -501,18 +510,31 @@ function migrateTranscriptArchive(
 ): boolean {
   const source = readArchiveSourceSnapshot(filePath);
   const content = readSessionArchiveContentSync(filePath);
-  const events = parseArchiveContent(content, filePath);
-  let changed = false;
+  let nulTailStart = content.length;
+  while (nulTailStart > 0 && content.charCodeAt(nulTailStart - 1) === 0) {
+    nulTailStart -= 1;
+  }
+  const hasTerminalNulSuffix = nulTailStart < content.length;
+  if (hasTerminalNulSuffix && nulTailStart === 0) {
+    throw new Error(`${filePath} contains no JSONL records before its terminal NUL suffix`);
+  }
+  // Torn writes may leave only preallocated NUL bytes after complete JSONL records.
+  // Recovery stays doctor-owned and reaches the same verified atomic replacement as media repair.
+  const recoveredContent = hasTerminalNulSuffix ? content.slice(0, nulTailStart) : content;
+  const events = parseArchiveContent(recoveredContent, filePath);
+  let mediaChanged = false;
   const transformed = events.map((event) => {
     const result = transformTranscriptEvent(event);
-    changed ||= result.changed;
+    mediaChanged ||= result.changed;
     return result.event;
   });
-  if (!changed) {
+  if (!hasTerminalNulSuffix && !mediaChanged) {
     return false;
   }
   assertEventIdentitiesUnchanged(events, transformed, filePath);
-  const rewritten = serializeArchiveEvents(transformed, content.endsWith("\n"));
+  const rewritten = mediaChanged
+    ? serializeArchiveEvents(transformed, recoveredContent.endsWith("\n"))
+    : recoveredContent;
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
     ? encodeSessionArchiveContent(rewritten)
@@ -568,6 +590,7 @@ function listTranscriptArchives(directory: string): string[] {
 /** Doctor-only migration from top-level Media* transcript fields to canonical facts. */
 export function migrateLegacyMediaPersistence(
   params: {
+    configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     hooks?: {
       beforeArchiveReplace?: (archivePath: string) => void;
       beforeDatabaseTransaction?: (databasePath: string) => void;
@@ -578,41 +601,36 @@ export function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
-  let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-  try {
-    registered = listOpenClawRegisteredAgentDatabases({ env });
-  } catch (error) {
-    return {
-      changes,
-      warnings: [
-        `Failed enumerating registered agent databases for media migration: ${String(error)}`,
-      ],
-    };
-  }
-
+  const targets = resolveAgentDatabaseMigrationTargets({
+    changes,
+    configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+    env,
+    warnings,
+  });
   const seenPaths = new Set<string>();
+  let databaseMigrationFailed = false;
   const archiveDirectories = new Set<string>();
-  for (const entry of registered) {
-    const pathname = path.resolve(entry.path);
+  for (const entry of targets) {
+    const pathname = entry.path;
     archiveDirectories.add(
       resolveSqliteTranscriptArchiveDirectory({
         agentId: entry.agentId,
         path: pathname,
       }),
     );
-    if (seenPaths.has(pathname)) {
+    if (seenPaths.has(entry.realPath)) {
       continue;
     }
-    seenPaths.add(pathname);
+    seenPaths.add(entry.realPath);
     try {
-      const result = migrateRegisteredDatabase({
+      const result = migrateAgentDatabase({
         agentId: entry.agentId,
         beforeTransaction: params.hooks?.beforeDatabaseTransaction
           ? () => params.hooks?.beforeDatabaseTransaction?.(pathname)
           : undefined,
         pathname,
       });
-      if (result.versionAdvanced) {
+      if (entry.source !== "registry" || result.versionAdvanced) {
         registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
       }
       if (
@@ -625,7 +643,20 @@ export function migrateLegacyMediaPersistence(
         );
       }
     } catch (error) {
+      databaseMigrationFailed = true;
       warnings.push(`Skipped media persistence migration for ${pathname}: ${String(error)}`);
+    }
+  }
+
+  if (!databaseMigrationFailed && seenPaths.size > 0) {
+    const repairedFailures = repairGatewayAgentMediaMigrationStartupFailures({
+      databasePaths: [...seenPaths],
+      env,
+    });
+    if (repairedFailures > 0) {
+      changes.push(
+        `Repaired ${repairedFailures} gateway startup failure ${repairedFailures === 1 ? "record" : "records"} after media migration.`,
+      );
     }
   }
 

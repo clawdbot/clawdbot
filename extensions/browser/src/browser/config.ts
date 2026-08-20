@@ -6,6 +6,7 @@
  */
 import os from "node:os";
 import path from "node:path";
+import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
@@ -18,8 +19,8 @@ import {
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { parseBooleanValue } from "../sdk-config.js";
 import { resolveUserPath } from "../utils.js";
-import { parseBooleanValue } from "../utils/boolean.js";
 import { parseBrowserHttpUrl, redactCdpUrl, isLoopbackHost } from "./cdp.helpers.js";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
@@ -90,7 +91,13 @@ export type ResolvedBrowserConfig = {
   extensionRelayDefaultPort: number;
   /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
   extensionRelayPorts: Record<string, number>;
-  /** Derived bearer token for extension relay auth (absent until gateway auth exists). */
+  /** Extension relay authentication compatibility policy. */
+  extensionRelay: {
+    allowLegacyAuth: boolean;
+  };
+  /** Per-profile process-only Basic credentials for internal browser clients. */
+  extensionRelayInternalTokens: Record<string, string>;
+  /** Persistent relay HMAC key (absent until pairing or relay startup creates it). */
   extensionRelayToken?: string;
 };
 
@@ -137,8 +144,8 @@ const DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS = 3_000;
  * can never hand this port to a managed profile.
  */
 const EXTENSION_RELAY_PORT_OFFSET = 8;
-/** Username half of the relay's Basic credential; the password is the derived token. */
-const EXTENSION_RELAY_CDP_USER = "openclaw";
+/** Username half of the process-only internal relay credential. */
+const EXTENSION_RELAY_CDP_USER = "openclaw-internal";
 /** Environment variable that overrides managed Chrome headless mode. */
 const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
@@ -236,26 +243,20 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
-  const resolvedAllowPrivateNetwork =
-    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
-
-  if (!resolvedAllowPrivateNetwork && !hasExplicitPrivateSetting && !allowedHostnames) {
-    // Keep the default policy object present so CDP guards still enforce
-    // fail-closed private-network checks on unconfigured installs.
-    return {};
+  const resolved = mergeSsrFPolicies({
+    ...rawPolicy,
+    allowedHostnames: normalizeStringList(rawPolicy?.allowedHostnames),
+  });
+  if (resolved && hasExplicitPrivateSetting) {
+    delete resolved.allowPrivateNetwork;
+    resolved.dangerouslyAllowPrivateNetwork =
+      allowPrivateNetwork === true || dangerouslyAllowPrivateNetwork === true;
   }
-
-  return {
-    ...(resolvedAllowPrivateNetwork ||
-    dangerouslyAllowPrivateNetwork === false ||
-    allowPrivateNetwork === false
-      ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
-      : {}),
-    ...(allowedHostnames ? { allowedHostnames } : {}),
-  };
+  // Keep an explicit strict object so every browser guard stays fail-closed
+  // even when the operator leaves the shared policy unconfigured.
+  return resolved ?? (hasExplicitPrivateSetting ? { dangerouslyAllowPrivateNetwork: false } : {});
 }
 
 function ensureDefaultProfile(
@@ -317,10 +318,31 @@ function resolveExtensionRelayPorts(
     .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
     .map(([name]) => name)
     .toSorted();
+  // Explicit ports can belong to any profile driver. Reserve them before
+  // allocation so an extension relay cannot bind another profile's listener.
+  const reservedPorts = new Set(
+    Object.values(profiles)
+      .map((profile) => profile.cdpPort)
+      .filter((port): port is number => typeof port === "number"),
+  );
   const ports: Record<string, number> = {};
-  names.forEach((name, index) => {
-    ports[name] = defaultPort - index;
-  });
+  const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
+  let nextPort = defaultPort;
+  for (const name of names) {
+    while (nextPort > minimumPort && reservedPorts.has(nextPort)) {
+      nextPort -= 1;
+    }
+    // The control port sits below this band; crossing it would silently
+    // collide with browser control instead of creating an extension relay.
+    if (nextPort <= minimumPort) {
+      throw new Error(
+        "No available extension relay ports in the reserved browser relay port range",
+      );
+    }
+    ports[name] = nextPort;
+    reservedPorts.add(nextPort);
+    nextPort -= 1;
+  }
   return ports;
 }
 
@@ -395,7 +417,7 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
-  // Host-local relay secret (created lazily by relay startup / pairing). Null
+  // Host-local HMAC key (created lazily by relay startup / pairing). Null
   // here just means the extension driver has not been used on this host yet.
   const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
@@ -462,6 +484,10 @@ export function resolveBrowserConfig(
       profiles,
       controlPort + EXTENSION_RELAY_PORT_OFFSET,
     ),
+    extensionRelay: {
+      allowLegacyAuth: cfg?.extensionRelay?.allowLegacyAuth ?? true,
+    },
+    extensionRelayInternalTokens: {},
     ...(extensionRelayToken ? { extensionRelayToken } : {}),
   };
 }
@@ -498,9 +524,9 @@ export function resolveProfile(
       profile.cdpPort ??
       resolved.extensionRelayPorts[profileName] ??
       resolved.extensionRelayDefaultPort;
-    const token = resolved.extensionRelayToken;
-    // Userinfo credentials flow through getHeadersWithAuth into /json/version
-    // and /cdp requests, so the relay is authenticated with zero extra plumbing.
+    const token = resolved.extensionRelayInternalTokens[profileName];
+    // Internal browser clients use a process-only credential. The persistent
+    // relay key is reserved for HMAC proofs and never enters a URL or header.
     const relayCdpUrl = token
       ? `http://${EXTENSION_RELAY_CDP_USER}:${encodeURIComponent(token)}@127.0.0.1:${relayPort}`
       : `http://127.0.0.1:${relayPort}`;

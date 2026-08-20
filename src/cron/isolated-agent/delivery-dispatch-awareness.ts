@@ -6,7 +6,6 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
-  resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,6 +15,7 @@ import type {
   SourceDeliveryOutcome,
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { parseThreadSessionSuffix } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
@@ -26,6 +26,7 @@ import {
   logCronDeliveryWarn,
   normalizeDeliveryTarget,
 } from "./delivery-dispatch-policy.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads } from "./helpers.js";
 import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
@@ -54,24 +55,6 @@ const outboundSessionRuntimeLoader = createLazyImportLoader(
 const transcriptRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/transcript.runtime.js"),
 );
-async function loadDeliveryOutboundRuntime(): Promise<
-  typeof import("./delivery-outbound.runtime.js")
-> {
-  return await deliveryOutboundRuntimeLoader.load();
-}
-
-async function loadOutboundSessionRuntime(): Promise<
-  typeof import("../../infra/outbound/outbound-session.js")
-> {
-  return await outboundSessionRuntimeLoader.load();
-}
-
-async function loadTranscriptRuntime(): Promise<
-  typeof import("../../config/sessions/transcript.runtime.js")
-> {
-  return await transcriptRuntimeLoader.load();
-}
-
 export function shouldQueueCronAwareness(params: {
   job: CronJob;
   delivery: SuccessfulDeliveryTarget;
@@ -91,7 +74,7 @@ export function resolveCronAwarenessMainSessionKey(params: {
   agentId: string;
 }): string {
   return params.cfg.session?.scope === "global"
-    ? resolveMainSessionKey(params.cfg)
+    ? "global"
     : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
@@ -153,7 +136,7 @@ export function resolveDirectCronFallbackSourceIndex(
 }
 
 function formatTargetCronDeliveryAwarenessText(text: string): string {
-  return `A scheduled cron job delivered this message to this channel:\n${text}`;
+  return `A scheduled automation delivered this message to this channel:\n${text}`;
 }
 
 export function formatTargetCronDeliveryFailureAwarenessText(params: {
@@ -161,7 +144,6 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
   channel: string;
   to: string;
   threadId?: string;
-  error: unknown;
   partialDelivered?: boolean;
 }): string {
   const targetParts = [`${params.channel}:${params.to}`];
@@ -169,10 +151,10 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
     targetParts.push(`thread ${params.threadId}`);
   }
   return [
-    "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+    "A scheduled automation attempted to deliver to this channel, but delivery failed.",
     `Job: ${params.job.name || params.job.id}`,
     `Target: ${targetParts.join(" ")}`,
-    `Delivery error: ${formatErrorMessage(params.error)}`,
+    "Check automation history for delivery error details.",
     params.partialDelivered
       ? "One or more scheduled message payloads may already have been delivered."
       : "No scheduled message was delivered.",
@@ -190,26 +172,32 @@ export async function queueCronAwarenessSystemEvent(params: {
   targetText?: string;
 }): Promise<void> {
   try {
-    const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
+    const { enqueueSystemEvent } = await deliveryOutboundRuntimeLoader.load();
     const mainSessionKey = resolveCronAwarenessMainSessionKey({
       cfg: params.cfg,
       agentId: params.agentId,
     });
     if (params.queueMainSession) {
-      enqueueSystemEvent(params.text, {
-        sessionKey: mainSessionKey,
-        contextKey: params.deliveryIdempotencyKey,
-      });
+      enqueueSystemEvent(
+        params.text,
+        withSystemEventOwner(
+          { sessionKey: mainSessionKey, contextKey: params.deliveryIdempotencyKey },
+          params.agentId,
+        ),
+      );
     }
     const targetSessionKey = params.targetSessionKey;
     const shouldQueueTargetSession =
       targetSessionKey &&
       (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
     if (shouldQueueTargetSession) {
-      enqueueSystemEvent(params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text), {
-        sessionKey: targetSessionKey,
-        contextKey: params.deliveryIdempotencyKey,
-      });
+      enqueueSystemEvent(
+        params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text),
+        withSystemEventOwner(
+          { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
+          params.agentId,
+        ),
+      );
     }
   } catch (err) {
     await logCronDeliveryWarn(
@@ -335,7 +323,7 @@ function canonicalizeDirectCronRouteSessionKey(params: {
 // outbound session exists before cron awareness or transcript code references it.
 async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
-  jobId: string;
+  job: CronJob;
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
@@ -343,14 +331,19 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 }): Promise<string> {
   try {
     const { resolveOutboundSessionRoute, ensureOutboundSessionEntry } =
-      await loadOutboundSessionRuntime();
+      await outboundSessionRuntimeLoader.load();
     const route = await resolveOutboundSessionRoute({
       cfg: params.cfg,
       channel: params.delivery.channel,
       agentId: params.agentId,
       accountId: params.delivery.accountId,
       target: params.delivery.to,
-      currentSessionKey: params.agentSessionKey,
+      currentSessionKey: selectCronRouteCurrentSessionKey(
+        params.job,
+        params.agentSessionKey,
+        params.delivery.channel,
+        params.delivery.to,
+      ),
       threadId: params.delivery.threadId,
     });
     const routeSessionKey = route?.sessionKey?.trim();
@@ -387,7 +380,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
     return canonicalRouteSessionKey;
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.jobId}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
+      `[cron:${params.job.id}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
     );
     return params.agentSessionKey;
   }
@@ -409,7 +402,7 @@ export async function resolveDirectCronDeliverySessionKey(params: {
 
   return await resolveCronDeliveryRouteSessionKey({
     cfg: params.cfg,
-    jobId: params.job.id,
+    job: params.job,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     delivery: params.delivery,
@@ -497,7 +490,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
     seen.add(dedupeKey);
     const targetSessionKey = await resolveCronDeliveryRouteSessionKey({
       cfg: params.cfg,
-      jobId: params.job.id,
+      job: params.job,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
       delivery: target,
@@ -528,7 +521,7 @@ async function appendDirectCronDeliveryTranscriptMirror(params: {
     return;
   }
   try {
-    const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+    const { appendAssistantMessageToSessionTranscript } = await transcriptRuntimeLoader.load();
     const result = await appendAssistantMessageToSessionTranscript(params.mirror);
     if (!result.ok) {
       await logCronDeliveryWarn(

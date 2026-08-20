@@ -11,7 +11,7 @@ import {
   hasLegacyAccountStreamingAliases,
   normalizeChannelAccounts,
   stripRetiredChannelKeys,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const streamingAliasMigration = defineChannelAliasMigration({
   channelId: "telegram",

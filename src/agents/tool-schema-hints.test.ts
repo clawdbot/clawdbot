@@ -87,7 +87,6 @@ describe("tool schema hints", () => {
     const outputHint = compactToolOutputHint(schema);
 
     expect(inputHint).toBe("unknown");
-    expect(inputHint.length).toBeLessThanOrEqual(300);
     expect(outputHint).toBeDefined();
     expect(outputHint!.length).toBeGreaterThan(300);
     expect(outputHint!.length).toBeLessThanOrEqual(600);

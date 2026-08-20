@@ -1,5 +1,6 @@
 // Control UI module implements control ui auth behavior.
-import { normalizeOptionalString, uniqueStrings } from "../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
 type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
@@ -35,7 +36,7 @@ export function resolveControlUiAuthHeader(source: ControlUiAuthSource): string 
   return token ? `Bearer ${token}` : null;
 }
 
-// Ordered list of non-empty, header-safe shared-secret candidates. Used by
+// Ordered list of non-empty, header-safe Control UI credentials. Used by
 // call sites that can retry a single request against an alternate credential
 // when the first returns 401 — for example, recovering from a stale
 // `settings.token` when the live session is authenticated via `password`.

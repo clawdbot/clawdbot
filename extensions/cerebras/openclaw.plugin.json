@@ -71,7 +71,7 @@
       }
     },
     "discovery": {
-      "cerebras": "refreshable"
+      "cerebras": "static"
     }
   },
   "setup": {

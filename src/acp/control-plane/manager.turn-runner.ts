@@ -72,6 +72,9 @@ export async function runManagerTurn(params: {
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<void> {
   const { input, sessionKey } = params;
+  if (input.admittedRunContext.operationalRunInstance.runId !== input.requestId) {
+    throw new Error("ACP operational run instance disagrees with the admitted request");
+  }
   const turnStartedAt = Date.now();
   const actorKey = normalizeActorKey(sessionKey);
   const taskContext =
@@ -121,6 +124,7 @@ export async function runManagerTurn(params: {
         ? new AcpRuntimeError(
             error.code,
             `All ACP backends failed (${backendAttempts.length}): ${failedBackends}`,
+            { detailCode: error.detailCode },
           )
         : error;
     params.recordTurnCompletion({
@@ -191,9 +195,6 @@ export async function runManagerTurn(params: {
                 sessionKey,
               });
         const resolvedMeta = requireReadySessionMeta(resolution);
-        const metaWithBackend: SessionAcpMeta = currentBackend
-          ? { ...resolvedMeta, backend: currentBackend }
-          : resolvedMeta;
         let runtime: AcpRuntime | undefined;
         let handle: AcpRuntimeHandle | undefined;
         let meta: SessionAcpMeta | undefined;
@@ -201,6 +202,7 @@ export async function runManagerTurn(params: {
         let internalAbortController: AbortController | undefined;
         let onCallerAbort: (() => void) | undefined;
         let activeTurnStarted = false;
+        let promptStarted = false;
         let sawTurnOutput = false;
         let retryFreshHandle = false;
         let skipPostTurnCleanup = false;
@@ -208,7 +210,8 @@ export async function runManagerTurn(params: {
           const ensured = await params.ensureRuntimeHandle({
             cfg: input.cfg,
             sessionKey,
-            meta: metaWithBackend,
+            meta: resolvedMeta,
+            selectedBackend: currentBackend,
           });
           runtime = ensured.runtime;
           handle = ensured.handle;
@@ -249,10 +252,6 @@ export async function runManagerTurn(params: {
             ? AbortSignal.any([input.signal, internalAbortController.signal])
             : internalAbortController.signal;
           const eventGate = { open: true };
-          await input.onLifecycle?.({
-            type: "prompt_submitted",
-            at: Date.now(),
-          });
           const turnPromise = consumeAcpTurnStream({
             runtime,
             turn: {
@@ -262,8 +261,23 @@ export async function runManagerTurn(params: {
               mode: input.mode,
               requestId: input.requestId,
               signal: combinedSignal,
+              onElicitation: input.onElicitation,
             },
             eventGate,
+            onBeforePrompt: input.onBeforePrompt,
+            onPromptStarted: async ({ authoritative }) => {
+              promptStarted = authoritative;
+              try {
+                await input.onLifecycle?.({
+                  type: "prompt_submitted",
+                  at: Date.now(),
+                });
+              } catch (error) {
+                logVerbose(
+                  `acp-manager: prompt submission observer failed for ${sessionKey}: ${String(error)}`,
+                );
+              }
+            },
             onOutputEvent: (event) => {
               sawTurnOutput = true;
               if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
@@ -361,6 +375,7 @@ export async function runManagerTurn(params: {
             cfg: input.cfg,
             sessionKey,
             error: acpError,
+            promptStarted,
             sawTurnOutput,
             runtime,
             meta,
@@ -375,6 +390,7 @@ export async function runManagerTurn(params: {
             backend: describeBackendCandidate(currentBackend),
             error: acpError.message,
             code: acpError.code,
+            promptStarted,
             sawOutput: sawTurnOutput,
           };
           backendAttempts.push(backendAttempt);

@@ -28,3 +28,7 @@ export function isWebSocketUrl(value: string | URL): boolean {
   const url = parseUrl(value);
   return url?.protocol === "ws:" || url?.protocol === "wss:";
 }
+
+export function isWssUrl(value: string | URL): boolean {
+  return parseUrl(value)?.protocol === "wss:";
+}

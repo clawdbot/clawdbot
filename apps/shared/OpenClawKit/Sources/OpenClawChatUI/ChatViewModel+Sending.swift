@@ -25,13 +25,15 @@ extension OpenClawChatViewModel {
     }
 
     var hasBlockingRunActivity: Bool {
-        pendingRunCount > 0 || hasActiveSessionRunWithoutChatSnapshot || isSwitchingSessionBranch
+        pendingRunCount > 0 || self.hasAdvertisedLiveRun ||
+            hasActiveSessionRunWithoutChatSnapshot || isSwitchingSessionBranch
     }
 
     var workingIndicatorIdentity: String {
-        ChatWorkingIdentity.resolve(
+        let selectedRunIDs = self.liveUsageRunID.map { Set([$0]) } ?? []
+        return ChatWorkingIdentity.resolve(
             sessionKey: sessionKey,
-            pendingRunIDs: pendingRuns,
+            pendingRunIDs: selectedRunIDs,
             localUserMessageIDsByRunID: pendingLocalUserEchoMessageIDsByRunID,
             fallbackGeneration: runOwnershipGeneration)
     }
@@ -513,10 +515,12 @@ extension OpenClawChatViewModel {
         }
         let routeResult = await transport.acquireOutboxRouteLease()
         guard isCurrentSession(draft.session) else { return .stop }
-        guard case let .unavailable(reason) = routeResult,
-              reason == OpenClawChatTransportUpgradeMessage.routingContract
-        else {
+        guard case let .unavailable(reason, allowsLiveSend) = routeResult else {
             return .persistIfAvailable
+        }
+        guard allowsLiveSend else {
+            errorText = "Could not verify this attachment's delivery route. Reconnect, then try again."
+            return .stop
         }
         guard hasRestoredOutboxMessages else {
             errorText = "Restoring queued messages. Try again in a moment."
@@ -525,7 +529,7 @@ extension OpenClawChatViewModel {
         guard !mustPreserveOutboxOrder else {
             // A legacy gateway cannot drain the existing durable rows, so keep
             // this new attachment in the composer behind them.
-            errorText = reason
+            errorText = reason ?? OpenClawChatTransportUpgradeMessage.routingContract
             return .stop
         }
         // Older healthy gateways can send attachments live but cannot safely
@@ -543,7 +547,6 @@ extension OpenClawChatViewModel {
                 + "localRunId=\(runId) pending=\(pendingRunCount)")
         pendingToolCallsById = [:]
         updateStreamingAssistantText(nil)
-        clearPlan()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;

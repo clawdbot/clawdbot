@@ -1,6 +1,7 @@
 // Profile CLI tests cover profile selection, persistence, and command wiring.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveGatewayPort } from "../config/paths.js";
 import { formatCliCommand } from "./command-format.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
@@ -307,6 +308,98 @@ describe("applyCliProfileEnv", () => {
   });
 
   it.each([
+    { name: "default service to named profile", inheritedProfile: undefined, selected: "work" },
+    { name: "named service to different profile", inheritedProfile: "main", selected: "work" },
+    { name: "named service to dev", inheritedProfile: "main", selected: "dev" },
+  ])("replaces the complete service selector bundle: $name", ({ inheritedProfile, selected }) => {
+    const inheritedStateDir = inheritedProfile
+      ? `/home/peter/.openclaw-${inheritedProfile}`
+      : "/home/peter/.openclaw";
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: inheritedProfile,
+      OPENCLAW_STATE_DIR: inheritedStateDir,
+      OPENCLAW_CONFIG_PATH: path.join(inheritedStateDir, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_LABEL: inheritedProfile
+        ? `ai.openclaw.${inheritedProfile}`
+        : "ai.openclaw.gateway",
+      OPENCLAW_SYSTEMD_UNIT: inheritedProfile
+        ? `openclaw-gateway-${inheritedProfile}.service`
+        : "openclaw-gateway.service",
+      OPENCLAW_WINDOWS_TASK_NAME: inheritedProfile
+        ? `OpenClaw Gateway (${inheritedProfile})`
+        : "OpenClaw Gateway",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    };
+
+    applyCliProfileEnv({ profile: selected, env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_PROFILE).toBe(selected);
+    expect(env.OPENCLAW_STATE_DIR).toBe(`/home/peter/.openclaw-${selected}`);
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe(selected === "dev" ? "19001" : undefined);
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
+  });
+
+  it("lets selected config or profile derivation resolve the port after stale service removal", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "main",
+      OPENCLAW_STATE_DIR: "/home/peter/.openclaw-main",
+      OPENCLAW_CONFIG_PATH: "/home/peter/.openclaw-main/openclaw.json",
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-main.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    };
+
+    applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+    expect(resolveGatewayPort({ gateway: { port: 21999 } }, env)).toBe(21999);
+    expect(resolveGatewayPort(undefined, env)).not.toBe(18789);
+  });
+
+  it("supports legacy gateway services without a service kind", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "main",
+      OPENCLAW_STATE_DIR: "/home/peter/.openclaw-main",
+      OPENCLAW_CONFIG_PATH: "/home/peter/.openclaw-main/openclaw.json",
+      OPENCLAW_GATEWAY_PORT: "18789",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+    };
+
+    applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
+  });
+
+  it("preserves node service selectors when selecting a CLI profile", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "main",
+      OPENCLAW_STATE_DIR: "/home/peter/.openclaw-main",
+      OPENCLAW_CONFIG_PATH: "/home/peter/.openclaw-main/openclaw.json",
+      OPENCLAW_GATEWAY_PORT: "19999",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-node.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "node",
+    };
+
+    applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19999");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.node");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-node.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Node");
+  });
+
+  it.each([
     {
       name: "the default profile without a profile marker",
       inheritedProfile: undefined,
@@ -356,6 +449,41 @@ describe("applyCliProfileEnv", () => {
 
     expect(env.OPENCLAW_STATE_DIR).toBe("/home/peter/.openclaw-work");
     expect(env.OPENCLAW_CONFIG_PATH).toBe("/srv/openclaw/custom.json");
+  });
+
+  it.each(["openclaw-gateway-main", "openclaw-gateway-main.service"])(
+    "drops inherited canonical service identities when switching profiles (%s)",
+    (systemdUnit) => {
+      const env: Record<string, string | undefined> = {
+        OPENCLAW_PROFILE: "main",
+        OPENCLAW_STATE_DIR: "/home/peter/.openclaw-main",
+        OPENCLAW_CONFIG_PATH: "/home/peter/.openclaw-main/openclaw.json",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
+        OPENCLAW_SYSTEMD_UNIT: systemdUnit,
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
+      };
+
+      applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+      expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
+      expect(env.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
+      expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
+    },
+  );
+
+  it("preserves explicit custom service identities when switching profiles", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "main",
+      OPENCLAW_LAUNCHD_LABEL: "com.example.gateway",
+      OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service",
+      OPENCLAW_WINDOWS_TASK_NAME: "Custom Gateway",
+    };
+
+    applyCliProfileEnv({ profile: "work", env, homedir: () => "/home/peter" });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("com.example.gateway");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("custom-gateway.service");
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("Custom Gateway");
   });
 
   it.each([

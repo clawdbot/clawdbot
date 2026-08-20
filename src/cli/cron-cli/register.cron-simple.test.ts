@@ -15,6 +15,8 @@ vi.mock("../gateway-rpc.js", async () => {
   };
 });
 
+const { isCronMachineOutput } = await import("./output-mode.js");
+const { registerCronCli } = await import("./register.js");
 const { registerCronSimpleCommands } = await import("./register.cron-simple.js");
 const originalStderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
 
@@ -35,6 +37,8 @@ function mockCronShowPages(readPage: (params: { offset?: number }) => unknown): 
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, params?: { id?: string; offset?: number }) => {
       if (method === "cron.get") {
+        // Mirrors the gateway's stable wire wording; older shipped CLI matchers
+        // parse exactly this form, so the server must not reword it.
         throw Object.assign(new Error(`cron job not found: ${params?.id ?? ""}`), {
           name: "GatewayClientRequestError",
           gatewayCode: "INVALID_REQUEST",
@@ -62,6 +66,60 @@ function restoreStderrIsTTY(): void {
     Reflect.deleteProperty(process.stderr, "isTTY");
   }
 }
+
+function createRegisteredCronCommand(): Command {
+  const program = new Command().name("openclaw");
+  registerCronCli(program);
+  const cron = program.commands.find((command) => command.name() === "cron");
+  if (!cron) {
+    throw new Error("cron command was not registered");
+  }
+  return cron;
+}
+
+describe("cron machine-output help", () => {
+  it.each([
+    { name: "status", aliases: [] },
+    { name: "add", aliases: ["create"] },
+    { name: "rm", aliases: ["remove", "delete"] },
+    { name: "enable", aliases: [] },
+    { name: "disable", aliases: [] },
+    { name: "get", aliases: [] },
+    { name: "runs", aliases: [] },
+    { name: "run", aliases: [] },
+    { name: "edit", aliases: [] },
+  ])("documents $name as always-JSON machine output", ({ name, aliases }) => {
+    const command = createRegisteredCronCommand().commands.find((candidate) =>
+      [candidate.name(), ...candidate.aliases()].includes(name),
+    );
+    const jsonOption = command?.options.find((option) => option.long === "--json");
+
+    expect(command?.aliases()).toEqual(aliases);
+    expect(jsonOption?.description).toBe(
+      "Explicit machine-output spelling (command results are JSON by default)",
+    );
+    expect(jsonOption?.defaultValue).toBeUndefined();
+    for (const commandName of [name, ...aliases]) {
+      expect(isCronMachineOutput(["node", "openclaw", "cron", commandName])).toBe(true);
+    }
+  });
+
+  it("keeps registered command output declarations aligned with early stdout routing", () => {
+    const cron = createRegisteredCronCommand();
+    for (const command of cron.commands) {
+      const jsonOption = command.options.find((option) => option.long === "--json");
+      const alwaysJson =
+        jsonOption?.description ===
+        "Explicit machine-output spelling (command results are JSON by default)";
+      const reservesMachineOutput = command.name() === "scratch" || alwaysJson;
+      for (const commandName of [command.name(), ...command.aliases()]) {
+        expect(isCronMachineOutput(["node", "openclaw", "cron", commandName]), commandName).toBe(
+          reservesMachineOutput,
+        );
+      }
+    }
+  });
+});
 
 describe("cron show pagination guard (regression for #83856)", () => {
   beforeEach(() => {
@@ -149,7 +207,7 @@ describe("cron show pagination guard (regression for #83856)", () => {
     );
   });
 
-  it("returns empty result when pagination terminates without a match", async () => {
+  it("uses the canonical lookup miss when pagination terminates without a match", async () => {
     mockCronShowPages(() => ({
       jobs: [],
       snapshotRevision: "test-empty-cron-inventory",
@@ -161,7 +219,9 @@ describe("cron show pagination guard (regression for #83856)", () => {
     }));
     await expect(runCronShow("missing")).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cron job not found: missing"),
+      expect.stringContaining(
+        "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+      ),
     );
   });
 });
@@ -201,6 +261,40 @@ describe("cron disable hint", () => {
       expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
     } else {
       expect(stderrWrite).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("cron scheduler status warnings", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { status: undefined, disabled: false },
+    { status: null, disabled: false },
+    { status: {}, disabled: false },
+    { status: { enabled: true }, disabled: false },
+    { status: { enabled: false }, disabled: true },
+  ])("warns only when scheduler disabled is known ($status)", async ({ status, disabled }) => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.status" ? status : { ok: true },
+    );
+
+    await runCronToggle("enable");
+
+    if (disabled) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("scheduler is disabled"),
+      );
+    } else {
+      expect(defaultRuntime.error).not.toHaveBeenCalled();
     }
   });
 });

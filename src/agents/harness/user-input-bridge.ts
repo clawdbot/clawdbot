@@ -1,3 +1,4 @@
+import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/reply-payload.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
@@ -32,7 +33,7 @@ type AgentHarnessQuestionPromptPayload = {
   text: string;
   presentation?: MessagePresentation;
   presentationTextMode?: "fallback";
-  channelData: { askUser: { questionId: string } };
+  channelData: { askUser: { questionId: string; optionValues?: string[] } };
 };
 
 type PromptDeliveryParams = Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -79,7 +80,9 @@ export async function deliverAgentHarnessUserInputPrompt(
 ): Promise<void> {
   const text = formatAgentHarnessUserInputPrompt(questions, options);
   if (params.onBlockReply) {
-    await params.onBlockReply({ text, presentation: options.presentation });
+    await params.onBlockReply(
+      markReplyPayloadForSourceSuppressionDelivery({ text, presentation: options.presentation }),
+    );
     return;
   }
   await params.onPartialReply?.({ text });
@@ -146,11 +149,27 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
       ...params,
       formatText: params.options?.formatText,
     });
-  return {
+  const [question] = params.questions;
+  const candidateOptionValues =
+    params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
+      ? (question.options?.map((option) => option.label) ?? [])
+      : [];
+  const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
+  const optionValues =
+    candidateOptionValues.length >= 2 &&
+    candidateOptionValues.length <= 4 &&
+    normalizedOptionValues.every(Boolean) &&
+    new Set(normalizedOptionValues).size === candidateOptionValues.length
+      ? candidateOptionValues
+      : undefined;
+  return markReplyPayloadForSourceSuppressionDelivery({
     text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
     ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
-    channelData: { askUser: { questionId: params.questionId } },
-  };
+    // Native callbacks need Gateway option order even when presentation controls are reordered.
+    channelData: {
+      askUser: { questionId: params.questionId, ...(optionValues ? { optionValues } : {}) },
+    },
+  });
 }
 
 function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {

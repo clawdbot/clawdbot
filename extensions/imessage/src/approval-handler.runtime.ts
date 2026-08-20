@@ -3,12 +3,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
+  type ChannelApprovalKind,
   createChannelApprovalNativeRuntimeAdapter,
   type PendingApprovalView,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  buildApprovalNativeControlsPromptText,
+  buildApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
@@ -32,6 +36,7 @@ import {
   unregisterIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
@@ -64,6 +69,11 @@ type PreparedIMessageApprovalTarget = {
   to: string;
   accountId?: string;
 };
+type IMessageApprovalPromptBinding = {
+  approvalId: string;
+  approvalKind: ChannelApprovalKind;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
 type PendingIMessageApprovalEntry = {
   accountId?: string;
   to: string;
@@ -84,7 +94,7 @@ type IMessageFinalPayload = {
 
 function buildPendingPayload(params: {
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   nowMs: number;
   view: PendingApprovalView;
 }): IMessagePendingDelivery {
@@ -97,7 +107,9 @@ function buildPendingPayload(params: {
     text: pendingContent.reactionPayload.text ?? "",
     // The native poll owns the primary controls. Manual commands stay in the
     // details message because bridge capability cannot prove recipient support.
-    pollText: pendingContent.manualFallbackPayload.text ?? "",
+    // Same bold headers and labels as the tapback prompt (#85954): both are
+    // delivered through the attributed-body send path.
+    pollText: buildApprovalNativeControlsPromptText({ view: params.view, nowMs: params.nowMs }),
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
 }
@@ -214,7 +226,7 @@ async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   question: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
@@ -242,7 +254,10 @@ async function deliverIMessageApprovalPoll(params: {
     const runtime = await loadIMessageActionsRuntime();
     const sent = await runtime.sendPoll({
       chatGuid,
-      question: params.question,
+      // `imsg poll send --question` has no attributed-body channel, so the
+      // question keeps the marker-free rendering of the same prompt copy the
+      // details message delivers with typed formatting ranges.
+      question: extractMarkdownFormatRuns(params.question).text,
       choices: options.map((option) => option.text),
       suppressComment: true,
       options: { ...cliOptions, chatGuid },
@@ -354,12 +369,12 @@ async function recoverIMessageApprovalTextFallback(params: {
   target: PreparedIMessageApprovalTarget;
   promptMessageId?: string;
   fallbackText: string;
-  approvalKind: "exec" | "plugin";
+  approvalPrompt: IMessageApprovalPromptBinding;
 }): Promise<string | undefined> {
   try {
     const result = await sendMessageIMessage(params.target.to, params.fallbackText, {
       config: params.cfg,
-      approvalKind: params.approvalKind,
+      approvalPrompt: params.approvalPrompt,
       conversationReadOrigin: "direct-operator",
       ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
       ...(params.promptMessageId ? { replyToId: params.promptMessageId } : {}),
@@ -413,7 +428,7 @@ const eagerlyBoundApprovalEntries = new WeakSet<PendingIMessageApprovalEntry>();
 function bindIMessageApprovalEntry(params: {
   entry: PendingIMessageApprovalEntry;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   expiresAtMs: number;
   pollTargetWasRegisteredDuringDelivery?: boolean;
@@ -534,9 +549,14 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         // fallback visible until the send receipt confirms the actual transport.
         const reactionFallbackVisible = !expectPoll || targetTransport !== "imessage";
         const promptText = reactionFallbackVisible ? pendingPayload.text : pendingPayload.pollText;
+        const approvalPrompt: IMessageApprovalPromptBinding = {
+          approvalId: view.approvalId,
+          approvalKind: view.approvalKind,
+          allowedDecisions: pendingPayload.allowedDecisions,
+        };
         const result = await sendMessageIMessage(preparedTarget.to, promptText, {
           config: cfg,
-          ...(reactionFallbackVisible ? { approvalKind: view.approvalKind } : {}),
+          ...(reactionFallbackVisible ? { approvalPrompt } : {}),
           // Approval delivery is host-originated: the target comes from the
           // approval's own routing (origin session or a configured approver),
           // never from model input. Attest that so #99905's conversation-read
@@ -578,7 +598,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
                 target: preparedTarget,
                 promptMessageId: result.guid,
                 fallbackText: pendingPayload.text,
-                approvalKind: view.approvalKind,
+                approvalPrompt,
               })
             : undefined;
         const entry: PendingIMessageApprovalEntry = {

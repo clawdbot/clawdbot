@@ -9,6 +9,9 @@ type BuildProviderAuthDoctorHintWithPlugin =
   ProviderRuntimeModule["buildProviderAuthDoctorHintWithPlugin"];
 type FormatProviderAuthProfileApiKeyWithPlugin =
   ProviderRuntimeModule["formatProviderAuthProfileApiKeyWithPlugin"];
+type LoginProviderOAuthWithPlugin = ProviderRuntimeModule["loginProviderOAuthWithPlugin"];
+type ResolveProviderOAuthCredentialWithPlugin =
+  ProviderRuntimeModule["resolveProviderOAuthCredentialWithPlugin"];
 type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeAuth"];
 type RefreshProviderOAuthCredentialWithPlugin =
   ProviderRuntimeModule["refreshProviderOAuthCredentialWithPlugin"];
@@ -45,6 +48,22 @@ export async function formatProviderAuthProfileApiKeyWithPlugin(
 ): Promise<Awaited<ReturnType<FormatProviderAuthProfileApiKeyWithPlugin>>> {
   const runtime = await loadProviderRuntime();
   return runtime.formatProviderAuthProfileApiKeyWithPlugin(...args);
+}
+
+/** Lazily runs the callback-based OAuth login owned by a provider plugin. */
+export async function loginProviderOAuthWithPlugin(
+  ...args: Parameters<LoginProviderOAuthWithPlugin>
+): Promise<Awaited<ReturnType<LoginProviderOAuthWithPlugin>>> {
+  const runtime = await loadProviderRuntime();
+  return runtime.loginProviderOAuthWithPlugin(...args);
+}
+
+/** Lazily resolves or refreshes a session OAuth credential through its provider plugin. */
+export async function resolveProviderOAuthCredentialWithPlugin(
+  ...args: Parameters<ResolveProviderOAuthCredentialWithPlugin>
+): Promise<Awaited<ReturnType<ResolveProviderOAuthCredentialWithPlugin>>> {
+  const runtime = await loadProviderRuntime();
+  return runtime.resolveProviderOAuthCredentialWithPlugin(...args);
 }
 
 /** Lazily prepares provider runtime auth for model execution. */

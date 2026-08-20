@@ -8,6 +8,24 @@ describe("plugin loader records", () => {
     vi.unstubAllEnvs();
   });
 
+  it("keeps package attribution separate from the runtime version", () => {
+    const record = createPluginRecord({
+      id: "versioned",
+      name: "Versioned",
+      source: "test",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+      packageVersion: "1.2.3",
+      version: "runtime-4",
+    });
+
+    expect(record).toMatchObject({
+      packageVersion: "1.2.3",
+      version: "runtime-4",
+    });
+  });
+
   it("preserves manifest-declared channel ids before runtime registration", () => {
     const record = createPluginRecord({
       id: "kitchen-sink",
@@ -55,7 +73,6 @@ describe("plugin loader records", () => {
         webFetchProviders: ["kitchen-sink-web-fetch-provider"],
         webSearchProviders: ["kitchen-sink-web-search-provider"],
         migrationProviders: ["kitchen-sink-migration-provider"],
-        memoryEmbeddingProviders: ["kitchen-sink-memory-provider"],
       },
       configSchema: false,
     });
@@ -73,7 +90,6 @@ describe("plugin loader records", () => {
     expect(record.webFetchProviderIds).toEqual(["kitchen-sink-web-fetch-provider"]);
     expect(record.webSearchProviderIds).toEqual(["kitchen-sink-web-search-provider"]);
     expect(record.migrationProviderIds).toEqual(["kitchen-sink-migration-provider"]);
-    expect(record.memoryEmbeddingProviderIds).toEqual(["kitchen-sink-memory-provider"]);
   });
 
   it.each([

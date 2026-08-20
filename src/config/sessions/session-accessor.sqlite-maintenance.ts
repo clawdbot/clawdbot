@@ -1,35 +1,39 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import {
-  materializeSqliteSessionStateDeletePlans,
-  type SqliteSessionStateDeletePlan,
+  materializeSessionStateDeletePlans,
+  type SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
-import { readSqliteSessionEntryCount } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryCount, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
-  assertPlannedSqliteLifecycleArtifactEntriesUnchanged,
-  collectProjectedReferencedSqliteSessionIds,
-  collectSqliteSessionStateIdsForEntry,
-  deleteMaterializedSqliteSessionStatePlans,
-  deletePlannedSqliteLifecycleArtifactEntries,
-  planSqliteSessionStateDeleteIfUnreferenced,
-  readSqliteSessionGenerationIdsForKeys,
+  assertPlannedLifecycleArtifactEntriesUnchanged,
+  collectProjectedReferencedSessionIds,
+  collectSessionStateIdsForEntry,
+  deleteMaterializedSessionStatePlans,
+  deletePlannedLifecycleArtifactEntries,
+  planSessionStateDeleteIfUnreferenced,
+  readSessionGenerationIdsForKeys,
 } from "./session-accessor.sqlite-lifecycle-state.js";
-import type { SqliteSessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
+  SessionEntryMaintenancePlan,
+  SessionEntryMaintenanceResult,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   cloneSessionEntry,
   getSessionKysely,
+  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import {
   collectSessionMaintenancePreserveKeys,
@@ -37,13 +41,15 @@ import {
 } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  normalizeResolvedMaintenanceConfigInput,
   shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
-  type ResolvedSessionMaintenanceConfig,
+  type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -66,10 +72,10 @@ function collectSqliteSessionMaintenanceBaseKeys(
 
 function hasStaleSqliteSessionEntryCandidate(
   database: OpenClawAgentDatabase,
-  pruneAfterMs: number,
-  preserveKeys: ReadonlySet<string> | undefined,
+  maxAgeMs: number,
+  isCandidate: (key: string, entry: SessionEntry) => boolean,
 ): boolean {
-  const cutoffMs = Date.now() - pruneAfterMs;
+  const cutoffMs = Date.now() - maxAgeMs;
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -77,10 +83,7 @@ function hasStaleSqliteSessionEntryCandidate(
       .selectFrom("session_nodes")
       .select(["entry_json", "session_key"])
       .where("updated_at", "<", cutoffMs)
-      .where(
-        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column. */
-        sql<boolean>`json_extract(entry_json, '$.archivedAt') IS NULL`,
-      )
+      .where("archived_at", "is", null)
       .orderBy("updated_at", "asc"),
   ).rows;
   return rows.some((row) => {
@@ -88,58 +91,13 @@ function hasStaleSqliteSessionEntryCandidate(
     if (!entry) {
       return false;
     }
-    return !shouldPreserveMaintenanceEntry({
-      key: normalizeStoreSessionKey(row.session_key),
-      entry,
-      preserveKeys,
-    });
+    return isCandidate(normalizeStoreSessionKey(row.session_key), entry);
   });
 }
 
-export function applySqliteSessionEntryMaintenance(
+function loadSqliteSessionMaintenanceStore(
   database: OpenClawAgentDatabase,
-  params: {
-    activeSessionKey: string;
-    archiveDirectory: string;
-    forceMaintenance?: boolean;
-    maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-    skipMaintenance?: boolean;
-    storePath: string;
-  },
-): SqliteSessionEntryMaintenancePlan {
-  if (params.skipMaintenance) {
-    return { entryRemovals: [], stateDeletePlans: [] };
-  }
-  const maintenance = params.maintenanceConfig ?? resolveMaintenanceConfig();
-  if (maintenance.mode === "warn") {
-    return { entryRemovals: [], stateDeletePlans: [] };
-  }
-
-  const entryCount = readSqliteSessionEntryCount(database);
-  const preserveCandidateKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
-  const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
-    database,
-    maintenance.pruneAfterMs,
-    preserveCandidateKeys,
-  );
-  const shouldLoadStore =
-    params.forceMaintenance === true ||
-    entryCount > maintenance.maxEntries ||
-    hasStaleCandidate ||
-    shouldRunModelRunPrune({
-      maintenance,
-      entryCount,
-      force: params.forceMaintenance,
-    }) ||
-    shouldRunSessionEntryMaintenance({
-      entryCount,
-      maxEntries: maintenance.maxEntries,
-      force: params.forceMaintenance,
-    });
-  if (!shouldLoadStore) {
-    return { entryRemovals: [], stateDeletePlans: [] };
-  }
-
+): Record<string, SessionEntry> {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -152,71 +110,177 @@ export function applySqliteSessionEntryMaintenance(
       store[row.session_key] = entry;
     }
   }
+  return store;
+}
 
-  const removedKeys = new Set<string>();
-  const removedEntriesByKey = new Map<string, SessionEntry>();
-  const removedSessionIds = new Set<string>();
-  const rememberRemovedEntry = (removed: { key: string; entry: SessionEntry }) => {
-    removedKeys.add(removed.key);
-    removedEntriesByKey.set(removed.key, cloneSessionEntry(removed.entry));
-    for (const sessionId of collectSqliteSessionStateIdsForEntry(removed.entry)) {
-      removedSessionIds.add(sessionId);
-    }
-  };
+export function applySessionEntryMaintenance(
+  database: OpenClawAgentDatabase,
+  params: {
+    activeSessionKey: string;
+    archiveDirectory: string;
+    forceMaintenance?: boolean;
+    maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
+    skipMaintenance?: boolean;
+    storePath: string;
+  },
+): SessionEntryMaintenancePlan {
+  if (params.skipMaintenance) {
+    return {
+      entryRemovals: [],
+      stateDeletePlans: [],
+      archived: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    };
+  }
+  const maintenance = params.maintenanceConfig
+    ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+    : resolveMaintenanceConfig();
+  if (maintenance.mode === "warn") {
+    return {
+      entryRemovals: [],
+      stateDeletePlans: [],
+      archived: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    };
+  }
+
+  // Count all rows before loading their payloads. Protection controls eviction candidates, not
+  // whether a row consumes maxEntries; the full snapshot is needed only when maintenance runs.
+  const entryCount = readSessionEntryCount(database);
+  const preserveCandidateKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
+  const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
+    database,
+    maintenance.pruneAfterMs,
+    (key, entry) =>
+      !shouldPreserveMaintenanceEntry({
+        key,
+        entry,
+        preserveKeys: preserveCandidateKeys,
+        preserveRecentMs: maintenance.preserveRecentMs ?? null,
+      }),
+  );
+  const hasStaleDashboardCandidate =
+    maintenance.archiveDashboardAfterMs != null &&
+    hasStaleSqliteSessionEntryCandidate(
+      database,
+      maintenance.archiveDashboardAfterMs,
+      (key, entry) =>
+        archiveStaleDashboardEntries({ [key]: entry }, maintenance.archiveDashboardAfterMs, {
+          log: false,
+          preserveKeys: preserveCandidateKeys,
+        }) > 0,
+    );
+  const shouldMaintainStore =
+    params.forceMaintenance === true ||
+    entryCount > maintenance.maxEntries ||
+    hasStaleDashboardCandidate ||
+    hasStaleCandidate ||
+    shouldRunModelRunPrune({
+      maintenance,
+      entryCount,
+      force: params.forceMaintenance,
+    }) ||
+    shouldRunSessionEntryMaintenance({
+      entryCount,
+      maxEntries: maintenance.maxEntries,
+      force: params.forceMaintenance,
+    });
+  if (!shouldMaintainStore) {
+    return {
+      entryRemovals: [],
+      stateDeletePlans: [],
+      archived: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+    };
+  }
+
+  const store = loadSqliteSessionMaintenanceStore(database);
   const preserveKeys =
     collectSessionMaintenancePreserveKeysForStore({
       storePath: params.storePath,
       store,
       baseKeys: collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
     }) ?? new Set<string>();
+  const removedKeys = new Set<string>();
+  const removedEntriesByKey = new Map<string, SessionEntry>();
+  const removedSessionIds = new Set<string>();
+  const rememberRemovedEntry = (removed: { key: string; entry: SessionEntry }) => {
+    removedKeys.add(removed.key);
+    removedEntriesByKey.set(removed.key, cloneSessionEntry(removed.entry));
+    for (const sessionId of collectSessionStateIdsForEntry(removed.entry)) {
+      removedSessionIds.add(sessionId);
+    }
+  };
+  let remainingEntryCount = entryCount;
+  let modelRunPruned = 0;
   if (
     shouldRunModelRunPrune({
       maintenance,
-      entryCount: Object.keys(store).length,
+      entryCount: remainingEntryCount,
       force: params.forceMaintenance,
     })
   ) {
-    pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+    modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
       log: false,
       onPruned: rememberRemovedEntry,
       preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
     });
+    remainingEntryCount -= modelRunPruned;
   }
+  const archived = archiveStaleDashboardEntries(store, maintenance.archiveDashboardAfterMs, {
+    log: false,
+    onArchived: ({ key, entry }) => {
+      writeSessionEntry(database, key, entry);
+    },
+    preserveKeys,
+  });
+  let pruned = 0;
   if (
     params.forceMaintenance === true ||
     hasStaleCandidate ||
-    Object.keys(store).length > maintenance.maxEntries
+    remainingEntryCount > maintenance.maxEntries
   ) {
-    pruneStaleEntries(store, maintenance.pruneAfterMs, {
+    pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
       log: false,
       onPruned: rememberRemovedEntry,
       preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
     });
+    remainingEntryCount -= pruned;
   }
+  let capped = 0;
   if (
     shouldRunSessionEntryMaintenance({
-      entryCount: Object.keys(store).length,
+      entryCount: remainingEntryCount,
       maxEntries: maintenance.maxEntries,
       force: params.forceMaintenance,
     })
   ) {
-    capEntryCount(store, maintenance.maxEntries, {
+    capped = capEntryCount(store, maintenance.maxEntries, {
       log: false,
       onCapped: rememberRemovedEntry,
       preserveKeys,
+      preserveRecentMs: maintenance.preserveRecentMs,
     });
   }
-  for (const sessionId of readSqliteSessionGenerationIdsForKeys(database, removedKeys)) {
+  for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeys)) {
     removedSessionIds.add(sessionId);
   }
-  const referencedSessionIds = collectProjectedReferencedSqliteSessionIds({
+  const referencedSessionIds = collectProjectedReferencedSessionIds({
     database,
     excludedSessionKeys: removedKeys,
     projectedStore: store,
   });
-  const deletePlans: SqliteSessionStateDeletePlan[] = [];
+  const deletePlans: SessionStateDeletePlan[] = [];
   for (const sessionId of removedSessionIds) {
-    const plan = planSqliteSessionStateDeleteIfUnreferenced({
+    const plan = planSessionStateDeleteIfUnreferenced({
       archiveTranscript: true,
       archiveDirectory: params.archiveDirectory,
       database,
@@ -228,51 +292,104 @@ export function applySqliteSessionEntryMaintenance(
     }
   }
   return {
-    entryRemovals: [...removedKeys].map((sessionKey) => ({
-      expectedEntry: removedEntriesByKey.get(sessionKey),
+    entryRemovals: [...removedEntriesByKey].map(([sessionKey, entry]) => ({
+      expectedEntry: entry,
       sessionKey,
     })),
     stateDeletePlans: deletePlans,
+    archived,
+    modelRunPruned,
+    pruned,
+    capped,
   };
 }
 
-export function finalizeSqliteSessionEntryMaintenancePlansBestEffort(
+export async function finalizeSessionEntryMaintenancePlansBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
-  plans: readonly SqliteSessionEntryMaintenancePlan[],
-): SessionLifecycleArchivedTranscript[] {
-  const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
-  const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);
-  if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
-    return [];
-  }
-  try {
-    const materializedPlans = materializeSqliteSessionStateDeletePlans(stateDeletePlans);
-    let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
-    runOpenClawAgentWriteTransaction((database) => {
-      assertPlannedSqliteLifecycleArtifactEntriesUnchanged(database, entryRemovals);
-      archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
-        database,
-        materializedPlans,
-        undefined,
-        new Set(entryRemovals.map((removal) => removal.sessionKey)),
-      );
-      deletePlannedSqliteLifecycleArtifactEntries(database, entryRemovals);
-    }, toDatabaseOptions(scope));
-    emitCommittedSessionEntryRemovals(entryRemovals);
-    return archivedTranscripts;
-  } catch (error) {
-    getChildLogger({ subsystem: "session-sqlite" }).warn(
-      "SQLite session maintenance cleanup failed",
-      {
-        agentId: scope.agentId,
-        error,
-        path: scope.path,
-        sessionIds: uniqueStrings(stateDeletePlans.map((plan) => plan.sessionId)),
-      },
-    );
-    return [];
-  }
+  plans: readonly SessionEntryMaintenancePlan[],
+): Promise<SessionEntryMaintenanceResult> {
+  return await finalizeSqliteSessionEntryMaintenancePlansWithCommit(scope, plans, async (commit) =>
+    commit(),
+  );
 }
 
-// Revalidates transcript bytes before row deletion so a concurrent append is
-// not dropped by an archive prepared from older content.
+/** Finalizes maintenance after its caller releases the per-store writer lane. */
+export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  plans: readonly SessionEntryMaintenancePlan[],
+): Promise<SessionEntryMaintenanceResult> {
+  return await finalizeSqliteSessionEntryMaintenancePlansWithCommit(
+    scope,
+    plans,
+    async (commit) => await runExclusiveSqliteSessionWrite(scope, async () => commit()),
+  );
+}
+
+async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  plans: readonly SessionEntryMaintenancePlan[],
+  commit: (
+    fn: () => SessionLifecycleArchivedTranscript[],
+  ) => Promise<SessionLifecycleArchivedTranscript[]>,
+): Promise<SessionEntryMaintenanceResult> {
+  const entryRemovals = plans.flatMap((plan) => plan.entryRemovals);
+  const stateDeletePlans = plans.flatMap((plan) => plan.stateDeletePlans);
+  const warn = (message: string, error: unknown) => {
+    getChildLogger({ subsystem: "session-sqlite" }).warn(message, {
+      agentId: scope.agentId,
+      error,
+      path: scope.path,
+      sessionIds: uniqueStrings(stateDeletePlans.map((plan) => plan.sessionId)),
+    });
+  };
+  const committedCounts = plans.reduce(
+    (counts, plan) => ({
+      archived: counts.archived + plan.archived,
+      modelRunPruned: counts.modelRunPruned + plan.modelRunPruned,
+      pruned: counts.pruned + plan.pruned,
+      capped: counts.capped + plan.capped,
+    }),
+    { archived: 0, modelRunPruned: 0, pruned: 0, capped: 0 },
+  );
+  const emptyResult: SessionEntryMaintenanceResult = {
+    archivedTranscripts: [],
+    archived: committedCounts.archived,
+    modelRunPruned: 0,
+    pruned: 0,
+    capped: 0,
+  };
+  if (entryRemovals.length === 0 && stateDeletePlans.length === 0) {
+    return emptyResult;
+  }
+  let archivedTranscripts: SessionLifecycleArchivedTranscript[];
+  try {
+    const materializedPlans = await materializeSessionStateDeletePlans(stateDeletePlans);
+    archivedTranscripts = await commit(() => {
+      let committed: SessionLifecycleArchivedTranscript[] = [];
+      runOpenClawAgentWriteTransaction((database) => {
+        assertPlannedLifecycleArtifactEntriesUnchanged(database, entryRemovals);
+        committed = deleteMaterializedSessionStatePlans(
+          database,
+          materializedPlans,
+          undefined,
+          new Set(entryRemovals.map((removal) => removal.sessionKey)),
+        );
+        deletePlannedLifecycleArtifactEntries(database, entryRemovals);
+      }, toDatabaseOptions(scope));
+      return committed;
+    });
+  } catch (error) {
+    warn("SQLite session maintenance cleanup failed", error);
+    return emptyResult;
+  }
+  emitCommittedSessionEntryRemovals(entryRemovals);
+  try {
+    return {
+      archivedTranscripts: await publishSessionStateArchives(scope, archivedTranscripts),
+      ...committedCounts,
+    };
+  } catch (error) {
+    warn("SQLite session maintenance archive publication failed", error);
+    return { archivedTranscripts: [], ...committedCounts };
+  }
+}

@@ -2,19 +2,19 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
+  createInstalledPluginIndexSnapshot,
   createPluginLoadResult,
   createPluginRecord,
-  DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
   HOOK_ONLY_MESSAGE,
   REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
 } from "./status.test-fixtures.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
+const resolveCompatibleRuntimePluginRegistryMock = vi.fn();
 const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
@@ -47,6 +47,7 @@ let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagno
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
+let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
 let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
 let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
@@ -56,12 +57,20 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
 }));
 
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+}));
+
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    loadOpenClawPluginsMock({ ...options, activate: false }),
+  resolveCompatibleRuntimePluginRegistry: (...args: unknown[]) =>
+    resolveCompatibleRuntimePluginRegistryMock(...args),
 }));
 
 vi.mock("./runtime/metadata-registry-loader.js", () => ({
@@ -85,6 +94,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
   loadPluginMetadataSnapshot: (params?: unknown) => loadPluginMetadataSnapshotMock(params),
+  rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
   resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
     params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
 }));
@@ -112,6 +122,8 @@ vi.mock("./runtime.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => undefined,
   resolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: () => undefined,
+  tryResolveSystemAgentWorkspaceDir: () => undefined,
 }));
 
 vi.mock("../agents/workspace.js", () => ({
@@ -135,23 +147,6 @@ function setSinglePluginLoadResult(
     plugins: [plugin],
     ...overrides,
   });
-}
-
-function createInstalledPluginIndexSnapshot(
-  plugins: Array<Record<string, unknown>>,
-): Record<string, unknown> {
-  return {
-    version: 1,
-    warning: "test",
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins,
-    diagnostics: [],
-  };
 }
 
 function expectInspectReport(
@@ -372,7 +367,11 @@ function expectBundleInspectState(
   params: {
     bundleCapabilities: readonly string[];
     shape: string;
-    mcpServers?: readonly { name: string; hasStdioTransport: boolean }[];
+    mcpServers?: readonly {
+      name: string;
+      hasStdioTransport: boolean;
+      unsupported?: boolean;
+    }[];
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
@@ -385,6 +384,7 @@ describe("plugin status reports", () => {
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
+      buildPluginCompatibilitySnapshotNotices,
       buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
@@ -397,6 +397,7 @@ describe("plugin status reports", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
@@ -482,6 +483,30 @@ describe("plugin status reports", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("reuses a supplied metadata snapshot for scoped diagnostics", () => {
+    const metadataSnapshot = loadPluginMetadataSnapshotMock({
+      index: createInstalledPluginIndexSnapshot([]),
+    });
+    loadPluginMetadataSnapshotMock.mockClear();
+
+    buildPluginDiagnosticsReport({
+      config: {},
+      workspaceDir: "/workspace",
+      onlyPluginIds: ["demo"],
+      metadataSnapshot: metadataSnapshot as never,
+    });
+
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expect(mockInput(loadOpenClawPluginsMock)).toMatchObject({
+      manifestRegistry: metadataSnapshot.manifestRegistry,
+      installRecords: {},
+      onlyPluginIds: ["demo"],
+      workspaceDir: "/workspace",
+      loadModules: true,
+    });
+  });
+
   it("loads plugin status from the auto-enabled config snapshot", () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledStatusConfig(
       {
@@ -554,7 +579,7 @@ describe("plugin status reports", () => {
     expectPluginLoaderCall({ loadModules: true });
   });
 
-  it("preserves raw config activation context when compatibility notices build their own report", () => {
+  it("preserves raw config activation context for compatibility-derived reports", () => {
     expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
@@ -572,10 +597,6 @@ describe("plugin status reports", () => {
       enabledConfig,
       loadModules: false,
     });
-  });
-
-  it("preserves raw config activation context for compatibility-derived reports", () => {
-    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
@@ -795,72 +816,39 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("warns external plugins off deprecated memory embedding provider registration", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "legacy-memory-provider",
-        name: "Legacy Memory Provider",
-        memoryEmbeddingProviderIds: ["legacy-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["legacy-memory-provider"] },
+  it("reuses compatible runtime hook registrations without loading cold plugin modules", () => {
+    const metadataPlugin = createPluginRecord({
+      id: "runtime-hook-only",
+      name: "Runtime Hook Only",
+    });
+    const runtimePlugin = createPluginRecord({
+      id: "runtime-hook-only",
+      name: "Runtime Hook Only",
+      hookCount: 1,
+    });
+    setSinglePluginLoadResult(metadataPlugin);
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(
+      createPluginLoadResult({
+        plugins: [runtimePlugin],
+        hooks: [createCustomHook({ pluginId: runtimePlugin.id, events: ["message"] })],
       }),
     );
 
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [`legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`],
-    });
+    expect(buildPluginCompatibilitySnapshotNotices({ config: {} })).toEqual([
+      createCompatibilityNotice({ pluginId: runtimePlugin.id, code: "hook-only" }),
+    ]);
+    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledOnce();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("warns when external plugins register memory embedding providers at runtime only", () => {
-    const runtimeProviderRegistration: PluginMemoryEmbeddingProviderRegistration = {
-      pluginId: "runtime-only-legacy-memory-provider",
-      pluginName: "Runtime Only Legacy Memory Provider",
-      provider: {
-        id: "runtime-only-legacy-memory-provider",
-        create: async () => ({ provider: null }),
-      },
-      source: "/tmp/runtime-only-legacy-memory-provider/index.ts",
-    };
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "runtime-only-legacy-memory-provider",
-          name: "Runtime Only Legacy Memory Provider",
-        }),
-      ],
-      memoryEmbeddingProviders: [runtimeProviderRegistration],
-    });
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "runtime-only-legacy-memory-provider",
-          code: "deprecated-memory-embedding-provider-api",
-        }),
-      ],
-      warnings: [
-        `runtime-only-legacy-memory-provider ${DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE}`,
-      ],
-    });
-  });
-
-  it("does not surface bundled memory embedding migration debt as user warnings", () => {
+  it("does not claim hook-only warnings from an unloaded metadata-only plugin", () => {
     setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "bundled-memory-provider",
-        name: "Bundled Memory Provider",
-        origin: "bundled",
-        memoryEmbeddingProviderIds: ["bundled-memory-provider"],
-        contracts: { memoryEmbeddingProviders: ["bundled-memory-provider"] },
-      }),
+      createPluginRecord({ id: "cold-plugin", name: "Cold Plugin", hookCount: 0 }),
     );
+    resolveCompatibleRuntimePluginRegistryMock.mockReturnValue(undefined);
 
-    expectNoCompatibilityWarnings();
+    expect(buildPluginCompatibilitySnapshotNotices({ config: {} })).toStrictEqual([]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("warns external plugins when load diagnostics reference removed session file APIs", () => {
@@ -997,12 +985,22 @@ describe("plugin status reports", () => {
         rootDir: "/tmp/native-mcp",
         mcpServers: {
           app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+          remote: { type: "http", url: "https://example.test/mcp" },
+          incomplete: { transport: "streamable-http" },
+          invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
+          invalidTransport: { transport: "http", url: "https://example.test/mcp" },
         },
       }),
       expectedId: "native-mcp",
       expectedBundleCapabilities: [],
       expectedShape: "non-capability",
-      expectedMcpServers: [{ name: "app", hasStdioTransport: true }],
+      expectedMcpServers: [
+        { name: "app", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "incomplete", hasStdioTransport: false, unsupported: true },
+        { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
+        { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
+      ],
     },
   ])(
     "$name",

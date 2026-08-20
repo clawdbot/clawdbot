@@ -26,10 +26,13 @@ openclaw exec-policy show --json
 openclaw exec-policy preset yolo
 openclaw exec-policy preset cautious --json
 
-openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full
+openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full --json
 ```
 
 Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
+
+`show`, `preset`, and `set` accept `--json` and return the same requested,
+host, and effective policy facts as one JSON object.
 
 Scope:
 

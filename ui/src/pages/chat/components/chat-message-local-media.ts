@@ -1,3 +1,5 @@
+import { buildAssistantMediaUrl } from "../../../app/assistant-media.ts";
+
 export function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
   if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
@@ -114,18 +116,30 @@ export function isLocalAttachmentPreviewAllowed(
 
 export function buildAssistantAttachmentUrl(
   source: string,
-  basePath?: string,
+  resourceBasePath?: string,
   mediaTicket?: string | null,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  const params = new URLSearchParams({ source });
-  const normalizedMediaTicket = mediaTicket?.trim();
-  if (normalizedMediaTicket) {
-    params.set("mediaTicket", normalizedMediaTicket);
+  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket);
+}
+
+export function appendAttachmentUrlSearchParam(
+  source: string,
+  name: string,
+  value: string,
+): string {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return trimmed;
   }
-  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+  const hashIndex = trimmed.indexOf("#");
+  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf("?");
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+  params.set(name, value);
+  return `${path}?${params.toString()}${hash}`;
 }

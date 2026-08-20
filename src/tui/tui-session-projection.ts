@@ -8,7 +8,7 @@ import {
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { agentSessionKeysMatchByRequestKey } from "../routing/session-key.js";
-import { extractTextFromMessage } from "./tui-formatters.js";
+import { extractTextFromMessage, isTuiAssistantAttachmentBlock } from "./tui-formatters.js";
 import type {
   ChatEvent,
   SessionChangedEvent,
@@ -16,33 +16,7 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
-function hasDisplayableNonTextSessionContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const record = message as Record<string, unknown>;
-  if (typeof record.mediaUrl === "string" && record.mediaUrl.trim()) {
-    return true;
-  }
-  if (
-    Array.isArray(record.mediaUrls) &&
-    record.mediaUrls.some((media) => typeof media === "string" && media.trim())
-  ) {
-    return true;
-  }
-  if (!Array.isArray(record.content)) {
-    return false;
-  }
-  return record.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const type = (block as Record<string, unknown>).type;
-    return typeof type === "string" && type !== "text" && type !== "thinking";
-  });
-}
-
-/** Keep attachment-only and provider-diagnostic finals visible in the TUI. */
+/** Admit only finals the terminal formatter can actually render. */
 export function hasDisplayableTuiSessionFinal(event: ChatEvent, showThinking: boolean): boolean {
   if (typeof event.errorMessage === "string" && event.errorMessage.trim()) {
     return true;
@@ -50,10 +24,7 @@ export function hasDisplayableTuiSessionFinal(event: ChatEvent, showThinking: bo
   if (!event.message) {
     return false;
   }
-  return (
-    extractTextFromMessage(event.message, { includeThinking: showThinking }).trim().length > 0 ||
-    hasDisplayableNonTextSessionContent(event.message)
-  );
+  return extractTextFromMessage(event.message, { includeThinking: showThinking }).trim().length > 0;
 }
 
 /** Distinguish a legacy batch invalidation from an individually replayable message. */
@@ -80,7 +51,7 @@ export function isIdentityOnlyTuiSessionInvalidation(event: SessionChangedEvent)
 }
 
 /** Provider-local imports require a complete source or persisted—not envelope—sequence. */
-export function isReplayableTuiSessionMessage(event: SessionMessageEvent): boolean {
+function isReplayableTuiSessionMessage(event: SessionMessageEvent): boolean {
   const identity = readSessionMessageIdentity(event.message, event);
   return Boolean(
     identity &&
@@ -139,6 +110,35 @@ export function reduceTuiSessionProjection(
   return projection;
 }
 
+/** Promote a durable assistant row into the matching live run projection. */
+export function projectTuiSessionMessage(
+  state: TuiStateAccess,
+  event: SessionMessageEvent,
+  unboundDisplayedRunIds: readonly string[],
+): string | undefined {
+  if (!isReplayableTuiSessionMessage(event)) {
+    return undefined;
+  }
+  const identity = readSessionMessageIdentity(event.message, event);
+  const assistantMessageId =
+    identity?.role === "assistant" && !identity.isImported ? (identity.id ?? undefined) : undefined;
+  // Some transcript envelopes omit run identity. A single unbound displayed
+  // final is the only non-ambiguous live owner that can adopt its durable ID.
+  const authoritativeRunId = assistantMessageId
+    ? (identity?.runId ??
+      event.clientRunId ??
+      state.activeChatRunId ??
+      (unboundDisplayedRunIds.length === 1 ? unboundDisplayedRunIds[0] : undefined))
+    : undefined;
+  reduceTuiSessionProjection(state, {
+    type: "messagePersisted",
+    message: event.message,
+    envelope: authoritativeRunId ? { ...event, runId: authoritativeRunId } : event,
+    scope: readTuiSessionProjectionScope(state),
+  });
+  return authoritativeRunId;
+}
+
 /** Retain the assistant reply actually rendered until authoritative history adopts it. */
 export function projectTuiSessionFinal(
   state: TuiStateAccess,
@@ -158,13 +158,7 @@ export function projectTuiSessionFinal(
       ? (event.message as Record<string, unknown>)
       : {};
   const attachments = Array.isArray(source.content)
-    ? source.content.filter((block) => {
-        if (!block || typeof block !== "object") {
-          return false;
-        }
-        const type = (block as { type?: unknown }).type;
-        return type !== "text" && type !== "thinking";
-      })
+    ? source.content.filter(isTuiAssistantAttachmentBlock)
     : [];
   reduceTuiSessionProjection(state, {
     type: "messagePersisted",

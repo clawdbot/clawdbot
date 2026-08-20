@@ -52,6 +52,11 @@ on:
         required: false
         default: ""
         type: string
+      kova_config_contract:
+        description: Optional fixture-contract override for a custom Kova ref
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -67,11 +72,11 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.29
-  OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf
+  OCM_VERSION: v0.2.32
+  OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 517952b835640a368c4af6dfe6dc8365ae841b57
-  KOVA_LEGACY_LIST_CONFIG_REF: f3d037b5b8aacd6adf8ef1dd2ea4c1d778ec7c6c
+  KOVA_CANONICAL_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
+  KOVA_LEGACY_LIST_CONFIG_REF: 0f9e678e239b45db46d2bd930b7983203580df78
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -86,13 +91,26 @@ jobs:
       tested_ref: ${{ steps.resolve.outputs.tested_ref }}
       tested_sha: ${{ steps.resolve.outputs.tested_sha }}
       kova_ref: ${{ steps.resolve.outputs.kova_ref }}
+      kova_config_contract: ${{ steps.resolve.outputs.kova_config_contract }}
+      kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
     steps:
+      - name: Checkout target metadata
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.target_ref || github.sha }}
+          path: .artifacts/performance-target
+          sparse-checkout: src/config/zod-schema.agent-defaults.ts
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Resolve OpenClaw target ref
         id: resolve
         env:
-          GH_TOKEN: ${{ github.token }}
           TARGET_REF_INPUT: ${{ inputs.target_ref }}
+          TARGET_CHECKOUT_DIR: ${{ github.workspace }}/.artifacts/performance-target
           KOVA_REF_INPUT: ${{ inputs.kova_ref }}
+          KOVA_CONFIG_CONTRACT_INPUT: ${{ inputs.kova_config_contract }}
         shell: bash
         run: |
           set -euo pipefail
@@ -101,34 +119,49 @@ jobs:
             echo "::error::target_ref must be a single line."
             exit 1
           fi
-          if [[ -z "$requested" ]]; then
-            resolved_sha="$GITHUB_SHA"
-            tested_ref="$GITHUB_REF_NAME"
-          else
-            encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
-            if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
-              echo "::error::Unable to resolve OpenClaw target_ref '${requested}'."
-              exit 1
-            fi
-            tested_ref="$requested"
-          fi
+          resolved_sha="$(git -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
+          tested_ref="${requested:-$GITHUB_REF_NAME}"
           if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
             exit 1
           fi
 
           kova_ref="${KOVA_REF_INPUT:-}"
-          if [[ -z "$kova_ref" ]]; then
-            schema_content="$({
-              gh api "repos/${GITHUB_REPOSITORY}/contents/src/config/zod-schema.agent-defaults.ts?ref=${resolved_sha}" --jq '.content' |
-                base64 --decode
-            })"
-            if grep -Fqx '    mediaModels: z' <<<"$schema_content"; then
-              kova_ref="$KOVA_CANONICAL_CONFIG_REF"
-            elif grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then
-              kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
+          kova_config_contract="${KOVA_CONFIG_CONTRACT_INPUT:-}"
+          if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
+            echo "::error::kova_ref must be a single line."
+            exit 1
+          fi
+          if [[ "$kova_config_contract" == *$'\n'* || "$kova_config_contract" == *$'\r'* ]]; then
+            echo "::error::kova_config_contract must be a single line."
+            exit 1
+          fi
+
+          if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
+            schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
+            if [[ -f "$schema_path" ]]; then
+              schema_content="$(cat "$schema_path")"
+            elif [[ -z "$kova_ref" ]]; then
+              echo "::error::Unable to inspect the Kova config-fixture contract for target ${resolved_sha}. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
+              exit 1
             else
-              echo "::error::Target ${resolved_sha} has no recognized Kova config-fixture contract. Supply kova_ref explicitly after validating the fixture."
+              schema_content=""
+            fi
+            if [[ -n "$schema_content" ]] && grep -Fqx '    mediaModels: z' <<<"$schema_content"; then
+              detected_kova_config_contract="canonical"
+              default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
+            elif [[ -n "$schema_content" ]] && grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then
+              detected_kova_config_contract="legacy-list"
+              default_kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
+            else
+              detected_kova_config_contract=""
+              default_kova_ref=""
+            fi
+            if [[ -n "$detected_kova_config_contract" ]]; then
+              kova_config_contract="${kova_config_contract:-$detected_kova_config_contract}"
+              kova_ref="${kova_ref:-$default_kova_ref}"
+            elif [[ -z "$kova_ref" ]]; then
+              echo "::error::Target ${resolved_sha} has no recognized Kova config-fixture contract. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
               exit 1
             fi
           fi
@@ -137,6 +170,12 @@ jobs:
           echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
           echo "kova_ref=$kova_ref" >> "$GITHUB_OUTPUT"
+          echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"
+          if [[ "$kova_ref" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_ref" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
+            echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"
+          fi
 
   kova:
     name: ${{ matrix.title }}
@@ -154,8 +193,8 @@ jobs:
             deep_profile: "false"
             live: "false"
             managed_service: "true"
-            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message"
-            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: mock-deep-profile
             title: Kova mock provider deep profile
             auth: mock
@@ -176,6 +215,7 @@ jobs:
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
       KOVA_REF: ${{ needs.resolve_target.outputs.kova_ref }}
+      KOVA_OPENCLAW_CONFIG_CONTRACT: ${{ needs.resolve_target.outputs.kova_config_contract }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
@@ -193,6 +233,7 @@ jobs:
       MATRIX_REPEAT: ${{ matrix.repeat }}
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
       MATRIX_LIVE: ${{ matrix.live }}
+      KOVA_REF_TRUSTED_FOR_LIVE: ${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}
     steps:
       - name: Decide lane
         id: lane
@@ -208,6 +249,10 @@ jobs:
           if [[ "$LANE_ID" == "live-openai-candidate" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_openai_candidate || 'false' }}" != "true" ]]; then
             run_lane=false
             reason="live_openai_candidate input is false"
+          fi
+          if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then
+            echo "::error::The live OpenAI lane only executes a reviewed immutable Kova default. Omit kova_ref or update the pinned workflow defaults after review."
+            exit 1
           fi
           echo "run=$run_lane" >> "$GITHUB_OUTPUT"
           if [[ "$run_lane" != "true" ]]; then
@@ -342,23 +387,6 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Configure OCM local workspace dependencies
-        if: steps.lane.outputs.run == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"
-          workspace_dependency_dirs=""
-          if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then
-            workspace_dependency_dirs="${GITHUB_WORKSPACE}/packages/ai"
-          fi
-          chmod 0755 "$npm_wrapper"
-          {
-            echo "OCM_INTERNAL_NPM_BIN=$npm_wrapper"
-            echo "OPENCLAW_OCM_REAL_NPM_BIN=$(command -v npm)"
-            echo "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs"
-          } >> "$GITHUB_ENV"
-
       - name: Kova version and plan sanity
         if: steps.lane.outputs.run == 'true'
         shell: bash
@@ -437,8 +465,8 @@ jobs:
         id: kova
         if: steps.lane.outputs.run == 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -483,7 +511,7 @@ jobs:
           echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
 
           set +e
-          node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mjs" \
+          node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mts" \
             --plan "$KOVA_PLAN_JSON" \
             --report "$report_json" \
             --profile "$PROFILE" \
@@ -497,7 +525,11 @@ jobs:
 
           effective_status="$status"
           if [[ "$evidence_status" == "0" && "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
-            if node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"
+            gate_args=("$report_json")
+            if [[ "$KOVA_REF" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_REF" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
+              gate_args+=(--require-instrumented-performance-contract)
+            fi
+            if node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"
             then
               effective_status=0
               {
@@ -514,7 +546,7 @@ jobs:
           set -e
 
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
-          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mjs" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          summary_args=(node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mts" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
           set +e
           "${summary_args[@]}"
           summary_status=$?
@@ -683,7 +715,7 @@ jobs:
           fi
 
           mkdir -p "$SOURCE_PERF_DIR/mock-hello"
-          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('scripts/bench-cli-startup.ts') && fs.existsSync('scripts/profile-extension-memory.mjs') ? 0 : 1)"; then
+          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('openclaw.mjs') && fs.existsSync('scripts/profile-extension-memory.mts') ? 0 : 1)"; then
             cat > "$SOURCE_PERF_DIR/index.md" <<EOF
           # OpenClaw Source Performance
 
@@ -695,17 +727,32 @@ jobs:
 
           - Tested ref: ${TESTED_REF}
           - Tested SHA: ${TESTED_SHA}
-          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, scripts/bench-cli-startup.ts, scripts/profile-extension-memory.mjs
+          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, openclaw.mjs, scripts/profile-extension-memory.mts
           EOF
             cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           # target_ref may predate the dedicated profile; preserve the historical full build there.
-          if node -e "import('./scripts/build-all.mjs').then((module) => process.exit(module.BUILD_ALL_PROFILES?.sourcePerformance ? 0 : 1)).catch(() => process.exit(1))"; then
-            OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance
+          if node --import tsx -e "import('./scripts/build-all.mts').then((module) => process.exit(module.BUILD_ALL_PROFILES?.sourcePerformance ? 0 : 1)).catch(() => process.exit(1))"; then
+            OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance
           else
             pnpm build
+          fi
+
+          supported_startup_cases="$(
+            node --import tsx scripts/bench-gateway-startup.ts --help |
+              sed -n 's/^  \([[:alnum:]_-][[:alnum:]_-]*\) (.*/\1/p'
+          )"
+          startup_case_args=()
+          for startup_case in default skipChannels preparedRuntimeCatalogStall preparedRuntimeScaleOne preparedRuntimeScaleMany oneInternalHook allInternalHooks fiftyPlugins fiftyStartupLazyPlugins; do
+            if grep -Fxq "$startup_case" <<<"$supported_startup_cases"; then
+              startup_case_args+=(--startup-case "$startup_case")
+            fi
+          done
+          if [[ " ${startup_case_args[*]} " != *" --startup-case default "* ]]; then
+            echo "The target startup benchmark did not advertise its required default case." >&2
+            exit 1
           fi
 
           pnpm test:gateway:cpu-scenarios \
@@ -713,12 +760,7 @@ jobs:
             --runs "$source_runs" \
             --warmup 1 \
             --skip-qa \
-            --startup-case default \
-            --startup-case skipChannels \
-            --startup-case oneInternalHook \
-            --startup-case allInternalHooks \
-            --startup-case fiftyPlugins \
-            --startup-case fiftyStartupLazyPlugins
+            "${startup_case_args[@]}"
 
           pnpm test:extensions:memory \
             -- --json "$SOURCE_PERF_DIR/extension-memory.json"
@@ -734,20 +776,34 @@ jobs:
           done
 
           gateway_home="$(mktemp -d)"
+          gateway_readiness_home="$(mktemp -d)"
           gateway_port="$(node -e "const net=require('node:net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{ console.log(s.address().port); s.close(); });")"
+          gateway_token="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
           gateway_state="$gateway_home/.openclaw"
           gateway_config="$gateway_state/openclaw.json"
+          gateway_readiness_state="$gateway_readiness_home/.openclaw"
+          gateway_readiness_config="$gateway_readiness_state/openclaw.json"
           gateway_log="$SOURCE_PERF_DIR/cli-gateway.log"
+          gateway_readiness_log="$SOURCE_PERF_DIR/cli-gateway-readiness.log"
           gateway_pid=""
-          mkdir -p "$gateway_state"
+          mkdir -p "$gateway_state" "$gateway_readiness_state"
+          catalog_refresh_config=""
+          # Frozen release candidates can predate this config key. Inspect the
+          # target schema so the trusted harness never writes invalid config.
+          if rg -q 'catalogRefresh:' src/config/zod-schema.core.ts; then
+            catalog_refresh_config='    "models": { "catalogRefresh": { "enabled": false } },'
+          fi
           cat > "$gateway_config" <<EOF
           {
+            "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
             "browser": { "enabled": false },
+          ${catalog_refresh_config}
+            "update": { "checkOnStart": false },
             "gateway": {
               "mode": "local",
               "port": ${gateway_port},
               "bind": "loopback",
-              "auth": { "mode": "none" },
+              "auth": { "mode": "token" },
               "controlUi": { "enabled": false },
               "tailscale": { "mode": "off" }
             },
@@ -757,16 +813,18 @@ jobs:
             }
           }
           EOF
+          cp "$gateway_config" "$gateway_readiness_config"
+          : > "$gateway_readiness_log"
           cleanup_gateway() {
             if [[ -n "${gateway_pid:-}" ]] && kill -0 "$gateway_pid" 2>/dev/null; then
               kill "$gateway_pid" 2>/dev/null || true
               wait "$gateway_pid" 2>/dev/null || true
             fi
-            rm -rf "$gateway_home"
+            rm -rf "$gateway_home" "$gateway_readiness_home"
           }
           trap cleanup_gateway EXIT
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 \
-            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth none --allow-unconfigured --force \
+          OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
+            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth token --allow-unconfigured --force \
             >"$gateway_log" 2>&1 &
           gateway_pid="$!"
 
@@ -795,9 +853,40 @@ jobs:
             sleep 1
           done
 
-          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
-            node --import tsx scripts/bench-cli-startup.ts \
-            --case gatewayHealthJson \
+          # Exercise the same shared-secret WebSocket path without creating benchmark device state.
+          while true; do
+            gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))
+            if (( gateway_ready_remaining <= 0 )); then
+              cat "$gateway_log" >&2
+              cat "$gateway_readiness_log" >&2
+              echo "Timed out after ${gateway_ready_timeout_seconds}s waiting for gateway WebSocket health." >&2
+              exit 1
+            fi
+            gateway_ready_remaining_ms=$((gateway_ready_remaining * 1000))
+            if OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_readiness_home" OPENCLAW_STATE_DIR="$gateway_readiness_state" OPENCLAW_CONFIG_PATH="$gateway_readiness_config" \
+              node dist/entry.js gateway health \
+                --port "$gateway_port" \
+                --timeout "$gateway_ready_remaining_ms" \
+                --json >"$gateway_readiness_log" 2>&1; then
+              break
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              cat "$gateway_log" >&2
+              cat "$gateway_readiness_log" >&2
+              exit 1
+            fi
+            # Pace fast transport failures without extending the shared startup deadline.
+            gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))
+            if (( gateway_ready_remaining > 0 )); then
+              sleep 1
+            fi
+          done
+
+          OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
+            node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts" \
+            --entry "$GITHUB_WORKSPACE/openclaw.mjs" \
+            --case gatewayHealthJsonWarmState \
+            --case gatewayHealthJsonFreshState \
             --case configGetGatewayPort \
             --runs "$source_runs" \
             --warmup 1 \
@@ -812,7 +901,7 @@ jobs:
             echo "SQLite state smoke probe is not available in ${TESTED_REF}; continuing with the remaining source probes." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
+          summary_args=(node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mts" \
             --source-dir "$SOURCE_PERF_DIR" \
             --output "$SOURCE_PERF_DIR/index.md")
           if [[ -n "${SOURCE_PERF_BASELINE_DIR:-}" && -d "$SOURCE_PERF_BASELINE_DIR" ]]; then

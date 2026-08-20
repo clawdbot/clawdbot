@@ -25,6 +25,7 @@ export function loadAgentTurnMediaRuntime() {
 type AgentTurnAttachmentRuntime = Pick<
   Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
+  | "isImageAttachment"
   | "isMediaUnderstandingSkipError"
   | "normalizeAttachments"
   | "resolveMediaAttachmentLocalRoots"
@@ -32,10 +33,6 @@ type AgentTurnAttachmentRuntime = Pick<
 
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
-
-function isImageAgentTurnAttachment(attachment: MediaAttachment): boolean {
-  return attachment.mime?.startsWith("image/") === true;
-}
 
 function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   return (
@@ -72,7 +69,10 @@ export async function resolveAgentTurnAttachments(params: {
         : attachment,
     );
   const recentHistoryImages = includeRecentHistoryImages
-    ? resolveRecentInboundHistoryImages({ ctx: params.ctx })
+    ? resolveRecentInboundHistoryImages({
+        ctx: params.ctx,
+        isImageAttachment: runtime.isImageAttachment,
+      })
     : [];
   const firstHistoryAttachmentIndex =
     currentAttachments.reduce(
@@ -83,6 +83,7 @@ export async function resolveAgentTurnAttachments(params: {
   const historyAttachments: MediaAttachment[] = recentHistoryImages.map((image, index) => ({
     path: image.path,
     mime: image.contentType,
+    kind: image.kind,
     index: firstHistoryAttachmentIndex + index,
   }));
   const historyAttachmentByIndex = new Map(
@@ -99,19 +100,22 @@ export async function resolveAgentTurnAttachments(params: {
   const resultIndexes: number[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
-    const mediaType = attachment.mime ?? "application/octet-stream";
-    if (!isImageAgentTurnAttachment(attachment)) {
+    if (!runtime.isImageAttachment(attachment)) {
       return false;
     }
     if (!normalizeOptionalString(attachment.path)) {
       return false;
     }
     try {
-      const { buffer } = await cache.getBuffer({
+      const { buffer, mime: mediaType } = await cache.getBuffer({
         attachmentIndex: attachment.index,
         maxBytes: AGENT_TURN_ATTACHMENT_MAX_BYTES,
         timeoutMs: AGENT_TURN_ATTACHMENT_TIMEOUT_MS,
       });
+      // Declared image kind selects the candidate; byte-aware cache detection owns the provider MIME.
+      if (!mediaType?.startsWith("image/")) {
+        return false;
+      }
       results.push({
         mediaType,
         data: buffer.toString("base64"),
@@ -139,7 +143,7 @@ export async function resolveAgentTurnAttachments(params: {
 
   let currentImageResolved = false;
   const hasCurrentMedia = currentAttachments.length > 0;
-  const hasCurrentImageCandidate = currentAttachments.some(isImageAgentTurnAttachment);
+  const hasCurrentImageCandidate = currentAttachments.some(runtime.isImageAttachment);
   for (const attachment of currentAttachments) {
     currentImageResolved = (await resolveImageAttachment(attachment)) || currentImageResolved;
   }

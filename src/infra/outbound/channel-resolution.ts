@@ -5,19 +5,18 @@ import type { ChannelMessageAdapterShape } from "../../channels/message/types.js
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
-  type DeliverableMessageChannel,
 } from "../../utils/message-channel.js";
 import { bootstrapOutboundChannelPlugin } from "./channel-bootstrap.runtime.js";
 
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
-export function normalizeDeliverableOutboundChannel(
-  raw?: string | null,
-): DeliverableMessageChannel | undefined {
+export function normalizeDeliverableOutboundChannel(raw?: string | null): string | undefined {
   const normalized = normalizeMessageChannel(raw);
   if (!normalized || !isDeliverableMessageChannel(normalized)) {
     return undefined;
@@ -25,28 +24,34 @@ export function normalizeDeliverableOutboundChannel(
   return normalized;
 }
 
-function maybeBootstrapChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
-  cfg?: OpenClawConfig;
-}): void {
-  bootstrapOutboundChannelPlugin(params);
+function getOutboundRuntimeRegistry(): PluginRegistry | null {
+  return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
 }
 
 function normalizeOutboundChannelForResolution(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   allowBootstrap?: boolean;
-}): { channel?: DeliverableMessageChannel; didBootstrap: boolean } {
+}): {
+  channel?: string;
+  didBootstrap: boolean;
+  bootstrapRegistry?: PluginRegistry;
+} {
   const normalized = normalizeMessageChannel(params.channel);
-  const deliverable = normalizeDeliverableOutboundChannel(normalized);
+  const deliverable =
+    normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
   if (deliverable || !normalized || normalized === INTERNAL_MESSAGE_CHANNEL) {
     return { channel: deliverable, didBootstrap: false };
   }
 
-  const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistries(normalized);
+  const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
+    normalized,
+    getOutboundRuntimeRegistry() ?? undefined,
+  );
   if (activeRuntimePlugin) {
     return {
-      channel: activeRuntimePlugin.id as DeliverableMessageChannel,
+      channel: activeRuntimePlugin.id,
       didBootstrap: false,
     };
   }
@@ -56,16 +61,19 @@ function normalizeOutboundChannelForResolution(params: {
 
   // External channel ids remain normalized before their runtime is registered.
   // Bootstrap first, then let the runtime candidate lookup confirm sendability.
-  maybeBootstrapChannelPlugin({
-    channel: normalized as DeliverableMessageChannel,
+  const bootstrapRegistry = bootstrapOutboundChannelPlugin({
+    channel: normalized,
     cfg: params.cfg,
+    agentId: params.agentId,
   });
-  const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistries(normalized);
+  const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
+    normalized,
+    bootstrapRegistry,
+  );
   return {
-    // The pinned channel registry may intentionally lag the active runtime
-    // registry, so strict registry validation here would hide a usable plugin.
-    channel: (bootstrappedRuntimePlugin?.id ?? normalized) as DeliverableMessageChannel,
+    channel: bootstrappedRuntimePlugin?.id ?? normalized,
     didBootstrap: true,
+    ...(bootstrapRegistry ? { bootstrapRegistry } : {}),
   };
 }
 
@@ -153,51 +161,48 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   return undefined;
 }
 
-function resolveValueFromRuntimeRegistries<TValue>(
+function resolveValueFromRuntimeRegistry<TValue>(
   channel: string,
   resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
+  registry: PluginRegistry | null | undefined = getOutboundRuntimeRegistry(),
 ): TValue | undefined {
-  const channelRegistry = getActivePluginChannelRegistry();
-  const channelPlugin = resolveDirectFromRegistry(channelRegistry, channel);
-  if (channelPlugin) {
-    const value = resolveValue(channelPlugin);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry && activeRegistry !== channelRegistry) {
-    const activePlugin = resolveDirectFromRegistry(activeRegistry, channel);
-    if (activePlugin) {
-      return resolveValue(activePlugin);
-    }
-  }
-  return undefined;
+  const plugin = resolveDirectFromRegistry(registry ?? null, channel);
+  return plugin ? resolveValue(plugin) : undefined;
 }
 
-function resolveDirectFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistries(channel, (plugin) => plugin);
-}
-
-function resolveRuntimeOutboundPluginFromRuntimeRegistries(
+function resolveDirectFromRuntimeRegistry(
   channel: string,
+  registry?: PluginRegistry,
 ): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
+  return resolveValueFromRuntimeRegistry(channel, (plugin) => plugin, registry);
 }
 
-function resolveActivatedOutboundPluginFromRuntimeRegistries(
+function resolveRuntimeOutboundPluginFromRuntimeRegistry(
   channel: string,
+  registry?: PluginRegistry,
 ): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistries(channel, resolveActivatedOutboundPlugin);
+  return resolveValueFromRuntimeRegistry(channel, resolveRuntimeOutboundPlugin, registry);
+}
+
+function resolveActivatedOutboundPluginFromRuntimeRegistry(
+  channel: string,
+  registry?: PluginRegistry,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistry(channel, resolveActivatedOutboundPlugin, registry);
 }
 
 /** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   allowBootstrap?: boolean;
 }): ChannelPlugin | undefined {
-  const { channel: normalized, didBootstrap } = normalizeOutboundChannelForResolution(params);
+  const {
+    channel: normalized,
+    didBootstrap,
+    bootstrapRegistry,
+  } = normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
   }
@@ -207,9 +212,9 @@ export function resolveOutboundChannelPlugin(params: {
   const current = resolveLoaded();
   const requireActivatedRuntime = params.allowBootstrap === true;
   const runtimeCurrent = requireActivatedRuntime
-    ? resolveActivatedOutboundPluginFromRuntimeRegistries(normalized)
-    : resolveRuntimeOutboundPluginFromRuntimeRegistries(normalized);
-  const setupFallback = resolveDirectFromRuntimeRegistries(normalized);
+    ? resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry)
+    : resolveRuntimeOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry);
+  const setupFallback = resolveDirectFromRuntimeRegistry(normalized, bootstrapRegistry);
   const bundledCurrent = resolve();
   const candidate = resolveRuntimeOutboundPluginCandidate({
     loaded: current,
@@ -227,11 +232,15 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
-  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const registry = bootstrapOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
-    runtime: resolveActivatedOutboundPluginFromRuntimeRegistries(normalized),
-    setupFallback: resolveDirectFromRuntimeRegistries(normalized),
+    runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, registry),
+    setupFallback: resolveDirectFromRuntimeRegistry(normalized, registry),
     bundled: resolve(),
     requireActivatedRuntime: true,
   });
@@ -241,23 +250,36 @@ export function resolveOutboundChannelPlugin(params: {
 export function resolveOutboundChannelMessageAdapter(params: {
   channel: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
-  const { channel: normalized, didBootstrap } = normalizeOutboundChannelForResolution(params);
+  const {
+    channel: normalized,
+    didBootstrap,
+    bootstrapRegistry,
+  } = normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
   }
   const current =
     resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
-    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveValueFromRuntimeRegistry(
+      normalized,
+      resolveSendCapableMessageAdapter,
+      bootstrapRegistry,
+    ) ??
     resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
   if (current || params.allowBootstrap !== true || didBootstrap) {
     return current;
   }
-  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const registry = bootstrapOutboundChannelPlugin({
+    channel: normalized,
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   return (
     resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
-    resolveValueFromRuntimeRegistries(normalized, resolveSendCapableMessageAdapter) ??
+    resolveValueFromRuntimeRegistry(normalized, resolveSendCapableMessageAdapter, registry) ??
     resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
   );
 }

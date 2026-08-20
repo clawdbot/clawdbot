@@ -76,14 +76,6 @@ async function cleanupMatrixQaTempDevices(
   }
 }
 
-function requireMatrixQaPassword(context: MatrixQaScenarioContext, actor: "driver" | "observer") {
-  const password = actor === "driver" ? context.driverPassword : context.observerPassword;
-  if (!password) {
-    throw new Error(`Matrix E2EE destructive ${actor} password is required`);
-  }
-  return password;
-}
-
 function requireMatrixQaRegistrationToken(context: MatrixQaScenarioContext) {
   const token = context.registrationToken?.trim();
   if (!token) {
@@ -1167,90 +1159,74 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
 export async function runMatrixQaE2eeWrongAccountRecoveryKeyScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const observerPassword = requireMatrixQaPassword(context, "observer");
-  const driverSetup = await prepareMatrixQaDestructiveSetup(
+  const sourceSetup = await prepareMatrixQaDestructiveSetup(
     context,
     "matrix-e2ee-wrong-account-recovery-key",
   );
-  const observer = await createMatrixQaE2eeScenarioClient({
-    accessToken: context.observerAccessToken,
-    actorId: `driver-destructive-${randomUUID().slice(0, 8)}`,
-    baseUrl: context.baseUrl,
-    deviceId: context.observerDeviceId,
-    observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
-    password: context.observerPassword,
-    scenarioId: "matrix-e2ee-wrong-account-recovery-key",
-    timeoutMs: context.timeoutMs,
-    userId: context.observerUserId,
-  });
+  let targetSetup: MatrixQaDestructiveSetup | undefined;
+  let device: Awaited<ReturnType<typeof loginMatrixQaRecoveryDevice>> | undefined;
+  let cli: Awaited<ReturnType<typeof createMatrixQaRecoveryCliRuntime>> | undefined;
   try {
-    const observerReady = await ensureMatrixQaOwnerReady({
-      allowCrossSigningResetOnRepair: true,
-      client: observer,
-      label: "observer",
+    targetSetup = await prepareMatrixQaDestructiveSetup(
+      context,
+      "matrix-e2ee-wrong-account-recovery-key",
+    );
+    device = await loginMatrixQaRecoveryDevice({
+      context,
+      deviceName: "OpenClaw Matrix QA Wrong Account Key",
+      password: targetSetup.ownerPassword,
+      userId: targetSetup.ownerUserId,
     });
-    let device: Awaited<ReturnType<typeof loginMatrixQaRecoveryDevice>> | undefined;
-    let cli: Awaited<ReturnType<typeof createMatrixQaRecoveryCliRuntime>> | undefined;
-    try {
-      device = await loginMatrixQaRecoveryDevice({
-        context,
-        deviceName: "OpenClaw Matrix QA Wrong Account Key",
-        password: observerPassword,
-        userId: context.observerUserId,
-      });
-      cli = await createMatrixQaRecoveryCliRuntime({
-        accountId: "wrong-account",
-        accessToken: device.accessToken,
-        context,
-        deviceId: device.deviceId,
-        label: "wrong-account-recovery-key",
-        userId: device.userId,
-      });
-      const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
-        allowNonZero: true,
-        args: [
-          "matrix",
-          "verify",
-          "backup",
-          "restore",
-          "--account",
-          "wrong-account",
-          "--recovery-key-stdin",
-          "--json",
-        ],
-        label: "restore-with-wrong-account-key",
-        runtime: cli,
-        stdin: `${driverSetup.encodedRecoveryKey}\n`,
-        timeoutMs: context.timeoutMs,
-      });
-      assertMatrixQaCliBackupRestoreFailed(restored, {
-        expectedBackupVersion: observerReady.backupVersion,
-        failureKind: "rejected-recovery-key",
-        label: "wrong-account recovery-key restore",
-      });
-      return {
-        artifacts: {
-          observerRecoveryDeviceId: device.deviceId,
-          restoreError: restored.payload.error,
-          restoreExitCode: restored.result.exitCode,
-        },
-        details: [
-          "driver recovery key was rejected for observer account backup",
-          `restore exit code: ${restored.result.exitCode}`,
-          `restore error: ${restored.payload.error}`,
-        ].join("\n"),
-      };
-    } finally {
-      await cli?.dispose().catch(() => undefined);
-      await observer.stop().catch(() => undefined);
-      if (device) {
-        await observer.deleteOwnDevices([device.deviceId]).catch(() => undefined);
-      }
-    }
+    cli = await createMatrixQaRecoveryCliRuntime({
+      accountId: "wrong-account",
+      accessToken: device.accessToken,
+      context,
+      deviceId: device.deviceId,
+      label: "wrong-account-recovery-key",
+      userId: device.userId,
+    });
+    const restored = await runMatrixQaCliJson<MatrixQaCliBackupStatus>({
+      allowNonZero: true,
+      args: [
+        "matrix",
+        "verify",
+        "backup",
+        "restore",
+        "--account",
+        "wrong-account",
+        "--recovery-key-stdin",
+        "--json",
+      ],
+      label: "restore-with-wrong-account-key",
+      runtime: cli,
+      stdin: `${sourceSetup.encodedRecoveryKey}\n`,
+      timeoutMs: context.timeoutMs,
+    });
+    assertMatrixQaCliBackupRestoreFailed(restored, {
+      expectedBackupVersion: targetSetup.backupVersion,
+      failureKind: "rejected-recovery-key",
+      label: "wrong-account recovery-key restore",
+    });
+    const artifacts = {
+      restoreError: restored.payload.error,
+      restoreExitCode: restored.result.exitCode,
+      targetRecoveryDeviceId: device.deviceId,
+    };
+    return {
+      artifacts,
+      details: [
+        "source-owner recovery key was rejected for target-owner account backup",
+        `restore exit code: ${restored.result.exitCode}`,
+        `restore error: ${restored.payload.error}`,
+      ].join("\n"),
+    };
   } finally {
-    await observer.stop().catch(() => undefined);
-    await driverSetup.owner.stop().catch(() => undefined);
+    await cli?.dispose().catch(() => undefined);
+    if (targetSetup && device) {
+      await targetSetup.owner.deleteOwnDevices([device.deviceId]).catch(() => undefined);
+    }
+    await targetSetup?.owner.stop().catch(() => undefined);
+    await sourceSetup.owner.stop().catch(() => undefined);
   }
 }
 

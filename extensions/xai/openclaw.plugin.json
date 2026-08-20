@@ -1,5 +1,8 @@
 {
   "id": "xai",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },

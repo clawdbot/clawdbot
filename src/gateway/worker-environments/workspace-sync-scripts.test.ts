@@ -2,9 +2,10 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForChildClose, waitForFile } from "../../../test/helpers/process-wait.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -20,15 +21,25 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
-const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
+function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
+  const child = spawn(process.execPath, argv, { env, stdio: ["ignore", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const exited = waitForChildClose(child, 10_000).then(({ code, signal }) => ({
+    code,
+    signal,
+    stderr,
+  }));
+  return { exited };
+}
 
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-quiescence-test-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-quiescence-test-");
   const home = path.join(root, "home");
   let workspace = path.join(root, "workspace");
   const bin = path.join(root, "bin");
@@ -55,14 +66,24 @@ async function fixture() {
   };
 }
 
-async function quiesce(input: Awaited<ReturnType<typeof fixture>>) {
+async function quiesce(input: Awaited<ReturnType<typeof fixture>>, sharedHost = false) {
   const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
+    [
+      process.execPath,
+      "-e",
+      REMOTE_WORKSPACE_QUIESCE_JS,
+      input.workspace,
+      "10000",
+      sharedHost ? "shared-host" : "dedicated",
+    ],
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
   const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
   expect(match).not.toBeNull();
+  if (sharedHost) {
+    expect(result.stderr).toContain("shared host declared; skipping process freeze sweep");
+  }
   return match![1]!;
 }
 
@@ -79,9 +100,22 @@ async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string)
   expect(result.code).toBe(0);
 }
 
-async function renew(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
+async function renew(
+  input: Awaited<ReturnType<typeof fixture>>,
+  nonce: string,
+  sharedHost = false,
+) {
   const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce, "20000"],
+    [
+      process.execPath,
+      "-e",
+      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+      input.workspace,
+      nonce,
+      "20000",
+      "final",
+      sharedHost ? "shared-host" : "dedicated",
+    ],
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
@@ -192,6 +226,36 @@ describe("remote workspace quiescence scripts", () => {
     }
   });
 
+  it("keeps unrelated same-uid processes running on a declared shared host", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    expect(child.pid).toBeDefined();
+    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
+
+    let nonce: string | undefined;
+    try {
+      nonce = await quiesce(input, true);
+      await renew(input, nonce, true);
+      const lease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+      ) as { processes: Array<{ pid: number }>; sharedHost: boolean };
+      expect(lease).toMatchObject({ processes: [], sharedHost: true });
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    } finally {
+      if (nonce) {
+        await resume(input, nonce);
+      }
+      child.kill("SIGCONT");
+      child.kill("SIGTERM");
+      if (child.exitCode === null) {
+        await once(child, "exit");
+      }
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
+  });
+
   it("fails closed when the watchdog lease no longer exists", async () => {
     const input = await fixture();
     const nonce = await quiesce(input);
@@ -207,8 +271,7 @@ describe("remote workspace quiescence scripts", () => {
 
 describe("remote workspace manifest script", () => {
   it("atomically applies and rolls back accepted workspace paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-accepted-paths-test-"));
-    roots.push(root);
+    const root = tempDirs.make("openclaw-accepted-paths-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
     await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
@@ -251,13 +314,31 @@ describe("remote workspace manifest script", () => {
     );
     await expect(fs.readFile(path.join(workspace, "added.txt"), "utf8")).resolves.toBe("added\n");
 
-    await fs.rm(path.join(path.dirname(staging), "applied"));
+    await fs.writeFile(
+      path.join(path.dirname(staging), "phase.json"),
+      JSON.stringify({ version: 1, nonce, phase: "applying" }),
+    );
     const recoveryNonce = "b".repeat(32);
     const recoveryBegin = await runTransaction("begin", recoveryNonce, JSON.stringify(["node"]));
     expect(recoveryBegin.code).toBe(0);
     await expect(fs.readFile(path.join(workspace, "node"), "utf8")).resolves.toBe("old file\n");
     await expect(fs.access(path.join(workspace, "added.txt"))).rejects.toThrow();
     expect((await runTransaction("rollback", recoveryNonce)).code).toBe(0);
+
+    const legacyNonce = "6".repeat(32);
+    const legacyBegin = await runTransaction("begin", legacyNonce, JSON.stringify(["node"]));
+    const legacyTransaction = path.dirname(legacyBegin.stdout.trim());
+    await fs.writeFile(path.join(legacyBegin.stdout.trim(), "node"), "legacy applied\n");
+    expect((await runTransaction("apply", legacyNonce)).code).toBe(0);
+    await fs.rm(path.join(legacyTransaction, "phase.json"));
+    await fs.writeFile(path.join(legacyTransaction, "applied"), "");
+    const legacyRecoveryNonce = "7".repeat(32);
+    expect(
+      await runTransaction("begin", legacyRecoveryNonce, JSON.stringify(["node"])),
+    ).toMatchObject({ code: 0 });
+    await expect(fs.readFile(path.join(workspace, "node"), "utf8")).resolves.toBe("old file\n");
+    expect((await runTransaction("rollback", legacyRecoveryNonce)).code).toBe(0);
+
     await fs.rm(path.join(workspace, "node"));
     await fs.mkdir(path.join(workspace, "node"));
     await fs.writeFile(path.join(workspace, "node/old.txt"), "read only\n");
@@ -355,9 +436,255 @@ describe("remote workspace manifest script", () => {
     await fs.chmod(path.join(workspace, "parent"), 0o700);
   });
 
+  it("reports strict settlement outcomes for each durable transaction phase", async () => {
+    const root = tempDirs.make("openclaw-accepted-settlement-outcomes-");
+    let workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace);
+    workspace = await fs.realpath(workspace);
+    await fs.writeFile(path.join(workspace, "result.txt"), "old\n");
+    const runTransaction = async (action: string, nonce: string, input?: string) =>
+      await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          action,
+          workspace,
+          nonce,
+        ],
+        { timeoutMs: 10_000, input },
+      );
+    const expectSettlement = (
+      value: Awaited<ReturnType<typeof runTransaction>>,
+      outcome: "begun" | "rolled-back" | "applied" | "committed",
+    ) => {
+      expect(value).toMatchObject({
+        code: 0,
+        stderr: "",
+        stdout: `${JSON.stringify({ version: 1, outcome })}\n`,
+      });
+    };
+
+    const begunNonce = "a".repeat(32);
+    expect(await runTransaction("begin", begunNonce, JSON.stringify(["result.txt"]))).toMatchObject(
+      { code: 0 },
+    );
+    expectSettlement(await runTransaction("settle", begunNonce), "begun");
+    expect(await runTransaction("rollback", begunNonce)).toMatchObject({ code: 0 });
+
+    const appliedNonce = "b".repeat(32);
+    const appliedBegin = await runTransaction(
+      "begin",
+      appliedNonce,
+      JSON.stringify(["result.txt"]),
+    );
+    await fs.writeFile(path.join(appliedBegin.stdout.trim(), "result.txt"), "applied\n");
+    expect(await runTransaction("apply", appliedNonce)).toMatchObject({ code: 0 });
+    expectSettlement(await runTransaction("settle", appliedNonce), "applied");
+    expect(await runTransaction("rollback", appliedNonce)).toMatchObject({ code: 0 });
+
+    const committedNonce = "c".repeat(32);
+    const committedBegin = await runTransaction(
+      "begin",
+      committedNonce,
+      JSON.stringify(["result.txt"]),
+    );
+    await fs.writeFile(path.join(committedBegin.stdout.trim(), "result.txt"), "committed\n");
+    expect(await runTransaction("apply", committedNonce)).toMatchObject({ code: 0 });
+    expect(await runTransaction("commit", committedNonce)).toMatchObject({ code: 0 });
+    expectSettlement(await runTransaction("settle", committedNonce), "committed");
+    expect(await runTransaction("recover", "d".repeat(32))).toMatchObject({ code: 0 });
+    await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+      "committed\n",
+    );
+    expect(
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+    ).toEqual([]);
+  });
+
+  it("serializes a live apply against rollback and recovery", async () => {
+    for (const contender of ["rollback", "recover"] as const) {
+      const root = tempDirs.make(`openclaw-accepted-${contender}-`);
+      let workspace = path.join(root, "workspace");
+      const gate = path.join(root, "gate.fifo");
+      const applyMarker = path.join(root, "apply-started");
+      const contenderMarker = path.join(root, "contender-waiting");
+      const preload = path.join(root, "gate.cjs");
+      await fs.mkdir(workspace);
+      workspace = await fs.realpath(workspace);
+      await fs.writeFile(path.join(workspace, "result.txt"), "old\n");
+      const mkfifo = await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 });
+      expect(mkfifo.code).toBe(0);
+      await fs.writeFile(
+        preload,
+        `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+let applyGated = false;
+fs.renameSync = function(source, destination) {
+  const result = renameSync.apply(this, arguments);
+  if (!applyGated && process.argv[1] === "apply" && source === process.env.OPENCLAW_TEST_GATE_SOURCE && destination.includes(path.sep + "backup" + path.sep)) {
+    applyGated = true;
+    fs.writeFileSync(process.env.OPENCLAW_TEST_APPLY_MARKER, "");
+    fs.readFileSync(process.env.OPENCLAW_TEST_GATE);
+  }
+  return result;
+};
+const kill = process.kill.bind(process);
+let contenderMarked = false;
+process.kill = function(pid, signal) {
+  if (!contenderMarked && signal === 0 && process.argv[1] === process.env.OPENCLAW_TEST_CONTENDER) {
+    contenderMarked = true;
+    fs.writeFileSync(process.env.OPENCLAW_TEST_CONTENDER_MARKER, "");
+  }
+  return kill(pid, signal);
+};
+`,
+      );
+      const env = {
+        ...process.env,
+        OPENCLAW_TEST_GATE: gate,
+        OPENCLAW_TEST_GATE_SOURCE: path.join(workspace, "result.txt"),
+        OPENCLAW_TEST_APPLY_MARKER: applyMarker,
+        OPENCLAW_TEST_CONTENDER: contender,
+        OPENCLAW_TEST_CONTENDER_MARKER: contenderMarker,
+      };
+      const nonce = contender === "rollback" ? "3".repeat(32) : "4".repeat(32);
+      const begin = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          "begin",
+          workspace,
+          nonce,
+        ],
+        { timeoutMs: 10_000, baseEnv: env, input: JSON.stringify(["result.txt"]) },
+      );
+      expect(begin.code).toBe(0);
+      const staging = begin.stdout.trim();
+      await fs.writeFile(path.join(staging, "result.txt"), "new\n");
+
+      const apply = spawnTransaction(
+        [
+          "--require",
+          preload,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          "apply",
+          workspace,
+          nonce,
+        ],
+        env,
+      );
+      await waitForFile(applyMarker, 10_000);
+      const transaction = path.dirname(staging);
+      await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
+      await expect(fs.readFile(path.join(transaction, "backup/result.txt"), "utf8")).resolves.toBe(
+        "old\n",
+      );
+      await expect(fs.readFile(path.join(staging, "result.txt"), "utf8")).resolves.toBe("new\n");
+
+      const contenderNonce = contender === "rollback" ? nonce : "5".repeat(32);
+      const competing = runCommandWithTimeout(
+        [
+          process.execPath,
+          "--require",
+          preload,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          contender,
+          workspace,
+          contenderNonce,
+        ],
+        { timeoutMs: 10_000, baseEnv: env },
+      );
+      await waitForFile(contenderMarker, 10_000);
+      await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
+      await expect(fs.readFile(path.join(transaction, "backup/result.txt"), "utf8")).resolves.toBe(
+        "old\n",
+      );
+
+      const gateWriter = await fs.open(gate, "w");
+      await gateWriter.write("release");
+      await gateWriter.close();
+      expect(await apply.exited).toMatchObject({ code: 0, signal: null, stderr: "" });
+      expect(await competing).toMatchObject({ code: 0, stderr: "" });
+      await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe("old\n");
+      expect(
+        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+      ).toEqual([]);
+    }
+  });
+
+  it("restores a dead reclaimer before settling its dead apply owner", async () => {
+    const root = tempDirs.make("openclaw-accepted-dead-owner-");
+    let workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace);
+    workspace = await fs.realpath(workspace);
+    await fs.writeFile(path.join(workspace, "result.txt"), "old\n");
+    const nonce = "8".repeat(32);
+    const runTransaction = async (action: string, input?: string) =>
+      await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+          action,
+          workspace,
+          nonce,
+        ],
+        { timeoutMs: 10_000, input },
+      );
+    const begin = await runTransaction("begin", JSON.stringify(["result.txt"]));
+    expect(begin.code).toBe(0);
+    const transaction = path.dirname(begin.stdout.trim());
+    await Promise.all([
+      fs.writeFile(
+        path.join(transaction, "phase.json"),
+        JSON.stringify({ version: 1, nonce, phase: "applying" }),
+      ),
+      fs.writeFile(
+        path.join(transaction, "state.json"),
+        JSON.stringify([{ relative: "result.txt", hadLive: true }]),
+      ),
+    ]);
+    await fs.rename(
+      path.join(workspace, "result.txt"),
+      path.join(transaction, "backup/result.txt"),
+    );
+    const workspaceKey = createHash("sha256").update(workspace).digest("hex");
+    const lock = path.join(root, `.openclaw-accepted-lock-${workspaceKey}`);
+    const deadPid = 2_147_483_647;
+    const token = "9".repeat(32);
+    await fs.mkdir(lock);
+    const invalidOwner = ["apply", nonce, deadPid, deadPid - 1, token].join(".");
+    const invalidEntry = path.join(lock, `owner.${invalidOwner}`);
+    await fs.writeFile(invalidEntry, "");
+    const rejected = await runTransaction("settle");
+    expect(rejected.code).not.toBe(0);
+    expect(rejected.stderr).toContain("invalid workspace mutation lock owner");
+    await fs.unlink(invalidEntry);
+    const ownerIdentity = ["apply", nonce, deadPid, deadPid, token].join(".");
+    const reclaimToken = "a".repeat(32);
+    const reclaimerIdentity = ["settle", nonce, deadPid, deadPid, reclaimToken].join(".");
+    await fs.writeFile(path.join(lock, `reclaim.${ownerIdentity}.${reclaimerIdentity}`), "");
+
+    const settled = await runTransaction("settle");
+
+    expect(settled).toMatchObject({
+      code: 0,
+      stderr: "",
+      stdout: `${JSON.stringify({ version: 1, outcome: "rolled-back" })}\n`,
+    });
+    await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe("old\n");
+    expect(
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+    ).toEqual([]);
+  });
+
   it("keeps the gateway's canonical manifest available across a second turn", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-lifecycle-test-"));
-    roots.push(root);
+    const root = tempDirs.make("openclaw-manifest-lifecycle-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
     await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
@@ -511,8 +838,7 @@ describe("remote workspace manifest script", () => {
   });
 
   it("drops derived artifacts from the worker manifest", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-derived-test-"));
-    roots.push(root);
+    const root = tempDirs.make("openclaw-manifest-derived-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
     const files = [
@@ -553,8 +879,7 @@ describe("remote workspace manifest script", () => {
   });
 
   it("keeps base tombstones in the final ignored-path verification", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-tombstone-test-"));
-    roots.push(root);
+    const root = tempDirs.make("openclaw-manifest-tombstone-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
     await fs.mkdir(home);
@@ -632,8 +957,7 @@ describe("remote workspace manifest script", () => {
   });
 
   it("drops stale descendants when a tracked directory becomes a file", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manifest-test-"));
-    roots.push(root);
+    const root = tempDirs.make("openclaw-manifest-test-");
     const home = path.join(root, "home");
     const workspace = path.join(root, "workspace");
     await fs.mkdir(home);

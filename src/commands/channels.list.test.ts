@@ -3,9 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  metadataSnapshot: {
+    plugins: [],
+    index: { plugins: [] },
+    discovery: { candidates: [], diagnostics: [] },
+  },
   readConfigFileSnapshot: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -13,15 +19,16 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
   })),
   listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
-  buildChannelAccountSnapshot: vi.fn(),
+  resolveChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
-  isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
-    () => true,
-  ),
+  listManifestInstalledChannelIds: vi.fn<() => Set<string>>(() => new Set()),
   resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
   callGateway: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn(() => "main"),
+  resolvePluginControlPlaneWorkspace: vi.fn<typeof resolvePluginControlPlaneWorkspace>(() => ({
+    workspaceDir: "/tmp/workspace",
+    workspaceScope: "selected",
+  })),
+  resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -36,6 +43,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: mocks.resolvePluginControlPlaneWorkspace,
+}));
+
 vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
 }));
@@ -45,7 +60,7 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
-  buildChannelAccountSnapshot: mocks.buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot: mocks.resolveChannelAccountSnapshot,
 }));
 
 vi.mock("./channel-setup/trusted-catalog.js", () => ({
@@ -53,17 +68,12 @@ vi.mock("./channel-setup/trusted-catalog.js", () => ({
 }));
 
 vi.mock("./channel-setup/discovery.js", () => ({
-  isCatalogChannelInstalled: mocks.isCatalogChannelInstalled,
+  listManifestInstalledChannelIds: mocks.listManifestInstalledChannelIds,
 }));
 
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHint:
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
-}));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
 import { channelsListCommand } from "./channels/list.js";
@@ -122,15 +132,21 @@ describe("channels list", () => {
     mocks.resolveCommandConfigWithSecrets.mockClear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReset();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-    mocks.buildChannelAccountSnapshot.mockReset();
+    mocks.resolveChannelAccountSnapshot.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
-    mocks.isCatalogChannelInstalled.mockReset();
-    mocks.isCatalogChannelInstalled.mockReturnValue(true);
+    mocks.listManifestInstalledChannelIds.mockReset();
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReset();
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+    mocks.resolvePluginControlPlaneWorkspace.mockReset();
+    mocks.resolvePluginControlPlaneWorkspace.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      workspaceScope: "selected",
+    });
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(mocks.metadataSnapshot);
   });
 
   it("does not include auth providers in JSON output (auth section was removed)", async () => {
@@ -170,8 +186,9 @@ describe("channels list", () => {
     await channelsListCommand({ json: true }, runtime);
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
-      includeSetupFallbackPlugins: true,
+      metadataSnapshot: mocks.metadataSnapshot,
     });
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
     const payload = JSON.parse(loggedText(runtime)) as {
       chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
     };
@@ -179,6 +196,88 @@ describe("channels list", () => {
       accounts: ["alerts", "default"],
       installed: true,
       origin: "configured",
+    });
+  });
+
+  it("keeps shared inventory when an explicit multi-agent roster has no system owner", async () => {
+    const runtime = createTestRuntime();
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { main: {}, research: {} },
+      },
+    };
+    mocks.resolvePluginControlPlaneWorkspace.mockReturnValue({
+      workspaceScope: "omitted",
+      diagnostic: {
+        level: "warn",
+        code: "workspace-scope-omitted",
+        message: "Workspace plugin discovery was skipped for this explicit roster.",
+      },
+    });
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("qqbot", "QQ Bot"),
+    ]);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["qqbot"]));
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    await channelsListCommand({ all: true, json: true }, runtime);
+
+    expect(mocks.resolvePluginControlPlaneWorkspace).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+    });
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
+    expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
+      cfg: config,
+      discovery: mocks.metadataSnapshot.discovery,
+    });
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { installed: boolean }>;
+      diagnostics?: Array<{ code?: string }>;
+    };
+    expect(payload.chat.qqbot?.installed).toBe(true);
+    expect(payload.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "workspace-scope-omitted" }),
+    );
+  });
+
+  it("uses the named system owner for workspace-scoped channel inventory", async () => {
+    const runtime = createTestRuntime();
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: { main: {}, research: { workspace: "/tmp/research-workspace" } },
+      },
+    };
+    mocks.resolvePluginControlPlaneWorkspace.mockReturnValue({
+      workspaceDir: "/tmp/research-workspace",
+      workspaceScope: "selected",
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    await channelsListCommand({ all: true, json: true }, runtime);
+
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
+      config,
+      env: process.env,
+      workspaceDir: "/tmp/research-workspace",
+      allowWorkspaceScopedCurrent: true,
+    });
+    expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
+      cfg: config,
+      workspaceDir: "/tmp/research-workspace",
+      discovery: mocks.metadataSnapshot.discovery,
+    });
+    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
+      cfg: config,
+      workspaceDir: "/tmp/research-workspace",
+      index: mocks.metadataSnapshot.index,
     });
   });
 
@@ -203,7 +302,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,
       tokenSource: "config",
@@ -227,6 +326,7 @@ describe("channels list", () => {
 
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
       includeSetupFallbackPlugins: true,
+      metadataSnapshot: mocks.metadataSnapshot,
     });
     const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Chat channels:");
@@ -237,12 +337,47 @@ describe("channels list", () => {
     expect(output).not.toContain("Auth providers");
   });
 
+  it("sanitizes channel labels only in terminal output", async () => {
+    const control = "\u001B]0;channels-list-injection\u0007";
+    const accountId = `${control}default\nforged-row`;
+    const channelLabel = `${control}Telegram 🦞\r\nAdmin`;
+    const accountName = `${control}Primary\tAccount`;
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ label: channelLabel, accountIds: [accountId] }),
+    ]);
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+      accountId,
+      name: accountName,
+      configured: true,
+      enabled: true,
+    });
+    const config = { channels: { telegram: { accounts: { [accountId]: {} } } } };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot, config });
+
+    const textRuntime = createTestRuntime();
+    await channelsListCommand({}, textRuntime);
+
+    const textOutput = loggedText(textRuntime);
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("Telegram 🦞\\r\\nAdmin");
+    expect(textOutput).toContain("\\nforged-row");
+    expect(textOutput).toContain("Primary\\tAccount");
+
+    const jsonRuntime = createTestRuntime();
+    await channelsListCommand({ json: true }, jsonRuntime);
+    const payload = JSON.parse(loggedText(jsonRuntime)) as {
+      chat?: Record<string, { accounts: string[] }>;
+    };
+    expect(payload.chat?.telegram?.accounts).toStrictEqual([accountId]);
+  });
+
   it("prefers reachable gateway account snapshots over command-local token state", async () => {
     const runtime = createTestRuntime();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       tokenSource: "none",
@@ -291,7 +426,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       tokenSource: "none",
@@ -320,7 +455,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: true,
       tokenSource: "config",
@@ -349,7 +484,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {},
@@ -370,7 +505,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("discord", "Discord"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
       pluginId: "discord",
       channelId: "discord",
@@ -400,6 +535,8 @@ describe("channels list", () => {
       },
       channelId: "discord",
       workspaceDir: "/tmp/workspace",
+      // Prepared once for the invocation; the row loop must not rediscover.
+      manifestRecords: expect.any(Array),
     });
     const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Discord");
@@ -418,7 +555,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("discord", "Discord"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
       pluginId: "discord",
       channelId: "discord",
@@ -456,7 +593,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {},
@@ -475,7 +612,7 @@ describe("channels list", () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       enabled: false,
@@ -507,7 +644,7 @@ describe("channels list", () => {
       createMockChannelPlugin({ id: "telegram", accountIds: ["default"] }),
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
-    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
       accountId: "default",
       configured: false,
       enabled: false,
@@ -515,7 +652,7 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
       createCatalogEntry("qqbot", "QQ Bot"),
     ]);
-    mocks.isCatalogChannelInstalled.mockImplementation(({ entry }) => entry.id !== "qqbot");
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set());
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {
@@ -538,6 +675,38 @@ describe("channels list", () => {
     expect(payload.chat.qqbot?.installed).toBe(false);
   });
 
+  it("resolves installed manifest channels once for the whole catalog", async () => {
+    const runtime = createTestRuntime();
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("wecom", "WeCom"),
+      createCatalogEntry("qqbot", "QQ Bot"),
+    ]);
+    mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["wecom"]));
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsListCommand({ all: true, json: true }, runtime);
+
+    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledOnce();
+    expect(mocks.listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith({
+      cfg: {},
+      workspaceDir: "/tmp/workspace",
+      discovery: mocks.metadataSnapshot.discovery,
+    });
+    expect(mocks.listManifestInstalledChannelIds).toHaveBeenCalledWith({
+      cfg: {},
+      workspaceDir: "/tmp/workspace",
+      index: mocks.metadataSnapshot.index,
+    });
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { installed: boolean }>;
+    };
+    expect(payload.chat.wecom?.installed).toBe(true);
+    expect(payload.chat.qqbot?.installed).toBe(false);
+  });
+
   it(
     "--all still surfaces catalog channels that are installed on disk but have no " +
       "plugin object loaded and no config entry (regression: WeCom-like channels " +
@@ -547,12 +716,12 @@ describe("channels list", () => {
       // Read-only loader returns nothing for wecom because the user has no
       // configured wecom channel, so the loader never activates it.
       mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
-      // But catalog knows about wecom, and isCatalogChannelInstalled sees
+      // But catalog knows about wecom, and manifest discovery sees
       // the wecom npm package on disk.
       mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
         createCatalogEntry("wecom", "WeCom"),
       ]);
-      mocks.isCatalogChannelInstalled.mockReturnValue(true);
+      mocks.listManifestInstalledChannelIds.mockReturnValue(new Set(["wecom"]));
       mocks.readConfigFileSnapshot.mockResolvedValue({
         ...baseConfigSnapshot,
         config: {},

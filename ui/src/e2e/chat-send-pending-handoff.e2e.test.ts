@@ -1,28 +1,19 @@
 // Control UI E2E tests cover the pending-send bubble handoff to authoritative history.
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-  type MockGatewayControls,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let page: Page | undefined;
-let server: ControlUiE2eServer | undefined;
+const suite = createControlUiE2eSuite({
+  name: "Control UI chat send pending handoff",
+});
 
 type FrameSample = {
   t: number;
   present: boolean;
   rowKeys: string[];
+  imageCount: number;
+  loadedImageCount: number;
 };
 
 type SamplerWindow = Window & {
@@ -31,10 +22,14 @@ type SamplerWindow = Window & {
 };
 
 const PROBE_TEXT = "Flicker probe message 4242";
+const IMAGE_PROBE_TEXT = "Image flicker probe message 4242";
+const ONE_PIXEL_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const ONE_PIXEL_PNG_DATA_URL = `data:image/png;base64,${ONE_PIXEL_PNG_B64}`;
 const USER_ECHO_ENTRY_ID = "pending-handoff-user-echo";
 
-async function startFrameSampler(currentPage: Page): Promise<void> {
-  await currentPage.evaluate((probeText) => {
+async function startFrameSampler(currentPage: Page, probeText = PROBE_TEXT): Promise<void> {
+  await currentPage.evaluate((text) => {
     const win = window as SamplerWindow;
     const frames: FrameSample[] = [];
     win.openclawSendFrameSamples = frames;
@@ -47,17 +42,24 @@ async function startFrameSampler(currentPage: Page): Promise<void> {
         return;
       }
       const rows = [...document.querySelectorAll<HTMLElement>("[data-virtual-row-key]")].filter(
-        (row) => (row.textContent ?? "").includes(probeText),
+        (row) => (row.textContent ?? "").includes(text),
       );
+      const images = rows.flatMap((row) => [
+        ...row.querySelectorAll<HTMLImageElement>(".chat-message-image"),
+      ]);
       frames.push({
         t: performance.now(),
         present: rows.length > 0,
         rowKeys: rows.map((row) => row.dataset.virtualRowKey ?? ""),
+        imageCount: images.length,
+        loadedImageCount: images.filter(
+          (image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
+        ).length,
       });
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
-  }, PROBE_TEXT);
+  }, probeText);
 }
 
 async function stopFrameSampler(currentPage: Page): Promise<FrameSample[]> {
@@ -68,28 +70,33 @@ async function stopFrameSampler(currentPage: Page): Promise<FrameSample[]> {
   });
 }
 
-/** Presence gaps (frames where the probe text vanished after first paint) and
- * the distinct row keys the probe bubble rendered under, in order. */
-function analyzeFrameSamples(frames: FrameSample[]): { gapFrames: number; keyTimeline: string[] } {
-  const firstVisible = frames.findIndex((frame) => frame.present);
-  expect(firstVisible).toBeGreaterThanOrEqual(0);
-  // Counting through the final sample also catches a permanent disappearance.
-  expect(frames[frames.length - 1]?.present).toBe(true);
-  let gapFrames = 0;
-  for (let index = firstVisible; index < frames.length; index++) {
-    if (frames[index]?.present === false) {
-      gapFrames += 1;
-    }
-  }
+function analyzeFrameContinuity(
+  frames: FrameSample[],
+  isHealthy: (frame: FrameSample) => boolean = (frame) => frame.present,
+): string[] {
+  const firstHealthy = frames.findIndex(isHealthy);
+  expect(firstHealthy).toBeGreaterThanOrEqual(0);
+  const continuityFrames = frames.slice(firstHealthy);
+  expect(
+    continuityFrames
+      .filter((frame) => !isHealthy(frame))
+      .map((frame) => ({
+        imageCount: frame.imageCount,
+        loadedImageCount: frame.loadedImageCount,
+        present: frame.present,
+        rowKeys: frame.rowKeys,
+        t: frame.t,
+      })),
+  ).toEqual([]);
   const keyTimeline: string[] = [];
-  for (const frame of frames) {
+  for (const frame of continuityFrames) {
     for (const key of frame.rowKeys) {
       if (keyTimeline[keyTimeline.length - 1] !== key) {
         keyTimeline.push(key);
       }
     }
   }
-  return { gapFrames, keyTimeline };
+  return keyTimeline;
 }
 
 const BASE_HISTORY = [
@@ -101,28 +108,43 @@ const BASE_HISTORY = [
   },
 ];
 
+type ChatSendParams = {
+  attachments?: Array<{ content?: string; mimeType?: string }>;
+  idempotencyKey?: string;
+};
+
 async function openChatAndSubmitProbe(
   currentPage: Page,
   gateway: MockGatewayControls,
-  opts?: { deferSend?: boolean },
-): Promise<string> {
-  await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+  opts: { attachImage?: boolean; deferSend?: boolean; probeText?: string } = {},
+): Promise<{ runId: string; sendParams: ChatSendParams }> {
+  const probeText = opts.probeText ?? PROBE_TEXT;
+  await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
   await currentPage.getByText("Ready.").waitFor({ timeout: 10_000 });
   await gateway.waitForRequest("sessions.list");
-  if (opts?.deferSend) {
+  if (opts.attachImage) {
+    await currentPage.locator(".agent-chat__file-input").setInputFiles({
+      name: "pixel.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+    });
+    await currentPage.locator(".chat-attachment-thumb").waitFor({ state: "visible" });
+  }
+  if (opts.deferSend) {
     await gateway.deferNext("chat.send");
   }
-  await startFrameSampler(currentPage);
-  await currentPage.locator(".agent-chat__input textarea").fill(PROBE_TEXT);
+  await startFrameSampler(currentPage, probeText);
+  await currentPage.locator(".agent-chat__input textarea").fill(probeText);
   await currentPage.locator(".agent-chat__input textarea").press("Enter");
   const send = await gateway.waitForRequest("chat.send");
-  const runId = (send.params as { idempotencyKey?: string }).idempotencyKey ?? "";
+  const sendParams = send.params as ChatSendParams;
+  const runId = sendParams.idempotencyKey ?? "";
   expect(runId).toBeTruthy();
   await currentPage
     .locator("[data-virtual-row-key]")
-    .getByText(PROBE_TEXT, { exact: true })
+    .getByText(probeText, { exact: true })
     .waitFor({ timeout: 10_000 });
-  return runId;
+  return { runId, sendParams };
 }
 
 async function finishRunAndSettle(
@@ -193,105 +215,119 @@ async function finishRunAndSettle(
   return stopFrameSampler(currentPage);
 }
 
-describeControlUiE2e("Control UI chat send pending handoff", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
+function isHealthyImageFrame(frame: FrameSample): boolean {
+  return frame.rowKeys.length === 1 && frame.imageCount === 1 && frame.loadedImageCount === 1;
+}
 
-  afterEach(async () => {
-    await page
-      ?.context()
-      .close()
-      .catch(() => {});
-    page = undefined;
-  });
+suite.define(() => {
+  it("keeps a submitted image visible through run completion and history reload", async () => {
+    await suite.withPage(
+      { viewport: { height: 800, width: 1200 } },
+      async ({ page: currentPage }) => {
+        const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
+        const { runId, sendParams } = await openChatAndSubmitProbe(currentPage, gateway, {
+          attachImage: true,
+          deferSend: true,
+          probeText: IMAGE_PROBE_TEXT,
+        });
 
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
-  });
+        expect(sendParams.attachments?.[0]).toMatchObject({
+          content: ONE_PIXEL_PNG_B64,
+          mimeType: "image/png",
+        });
+        // A locally submitted turn plays the composer entry animation exactly once.
+        expect(await currentPage.locator(".chat-bubble--user-turn-enter").count()).toBe(1);
+        await expect
+          .poll(() =>
+            currentPage.evaluate(() =>
+              ((window as SamplerWindow).openclawSendFrameSamples ?? []).some(
+                (frame) =>
+                  frame.rowKeys.length === 1 &&
+                  frame.imageCount === 1 &&
+                  frame.loadedImageCount === 1,
+              ),
+            ),
+          )
+          .toBe(true);
+        await gateway.resolveDeferred("chat.send");
 
-  it("keeps the submitted user turn visible through run completion and history reload", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
+        const frames = await finishRunAndSettle(currentPage, gateway, runId, {
+          content: [
+            { text: IMAGE_PROBE_TEXT, type: "text" },
+            {
+              type: "image",
+              url: ONE_PIXEL_PNG_DATA_URL,
+              source: { type: "url", url: ONE_PIXEL_PNG_DATA_URL },
+            },
+          ],
+          role: "user",
+          timestamp: Date.now(),
+          __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
+        });
 
-    const runId = await openChatAndSubmitProbe(currentPage, gateway);
-    // A locally submitted turn plays the composer entry animation exactly once.
-    expect(await currentPage.locator(".chat-bubble--user-turn-enter").count()).toBe(1);
-
-    const frames = await finishRunAndSettle(currentPage, gateway, runId, {
-      content: [{ text: PROBE_TEXT, type: "text" }],
-      role: "user",
-      timestamp: Date.now(),
-      __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
-    });
-
-    const { gapFrames, keyTimeline } = analyzeFrameSamples(frames);
-    // The submitted text must never disappear once visible.
-    expect(gapFrames).toBe(0);
-    // The bubble keeps one identity through the pending -> history handoff, so
-    // the DOM node is never remounted (no animation replay, no layout jump).
-    expect(new Set(keyTimeline).size).toBe(1);
+        const keyTimeline = analyzeFrameContinuity(frames, isHealthyImageFrame);
+        // The bubble keeps one identity through the pending -> history handoff, so
+        // the DOM node is never remounted (no animation replay, no layout jump).
+        expect(new Set(keyTimeline).size).toBe(1);
+        const submittedRow = currentPage
+          .locator("[data-virtual-row-key]")
+          .filter({ hasText: IMAGE_PROBE_TEXT });
+        expect(await submittedRow.getByText("Attached image", { exact: false }).count()).toBe(0);
+      },
+    );
   });
 
   it("keeps the submitted user turn visible when the session echo lands before the send ack", async () => {
-    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const currentPage = await context.newPage();
-    page = currentPage;
-    const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
+    await suite.withPage(
+      { viewport: { height: 800, width: 1200 } },
+      async ({ page: currentPage }) => {
+        const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
+        const { runId } = await openChatAndSubmitProbe(currentPage, gateway, { deferSend: true });
 
-    const runId = await openChatAndSubmitProbe(currentPage, gateway, { deferSend: true });
+        // The Gateway persists and broadcasts the user turn before the ack resolves.
+        const userEcho = {
+          content: [{ text: PROBE_TEXT, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+          __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
+        };
+        await gateway.setHistoryMessages([...BASE_HISTORY, userEcho]);
+        const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+        await gateway.emitGatewayEvent("session.message", {
+          activeRunIds: [runId],
+          clientRunId: runId,
+          hasActiveRun: true,
+          message: userEcho,
+          messageId: "pending-handoff-echo-1",
+          messageSeq: 2,
+          session: {
+            activeRunIds: [runId],
+            hasActiveRun: true,
+            key: "main",
+            kind: "direct",
+            status: "running",
+            updatedAt: Date.now(),
+          },
+          sessionKey: "main",
+        });
+        await expect
+          .poll(async () => (await gateway.getRequests("chat.history")).length, {
+            timeout: 10_000,
+          })
+          .toBeGreaterThan(historyRequestsBefore);
+        await currentPage.waitForTimeout(300);
+        await gateway.resolveDeferred("chat.send");
 
-    // The Gateway persists and broadcasts the user turn before the ack resolves.
-    const userEcho = {
-      content: [{ text: PROBE_TEXT, type: "text" }],
-      role: "user",
-      timestamp: Date.now(),
-      __openclaw: { id: USER_ECHO_ENTRY_ID, idempotencyKey: runId, seq: 2 },
-    };
-    await gateway.setHistoryMessages([...BASE_HISTORY, userEcho]);
-    const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
-    await gateway.emitGatewayEvent("session.message", {
-      activeRunIds: [runId],
-      clientRunId: runId,
-      hasActiveRun: true,
-      message: userEcho,
-      messageId: "pending-handoff-echo-1",
-      messageSeq: 2,
-      session: {
-        activeRunIds: [runId],
-        hasActiveRun: true,
-        key: "main",
-        kind: "direct",
-        status: "running",
-        updatedAt: Date.now(),
+        const frames = await finishRunAndSettle(currentPage, gateway, runId, userEcho);
+        const keyTimeline = analyzeFrameContinuity(frames);
+        expect(new Set(keyTimeline).size).toBe(1);
+        // The single stable key above proves the node never remounted, so the
+        // entry animation cannot have replayed; at most the one submitted turn
+        // still carries the (inert, completed) animation class.
+        expect(
+          await currentPage.locator(".chat-bubble--user-turn-enter").count(),
+        ).toBeLessThanOrEqual(1);
       },
-      sessionKey: "main",
-    });
-    await expect
-      .poll(async () => (await gateway.getRequests("chat.history")).length, { timeout: 10_000 })
-      .toBeGreaterThan(historyRequestsBefore);
-    await currentPage.waitForTimeout(300);
-    await gateway.resolveDeferred("chat.send");
-
-    const frames = await finishRunAndSettle(currentPage, gateway, runId, userEcho);
-
-    const { gapFrames, keyTimeline } = analyzeFrameSamples(frames);
-    expect(gapFrames).toBe(0);
-    expect(new Set(keyTimeline).size).toBe(1);
-    // The single stable key above proves the node never remounted, so the
-    // entry animation cannot have replayed; at most the one submitted turn
-    // still carries the (inert, completed) animation class.
-    expect(await currentPage.locator(".chat-bubble--user-turn-enter").count()).toBeLessThanOrEqual(
-      1,
     );
   });
 });

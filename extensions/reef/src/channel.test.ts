@@ -44,6 +44,7 @@ describe("Reef inbound dispatch content", () => {
         ReefProvenance: "Untrusted third-party data from @clanky's agent.",
         ReefEnvelopeId: "message-1",
         SenderIsBot: true,
+        MessageThreadId: "message-1",
       },
     });
   });
@@ -65,6 +66,70 @@ describe("Reef inbound dispatch content", () => {
       ReplyToIdFull: "message-1",
       MessageThreadId: "thread-1",
     });
+  });
+
+  it("does not invent a thread for an explicitly correlated unthreaded reply", () => {
+    const content = resolveReefInboundDispatchContent({
+      id: "message-2",
+      peer: "clanky",
+      text: "correlated reply",
+      provenance: "Untrusted third-party data from @clanky's agent.",
+      autonomy: "bounded",
+      replyTo: "message-1",
+    });
+
+    expect(content.extraContext).toMatchObject({
+      ReplyToId: "message-1",
+      ReplyToIdFull: "message-1",
+    });
+    expect(content.extraContext).not.toHaveProperty("MessageThreadId");
+  });
+});
+
+describe("Reef message-tool threading", () => {
+  it("keeps contextual replies on the inbound message thread", () => {
+    const threading = reefPlugin.threading;
+    if (!threading?.buildToolContext || !threading.resolveAutoThreadId) {
+      throw new Error("expected Reef threading adapter");
+    }
+    const toolContext = threading.buildToolContext({
+      cfg: {},
+      accountId: "default",
+      context: {
+        Channel: "reef",
+        To: "reef:remote-agent",
+        ChatType: "direct",
+        CurrentMessageId: "message-1",
+        ReplyToMode: "all",
+        MessageThreadId: "message-1",
+      },
+    });
+
+    expect(toolContext).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentMessagingTarget: "reef:remote-agent",
+      currentMessageId: "message-1",
+      currentThreadTs: "message-1",
+      replyToMode: "all",
+    });
+    expect(
+      threading.resolveAutoThreadId({
+        cfg: {},
+        accountId: "default",
+        to: "@remote-agent",
+        toolContext,
+        replyToId: "message-1",
+      }),
+    ).toBe("message-1");
+    expect(
+      threading.resolveAutoThreadId({
+        cfg: {},
+        accountId: "default",
+        to: "reef:another-agent",
+        toolContext,
+        replyToId: "message-1",
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -112,6 +177,21 @@ describe("Reef conversation directory", () => {
         runtime: defaultRuntime,
       }),
     ).resolves.toEqual([{ kind: "user", id: "molty", name: "@molty's agent", handle: "@molty" }]);
+  });
+});
+
+describe("Reef channel status", () => {
+  it("preserves the channel-authored lifecycle in account snapshots", async () => {
+    const cfg = { channels: { reef: { handle: "clawd" } } };
+    const account = reefPlugin.config.resolveAccount(cfg);
+
+    const snapshot = await reefPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: { accountId: "default", lifecycle: "recovering" },
+    });
+
+    expect(snapshot).toMatchObject({ lifecycle: "recovering" });
   });
 });
 

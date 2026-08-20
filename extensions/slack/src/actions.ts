@@ -1,15 +1,19 @@
 // Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
@@ -31,6 +35,7 @@ export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
   token?: string;
+  teamId?: string;
   client?: WebClient;
 };
 
@@ -212,8 +217,18 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   if (opts.client) {
     return opts.client;
   }
+  const accountId = opts.cfg
+    ? resolveSlackAccount({
+        cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
+        accountId: opts.accountId,
+      }).accountId
+    : normalizeAccountId(opts.accountId);
+  assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? getSlackWriteClient(token) : createSlackLookupClient(token);
+  if (mode === "write") {
+    return getSlackWriteClient(token, { teamId: opts.teamId });
+  }
+  return createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -320,6 +335,7 @@ export async function sendSlackMessage(
   opts: Omit<SlackActionClientOpts, "cfg"> & {
     cfg: OpenClawConfig;
     mediaUrl?: string;
+    forceDocument?: boolean;
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -342,6 +358,7 @@ export async function sendSlackMessage(
     cfg: opts.cfg,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
+    ...(opts.forceDocument ? { forceDocument: true } : {}),
     mediaAccess: opts.mediaAccess,
     mediaLocalRoots: opts.mediaLocalRoots,
     mediaReadFile: opts.mediaReadFile,
@@ -361,6 +378,16 @@ export async function sendSlackMessage(
 }
 
 export async function editSlackMessage(
+  channelId: string,
+  messageId: string,
+  content: string,
+  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+) {
+  await editSlackRenderedMessage(channelId, messageId, normalizeSlackOutboundText(content), opts);
+}
+
+// Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
+export async function editSlackRenderedMessage(
   channelId: string,
   messageId: string,
   content: string,
@@ -476,7 +503,7 @@ export async function readSlackMessages(
     ? {
         inclusive: true,
         latest: exactMessageId,
-        oldest: undefined,
+        oldest: exactMessageId,
       }
     : {
         latest: normalizeSlackReadTimestamp(opts.before, "before"),
@@ -486,11 +513,18 @@ export async function readSlackMessages(
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {
+    // Slack pages thread roots before replies; exclude the root before its limit consumes the page.
+    const oldest = exactMessageId
+      ? exactMessageId
+      : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
+        ? exactBounds.oldest
+        : opts.threadId;
     const result = await client.conversations.replies({
       channel: channelId,
       ts: opts.threadId,
       limit: readLimit,
       ...exactBounds,
+      oldest,
     });
     const messages = ((result.messages ?? []) as SlackMessageSummary[])
       .filter((message) => {
@@ -576,11 +610,6 @@ type SlackFileThreadShare = {
   threadTs?: string;
 };
 
-function normalizeSlackScopeValue(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<string> {
   const ids = new Set<string>();
   for (const group of [file.channels, file.groups, file.ims]) {
@@ -591,7 +620,7 @@ function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<stri
       if (typeof entry !== "string") {
         continue;
       }
-      const normalized = normalizeSlackScopeValue(entry);
+      const normalized = normalizeOptionalString(entry);
       if (normalized) {
         ids.add(normalized);
       }
@@ -615,7 +644,7 @@ function collectSlackSharedChannelIds(file: SlackFileInfoSummary): Set<string> {
   const ids = new Set<string>();
   for (const shareMap of collectSlackShareMaps(file)) {
     for (const channelId of Object.keys(shareMap)) {
-      const normalized = normalizeSlackScopeValue(channelId);
+      const normalized = normalizeOptionalString(channelId);
       if (normalized) {
         ids.add(normalized);
       }
@@ -639,9 +668,9 @@ function collectSlackThreadShares(
         continue;
       }
       const entry = rawEntry as Record<string, unknown>;
-      const ts = typeof entry.ts === "string" ? normalizeSlackScopeValue(entry.ts) : undefined;
+      const ts = typeof entry.ts === "string" ? normalizeOptionalString(entry.ts) : undefined;
       const threadTs =
-        typeof entry.thread_ts === "string" ? normalizeSlackScopeValue(entry.thread_ts) : undefined;
+        typeof entry.thread_ts === "string" ? normalizeOptionalString(entry.thread_ts) : undefined;
       matches.push({ channelId, ts, threadTs });
     }
   }
@@ -653,11 +682,11 @@ function hasSlackScopeMismatch(params: {
   channelId?: string;
   threadId?: string;
 }): boolean {
-  const channelId = normalizeSlackScopeValue(params.channelId);
+  const channelId = normalizeOptionalString(params.channelId);
   if (!channelId) {
     return false;
   }
-  const threadId = normalizeSlackScopeValue(params.threadId);
+  const threadId = normalizeOptionalString(params.threadId);
 
   const directIds = collectSlackDirectShareChannelIds(params.file);
   const sharedIds = collectSlackSharedChannelIds(params.file);
@@ -714,6 +743,7 @@ export async function downloadSlackFile(
         url_private_download: file.url_private_download,
       },
     ],
+    client,
     token,
     maxBytes: opts.maxBytes,
   });

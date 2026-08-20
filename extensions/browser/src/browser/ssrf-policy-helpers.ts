@@ -2,6 +2,7 @@
  * SSRF policy helpers for Browser routes that need one-off hostname grants.
  */
 import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
 
 // Exact-host CDP scoping replaces allowedHostnames. Preserve whether the source
 // policy allowed authority changes before that synthetic allowlist was added.
@@ -18,6 +19,27 @@ export function allowsDiscoveredCdpAuthorityChange(ssrfPolicy?: SsrFPolicy): boo
   return (
     !ssrfPolicy || (!hasExplicitAllowedHostnames && isPrivateNetworkAllowedByPolicy(ssrfPolicy))
   );
+}
+
+/** Return true when policy already trusts this hostname as a private-network destination. */
+export function isCdpHostnameTrustedByPolicy(
+  ssrfPolicy: SsrFPolicy | undefined,
+  hostname: string,
+): boolean {
+  const normalizedHostname = normalizeHostname(hostname);
+  if (!normalizedHostname) {
+    return false;
+  }
+  const allowedHostnames = (ssrfPolicy?.allowedHostnames ?? [])
+    .map((pattern) => normalizeHostname(pattern))
+    .filter(Boolean);
+  if (allowedHostnames.length === 0) {
+    return isPrivateNetworkAllowedByPolicy(ssrfPolicy);
+  }
+  if (allowedHostnames.some((pattern) => pattern === "*" || pattern === "*.")) {
+    return true;
+  }
+  return matchesHostnameAllowlist(normalizedHostname, allowedHostnames);
 }
 
 /** Returns an SSRF policy restricted to one exact control-plane hostname. */

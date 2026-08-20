@@ -14,10 +14,10 @@ export class CodexThreadBindingConflictError extends Error {
   }
 }
 
-export class CodexRingZeroAttestationError extends Error {
+export class CodexRestrictedToolSurfaceAttestationError extends Error {
   constructor(cause: unknown) {
-    super("Codex ring-zero MCP attestation failed", { cause });
-    this.name = "CodexRingZeroAttestationError";
+    super("Codex restricted-tool-surface MCP attestation failed", { cause });
+    this.name = "CodexRestrictedToolSurfaceAttestationError";
   }
 }
 

@@ -4,6 +4,7 @@ import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-c
 import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -23,7 +24,7 @@ function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssu
 }
 
 /** Formats a parsed config issue path into a user-facing dotted path. */
-export function formatConfigPath(parts: Array<string | number>): string {
+export function formatConfigKeyPath(parts: Array<string | number>): string {
   if (parts.length === 0) {
     return "<root>";
   }
@@ -112,32 +113,40 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       if (typeof key !== "string" || !(key in record)) {
         continue;
       }
+      // $include is authored parser syntax at every object depth, not a schema field.
+      // Doctor validates raw source, so stripping it would destroy include-owned config.
+      if (key === INCLUDE_KEY) {
+        continue;
+      }
       if (protectedSet?.has(key)) {
         continue;
       }
       delete record[key];
-      removed.push(formatConfigPath([...issuePath, key]));
+      removed.push(formatConfigKeyPath([...issuePath, key]));
     }
   }
 
   return { config: next, removed };
 }
 
-/** Warns when legacy OpenCode provider overrides shadow the built-in catalog. */
-export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
+/** Warns when legacy OpenCode overrides shadow an active plugin-provided catalog. */
+export function noteOpencodeProviderOverrides(
+  cfg: OpenClawConfig,
+  options: { opencodePluginActive?: boolean; opencodeGoPluginActive?: boolean } = {},
+): void {
   const providers = cfg.models?.providers;
   if (!providers) {
     return;
   }
 
   const overrides: string[] = [];
-  if (providers.opencode) {
+  if (options.opencodePluginActive === true && providers.opencode) {
     overrides.push("opencode");
   }
-  if (providers["opencode-zen"]) {
+  if (options.opencodePluginActive === true && providers["opencode-zen"]) {
     overrides.push("opencode-zen");
   }
-  if (providers["opencode-go"]) {
+  if (options.opencodeGoPluginActive === true && providers["opencode-go"]) {
     overrides.push("opencode-go");
   }
   if (overrides.length === 0) {
@@ -152,7 +161,7 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
         ? providerEntry.api
         : undefined;
     return [
-      `- models.providers.${id} is set; this overrides the built-in ${providerLabel} catalog.`,
+      `- models.providers.${id} is set; this overrides the plugin-provided ${providerLabel} catalog.`,
       api ? `- models.providers.${id}.api=${api}` : null,
     ].filter((line): line is string => Boolean(line));
   });
@@ -259,6 +268,23 @@ export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
       '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
       "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
       "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}
+
+/** Warns when per-requester MCP OAuth cannot build a public callback URL. */
+export function noteMcpOriginWarning(cfg: OpenClawConfig): void {
+  const hasPerRequesterOAuth = Object.values(cfg.mcp?.servers ?? {}).some(
+    (server) => server.oauth?.identity === "per-requester",
+  );
+  if (!hasPerRequesterOAuth || cfg.gateway?.publicOrigin) {
+    return;
+  }
+  note(
+    [
+      '- An MCP server uses oauth.identity "per-requester", but gateway.publicOrigin is not set.',
+      "  Set gateway.publicOrigin to the externally reachable Gateway origin so senders can complete MCP sign-in.",
     ].join("\n"),
     "Doctor warnings",
   );

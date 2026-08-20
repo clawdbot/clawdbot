@@ -21,8 +21,10 @@ export type PluginNodeCapabilitySurface = {
   scopeKey?: string;
 };
 
-/** Client-side storage for surface URLs and minted plugin-node capabilities. */
+/** Client state used to authorize plugin-node surface capabilities. */
 export type PluginNodeCapabilityClient = {
+  /** Retired clients cannot back HTTP capability auth or its renewal while close is pending. */
+  invalidated?: boolean;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -346,6 +348,9 @@ export function hasAuthorizedPluginNodeCapability(params: {
     return false;
   }
   for (const client of params.clients) {
+    if (client.invalidated) {
+      continue;
+    }
     const entry = client.pluginNodeCapabilities?.[storageKey];
     if (!entry || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
       continue;

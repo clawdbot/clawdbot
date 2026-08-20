@@ -5,6 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
+import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import {
   loadSessionDiff,
   parseNameStatusZ,
@@ -14,19 +17,27 @@ import {
 } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
   loadSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
 }));
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: hoisted.loadSessionEntry,
-  loadSessionEntryReadOnly: hoisted.loadSessionEntry,
+  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
+  patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
 function git(cwd: string, ...args: string[]): string {
@@ -40,10 +51,11 @@ function initRepo(root: string): void {
   git(root, "config", "commit.gpgsign", "false");
 }
 
-function mockSession(spawnedCwd: string): void {
+function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): void {
   hoisted.loadSessionEntry.mockReturnValue({
+    agentId: "main",
     cfg: {},
-    entry: { sessionId: "s1", spawnedCwd },
+    entry: { sessionId: "s1", spawnedCwd, ...entry },
     storePath: "/tmp/sessions.json",
     canonicalKey: "agent:main:s1",
   });
@@ -109,6 +121,7 @@ describe("loadSessionDiff", () => {
 
   it("reports unknown sessions without touching a workspace", async () => {
     hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "main",
       cfg: {},
       entry: undefined,
       storePath: undefined,
@@ -123,6 +136,97 @@ describe("loadSessionDiff", () => {
     mockSession(repoRoot);
     const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
     expect(result.unavailableReason).toBe("not_git");
+  });
+
+  it("shows the full diff without mutating a pending baseline claim", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
+    mockSession(repoRoot, {
+      sessionDiffBaselineCapture: {
+        version: 1,
+        captureId: "pending-capture",
+        status: "pending",
+      },
+    });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["pending.txt"]);
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted fixed-store owner for a bare session checkout", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "owned.txt"), "ops\n");
+    const cfg = {
+      session: { store: "/tmp/shared.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+    hoisted.loadSessionEntry.mockReturnValue({
+      agentId: "ops",
+      cfg,
+      entry: { sessionId: "sess-owned-global" },
+      storePath: cfg.session.store,
+      canonicalKey: "global",
+    });
+    hoisted.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId: string) =>
+      agentId === "ops" ? repoRoot : "/wrong/research",
+    );
+    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+    await sessionsDiffHandlers["sessions.diff"]?.({
+      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
+      params: { sessionKey: "global" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+      context: { getRuntimeConfig: () => cfg } as never,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        ok: true,
+        payload: expect.objectContaining({ root: repoRoot }),
+      }),
+    ]);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "ops");
+  });
+
+  it("rejects a foreign agent before loading a bare fixed-store checkout", async () => {
+    const cfg = {
+      session: { store: "/tmp/shared.sqlite", scope: "global" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as const;
+    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+    await sessionsDiffHandlers["sessions.diff"]?.({
+      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
+      params: { sessionKey: "global", agentId: "research" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+      context: { getRuntimeConfig: () => cfg } as never,
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: 'agent "research" does not match session key agent "ops"',
+        }),
+      }),
+    ]);
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 
   it("diffs a feature branch against the local default branch", async () => {
@@ -189,6 +293,7 @@ describe("loadSessionDiff", () => {
     fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
     git(repoRoot, "add", ".");
     git(repoRoot, "commit", "-qm", "init");
+    const rootCommit = git(repoRoot, "rev-parse", "HEAD").trim();
     fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\nmore\n");
     mockSession(repoRoot);
 
@@ -197,6 +302,92 @@ describe("loadSessionDiff", () => {
     expect(result.baseRef).toBe("HEAD");
     expect(result.files).toHaveLength(1);
     expect(result.files[0]?.additions).toBe(1);
+
+    const committed = await loadSessionDiff({
+      sessionKey: "agent:main:s1",
+      scope: "commit",
+      commit: rootCommit,
+    });
+    expect(committed.unavailableReason).toBe("unknown_commit");
+    expect(committed.files).toEqual([]);
+  });
+
+  it("scopes branch, working-tree, and commit diffs with branch metadata", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "base.txt"), "base\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "base");
+    const mergeBase = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-qb", "sibling");
+    fs.writeFileSync(path.join(repoRoot, "sibling.txt"), "sibling commit\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "sibling change");
+    const siblingCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-q", "main");
+    git(repoRoot, "checkout", "-qb", "feature");
+
+    fs.writeFileSync(path.join(repoRoot, "first.txt"), "first commit\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "first change");
+    const firstCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+    fs.writeFileSync(path.join(repoRoot, "second.txt"), "second commit\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "second change");
+    const secondCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+
+    fs.appendFileSync(path.join(repoRoot, "second.txt"), "working tree\n");
+    fs.writeFileSync(path.join(repoRoot, "loose.txt"), "untracked\n");
+    mockSession(repoRoot);
+
+    const all = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(all.files.map((file) => file.path)).toEqual(["first.txt", "loose.txt", "second.txt"]);
+    expect(all.aheadCount).toBe(2);
+    expect(all.commits).toEqual([
+      { sha: git(repoRoot, "rev-parse", "--short", secondCommit).trim(), subject: "second change" },
+      { sha: git(repoRoot, "rev-parse", "--short", firstCommit).trim(), subject: "first change" },
+    ]);
+    expect(all.mergeBase).toEqual({
+      sha: git(repoRoot, "rev-parse", "--short", mergeBase).trim(),
+      subject: "base",
+    });
+
+    const uncommitted = await loadSessionDiff({
+      sessionKey: "agent:main:s1",
+      scope: "uncommitted",
+    });
+    expect(uncommitted.files.map((file) => file.path)).toEqual(["loose.txt", "second.txt"]);
+    expect(uncommitted.files.find((file) => file.path === "second.txt")?.patch).toContain(
+      "+working tree",
+    );
+
+    const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const committed = await loadSessionDiff({
+      sessionKey: "agent:main:s1",
+      scope: "commit",
+      commit: firstCommit,
+    });
+    expect(committed.files.map((file) => file.path)).toEqual(["first.txt"]);
+    expect(committed.files[0]?.patch).toContain("+first commit");
+    expect(committed.files[0]?.untracked).toBeUndefined();
+
+    for (const commit of [siblingCommit, mergeBase]) {
+      const outsideAdvertisedHistory = await loadSessionDiff({
+        sessionKey: "agent:main:s1",
+        scope: "commit",
+        commit,
+      });
+      expect(outsideAdvertisedHistory.unavailableReason).toBe("unknown_commit");
+      expect(outsideAdvertisedHistory.files).toEqual([]);
+    }
+
+    const unknown = await loadSessionDiff({
+      sessionKey: "agent:main:s1",
+      scope: "commit",
+      commit: "not-a-commit",
+    });
+    expect(unknown.unavailableReason).toBe("unknown_commit");
+    expect(unknown.files).toEqual([]);
   });
 
   it("never executes configured textconv drivers from the read RPC", async () => {
@@ -268,6 +459,77 @@ describe("loadSessionDiff", () => {
     expect(result.files.find((file) => file.path === "loose.txt")?.untracked).toBe(true);
   });
 
+  it("hides unchanged files captured at session start and resurfaces later edits", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
+    mockSession(repoRoot);
+
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "s1",
+    });
+    expect(baseline?.files).toHaveLength(1);
+
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const unchanged = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(unchanged.files).toEqual([]);
+    expect(unchanged.additions).toBe(0);
+
+    fs.appendFileSync(path.join(repoRoot, "AGENTS.md"), "added by this session\n");
+    const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(changed.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
+    expect(changed.files[0]?.patch).toContain("+added by this session");
+  });
+
+  it("hides unchanged binary files and resurfaces later binary edits", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "icon.bin"), Buffer.from([0, 1, 2, 0, 3]));
+    mockSession(repoRoot);
+
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "s1",
+    });
+    expect(baseline?.files).toHaveLength(1);
+
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const unchanged = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(unchanged.files).toEqual([]);
+
+    fs.writeFileSync(path.join(repoRoot, "icon.bin"), Buffer.from([0, 1, 9, 0, 3]));
+    const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(changed.files.map((file) => file.path)).toEqual(["icon.bin"]);
+    expect(changed.files[0]?.binary).toBe(true);
+  });
+
+  it("skips oversized files instead of materializing them during baseline capture", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "large.txt"), Buffer.alloc(4 * 1024 * 1024 + 1, 97));
+
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "s1",
+    });
+
+    expect(baseline?.files).toEqual([]);
+    expect(baseline?.truncated).toBe(true);
+  });
+
+  it("ignores a baseline from an older session generation", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
+    mockSession(repoRoot);
+    const baseline = await captureSessionDiffBaseline({
+      cwd: repoRoot,
+      sessionId: "old-session",
+    });
+
+    mockSession(repoRoot, { sessionDiffBaseline: baseline });
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
+  });
+
   it("counts untracked additions whose content begins with plus signs", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
@@ -284,18 +546,48 @@ describe("loadSessionDiff", () => {
   });
 
   it("rejects invalid params through the handler", async () => {
-    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-    await sessionsDiffHandlers["sessions.diff"]?.({
-      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-        calls.push({ ok, payload, error });
-      },
-      context: { getRuntimeConfig: () => ({}) } as never,
+    const invalidParams = [
+      {},
+      { sessionKey: "agent:main:s1", scope: "commit" },
+      { sessionKey: "agent:main:s1", scope: "all", commit: "HEAD" },
+      { sessionKey: "agent:main:s1", scope: "uncommitted", commit: "HEAD" },
+    ];
+    for (const params of invalidParams) {
+      const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await sessionsDiffHandlers["sessions.diff"]?.({
+        req: { type: "req", id: "sessions.diff", method: "sessions.diff", params },
+        params,
+        client: null,
+        isWebchatConnect: () => false,
+        respond: (ok: boolean, payload?: unknown, error?: unknown) => {
+          calls.push({ ok, payload, error });
+        },
+        context: { getRuntimeConfig: () => ({}) } as never,
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.ok).toBe(false);
+    }
+  });
+});
+
+describe("ensureSessionDiffBaseline", () => {
+  it("does not baseline an existing operator session after upgrade", async () => {
+    const entry: SessionEntry = {
+      createdVia: "operator",
+      sessionId: "existing-session",
+      updatedAt: Date.now(),
+    };
+    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
+
+    const result = await ensureSessionDiffBaseline({
+      cwd: "/unused",
+      entry,
+      isNewSession: false,
+      sessionKey: "agent:main:existing",
+      storePath: "/unused/sessions.json",
     });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.ok).toBe(false);
+
+    expect(result).toBe(entry);
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 });

@@ -1,19 +1,39 @@
-import fs from "node:fs";
-import fsp from "node:fs/promises";
 import { createServer } from "node:net";
-import path from "node:path";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Command } from "commander";
-import { formatErrorMessage } from "./error-runtime.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
-import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
-import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
+import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+export {
+  createLazyCliRuntimeLoader,
+  createLiveTransportQaCliRegistration,
+  runLiveTransportQaSuiteCommand,
+} from "./qa-runner-runtime.js";
+export type {
+  LiveTransportQaCliRegistration,
+  LiveTransportQaCliRegistrationOptions,
+  LiveTransportQaCommandOptions,
+  LiveTransportQaCredentialCliOptions,
+  LiveTransportQaSuiteCommandOptions,
+} from "./qa-runner-runtime.js";
+
 type QaRuntimeSurface = {
+  acquireQaCredentialLease: <TPayload>(options: {
+    env?: NodeJS.ProcessEnv;
+    kind: string;
+    parsePayload: (payload: unknown) => TPayload;
+    resolveEnvPayload: () => TPayload;
+    source?: string;
+  }) => Promise<{
+    heartbeat(): Promise<void>;
+    heartbeatIntervalMs: number;
+    kind: string;
+    payload: TPayload;
+    release(): Promise<void>;
+    source: "convex" | "env";
+  }>;
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -22,6 +42,15 @@ type QaRuntimeSurface = {
     },
   ) => string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  startQaCredentialLeaseHeartbeat: (lease: {
+    heartbeat(): Promise<void>;
+    heartbeatIntervalMs: number;
+    kind: string;
+    source: "convex" | "env";
+  }) => {
+    stop(): Promise<void>;
+    throwIfFailed(): void;
+  };
 };
 
 function isMissingQaRuntimeError(error: unknown) {
@@ -32,20 +61,12 @@ function isMissingQaRuntimeError(error: unknown) {
   );
 }
 
-/** Load the bundled QA lab runtime surface, throwing when the private bundle is absent. */
-export function loadQaRuntimeModule(): QaRuntimeSurface {
-  const env = resolvePrivateQaBundledPluginsEnv();
-  return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
-    dirName: "qa-lab",
-    artifactBasename: "runtime-api.js",
-    ...(env ? { env } : {}),
-  });
-}
+const loadQaLabRuntimeModule = loadQaRunnerRuntimeModule as unknown as () => QaRuntimeSurface;
+export { loadQaLabRuntimeModule as loadQaRuntimeModule };
 
-/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
-export function isQaRuntimeAvailable(): boolean {
+function isQaRuntimeAvailableStrict(): boolean {
   try {
-    loadQaRuntimeModule();
+    loadQaLabRuntimeModule();
     return true;
   } catch (error) {
     if (isMissingQaRuntimeError(error)) {
@@ -55,169 +76,7 @@ export function isQaRuntimeAvailable(): boolean {
   }
 }
 
-/** Normalized options passed from live-transport QA CLIs into lane runners. */
-export type LiveTransportQaCommandOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  scenarioIds?: string[];
-  listScenarios?: boolean;
-  sutAccountId?: string;
-  credentialSource?: string;
-  credentialRole?: string;
-};
-
-type LiveTransportQaCommanderOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  model?: string;
-  altModel?: string;
-  scenario?: string[];
-  listScenarios?: boolean;
-  fast?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  sutAccount?: string;
-  credentialSource?: string;
-  credentialRole?: string;
-};
-
-/** Commander registration hook for one live-transport QA subcommand. */
-export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
-
-/** Help text customizations for live credential source and role flags. */
-export type LiveTransportQaCredentialCliOptions = {
-  sourceDescription?: string;
-  roleDescription?: string;
-};
-
-/** Declarative command metadata and runner used to install a live-transport QA CLI. */
-export type LiveTransportQaCliRegistrationOptions = {
-  commandName: string;
-  credentialOptions?: LiveTransportQaCredentialCliOptions;
-  defaultProviderMode: string;
-  description: string;
-  providerModeHelp: string;
-  listScenariosHelp?: string;
-  outputDirHelp: string;
-  profileHelp?: string;
-  failFastHelp?: string;
-  allowFailuresHelp?: string;
-  scenarioHelp: string;
-  sutAccountHelp: string;
-  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
-  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-};
-
-/** Memoize a lazy CLI runtime import so repeated command paths share one loaded module. */
-export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
-  let promise: Promise<T> | null = null;
-  return async () => {
-    promise ??= load();
-    return await promise;
-  };
-}
-
-function collectLiveTransportQaStringOption(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
-}
-
-function mapLiveTransportQaCommanderOptions(
-  opts: LiveTransportQaCommanderOptions,
-): LiveTransportQaCommandOptions {
-  return {
-    repoRoot: opts.repoRoot,
-    outputDir: opts.outputDir,
-    providerMode: opts.providerMode,
-    primaryModel: opts.model,
-    alternateModel: opts.altModel,
-    fastMode: opts.fast,
-    allowFailures: opts.allowFailures,
-    failFast: opts.failFast,
-    profile: opts.profile,
-    scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios,
-    sutAccountId: opts.sutAccount,
-    credentialSource: opts.credentialSource,
-    credentialRole: opts.credentialRole,
-  };
-}
-
-function registerLiveTransportQaCli(
-  params: LiveTransportQaCliRegistrationOptions & {
-    qa: Command;
-    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-  },
-) {
-  const command = params.qa
-    .command(params.commandName)
-    .description(params.description)
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", params.outputDirHelp)
-    .option("--provider-mode <mode>", params.providerModeHelp, params.defaultProviderMode)
-    .option("--model <ref>", "Primary provider/model ref")
-    .option("--alt-model <ref>", "Alternate provider/model ref")
-    .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
-    .option("--fast", "Enable provider fast mode where supported", false);
-
-  if (params.allowFailuresHelp) {
-    command.option("--allow-failures", params.allowFailuresHelp, false);
-  }
-
-  command.option("--sut-account <id>", params.sutAccountHelp, "sut");
-
-  if (params.listScenariosHelp) {
-    command.option("--list-scenarios", params.listScenariosHelp, false);
-  }
-
-  if (params.profileHelp) {
-    command.option("--profile <profile>", params.profileHelp);
-  }
-
-  if (params.failFastHelp) {
-    command.option("--fail-fast", params.failFastHelp, false);
-  }
-
-  if (params.credentialOptions) {
-    command.option(
-      "--credential-source <source>",
-      params.credentialOptions.sourceDescription ??
-        "Credential source for live lanes: env or convex (default: env)",
-    );
-    if (params.credentialOptions.roleDescription) {
-      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
-    }
-  }
-
-  command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    await params.run(mapLiveTransportQaCommanderOptions(opts));
-  });
-}
-
-/** Build a Commander registration object for one live-transport QA command. */
-export function createLiveTransportQaCliRegistration(
-  params: LiveTransportQaCliRegistrationOptions,
-): LiveTransportQaCliRegistration {
-  return {
-    commandName: params.commandName,
-    adapterFactory: params.adapterFactory,
-    register(qa: Command) {
-      registerLiveTransportQaCli({
-        ...params,
-        qa,
-      });
-    },
-  };
-}
+export { isQaRuntimeAvailableStrict as isQaRuntimeAvailable };
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
@@ -238,35 +97,6 @@ export type QaDockerFetchLike = (
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
-
-/** Append a formatted live-lane issue while preserving the caller-owned issue list. */
-export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {
-  issues.push(`${label}: ${formatErrorMessage(error)}`);
-}
-
-/** Format a live-lane failure message that includes artifact labels and paths. */
-export function buildQaLiveLaneArtifactsError(params: {
-  heading: string;
-  artifacts: Record<string, string>;
-  details?: string[];
-}) {
-  return [
-    params.heading,
-    ...(params.details ?? []),
-    "Artifacts:",
-    ...Object.entries(params.artifacts).map(([label, filePath]) => `- ${label}: ${filePath}`),
-  ].join("\n");
-}
-
-/** Print live-transport QA artifact paths with a lane label for CI log parsers. */
-export function printLiveTransportQaArtifacts(
-  laneLabel: string,
-  artifacts: Record<string, string>,
-) {
-  for (const [label, filePath] of Object.entries(artifacts)) {
-    process.stdout.write(`${laneLabel} ${label}: ${filePath}\n`);
-  }
-}
 
 function describeQaDockerError(error: unknown) {
   if (error instanceof Error) {
@@ -588,68 +418,5 @@ export function createQaDockerRuntime(params: {
     resolveHostPort: resolveQaDockerHostPort,
     waitForDockerServiceHealth,
     waitForHealth,
-  };
-}
-
-type ProcessWriteCallback = (err?: Error | null) => void;
-
-/** Tee stdout and stderr into a private artifact file until the returned stop hook runs. */
-export async function startLiveTransportQaOutputTee(params: {
-  fileName: string;
-  outputDir: string;
-}) {
-  await fsp.mkdir(params.outputDir, { recursive: true });
-  const outputPath = path.join(params.outputDir, params.fileName);
-  const output = fs.createWriteStream(outputPath, {
-    encoding: "utf8",
-    flags: "a",
-    mode: 0o600,
-  });
-  let outputError: Error | null = null;
-  output.on("error", (error) => {
-    outputError ??= error;
-  });
-  const originalStdoutWrite = Reflect.get(process.stdout, "write");
-  const originalStderrWrite = Reflect.get(process.stderr, "write");
-  const boundStdoutWrite = originalStdoutWrite.bind(process.stdout);
-  const boundStderrWrite = originalStderrWrite.bind(process.stderr);
-  let stopped = false;
-
-  const tee = (originalWrite: typeof process.stdout.write) =>
-    function writeWithTee(
-      this: NodeJS.WriteStream,
-      chunk: string | Uint8Array,
-      encodingOrCallback?: BufferEncoding | ProcessWriteCallback,
-      callback?: ProcessWriteCallback,
-    ) {
-      if (!stopped && !outputError) {
-        output.write(chunk);
-      }
-      return Reflect.apply(originalWrite, this, [chunk, encodingOrCallback, callback]) as boolean;
-    };
-
-  process.stdout.write = tee(boundStdoutWrite) as typeof process.stdout.write;
-  process.stderr.write = tee(boundStderrWrite) as typeof process.stderr.write;
-
-  return {
-    outputPath,
-    async stop() {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      process.stdout.write = originalStdoutWrite;
-      process.stderr.write = originalStderrWrite;
-      if (outputError) {
-        throw outputError;
-      }
-      await new Promise<void>((resolve, reject) => {
-        output.once("error", reject);
-        output.end(resolve);
-      });
-      if (outputError) {
-        throw toErrorObject(outputError, "Non-Error thrown");
-      }
-    },
   };
 }

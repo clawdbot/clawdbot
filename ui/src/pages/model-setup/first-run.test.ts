@@ -54,7 +54,7 @@ describe("model setup first-run redirect", () => {
     ).toBe(false);
     expect(
       isDefaultChatLanding(
-        { pathname: "/settings/general", search: "", hash: "" },
+        { pathname: "/settings/appearance", search: "", hash: "" },
         "",
         routeIdFromPath,
       ),
@@ -90,6 +90,10 @@ describe("model setup first-run redirect", () => {
         },
         subscribe,
       },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -120,6 +124,8 @@ describe("model setup first-run redirect", () => {
       phase: "connected",
       client,
       hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
@@ -133,6 +139,10 @@ describe("model setup first-run redirect", () => {
           return () => undefined;
         },
       },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -145,11 +155,106 @@ describe("model setup first-run redirect", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith(
       "openclaw.setup.detect",
-      {},
-      expect.objectContaining({ timeoutMs: 20_000 }),
+      { agentId: "main" },
+      expect.objectContaining({ timeoutMs: 40_000 }),
     );
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    expect(consumeCachedModelSetupDetection(client)).toEqual(result);
+    expect(
+      consumeCachedModelSetupDetection({ client, hello: snapshot.hello, agentId: "main" }),
+    ).toEqual(result);
+  });
+
+  it("retries one transient detection failure without duplicating either attempt", async () => {
+    const result = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/workspace",
+      setupComplete: false,
+    };
+    let rejectFirst!: (error: Error) => void;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce(result);
+    const client = { request } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      phase: "connected" as const,
+      client,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    const replace = vi.fn();
+    const context = {
+      gateway: {
+        snapshot,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
+      replace,
+    } as unknown as ApplicationContext<RouteId>;
+
+    await startRedirect(context);
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    expect(request).toHaveBeenCalledOnce();
+
+    rejectFirst(new Error("temporary gateway failure"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+  });
+
+  it("stops after the same connection rejects detection twice", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const client = { request } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      phase: "connected" as const,
+      client,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    const context = {
+      gateway: {
+        snapshot,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
+      replace: vi.fn(),
+    } as unknown as ApplicationContext<RouteId>;
+
+    await startRedirect(context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("does not redirect after the operator leaves the default landing", async () => {
@@ -167,6 +272,8 @@ describe("model setup first-run redirect", () => {
       phase: "connected",
       client,
       hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
@@ -180,6 +287,10 @@ describe("model setup first-run redirect", () => {
           return () => undefined;
         },
       },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -188,7 +299,77 @@ describe("model setup first-run redirect", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
     expect(replace).not.toHaveBeenCalled();
-    expect(consumeCachedModelSetupDetection(client)).toEqual(result);
+    expect(
+      consumeCachedModelSetupDetection({ client, hello: snapshot.hello, agentId: "main" }),
+    ).toEqual(result);
+  });
+
+  it("rejects stale detection and retries first-run guidance after a same-client reconnect", async () => {
+    const stale = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/stale-workspace",
+      setupComplete: false,
+    };
+    const current = {
+      ...stale,
+      workspace: "/tmp/current-workspace",
+    };
+    let resolveStale!: (result: typeof stale) => void;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<typeof stale>((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(current);
+    const client = { request } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const firstHello = {
+      type: "hello-ok" as const,
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["openclaw.setup.detect"] },
+    };
+    const gateway = {
+      snapshot: { phase: "connected", client, hello: firstHello as typeof firstHello | null },
+      subscribe: (next: GatewayListener) => {
+        listener = next;
+        return () => undefined;
+      },
+    };
+    const replace = vi.fn();
+    const context = {
+      gateway,
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
+      replace,
+    } as unknown as ApplicationContext<RouteId>;
+    await startRedirect(context);
+    expect(request).toHaveBeenCalledOnce();
+
+    gateway.snapshot = { phase: "reconnecting", client, hello: null };
+    listener!(gateway.snapshot as Parameters<GatewayListener>[0]);
+    const nextHello = { ...firstHello };
+    gateway.snapshot = { phase: "connected", client, hello: nextHello };
+    listener!(gateway.snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+    resolveStale(stale);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(consumeCachedModelSetupDetection({ client, hello: nextHello, agentId: "main" })).toEqual(
+      current,
+    );
+    expect(
+      consumeCachedModelSetupDetection({ client, hello: firstHello, agentId: "main" }),
+    ).toBeNull();
+    expect(replace).toHaveBeenCalledOnce();
   });
 
   it("does not detect without admin scope or an advertised setup method", async () => {
@@ -203,6 +384,10 @@ describe("model setup first-run redirect", () => {
           listener = next;
           return () => undefined;
         },
+      },
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
       },
       replace: vi.fn(),
     } as unknown as ApplicationContext<RouteId>;

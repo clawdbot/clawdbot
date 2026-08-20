@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
+import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import { getSmsRuntime } from "./runtime.js";
 import {
   buildTwilioInboundMessage,
@@ -17,11 +18,6 @@ import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const SMS_INGRESS_PAYLOAD_VERSION = 1;
 const SMS_INGRESS_DRAIN_INTERVAL_MS = 500;
-// Tombstones dominate the retired 10-minute / 10,000-key replay cache.
-const SMS_COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
-const SMS_COMPLETED_MAX_ENTRIES = 20_000;
-const SMS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const SMS_FAILED_MAX_ENTRIES = 1_000;
 
 type SmsIngressPayload = {
   version: typeof SMS_INGRESS_PAYLOAD_VERSION;
@@ -44,8 +40,41 @@ function parseSmsIngressForm(
   if (!message) {
     throw new SmsIngressPermanentError("SMS ingress payload is invalid.");
   }
-  if (message.accountSid && message.accountSid !== account.accountSid) {
+  if (!message.accountSid || message.accountSid !== account.accountSid) {
     throw new SmsIngressPermanentError("SMS ingress payload has an invalid Twilio account.");
+  }
+  const isRcsRecipient = /^rcs:/iu.test(message.to);
+  if (isRcsRecipient) {
+    if (!message.body) {
+      throw new SmsIngressPermanentError("SMS ingress payload is invalid.");
+    }
+    if (
+      account.messagingServiceSid &&
+      message.messagingServiceSid !== account.messagingServiceSid
+    ) {
+      throw new SmsIngressPermanentError(
+        "SMS ingress payload has an invalid Twilio Messaging Service.",
+      );
+    }
+    // Shipped fromNumber-only RCS callbacks use an agent address in `To`, so
+    // they cannot be bound to the phone number without a new RCS config contract.
+    // MMS support must not change shipped RCS text behavior. Ignore unsupported
+    // RCS media fields until the RCS owner defines its media contract.
+    const { unavailableMediaCount: _unavailableMediaCount, ...textMessage } = message;
+    return { ...textMessage, media: [] };
+  }
+  if (account.fromNumber) {
+    const recipient = normalizeSmsPhoneNumber(message.to);
+    if (!looksLikeSmsPhoneNumber(recipient) || recipient !== account.fromNumber) {
+      throw new SmsIngressPermanentError("SMS ingress payload has an invalid Twilio recipient.");
+    }
+  } else if (
+    !message.messagingServiceSid ||
+    message.messagingServiceSid !== account.messagingServiceSid
+  ) {
+    throw new SmsIngressPermanentError(
+      "SMS ingress payload has an invalid Twilio Messaging Service.",
+    );
   }
   return message;
 }
@@ -118,12 +147,11 @@ export function createSmsIngressSpool(params: {
         event.receivedAt,
       ),
     pollIntervalMs: SMS_INGRESS_DRAIN_INTERVAL_MS,
+    // The 1-day / 20k tombstones dominate the retired 10-minute / 10,000-key cache.
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: SMS_COMPLETED_TTL_MS,
-      completedMaxEntries: SMS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SMS_FAILED_TTL_MS,
-      failedMaxEntries: SMS_FAILED_MAX_ENTRIES,
+      completedTtlMs: 24 * 60 * 60 * 1_000,
+      failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
     waitForDeliveryIdleBeforeRepump: false,

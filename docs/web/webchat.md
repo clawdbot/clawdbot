@@ -1,5 +1,5 @@
 ---
-summary: "Loopback WebChat static host and Gateway WS usage for chat UI"
+summary: "Native and Control UI WebChat usage over the Gateway WebSocket"
 read_when:
   - Debugging or configuring WebChat access
 title: "WebChat"
@@ -24,7 +24,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 
 - The UI connects to the Gateway WebSocket and uses the `chat.history`, `chat.send`, `chat.inject`, and `chat.message.get` RPC methods.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`. API clients can send a per-request `maxChars` to override the default limit for one call.
-- When a visible assistant message was truncated in `chat.history`, Control UI can open a side reader and fetch the full display-normalized entry on demand through `chat.message.get`, without increasing the default history payload. `chat.message.get` uses the same transcript branch and display rules as `chat.history`, but targets one entry by `messageId` and returns an honest unavailable reason when the full content can no longer be returned.
+- When a visible assistant message was truncated in `chat.history`, **Show more** fetches the full display-normalized entry inline through `chat.message.get`, without increasing the default history payload. **Show less** restores the truncated preview and reuses the fetched content on the next expansion. `chat.message.get` uses the same transcript branch and display rules as `chat.history`, but targets one entry by `messageId` and returns an honest unavailable reason when the full content can no longer be returned.
 - `chat.history` follows the active transcript branch for append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
 - Compaction entries render as a "Compacted history" divider explaining that the compacted transcript is preserved as a checkpoint, with an action to open session checkpoints (branch or restore, when permissions allow).
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.

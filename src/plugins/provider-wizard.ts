@@ -8,8 +8,8 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
-import { resolvePluginSetupProvider } from "./setup-registry.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { resolvePluginSetupProviderCore } from "./setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -42,6 +42,7 @@ type ProviderWizardProvidersResolver = (params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }) => ProviderPlugin[];
 
 let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
@@ -134,15 +135,17 @@ function resolveProviderWizardProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }): ProviderPlugin[] {
   if (providerWizardProvidersResolverForTest) {
     return providerWizardProvidersResolverForTest(params);
   }
-  return resolvePluginProviders({
+  return resolvePluginProvidersCore({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
+    ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
 }
 
@@ -240,7 +243,7 @@ export function resolveProviderModelPickerEntries(params: {
   return entries;
 }
 
-export function resolveProviderPluginChoice(params: {
+export function resolveProviderPluginChoiceCore(params: {
   providers: ProviderPlugin[];
   choice: string;
 }): {
@@ -301,7 +304,7 @@ export function resolveProviderPluginChoice(params: {
   return null;
 }
 
-export async function runProviderModelSelectedHook(params: {
+export async function runProviderModelSelectedHookCore(params: {
   config: OpenClawConfig;
   model: string;
   prompter: WizardPrompter;
@@ -322,7 +325,7 @@ export async function runProviderModelSelectedHook(params: {
     return;
   }
 
-  const setupProvider = resolvePluginSetupProvider({
+  const setupProvider = resolvePluginSetupProviderCore({
     provider: selectedProviderId,
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -334,6 +337,7 @@ export async function runProviderModelSelectedHook(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      providerRefs: [selectedProviderId],
     }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;

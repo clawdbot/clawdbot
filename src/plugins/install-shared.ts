@@ -1,10 +1,17 @@
 import path from "node:path";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+} from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
@@ -15,7 +22,7 @@ import {
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
-import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   emitPluginAuditSecurityEvent,
   emitPluginInstallSecurityEvent,
@@ -30,11 +37,15 @@ export async function loadPluginInstallRuntime() {
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+type PluginCompatibilityRuntime = Pick<
+  PluginInstallRuntime,
+  "checkMinHostVersion" | "resolveCompatibilityHostVersion"
+>;
 
 export const defaultLogger: PluginInstallLogger = {};
 
 export function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
-  return `Installed plugin ${packageName} declares openclaw as a peer dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
+  return `Installed plugin ${packageName} declares an openclaw dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
 }
 
 const MISSING_EXTENSIONS_ERROR =
@@ -65,7 +76,7 @@ function validateOpenClawPackageCompatibility(params: {
 }
 
 export function validateOpenClawPackageInstallCompatibility(params: {
-  runtime: PluginInstallRuntime;
+  runtime: PluginCompatibilityRuntime;
   pluginId: string;
   packageMetadata?: OpenClawPackageManifest;
 }): PluginInstallFailureResult | null {
@@ -166,6 +177,7 @@ export function buildDirectoryInstallResult(params: {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  setup?: import("./manifest.js").PluginManifestSetup;
 }): InstallPluginResult {
   return {
     ok: true,
@@ -174,6 +186,7 @@ export function buildDirectoryInstallResult(params: {
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
+    ...(params.setup ? { setup: params.setup } : {}),
   };
 }
 
@@ -212,6 +225,9 @@ function buildBlockedInstallResult(params: {
   return {
     ok: false,
     error: params.blocked.reason,
+    ...(params.blocked.installPolicyWarning
+      ? { installPolicyWarning: params.blocked.installPolicyWarning }
+      : {}),
     ...(params.blocked.code === "security_scan_failed"
       ? { code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED }
       : params.blocked.code === "security_scan_blocked"
@@ -356,6 +372,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  setup?: import("./manifest.js").PluginManifestSetup;
   targetDir?: string;
   extensionsDir?: string;
   logger: PluginInstallLogger;
@@ -402,10 +419,11 @@ export async function installPluginDirectoryIntoExtensions(params: {
       manifestName: params.manifestName,
       version: params.version,
       extensions: params.extensions,
+      setup: params.setup,
     });
   }
 
-  const installRes = await runtime.installPackageDir({
+  const packageInstallParams = {
     sourceDir: params.sourceDir,
     targetDir,
     mode: params.mode,
@@ -416,33 +434,35 @@ export async function installPluginDirectoryIntoExtensions(params: {
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
-    afterInstall: async (installedDir) => {
+    afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
       if (!postInstallResult) {
         return { ok: true as const };
       }
-      return {
-        ok: false as const,
-        error: postInstallResult.error,
-        ...(postInstallResult.code ? { code: postInstallResult.code } : {}),
-      };
+      return postInstallResult;
     },
-  });
+  };
+  const installRes = await runtime.installPackageDir(
+    isPluginInstallCommitDeferred(params)
+      ? requestDeferredPackageDirInstall(packageInstallParams)
+      : packageInstallParams,
+  );
   if (!installRes.ok) {
-    return {
-      ok: false,
-      error: installRes.error,
-      ...(installRes.code ? { code: installRes.code as PluginInstallErrorCode } : {}),
-    };
+    return installRes;
   }
 
-  return buildDirectoryInstallResult({
-    pluginId: params.pluginId,
-    targetDir,
-    manifestName: params.manifestName,
-    version: params.version,
-    extensions: params.extensions,
-  });
+  const result = {
+    ...buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+      setup: params.setup,
+    }),
+  };
+  const transaction = resolvePackageDirInstallTransaction(installRes);
+  return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }
 
 async function resolvePluginInstallTarget(params: {

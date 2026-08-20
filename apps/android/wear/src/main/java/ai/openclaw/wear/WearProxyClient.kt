@@ -98,7 +98,7 @@ internal class WearProxyClient private constructor(
   ): WearRpcResult {
     var attemptedPreferredPhone: PreferredPhoneRegistration? = null
     val result =
-      withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+      withTimeoutOrNull(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS) {
         requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode) { registration ->
           attemptedPreferredPhone = registration
         }
@@ -337,7 +337,6 @@ internal class WearProxyClient private constructor(
   )
 
   companion object {
-    private const val REQUEST_TIMEOUT_MS = 10_000L
     private const val MAX_BUFFERED_EVENTS = 64
 
     fun create(context: Context): WearProxyClient {
@@ -395,6 +394,10 @@ internal enum class WearSequenceDecision {
 
 internal data class WearResponseRequest(
   val responseGeneration: Long,
+  val eventGeneration: Long,
+)
+
+internal data class WearReadOnlyResponseRequest(
   val eventGeneration: Long,
 )
 
@@ -462,6 +465,11 @@ internal class WearEventSequenceTracker {
     return WearResponseRequest(responseGeneration = responseGeneration, eventGeneration = eventGeneration)
   }
 
+  // Read-only projections may overlap a model request. Their owner supplies
+  // feature-local cancellation, while this token only binds the event cursor.
+  @Synchronized
+  fun beginReadOnlyResponseRequest(): WearReadOnlyResponseRequest = WearReadOnlyResponseRequest(eventGeneration = eventGeneration)
+
   @Synchronized
   fun invalidateResponseRequests() {
     responseGeneration += 1
@@ -474,11 +482,31 @@ internal class WearEventSequenceTracker {
     sequence: Long?,
   ): Boolean {
     if (request.responseGeneration != responseGeneration) return false
+    return isEventCursorCurrent(request.eventGeneration, streamId, sequence)
+  }
+
+  @Synchronized
+  fun isReadOnlyResponseCurrent(
+    request: WearReadOnlyResponseRequest,
+    streamId: String?,
+    sequence: Long?,
+  ): Boolean = isEventCursorCurrent(request.eventGeneration, streamId, sequence)
+
+  private fun isEventCursorCurrent(
+    requestEventGeneration: Long,
+    responseStreamId: String?,
+    sequence: Long?,
+  ): Boolean {
     if (awaitingSnapshot) return false
-    if (this.streamId != streamId && (this.streamId != null || streamId != null)) return false
+    if (
+      this.streamId != responseStreamId &&
+      (this.streamId != null || responseStreamId != null)
+    ) {
+      return false
+    }
     val currentSequence = lastSequence
     return if (sequence == null) {
-      request.eventGeneration == eventGeneration
+      requestEventGeneration == eventGeneration
     } else {
       sequence == currentSequence
     }

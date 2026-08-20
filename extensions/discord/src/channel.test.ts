@@ -232,9 +232,31 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "thread-reply" as never })).toBe(
       "local",
     );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "poll" })).toBe("local");
+    expect(discordPlugin.actions?.supportsAction?.({ action: "poll" })).toBe(false);
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "channel-info" as never })).toBe(
       "gateway",
     );
+  });
+
+  it("requires trusted requester identity for registered privileged tool actions", () => {
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(true);
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+      }),
+    ).toBe(false);
+    expect(
+      discordPlugin.actions?.requiresTrustedRequesterSender?.({
+        action: "read",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
   });
 
   it("adds Discord mention formatting to agent prompt hints", () => {
@@ -404,35 +426,6 @@ describe("discordPlugin outbound", () => {
     expect(objectArgAt(sendMessageDiscord, 1, 2).mediaUrl).toBe("/tmp/molty.mp4");
     expect(result.channel).toBe("discord");
     expect(result.messageId).toBe("video-1");
-  });
-
-  it("threads poll sends through the thread target", async () => {
-    const sendPollDiscord = vi.fn(async () => discordTestSendResult("poll-1"));
-    const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
-    try {
-      const result = await discordPlugin.outbound!.sendPoll!({
-        cfg: EMPTY_DISCORD_TEST_CONFIG,
-        to: "channel:123",
-        poll: {
-          question: "Best shell?",
-          options: ["molty", "molter"],
-        },
-        accountId: "work",
-        threadId: "thread-123",
-      });
-
-      expect(argAt(sendPollDiscord, 0, 0)).toBe("channel:thread-123");
-      expect(argAt(sendPollDiscord, 0, 1)).toEqual({
-        question: "Best shell?",
-        options: ["molty", "molter"],
-      });
-      expect(objectArgAt(sendPollDiscord, 0, 2).accountId).toBe("work");
-      const pollResult = result as { channel?: string; messageId?: string };
-      expect(pollResult.channel).toBe("discord");
-      expect(pollResult.messageId).toBe("poll-1");
-    } finally {
-      sendPollSpy.mockRestore();
-    }
   });
 
   it("forwards heartbeat typing through the run config and attached target", async () => {

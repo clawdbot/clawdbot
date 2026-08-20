@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -14,9 +15,11 @@ const mocks = vi.hoisted(() => {
     writeJson: vi.fn(),
   };
   return {
+    clearManagedPluginOfficialCatalogCache: vi.fn(),
     defaultRuntime,
     getRuntimeConfig: vi.fn(),
     loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
+    notifyGatewayPluginMetadataChanged: vi.fn(),
   };
 });
 
@@ -34,6 +37,14 @@ vi.mock("../runtime.js", () => ({
 vi.mock("../plugins/official-external-plugin-catalog.js", () => ({
   loadConfiguredHostedOfficialExternalPluginCatalogEntries:
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
+}));
+
+vi.mock("../plugins/management-service.js", () => ({
+  clearManagedPluginOfficialCatalogCache: mocks.clearManagedPluginOfficialCatalogCache,
+}));
+
+vi.mock("./plugins-update-gateway-signal.js", () => ({
+  notifyGatewayPluginMetadataChanged: mocks.notifyGatewayPluginMetadataChanged,
 }));
 
 async function createTimelinePath(): Promise<string> {
@@ -57,6 +68,8 @@ describe("plugins marketplace refresh", () => {
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.getRuntimeConfig.mockReset();
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockReset();
+    mocks.clearManagedPluginOfficialCatalogCache.mockReset();
+    mocks.notifyGatewayPluginMetadataChanged.mockReset().mockResolvedValue(true);
     vi.unstubAllEnvs();
   });
 
@@ -67,30 +80,12 @@ describe("plugins marketplace refresh", () => {
   it("refreshes an explicitly selected marketplace feed and prints JSON", async () => {
     const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
-        checksum: "feed-sha",
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
         etag: '"abc"',
-      },
-      trust: {
-        mode: "signed",
-        signedBy: "acme-root-2026",
-        signatureCount: 1,
-        threshold: 1,
-        verifiedAt: "2026-06-23T00:01:02.000Z",
-      },
-    });
+      }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -104,6 +99,7 @@ describe("plugins marketplace refresh", () => {
       expectedSha256: "feed-sha",
       requireSnapshotWrite: true,
     });
+    expect(mocks.notifyGatewayPluginMetadataChanged).toHaveBeenCalledWith(config);
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
       source: "hosted",
       entries: 2,
@@ -130,29 +126,9 @@ describe("plugins marketplace refresh", () => {
 
   it("prints bounded signed feed trust state in text output", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
-        checksum: "feed-sha",
-      },
-      trust: {
-        mode: "signed",
-        signedBy: "acme-root-2026",
-        signatureCount: 1,
-        threshold: 1,
-        verifiedAt: "2026-06-23T00:01:02.000Z",
-      },
-    });
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({ entries: [{ name: "@acme/calendar" }] }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({});
@@ -168,22 +144,13 @@ describe("plugins marketplace refresh", () => {
   it("normalizes bare SHA-256 pins before refreshing", async () => {
     const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        entries: [{ name: "@acme/calendar" }],
         checksum: "sha256:abcdef",
-      },
-    });
+        includeTrust: false,
+      }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -231,6 +198,65 @@ describe("plugins marketplace refresh", () => {
     const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
     expect(output).toContain("bundled fallback");
     expect(output).toContain("hosted catalog feed returned HTTP 503");
+    expect(mocks.notifyGatewayPluginMetadataChanged).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps pinned snapshot JSON clean when the Gateway cannot refresh", async () => {
+    const config = {};
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({ source: "hosted-snapshot" }),
+    );
+    mocks.notifyGatewayPluginMetadataChanged.mockResolvedValue(false);
+
+    const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
+    await expect(
+      runPluginMarketplaceRefreshCommand({ expectedSha256: "sha256:expected", json: true }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.notifyGatewayPluginMetadataChanged).toHaveBeenCalledWith(config);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledOnce();
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining('Run "openclaw gateway restart" to apply the current catalog state.'),
+      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
+    ]);
+    expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps a hosted refresh successful and prints restart guidance when the Gateway is offline", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture(),
+    );
+    mocks.notifyGatewayPluginMetadataChanged.mockResolvedValue(false);
+
+    const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceRefreshCommand({});
+
+    expect(mocks.defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining('Run "openclaw gateway restart" to apply the current catalog state.'),
+    );
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps JSON stdout clean when an offline Gateway needs a restart", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture(),
+    );
+    mocks.notifyGatewayPluginMetadataChanged.mockResolvedValue(false);
+
+    const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceRefreshCommand({ json: true });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledOnce();
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining('Run "openclaw gateway restart" to apply the current catalog state.'),
+    );
     expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
@@ -307,30 +333,13 @@ describe("plugins marketplace refresh", () => {
       diagnostics: { flags: ["timeline"] },
     };
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
         url: "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag",
-        status: 200,
-        checksum: "feed-sha",
         etag: '"abc"',
-      },
-      trust: {
-        mode: "signed",
-        signedBy: "acme-root-2026",
-        signatureCount: 1,
-        threshold: 1,
-        verifiedAt: "2026-06-23T00:01:02.000Z",
-      },
-    });
+      }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({

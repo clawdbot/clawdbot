@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
@@ -28,6 +29,20 @@ data class ChatMessage(
   val idempotencyKey: String? = null,
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
+  val provenance: ChatMessageProvenance? = null,
+  val transcriptMarker: ChatTranscriptMarker? = null,
+)
+
+data class ChatMessageProvenance(
+  val kind: String,
+  val sourceTool: String? = null,
+)
+
+data class ChatTranscriptMarker(
+  val kind: String,
+  val id: String? = null,
+  val tokensBefore: Double? = null,
+  val tokensAfter: Double? = null,
 )
 
 /** One selectable transcript branch returned by sessions.branches.list. */
@@ -63,7 +78,7 @@ data class ChatTranscriptAnchorState(
 )
 
 /**
- * One content part in a chat message; images carry either bounded base64 or a managed artifact reference.
+ * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",
@@ -79,6 +94,7 @@ data class ChatMessageContent(
   val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
 )
 
@@ -101,7 +117,29 @@ data class ChatPendingToolCall(
   val args: kotlinx.serialization.json.JsonObject? = null,
   val startedAtMs: Long,
   val isError: Boolean? = null,
+  val liveDiff: ChatDiffStat? = null,
 )
+
+data class ChatDiffStat(
+  val added: Int,
+  val removed: Int,
+  val files: Int? = null,
+)
+
+data class ChatSubagentActivity(
+  val id: String,
+  val status: String,
+  val snippet: String?,
+  val diffStat: ChatDiffStat?,
+  val terminalSummary: String?,
+  val error: String?,
+  val startedAtMs: Long,
+  val endedAtMs: Long?,
+  val childSessionKey: String?,
+) {
+  val isWorking: Boolean
+    get() = status == "queued" || status == "running"
+}
 
 enum class ChatPlanStepStatus {
   Pending,
@@ -112,6 +150,18 @@ enum class ChatPlanStepStatus {
 data class ChatPlanStep(
   val step: String,
   val status: ChatPlanStepStatus,
+)
+
+data class ChatProgressCard(
+  val revision: Int,
+  val updatedAt: Long,
+  val markdown: String?,
+  val steps: List<ChatPlanStep>,
+)
+
+internal data class ChatProgressCardGetResult(
+  val sessionKey: String?,
+  val card: ChatProgressCard?,
 )
 
 /** Parses a complete gateway plan snapshot, including legacy string-only steps. */
@@ -158,6 +208,59 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
   }
 }
 
+internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressCardGetResult {
+  val result = element as? JsonObject ?: error("Invalid progressCard.get response")
+  if (!result.containsKey("card")) error("Invalid progressCard.get response")
+  val rawCard = result["card"]
+  if (rawCard == null || rawCard is JsonNull) {
+    return ChatProgressCardGetResult(sessionKey = null, card = null)
+  }
+  val card = rawCard as? JsonObject ?: error("Invalid progressCard.get response")
+  val sessionKey =
+    (card["sessionKey"] as? JsonPrimitive)
+      ?.takeIf { it.isString }
+      ?.content
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?: error("Invalid progress card session key")
+  val revision =
+    (card["revision"] as? JsonPrimitive)
+      ?.takeUnless { it.isString }
+      ?.content
+      ?.toLongOrNull()
+      ?.takeIf { it in 1..Int.MAX_VALUE }
+      ?.toInt()
+      ?: error("Invalid progress card revision")
+  val updatedAt =
+    (card["updatedAt"] as? JsonPrimitive)
+      ?.takeUnless { it.isString }
+      ?.content
+      ?.toLongOrNull()
+      ?: error("Invalid progress card update time")
+  val markdown =
+    if (card.containsKey("markdown")) {
+      (card["markdown"] as? JsonPrimitive)
+        ?.takeIf { it.isString }
+        ?.content
+        ?: error("Invalid progress card markdown")
+    } else {
+      null
+    }?.takeIf { it.isNotBlank() }
+  val steps = parseChatPlanSteps(card["steps"])
+  val parsedCard =
+    if (markdown == null && steps.isEmpty()) {
+      null
+    } else {
+      ChatProgressCard(
+        revision = revision,
+        updatedAt = updatedAt,
+        markdown = markdown,
+        steps = steps,
+      )
+    }
+  return ChatProgressCardGetResult(sessionKey = sessionKey, card = parsedCard)
+}
+
 /** Gateway-advertised thinking choice for the active provider/model pair. */
 data class ChatThinkingLevelOption(
   val id: String,
@@ -182,13 +285,28 @@ internal val defaultChatThinkingLevelSelection =
     isGatewayProvided = false,
   )
 
+internal data class ChatActiveRunPresentation(
+  val count: Int = 0,
+  val runId: String? = null,
+  val clockKey: String? = null,
+  val outputTokens: Long? = null,
+)
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val sessionId: String? = null,
   val ownerAgentId: String? = null,
+  val classification: String? = null,
+  val accountId: String? = null,
+  val peerKind: String? = null,
+  val isMain: Boolean? = null,
+  val isBackground: Boolean? = null,
+  val hasClassificationMetadata: Boolean =
+    classification != null || accountId != null || peerKind != null || isMain != null || isBackground != null,
   val displayName: String? = null,
   val derivedTitle: String? = null,
   val label: String? = null,
@@ -214,6 +332,7 @@ data class ChatSessionEntry(
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
   val spawnedBy: String? = null,
   val hasActiveSubagentRun: Boolean? = null,
@@ -269,12 +388,6 @@ data class ChatCommandEntry(
 data class ChatInFlightRun(
   val runId: String,
   val text: String,
-  val plan: ChatPlanSnapshot? = null,
-)
-
-data class ChatPlanSnapshot(
-  val steps: List<ChatPlanStep>,
-  val explanation: String? = null,
 )
 
 /**

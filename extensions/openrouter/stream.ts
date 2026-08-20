@@ -8,7 +8,8 @@ import {
   normalizeOpenAICompatibleReasoningReplay,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isOpenRouterDeepSeekV4ModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -18,21 +19,13 @@ import {
 const log = createSubsystemLogger("openrouter-stream");
 const openRouterThinkingStreamHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() : undefined;
-}
-
-function isOpenRouterAnthropicModelId(modelId: unknown): boolean {
-  const normalized = readString(modelId)?.toLowerCase();
-  return (
-    normalized?.startsWith("anthropic/") === true ||
-    normalized?.startsWith("openrouter/anthropic/") === true
-  );
+function normalizeOpenRouterStringPreservingEmpty(value: unknown): string | undefined {
+  return readStringValue(value)?.trim();
 }
 
 function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
-  const provider = readString(model.provider)?.toLowerCase();
-  const baseUrl = readString(model.baseUrl);
+  const provider = normalizeOpenRouterStringPreservingEmpty(model.provider)?.toLowerCase();
+  const baseUrl = normalizeOpenRouterStringPreservingEmpty(model.baseUrl);
   if (baseUrl) {
     return normalizeOpenRouterBaseUrl(baseUrl) === OPENROUTER_BASE_URL;
   }
@@ -40,16 +33,16 @@ function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
 }
 
 function shouldPatchAnthropicOpenRouterPayload(model: Parameters<StreamFn>[0]): boolean {
-  const api = readString(model.api);
+  const api = normalizeOpenRouterStringPreservingEmpty(model.api);
   return (
     (api === undefined || api === "openai-completions") &&
-    isOpenRouterAnthropicModelId(model.id) &&
+    normalizeOpenRouterModelFamilyId(model.id)?.startsWith("anthropic/") === true &&
     isVerifiedOpenRouterRoute(model)
   );
 }
 
 function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]): boolean {
-  const api = readString(model.api);
+  const api = normalizeOpenRouterStringPreservingEmpty(model.api);
   return (
     (api === undefined || api === "openai-completions") &&
     isOpenRouterDeepSeekV4ModelId(model.id) &&
@@ -58,12 +51,12 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
 }
 
 function shouldPatchOpenRouterRoutingPayload(model: Parameters<StreamFn>[0]): boolean {
-  const api = readString(model.api);
+  const api = normalizeOpenRouterStringPreservingEmpty(model.api);
   return (api === undefined || api === "openai-completions") && isVerifiedOpenRouterRoute(model);
 }
 
 function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameters<StreamFn>[2] {
-  const apiKey = readString(options?.apiKey);
+  const apiKey = normalizeOpenRouterStringPreservingEmpty(options?.apiKey);
   if (!apiKey) {
     return options;
   }
@@ -154,7 +147,11 @@ function isEnabledReasoningValue(value: unknown): boolean {
     return normalized !== "" && normalized !== "off" && normalized !== "none";
   }
   if (typeof value === "object" && !Array.isArray(value)) {
-    const effort = (value as Record<string, unknown>).effort;
+    const reasoning = value as Record<string, unknown>;
+    if (reasoning.enabled === false) {
+      return false;
+    }
+    const effort = reasoning.effort;
     if (typeof effort === "string") {
       const normalized = effort.trim().toLowerCase();
       return normalized !== "" && normalized !== "off" && normalized !== "none";
@@ -246,10 +243,7 @@ function applyOpenRouterDeepSeekV4ReasoningEffort(
     delete payload.reasoning;
     return false;
   }
-  const reasoning =
-    payload.reasoning && typeof payload.reasoning === "object" && !Array.isArray(payload.reasoning)
-      ? (payload.reasoning as Record<string, unknown>)
-      : {};
+  const reasoning = asNonArrayRecord(payload.reasoning);
   reasoning.effort = effort;
   payload.reasoning = reasoning;
   return true;

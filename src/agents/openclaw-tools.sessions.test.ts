@@ -3,14 +3,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
+import {
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -18,7 +25,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 const loadSessionEntryByKeyMock = vi.fn();
-vi.mock("./subagent-announce-delivery.js", () => ({
+vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
 }));
 
@@ -45,9 +52,7 @@ import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.test-support.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
-import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const TEST_CONFIG = {
@@ -175,6 +180,21 @@ function createOpenClawTools(options?: {
   ];
 }
 
+function getSessionTool(
+  name: "sessions_list" | "sessions_history" | "sessions_search" | "sessions_send",
+  options?: Parameters<typeof createOpenClawTools>[0],
+) {
+  const tool = createOpenClawTools(options).find((candidate) => candidate.name === name);
+  if (!tool) {
+    throw new Error(`missing ${name} tool`);
+  }
+  return tool;
+}
+
+function cloneTestConfig() {
+  return { ...TEST_CONFIG, session: { ...TEST_CONFIG.session } };
+}
+
 const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   await vi.waitFor(
     () => {
@@ -244,6 +264,7 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 
 describe("sessions tools", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
@@ -254,15 +275,9 @@ describe("sessions tools", () => {
         payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    sessionsResolutionTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    sessionsSendA2ATesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
   });
+  afterEach(resetGatewayWorkAdmission);
 
   it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
@@ -326,10 +341,7 @@ describe("sessions tools", () => {
     { alias: "content", value: "hello from content" },
     { alias: "text", value: "hello from text" },
   ])("sessions_send prepares hidden $alias alias before validation", ({ alias, value }) => {
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    const tool = getSessionTool("sessions_send");
     if (!tool.prepareArguments) {
       throw new Error("sessions_send missing prepareArguments");
     }
@@ -357,10 +369,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    const tool = getSessionTool("sessions_send");
 
     const result = await tool.execute("call-alias", {
       sessionKey: "main",
@@ -385,10 +394,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    const tool = getSessionTool("sessions_send");
 
     const result = await tool.execute("call-alias", {
       sessionKey: "main",
@@ -406,8 +412,8 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send prepares sanitized aliases without exposing alias keys", () => {
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
-    if (!tool?.prepareArguments) {
+    const tool = getSessionTool("sessions_send");
+    if (!tool.prepareArguments) {
       throw new Error("missing sessions_send prepareArguments");
     }
 
@@ -429,8 +435,9 @@ describe("sessions tools", () => {
           path: "/tmp/sessions.json",
           sessions: [
             {
-              key: "main",
+              key: "agent:main:main",
               kind: "direct",
+              classification: "main",
               sessionId: "s-main",
               updatedAt: 10,
               lastChannel: "whatsapp",
@@ -438,8 +445,10 @@ describe("sessions tools", () => {
               lastMessagePreview: "Latest assistant update",
             },
             {
-              key: "discord:group:dev",
+              key: "agent:main:discord:group:dev",
               kind: "group",
+              classification: "group",
+              peerKind: "group",
               sessionId: "s-group",
               updatedAt: 11,
               channel: "discord",
@@ -455,6 +464,7 @@ describe("sessions tools", () => {
             {
               key: "agent:main:dashboard:child",
               kind: "direct",
+              classification: "dashboard",
               sessionId: "s-dashboard-child",
               updatedAt: 12,
               parentSessionKey: "agent:main:main",
@@ -462,18 +472,20 @@ describe("sessions tools", () => {
             {
               key: "agent:main:subagent:worker",
               kind: "direct",
+              classification: "subagent",
               sessionId: "s-subagent-worker",
               updatedAt: 13,
               spawnedBy: "agent:main:main",
             },
             {
-              key: "cron:job-1",
+              key: "agent:main:cron:job-1",
               kind: "direct",
+              classification: "cron",
               sessionId: "s-cron",
               updatedAt: 9,
             },
-            { key: "global", kind: "global" },
-            { key: "unknown", kind: "unknown" },
+            { key: "global", kind: "global", classification: "global", agentId: "main" },
+            { key: "unknown", kind: "unknown", classification: "unknown", agentId: "main" },
           ],
         };
       }
@@ -491,10 +503,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    if (!tool) {
-      throw new Error("missing sessions_list tool");
-    }
+    const tool = getSessionTool("sessions_list");
 
     const result = await tool.execute("call1", {
       agentId: "main",
@@ -515,7 +524,8 @@ describe("sessions tools", () => {
         includeGlobal: true,
         includeUnknown: true,
         label: "mailbox",
-        limit: undefined,
+        limit: 200,
+        offset: 0,
         search: "review",
         spawnedBy: undefined,
       },
@@ -534,7 +544,7 @@ describe("sessions tools", () => {
       }>;
     };
     expect(details.sessions).toHaveLength(5);
-    const main = details.sessions?.find((s) => s.key === "main");
+    const main = details.sessions?.find((s) => s.key === "agent:main:main");
     expect(main?.agentId).toBe("main");
     expect(main?.channel).toBe("whatsapp");
     expect(main?.derivedTitle).toBe("Main mailbox");
@@ -542,7 +552,7 @@ describe("sessions tools", () => {
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
-    const group = details.sessions?.find((s) => s.key === "discord:group:dev");
+    const group = details.sessions?.find((s) => s.key === "agent:main:discord:group:dev");
     expect(group?.status).toBe("running");
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
     expect(group?.derivedTitle).toBe("Dev room");
@@ -566,7 +576,7 @@ describe("sessions tools", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:main", storePath },
         { sessionId: "visible", updatedAt: 20 },
       );
@@ -578,7 +588,7 @@ describe("sessions tools", () => {
         { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
         { cwd: tmpDir, message: { role: "assistant", content: "Visible latest reply" } },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "other", sessionKey: "agent:other:main", storePath },
         { sessionId: "hidden", updatedAt: 21 },
       );
@@ -602,12 +612,14 @@ describe("sessions tools", () => {
               {
                 key: "agent:main:main",
                 kind: "direct",
+                classification: "main",
                 sessionId: "visible",
                 updatedAt: 20,
               },
               {
                 key: "agent:other:main",
                 kind: "direct",
+                classification: "main",
                 sessionId: "hidden",
                 updatedAt: 21,
               },
@@ -617,7 +629,7 @@ describe("sessions tools", () => {
         return {};
       });
 
-      const tool = createOpenClawTools({
+      const tool = getSessionTool("sessions_list", {
         agentSessionKey: "agent:main:main",
         config: {
           ...TEST_CONFIG,
@@ -626,10 +638,7 @@ describe("sessions tools", () => {
             agentToAgent: { enabled: false },
           },
         } as OpenClawConfig,
-      }).find((candidate) => candidate.name === "sessions_list");
-      if (!tool) {
-        throw new Error("missing sessions_list tool");
-      }
+      });
 
       const result = await tool.execute("call-preview", {
         includeDerivedTitles: true,
@@ -639,8 +648,9 @@ describe("sessions tools", () => {
       expect(details.sessions).toStrictEqual([
         {
           key: "agent:main:main",
+          sessionId: "visible",
           agentId: "main",
-          kind: "other",
+          kind: "main",
           channel: "unknown",
           archived: false,
           pinned: false,
@@ -655,7 +665,7 @@ describe("sessions tools", () => {
     }
   });
 
-  it("sessions_list omits transcript paths from model-facing rows", async () => {
+  it("sessions_list exposes lifecycle identity without transcript paths", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -663,8 +673,9 @@ describe("sessions tools", () => {
           path: "(multiple)",
           sessions: [
             {
-              key: "main",
+              key: "agent:main:main",
               kind: "direct",
+              classification: "main",
               sessionId: "sess-main",
               updatedAt: 12,
             },
@@ -674,18 +685,15 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    if (!tool) {
-      throw new Error("missing sessions_list tool");
-    }
+    const tool = getSessionTool("sessions_list");
 
     const result = await tool.execute("call2b", {});
     const details = result.details as {
       sessions?: Array<Record<string, unknown>>;
     };
-    const main = details.sessions?.find((session) => session.key === "main");
+    const main = details.sessions?.find((session) => session.key === "agent:main:main");
     expect(main).not.toHaveProperty("transcriptPath");
-    expect(main).not.toHaveProperty("sessionId");
+    expect(main).toHaveProperty("sessionId", "sess-main");
   });
 
   it("sessions_history filters tool messages by default", async () => {
@@ -714,10 +722,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call3", { sessionKey: "main" });
     const details = result.details as { messages?: unknown[] };
@@ -743,7 +748,7 @@ describe("sessions tools", () => {
     );
   });
 
-  it("sessions_history caps oversized payloads and strips heavy fields", async () => {
+  it("sessions_history caps oversized payloads and strips tool-owned heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",
       content: [
@@ -754,14 +759,6 @@ describe("sessions tools", () => {
         {
           type: "thinking",
           thinking: "y".repeat(7000),
-          thinkingSignature: "sig".repeat(4000),
-          openclawReasoningReplay: {
-            v: 1,
-            source: "openai-responses",
-            provider: "openai",
-            api: "openai-chatgpt-responses",
-            model: "gpt-5.5",
-          },
         },
       ],
       details: {
@@ -780,10 +777,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call4b", {
       sessionKey: "main",
@@ -813,8 +807,6 @@ describe("sessions tools", () => {
             type?: string;
             text?: string;
             thinking?: string;
-            thinkingSignature?: string;
-            openclawReasoningReplay?: unknown;
           }>;
         }
       | undefined;
@@ -824,8 +816,7 @@ describe("sessions tools", () => {
     expect(typeof textBlock?.text).toBe("string");
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
     const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
-    expect(thinkingBlock?.thinkingSignature).toBeUndefined();
-    expect(thinkingBlock?.openclawReasoningReplay).toBeUndefined();
+    expect((thinkingBlock?.thinking ?? "").length <= 4015).toBe(true);
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {
@@ -845,10 +836,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call4c", {
       sessionKey: "main",
@@ -893,10 +881,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call-redact-1", { sessionKey: "main" });
     const details = result.details as {
@@ -933,10 +918,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call-redact-2", { sessionKey: "main" });
     const details = result.details as {
@@ -970,10 +952,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call5", { sessionKey: sessionId });
     const details = result.details as { messages?: unknown[] };
@@ -1000,10 +979,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    if (!tool) {
-      throw new Error("missing sessions_history tool");
-    }
+    const tool = getSessionTool("sessions_history");
 
     const result = await tool.execute("call6", { sessionKey: sessionId });
     const details = result.details as { status?: string; error?: string };
@@ -1074,13 +1050,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const fire = await tool.execute("call5", {
       sessionKey: "main",
@@ -1113,6 +1086,22 @@ describe("sessions tools", () => {
     expect(Value.Check(tool.outputSchema!, waited.details)).toBe(true);
     expect(
       Value.Check(tool.outputSchema!, {
+        runId: "run-no-reply",
+        status: "no_reply",
+        sessionKey: "agent:main:other",
+        message: "Target session completed without a visible reply.",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.outputSchema!, {
+        runId: "run-invalid-ok",
+        status: "ok",
+        sessionKey: "agent:main:other",
+        delivery: { status: "pending", mode: "announce" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(tool.outputSchema!, {
         runId: "run-error",
         status: "forbidden",
         error: "hidden",
@@ -1126,9 +1115,7 @@ describe("sessions tools", () => {
         extra: true,
       }),
     ).toBe(false);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ error: string; runId: string; status: "error" | "forbidden"; sentBeforeError?: true; sessionKey?: string; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "accepted"; watched?: boolean } | { error: string; runId: string; sentBeforeError: true; sessionKey: string; status: "timeout"; delivery?: { mode: "announce"; status: "pending" | "skipped" }; watched?: boolean } | { delivery: { mode: "announce"; status: "pending" | "skipped" }; runId: string; sessionKey: string; status: "ok"; reply?: string; watched?: boolean }',
-    );
+    expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
     await waitForCalls(() => historyCallCount, 7);
@@ -1187,7 +1174,7 @@ describe("sessions tools", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "scoped-main-incarnation";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: targetSessionKey, storePath },
       { sessionId: expectedSessionId, updatedAt: 1 },
     );
@@ -1201,13 +1188,16 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as GatewayCall;
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: targetSessionKey };
+      }
       if (request.method === "agent") {
         return { runId: "run-scoped", status: "accepted", acceptedAt: 1 };
       }
       return {};
     });
     try {
-      const tool = createOpenClawTools({
+      const tool = getSessionTool("sessions_send", {
         agentSessionKey: requesterSessionKey,
         sandboxed: true,
         config: {
@@ -1215,10 +1205,7 @@ describe("sessions tools", () => {
           tools: { sessions: { visibility: "self" }, agentToAgent: { enabled: false } },
           agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
         } as OpenClawConfig,
-      }).find((candidate) => candidate.name === "sessions_send");
-      if (!tool) {
-        throw new Error("missing sessions_send tool");
-      }
+      });
 
       const result = await tool.execute("scoped-send", {
         sessionKey: targetSessionKey,
@@ -1232,11 +1219,7 @@ describe("sessions tools", () => {
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
-      expect(calls.map((call) => call.method)).toEqual([
-        "sessions.list",
-        "sessions.resolve",
-        "agent",
-      ]);
+      expect(calls.map((call) => call.method)).toEqual(["agent"]);
     } finally {
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1269,13 +1252,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "discord:group:req",
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const result = await tool.execute("call-pending-error", {
       sessionKey: "main",
@@ -1318,13 +1298,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "main",
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const result = await tool.execute("call7", {
       sessionKey: sessionId,
@@ -1410,16 +1387,12 @@ describe("sessions tools", () => {
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const waited = await tool.execute("call7", {
       sessionKey: targetKey,
@@ -1459,11 +1432,19 @@ describe("sessions tools", () => {
     expect(sendParams.message).toBe("announce now");
   });
 
-  it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
+  it("sessions_send admits delayed ping-pong and final announce after the parent root releases", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const requesterKey = "agent:main:main";
     const targetKey = "agent:director1:main";
     let targetWaitCount = 0;
+    let releaseDelayedWait = () => {};
+    const delayedWaitGate = new Promise<void>((resolve) => {
+      releaseDelayedWait = resolve;
+    });
+    let requesterProviderStarts = 0;
+    let requesterAdmissionClosed: boolean | undefined;
+    let finalAnnounceProviderStarts = 0;
+    let finalAnnounceAdmissionClosed: boolean | undefined;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -1473,6 +1454,11 @@ describe("sessions tools", () => {
           return { runId: "run-target", status: "accepted", acceptedAt: 2000 };
         }
         if (params?.sessionKey === requesterKey) {
+          requesterAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+          if (requesterAdmissionClosed) {
+            throw new GatewayDrainingError();
+          }
+          requesterProviderStarts += 1;
           return { runId: "run-requester", status: "accepted", acceptedAt: 2001 };
         }
       }
@@ -1480,9 +1466,11 @@ describe("sessions tools", () => {
         const params = request.params as { runId?: string } | undefined;
         if (params?.runId === "run-target") {
           targetWaitCount += 1;
-          return targetWaitCount === 1
-            ? { runId: "run-target", status: "timeout" }
-            : { runId: "run-target", status: "ok" };
+          if (targetWaitCount === 1) {
+            return { runId: "run-target", status: "timeout" };
+          }
+          await delayedWaitGate;
+          return { runId: "run-target", status: "ok" };
         }
         if (params?.runId === "run-requester") {
           return { runId: "run-requester", status: "ok" };
@@ -1516,45 +1504,48 @@ describe("sessions tools", () => {
       }
       return {};
     });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => {
+        finalAnnounceAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        if (finalAnnounceAdmissionClosed) {
+          throw new GatewayDrainingError();
+        }
+        finalAnnounceProviderStarts += 1;
+        return {
+          payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+          meta: { durationMs: 1 },
+        };
+      },
+    });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
-      config: {
-        ...TEST_CONFIG,
-        session: {
-          ...TEST_CONFIG.session,
-        },
-      },
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
-
-    const result = await tool.execute("call-delayed", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
+      config: cloneTestConfig(),
     });
+
+    const result = await runWithGatewayRootWorkAdmissionForTest(() =>
+      tool.execute("call-delayed", {
+        sessionKey: targetKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      }),
+    );
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("accepted");
     expect(details.sessionKey).toBe(targetKey);
     expect(details.delivery?.status).toBe("pending");
     expect(details.delivery?.mode).toBe("announce");
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    releaseDelayedWait();
 
     await vi.waitFor(
       () => {
-        const requesterReplyCall = calls.find(
-          (call) =>
-            call.method === "agent" &&
-            (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
-        );
-        if (!requesterReplyCall) {
-          throw new Error("expected requester reply call");
-        }
+        expect(requesterAdmissionClosed).toBe(false);
       },
       { timeout: 2_000, interval: 5 },
     );
+    expect(requesterProviderStarts).toBe(3);
 
     const requesterReplyCall = calls.find(
       (call) =>
@@ -1575,6 +1566,11 @@ describe("sessions tools", () => {
     expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
     expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
     expect(calls.find((call) => call.method === "send")).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(finalAnnounceAdmissionClosed).toBe(false);
+      expect(finalAnnounceProviderStarts).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
   });
 
   it("sessions_send reports active-run queue rejection without durable-session fallback", async () => {
@@ -1605,19 +1601,11 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "telegram",
-      config: {
-        ...TEST_CONFIG,
-        session: {
-          ...TEST_CONFIG.session,
-        },
-      },
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+      config: cloneTestConfig(),
+    });
 
     const result = await tool.execute("call-run-scoped-caller", {
       sessionKey: runScopedCallerKey,
@@ -1668,19 +1656,11 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "agent:re-portal:main",
       agentChannel: "telegram",
-      config: {
-        ...TEST_CONFIG,
-        session: {
-          ...TEST_CONFIG.session,
-        },
-      },
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+      config: cloneTestConfig(),
+    });
 
     const result = await tool.execute("call-run-scoped-caller", {
       sessionKey: runScopedCallerKey,
@@ -1723,19 +1703,11 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "agent:re-portal:main",
       agentChannel: "telegram",
-      config: {
-        ...TEST_CONFIG,
-        session: {
-          ...TEST_CONFIG.session,
-        },
-      },
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+      config: cloneTestConfig(),
+    });
 
     const result = await tool.execute("call-ordinary-active", {
       sessionKey: ordinaryActiveKey,
@@ -1799,19 +1771,11 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "telegram",
-      config: {
-        ...TEST_CONFIG,
-        session: {
-          ...TEST_CONFIG.session,
-        },
-      },
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+      config: cloneTestConfig(),
+    });
 
     const result = await tool.execute("call-run-scoped-caller", {
       sessionKey: runScopedCallerKey,
@@ -1851,6 +1815,76 @@ describe("sessions tools", () => {
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
+  it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exact-cron-send-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const requesterKey = "agent:main:main";
+    const runScopedTargetKey = "agent:leasing-ops:cron:monthly-utility:run:run-exact";
+    const targetSessionId = "exact-cron-run-incarnation";
+    const queueMessage = vi.fn(async () => {});
+    try {
+      await upsertSessionEntryCore(
+        { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
+        { sessionId: targetSessionId, updatedAt: 1 },
+      );
+      setActiveEmbeddedRun(
+        targetSessionId,
+        {
+          queueMessage,
+          isStreaming: () => false,
+          isCompacting: () => false,
+          supportsTranscriptCommitWait: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          abort: () => {},
+        },
+        runScopedTargetKey,
+      );
+      const calls: GatewayCall[] = [];
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as GatewayCall;
+        calls.push(request);
+        if (request.method === "sessions.list") {
+          return {
+            path: storePath,
+            sessions: [{ key: runScopedTargetKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "agent") {
+          throw new Error("exact target must not fall back to the durable Cron session");
+        }
+        return {};
+      });
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterKey,
+        expectedTargetSessionId: targetSessionId,
+        idempotencyKey: "worker-session-send:exact-cron-operation",
+        config: {
+          ...cloneTestConfig(),
+          session: {
+            ...cloneTestConfig().session,
+            store: storePath,
+          },
+        },
+        callGateway: callGatewayMock,
+      });
+
+      const result = await tool.execute("exact-cron-send", {
+        sessionKey: runScopedTargetKey,
+        message: "do not reroute this exact message",
+        timeoutSeconds: 0,
+      });
+
+      expect(sessionsSendDetails(result.details)).toMatchObject({
+        status: "error",
+        sessionKey: runScopedTargetKey,
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.method === "agent")).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const runScopedCallerKey = "agent:leasing-ops:slack:channel:c-room:run:run-fast";
@@ -1876,19 +1910,11 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "agent:re-portal:main",
       agentChannel: "telegram",
-      config: {
-        ...TEST_CONFIG,
-        session: {
-          ...TEST_CONFIG.session,
-        },
-      },
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+      config: cloneTestConfig(),
+    });
 
     const result = await tool.execute("call-run-scoped-caller", {
       sessionKey: runScopedCallerKey,
@@ -1928,13 +1954,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "agent:re-portal:main",
       agentChannel: "telegram",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const result = await tool.execute("call-run-scoped-caller", {
       sessionKey: runScopedCallerKey,
@@ -1980,13 +2003,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "agent:re-portal:main",
       agentChannel: "telegram",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const result = await tool.execute("call-run-scoped-caller", {
       sessionKey: runScopedCallerKey,
@@ -2031,13 +2051,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const result = await tool.execute("call-terminal", {
       sessionKey: targetKey,
@@ -2071,13 +2088,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const result = await tool.execute("call-error", {
       sessionKey: targetKey,
@@ -2136,13 +2150,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const waited = await tool.execute("call-parent-owned-native-subagent", {
       sessionKey: targetKey,
@@ -2231,6 +2242,7 @@ describe("sessions tools", () => {
           sessions: [
             {
               key: targetKey,
+              agentId: "main",
               deliveryContext: {
                 channel: "whatsapp",
                 to: "123@g.us",
@@ -2267,16 +2279,12 @@ describe("sessions tools", () => {
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
 
-    const tool = createOpenClawTools({
+    const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
-    }).find((candidate) => candidate.name === "sessions_send");
-    if (!tool) {
-      throw new Error("missing sessions_send tool");
-    }
+    });
 
     const waited = await tool.execute("call-thread", {
       sessionKey: targetKey,

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
@@ -34,6 +35,53 @@ export type AnthropicProjectedToolChoice =
   | ({ readonly type: "any" } & AnthropicParallelToolChoice)
   | { readonly type: "none" }
   | ({ readonly type: "tool"; readonly name: string } & AnthropicParallelToolChoice);
+
+const CLAUDE_CODE_TOOL_NAMES = [
+  "Read",
+  "Write",
+  "Edit",
+  "Bash",
+  "Grep",
+  "Glob",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "KillShell",
+  "NotebookEdit",
+  "Skill",
+  "Task",
+  "TaskOutput",
+  "TodoWrite",
+  "WebFetch",
+  "WebSearch",
+];
+const CLAUDE_CODE_TOOL_LOOKUP = new Map(
+  CLAUDE_CODE_TOOL_NAMES.map((name) => [name.toLowerCase(), name]),
+);
+
+/** Preserve Claude Code's canonical tool casing for subscription OAuth requests. */
+export function toClaudeCodeToolName(name: string): string {
+  return CLAUDE_CODE_TOOL_LOOKUP.get(name.toLowerCase()) ?? name;
+}
+
+/** Anthropic rejects forced tools while extended thinking is enabled. */
+export function normalizeAnthropicToolChoice(
+  thinkingEnabled: boolean,
+  toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
+): AnthropicProjectedToolChoice {
+  if (
+    thinkingEnabled &&
+    (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
+  ) {
+    return { type: "auto" };
+  }
+  return typeof toolChoice === "string" ? { type: toolChoice } : toolChoice;
+}
+
+/** Anthropic tool identifiers accept only ASCII word characters and dashes. */
+export function normalizeAnthropicToolCallId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+}
 
 function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");

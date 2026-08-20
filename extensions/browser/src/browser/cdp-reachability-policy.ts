@@ -5,10 +5,17 @@
  * is stricter, so this module scopes the exception to browser control only.
  */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+import { normalizeHostname } from "../sdk-security-runtime.js";
+import { CHROME_MCP_ENDPOINT_FLAGS } from "./chrome-mcp-contracts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+import { isCdpHostnameTrustedByPolicy, withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+
+// Synthetic exact-host CDP policies must retain the operator's original intent;
+// otherwise Chrome MCP cannot distinguish default control-plane scoping from a
+// user-authored restriction that genuinely requires pinned transport.
+const cdpControlSourcePolicyByScopedPolicy = new WeakMap<SsrFPolicy, SsrFPolicy>();
 
 function withCdpControlHostname(
   profile: ResolvedBrowserProfile,
@@ -19,17 +26,41 @@ function withCdpControlHostname(
   if (!ssrfPolicy || !cdpHost) {
     return ssrfPolicy;
   }
-  const allowedHostnames = (ssrfPolicy.allowedHostnames ?? [])
-    .map((pattern) => normalizeHostname(pattern))
-    .filter((pattern) => pattern && pattern !== "*" && pattern !== "*.");
-  if (
-    requireAllowlistMatch &&
-    allowedHostnames.length > 0 &&
-    !matchesHostnameAllowlist(cdpHost, allowedHostnames)
-  ) {
+  if (requireAllowlistMatch && !isCdpHostnameTrustedByPolicy(ssrfPolicy, cdpHost)) {
     return ssrfPolicy;
   }
-  return withExactHostnamePolicy(ssrfPolicy, cdpHost);
+  const scopedPolicy = withExactHostnamePolicy(ssrfPolicy, cdpHost);
+  cdpControlSourcePolicyByScopedPolicy.set(scopedPolicy, ssrfPolicy);
+  return scopedPolicy;
+}
+
+function hasPolicyEntries(values?: string[]): boolean {
+  return (values ?? []).some((value) => value.trim().length > 0);
+}
+
+function requiresPinnedChromeMcpCdpTransport(cdpPolicy?: SsrFPolicy): boolean {
+  if (!cdpPolicy) {
+    return false;
+  }
+  const policyIntent = cdpControlSourcePolicyByScopedPolicy.get(cdpPolicy) ?? cdpPolicy;
+  const hasScopedPolicy =
+    policyIntent.allowRfc2544BenchmarkRange === true ||
+    policyIntent.allowIpv6UniqueLocalRange === true ||
+    hasPolicyEntries(policyIntent.allowedHostnames) ||
+    hasPolicyEntries(policyIntent.hostnameAllowlist) ||
+    hasPolicyEntries(policyIntent.allowedOrigins);
+  return !(
+    !hasScopedPolicy &&
+    (policyIntent.dangerouslyAllowPrivateNetwork === true ||
+      policyIntent.allowPrivateNetwork === true)
+  );
+}
+
+function hasChromeMcpEndpointArg(args?: string[]): boolean {
+  return (args ?? []).some((arg) => {
+    const [name] = arg.split("=", 1);
+    return CHROME_MCP_ENDPOINT_FLAGS.has(name ?? arg);
+  });
 }
 
 export function resolveCdpReachabilityPolicy(
@@ -51,3 +82,19 @@ export function resolveCdpReachabilityPolicy(
 
 /** Alias used by callers that treat reachability and control as one CDP policy. */
 export const resolveCdpControlPolicy = resolveCdpReachabilityPolicy;
+
+export function assertChromeMcpCdpTransportAllowed(
+  profile: ResolvedBrowserProfile,
+  cdpPolicy?: SsrFPolicy,
+): void {
+  const hasExplicitEndpoint = Boolean(profile.cdpUrl) || hasChromeMcpEndpointArg(profile.mcpArgs);
+  if (profile.driver !== "existing-session" || !hasExplicitEndpoint) {
+    return;
+  }
+  if (!requiresPinnedChromeMcpCdpTransport(cdpPolicy)) {
+    return;
+  }
+  throw new BrowserProfileUnavailableError(
+    `Browser profile "${profile.name}" uses Chrome MCP with an explicit CDP endpoint, but the active Browser CDP policy requires OpenClaw to pin the approved endpoint. Chrome MCP cannot carry that pinned transport across its subprocess boundary. Use driver "openclaw" for guarded CDP endpoints, or remove cdpUrl and browserUrl/wsEndpoint mcpArgs from this existing-session profile so Chrome MCP attaches to a host-local Chrome profile.`,
+  );
+}

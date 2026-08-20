@@ -13,6 +13,14 @@ import {
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import { resolveBundledFacadeModuleLocation } from "./facade-resolution-shared.js";
 
+/** Error thrown when a bundled plugin public surface artifact cannot be resolved. */
+export class MissingPublicSurfaceError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "MissingPublicSurfaceError";
+  }
+}
+
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
@@ -204,7 +212,7 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
 
 /** Resolve and synchronously load a bundled plugin public surface by plugin dir and artifact name. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
-export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
+export function loadBundledPluginPublicSurfaceModuleSyncCore<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
   trackedPluginId?: string | (() => string);
@@ -212,7 +220,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 }): T {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
@@ -230,7 +238,7 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
 }): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }

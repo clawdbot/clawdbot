@@ -6,15 +6,17 @@
     <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पिछला %1$s"</string>
     <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अगला %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नियंत्रण"</string>
-    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलें"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"वॉच ऑडियो विफल रहा"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलकर लिखें"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"लाइव"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"थ्रेड"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"थ्रेड खोलें"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← स्वाइप करें →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दबाकर रखें"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टैप करें"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"दो बार टैप करें"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"नए संदेश दिखाएँ"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बातचीत यहाँ देखने के लिए Live शुरू करें।"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नया"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप करें"</string>
@@ -29,7 +31,7 @@
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कनेक्ट हो रहा है"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सोच रहा है"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"टाइप कर रहा है"</string>
-    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेज रहा है"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"भेजा जा रहा है"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट काम कर रहा है"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"त्रुटि"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"तैयार"</string>
@@ -58,7 +60,7 @@
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"एजेंट, सत्र और चैट पढ़े जा रहे हैं"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन तैयार है"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway कनेक्ट है"</string>
-    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन है"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ऑफ़लाइन"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जोड़े गए फ़ोन पर OpenClaw में Gateway को फिर से कनेक्ट करें।"</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन पर OpenClaw खोलें"</string>
     <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"घड़ी कभी भी स्वयं Gateway को शुरू या प्रमाणित नहीं करती है।"</string>
@@ -72,7 +74,7 @@
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपडेट आवश्यक है"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन और घड़ी, दोनों पर OpenClaw अपडेट करें।"</string>
     <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"रीफ़्रेश करें"</string>
-    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फिर से प्रयास करें"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पुनः प्रयास करें"</string>
     <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw के जवाब"</string>
     <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब दें"</string>
     <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw का जवाब"</string>
@@ -84,4 +86,30 @@
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सत्र खोलें और अपने युग्मित फ़ोन के ज़रिए जवाब दें"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"खोलें"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन प्रॉक्सी"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"बैकग्राउंड टास्क"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"सत्र स्वार्म"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ध्यान दें"</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"स्थिति: %1$s"</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"तैयार"</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"रीफ़्रेश हो रहा है"</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"अनुपलब्ध"</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse लोड हो रहा है"</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पेयर किए गए फ़ोन से सीमाबद्ध समुच्चय पढ़े जा रहे हैं।"</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"कतार में"</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"चल रहा है"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"पूर्ण"</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"हो गया"</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"विफल"</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"समूह"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"लंबित अनुरोध"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"सीमाबद्ध सक्रिय और हालिया स्नैपशॉट"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"सक्रिय कार्य सूची अपनी सीमा पर है"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"हालिया कार्य सूची अपनी सीमा पर है"</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"सक्रिय"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"निष्क्रिय"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"चरण %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"कतारबद्ध %1$d, चल रहे %2$d, पूर्ण %3$d, विफल %4$d, छिपे %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"और चरण नहीं दिखाए गए"</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"अज्ञात"</string>
 </resources>

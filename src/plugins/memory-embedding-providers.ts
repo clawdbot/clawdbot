@@ -1,192 +1,116 @@
-import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
-// Resolves plugin-provided memory embedding providers from config and registry.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretInput } from "../config/types.secrets.js";
+import type {
+  EmbeddingInput,
+  EmbeddingProvider,
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCallOptions,
+  EmbeddingProviderCreateOptions,
+} from "./embedding-provider-types.js";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCreateOptions,
+} from "./registry-contribution-types.js";
 
-/** Chunk submitted to memory embedding batch processing. */
-export type MemoryEmbeddingBatchChunk = {
-  text: string;
-  embeddingInput?: EmbeddingInput;
-};
+const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 
-/** Options for batch memory embedding work. */
-export type MemoryEmbeddingBatchOptions = {
-  agentId: string;
-  chunks: MemoryEmbeddingBatchChunk[];
-  wait: boolean;
-  concurrency: number;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug: (message: string, data?: Record<string, unknown>) => void;
-};
+export type {
+  MemoryEmbeddingBatchChunk,
+  MemoryEmbeddingBatchOptions,
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
+  MemoryEmbeddingProviderCreateOptions,
+  MemoryEmbeddingProviderCreateResult,
+  MemoryEmbeddingProviderIndexIdentity,
+  MemoryEmbeddingProviderRuntime,
+} from "./registry-contribution-types.js";
 
-/** Per-call options for memory embedding providers. */
-export type MemoryEmbeddingProviderCallOptions = {
-  signal?: AbortSignal;
-};
+function embeddingInputText(input: EmbeddingInput): string {
+  return typeof input === "string" ? input : input.text;
+}
 
-/** Runtime metadata returned with memory embedding providers. */
-export type MemoryEmbeddingProviderRuntime = {
-  id: string;
-  cacheKeyData?: Record<string, unknown>;
-  /** Prior persisted model/cache identities that are equivalent to the current identity. */
-  indexIdentityAliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-  inlineQueryTimeoutMs?: number;
-  inlineBatchTimeoutMs?: number;
-  sourceWideBatchEmbed?: boolean;
-  batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
-};
+function memoryCreateOptions(
+  options: EmbeddingProviderCreateOptions,
+): Parameters<MemoryEmbeddingProviderAdapter["create"]>[0] {
+  // Runtime callers may carry memory-owner extensions such as acquireLocalService.
+  // Preserve them while translating the two fields renamed by the generic contract.
+  const { dimensions, taskType, ...base } = options;
+  return {
+    ...base,
+    fallback: "none",
+    ...(typeof dimensions === "number" ? { outputDimensionality: dimensions } : {}),
+    taskType: taskType as MemoryEmbeddingProviderCreateOptions["taskType"],
+  };
+}
 
-/** Provider-owned canonical identity and exact aliases for persisted indexes. */
-export type MemoryEmbeddingProviderIndexIdentity = {
-  model: string;
-  cacheKeyData: Record<string, unknown>;
-  aliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-};
+type MemoryEmbeddingInput = Parameters<
+  NonNullable<MemoryEmbeddingProvider["embedBatchInputs"]>
+>[0][number];
 
-/** Created memory embedding provider instance. */
-export type MemoryEmbeddingProvider = {
-  id: string;
-  model: string;
-  maxInputTokens?: number;
-  embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
-  embedBatch: (
-    texts: string[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  embedBatchInputs?: (
+function memoryEmbeddingInput(input: EmbeddingInput): MemoryEmbeddingInput {
+  return typeof input === "string" ? { text: input } : input;
+}
+
+function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): EmbeddingProvider {
+  const embedBatch = async (
     inputs: EmbeddingInput[],
-    options?: MemoryEmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  close?: () => Promise<void> | void;
-};
-
-/** Options passed to memory embedding provider adapters. */
-export type MemoryEmbeddingProviderCreateOptions = {
-  config: OpenClawConfig;
-  agentDir?: string;
-  provider?: string;
-  fallback?: string;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<number[][]> => {
+    if (options?.inputType === "query") {
+      return await Promise.all(
+        inputs.map((input) => provider.embedQuery(embeddingInputText(input), options)),
+      );
+    }
+    if (provider.embedBatchInputs) {
+      return await provider.embedBatchInputs(inputs.map(memoryEmbeddingInput), options);
+    }
+    return await provider.embedBatch(inputs.map(embeddingInputText), options);
   };
-  model: string;
-  inputType?: string;
-  queryInputType?: string;
-  documentInputType?: string;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
-    contextSize?: number | "auto";
+
+  const adapted: EmbeddingProvider = {
+    id: provider.id,
+    model: provider.model,
+    ...(typeof provider.maxInputTokens === "number"
+      ? { maxInputTokens: provider.maxInputTokens }
+      : {}),
+    embed: async (input, options) => {
+      if (options?.inputType === "query") {
+        return await provider.embedQuery(embeddingInputText(input), options);
+      }
+      return (await embedBatch([input], options))[0] ?? [];
+    },
+    embedBatch,
+    ...(provider.close ? { close: async () => await provider.close?.() } : {}),
   };
-  outputDimensionality?: number;
-  taskType?:
-    | "RETRIEVAL_QUERY"
-    | "RETRIEVAL_DOCUMENT"
-    | "SEMANTIC_SIMILARITY"
-    | "CLASSIFICATION"
-    | "CLUSTERING"
-    | "QUESTION_ANSWERING"
-    | "FACT_VERIFICATION";
-};
-
-/** Result returned by a memory embedding provider adapter. */
-export type MemoryEmbeddingProviderCreateResult = {
-  provider: MemoryEmbeddingProvider | null;
-  runtime?: MemoryEmbeddingProviderRuntime;
-};
-
-/** Adapter contract for registered memory embedding providers. */
-export type MemoryEmbeddingProviderAdapter = {
-  id: string;
-  defaultModel?: string;
-  transport?: "local" | "remote";
-  authProviderId?: string;
-  autoSelectPriority?: number;
-  allowExplicitWhenConfiguredAuto?: boolean;
-  supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
-  resolveIndexIdentity?: (
-    options: MemoryEmbeddingProviderCreateOptions,
-  ) => MemoryEmbeddingProviderIndexIdentity;
-  create: (
-    options: MemoryEmbeddingProviderCreateOptions,
-  ) => Promise<MemoryEmbeddingProviderCreateResult>;
-  formatSetupError?: (err: unknown) => string;
-  shouldContinueAutoSelection?: (err: unknown) => boolean;
-};
-
-/** Registered memory embedding provider with optional owning plugin metadata. */
-export type RegisteredMemoryEmbeddingProvider = {
-  adapter: MemoryEmbeddingProviderAdapter;
-  ownerPluginId?: string;
-};
-
-const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
-
-function getMemoryEmbeddingProviders(): Map<string, RegisteredMemoryEmbeddingProvider> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[MEMORY_EMBEDDING_PROVIDERS_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, RegisteredMemoryEmbeddingProvider>;
-  }
-  const created = new Map<string, RegisteredMemoryEmbeddingProvider>();
-  globalStore[MEMORY_EMBEDDING_PROVIDERS_KEY] = created;
-  return created;
-}
-
-/** Registers a memory embedding provider adapter for the current process. */
-export function registerMemoryEmbeddingProvider(
-  adapter: MemoryEmbeddingProviderAdapter,
-  options?: { ownerPluginId?: string },
-): void {
-  getMemoryEmbeddingProviders().set(adapter.id, {
-    adapter,
-    ownerPluginId: options?.ownerPluginId,
-  });
-}
-
-/** Returns a registered memory embedding provider entry. */
-export function getRegisteredMemoryEmbeddingProvider(
-  id: string,
-): RegisteredMemoryEmbeddingProvider | undefined {
-  return getMemoryEmbeddingProviders().get(id);
-}
-
-/** Returns only the memory embedding provider adapter. */
-export function getMemoryEmbeddingProvider(id: string): MemoryEmbeddingProviderAdapter | undefined {
-  return getMemoryEmbeddingProviders().get(id)?.adapter;
-}
-
-/** Lists registered memory embedding provider entries. */
-export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
-  return Array.from(getMemoryEmbeddingProviders().values());
-}
-
-/** Lists registered memory embedding provider adapters. */
-export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[] {
-  return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
-}
-/** Replaces registered memory embedding providers while preserving metadata. */
-export function restoreRegisteredMemoryEmbeddingProviders(
-  entries: RegisteredMemoryEmbeddingProvider[],
-): void {
-  getMemoryEmbeddingProviders().clear();
-  for (const entry of entries) {
-    registerMemoryEmbeddingProvider(entry.adapter, {
-      ownerPluginId: entry.ownerPluginId,
+  const getRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
+  if (typeof getRuntimeFacts === "function") {
+    Object.defineProperty(adapted, LOCAL_EMBEDDING_RUNTIME_FACTS, {
+      enumerable: false,
+      value: getRuntimeFacts,
     });
   }
+  return adapted;
 }
 
-/** Clears registered memory embedding providers. */
-export function clearMemoryEmbeddingProviders(): void {
-  getMemoryEmbeddingProviders().clear();
+/** Adapt a memory-aware provider implementation to the generic registration contract. */
+export function adaptMemoryEmbeddingProviderAdapter(
+  adapter: MemoryEmbeddingProviderAdapter,
+): EmbeddingProviderAdapter {
+  const { create: _create, resolveIndexIdentity, ...metadata } = adapter;
+  return {
+    ...metadata,
+    ...(resolveIndexIdentity
+      ? {
+          resolveIndexIdentity: (options: EmbeddingProviderCreateOptions) =>
+            resolveIndexIdentity(memoryCreateOptions(options)),
+        }
+      : {}),
+    create: async (options) => {
+      const result = await adapter.create(memoryCreateOptions(options));
+      return {
+        ...result,
+        provider: result.provider ? adaptMemoryEmbeddingProvider(result.provider) : null,
+      };
+    },
+  };
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
@@ -13,42 +14,8 @@ enum SystemAgentDraft: String, Decodable {
     }
 }
 
-@MainActor
-@Observable
-final class OnboardingSystemAgentChatState {
-    var chat = SystemAgentOnboardingChatModel()
-    var isPresented = false
-    @ObservationIgnored private var startTask: Task<Void, Never>?
-
-    @discardableResult
-    func presentAndStart() -> Task<Void, Never> {
-        self.isPresented = true
-        if let startTask {
-            return startTask
-        }
-        let chat = self.chat
-        let task = Task { await chat.startIfNeeded() }
-        self.startTask = task
-        return task
-    }
-
-    func waitForStartIfNeeded() async {
-        let task = self.startTask
-        await task?.value
-    }
-
-    func resetForGatewayChange() {
-        self.isPresented = false
-        self.startTask?.cancel()
-        self.startTask = nil
-        self.chat.invalidate()
-        self.chat = SystemAgentOnboardingChatModel()
-    }
-}
-
-/// Onboarding talks to OpenClaw over the gateway `openclaw.chat` RPC.
-/// The conversation is available after structured setup establishes working
-/// inference, so the model-backed helper can answer reliably.
+/// Settings talks to OpenClaw over the gateway `openclaw.chat` RPC after
+/// inference is configured, so the model-backed helper can answer reliably.
 @MainActor
 @Observable
 final class SystemAgentOnboardingChatModel {
@@ -474,9 +441,11 @@ private struct SystemAgentChatBubble: View {
             if self.message.role == .user {
                 Spacer(minLength: 40)
             }
-            Text(self.attributedText)
-                .font(.callout)
-                .textSelection(.enabled)
+            OpenClawChatMarkdownView(
+                text: self.message.text,
+                isUserMessage: self.message.role == .user,
+                variant: .compact,
+                textColor: .primary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .background(
@@ -488,29 +457,5 @@ private struct SystemAgentChatBubble: View {
                 Spacer(minLength: 40)
             }
         }
-    }
-
-    private var attributedText: AttributedString {
-        // OpenClaw replies use light markdown (headings, bold, backticks).
-        // Parse per line so multi-line replies keep their structure.
-        var result = AttributedString()
-        let lines = self.message.text.split(separator: "\n", omittingEmptySubsequences: false)
-        for (index, line) in lines.enumerated() {
-            var text = String(line)
-            var isHeading = false
-            if text.hasPrefix("## ") {
-                text = String(text.dropFirst(3))
-                isHeading = true
-            }
-            var piece = (try? AttributedString(markdown: text)) ?? AttributedString(text)
-            if isHeading {
-                piece.font = .headline
-            }
-            result.append(piece)
-            if index < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
     }
 }

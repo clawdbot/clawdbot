@@ -7,7 +7,7 @@ import {
   extractKotlinHandledEvents,
   extractSwiftHandledEvents,
   extractSwiftStaticStringConstants,
-} from "../../scripts/check-protocol-event-coverage.mjs";
+} from "../../scripts/check-protocol-event-coverage.mts";
 
 const GATEWAY_LIST_FIXTURE = `
 export const GATEWAY_EVENTS = [
@@ -88,13 +88,10 @@ describe("extractSwiftHandledEvents", () => {
       if evt.event == "connect.challenge" { return }
     `;
     const handled = extractSwiftHandledEvents(source, constants);
-    expect([...handled].toSorted()).toEqual([
-      "chat",
-      "connect.challenge",
-      "exec.approval.requested",
-      "session.message",
-      "tick",
-    ]);
+    const handledEvents = [...handled] as string[];
+    expect(
+      handledEvents.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    ).toEqual(["chat", "connect.challenge", "exec.approval.requested", "session.message", "tick"]);
   });
 
   it("extracts only type-scoped static string constants", () => {

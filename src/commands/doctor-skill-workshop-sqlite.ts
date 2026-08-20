@@ -1,22 +1,19 @@
 /** Doctor-owned migration of Skill Workshop proposal metadata into shared SQLite. */
 import path from "node:path";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
-  parseSkillProposalRecord,
-  parseSkillProposalRollback,
-  readSkillProposalRecord,
+  readSkillProposal,
   readSkillProposalRollback,
+  validateSkillProposalRecord,
+  validateSkillProposalRollback,
 } from "../skills/workshop/store.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "../skills/workshop/types.js";
 
@@ -36,11 +33,6 @@ type MigrationResult = {
   migrated: number;
 };
 
-function isNotFoundError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "not-found" || code === "ENOENT";
-}
-
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
   const read = await rootDir.read(relativePath, {
     hardlinks: "reject",
@@ -55,9 +47,7 @@ function proposalWorkspace(record: SkillProposalRecord): string {
 }
 
 function configuredAgentIds(config: OpenClawConfig): string[] {
-  return [
-    ...new Set([resolveDefaultAgentId(config), ...listAgentIds(config)].map(normalizeAgentId)),
-  ];
+  return listAgentIds(config);
 }
 
 function inferOwnerAgentId(params: {
@@ -70,13 +60,9 @@ function inferOwnerAgentId(params: {
     return normalizeAgentId(params.record.origin.agentId);
   }
   if (params.record.origin?.sessionKey) {
-    try {
-      return resolveAgentIdFromSessionKey(
-        params.record.origin.sessionKey,
-        resolveDefaultAgentId(params.config),
-      );
-    } catch {
-      // Fall through to the workspace and single-agent evidence below.
+    const sessionAgentId = parseAgentSessionKey(params.record.origin.sessionKey)?.agentId;
+    if (sessionAgentId) {
+      return normalizeAgentId(sessionAgentId);
     }
   }
   const agentIds = configuredAgentIds(params.config);
@@ -96,15 +82,18 @@ async function readLegacyRollback(
   proposalId: string,
 ): Promise<SkillProposalRollback | undefined> {
   try {
-    const rollback = parseSkillProposalRollback(
+    const rollback = validateSkillProposalRollback(
       await readJson(stateRoot, `${PROPOSALS_DIR}/${proposalId}/rollback.json`, MAX_ROLLBACK_BYTES),
     );
-    if (!rollback || rollback.proposalId !== proposalId) {
+    if (!rollback.ok) {
+      throw new Error(rollback.error.message);
+    }
+    if (rollback.value.proposalId !== proposalId) {
       throw new Error("invalid rollback metadata");
     }
-    return rollback;
+    return rollback.value;
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (isMissingPathError(error)) {
       return undefined;
     }
     throw error;
@@ -116,7 +105,9 @@ async function verifyImportedProposal(params: {
   record: SkillProposalRecord;
   rollback?: SkillProposalRollback;
 }): Promise<void> {
-  const imported = await readSkillProposalRecord(params.record.id, { env: params.env });
+  const imported = (
+    await readSkillProposal(params.record.id, { env: params.env }, {}, { reconcile: false })
+  )?.record;
   if (
     !imported ||
     imported.draftHash !== params.record.draftHash ||
@@ -139,10 +130,13 @@ async function migrateProposal(params: {
   stateRoot: Root;
 }): Promise<"imported" | "already-imported"> {
   const proposalDir = `${PROPOSALS_DIR}/${params.proposalId}`;
-  const record = parseSkillProposalRecord(
+  const record = validateSkillProposalRecord(
     await readJson(params.stateRoot, `${proposalDir}/proposal.json`, MAX_RECORD_BYTES),
   );
-  if (!record || record.id !== params.proposalId) {
+  if (!record.ok) {
+    throw new Error(record.error.message);
+  }
+  if (record.value.id !== params.proposalId) {
     throw new Error("invalid proposal metadata");
   }
   const draft = await params.stateRoot.read(`${proposalDir}/PROPOSAL.md`, {
@@ -150,15 +144,15 @@ async function migrateProposal(params: {
     maxBytes: MAX_RECORD_BYTES,
     symlinks: "reject",
   });
-  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.draftHash) {
+  if (hashSkillProposalContent(draft.buffer.toString("utf8")) !== record.value.draftHash) {
     throw new Error("proposal draft hash does not match proposal metadata");
   }
   const rollback = await readLegacyRollback(params.stateRoot, params.proposalId);
-  const workspaceDir = proposalWorkspace(record);
+  const workspaceDir = proposalWorkspace(record.value);
   const ownerAgentId = inferOwnerAgentId({
     config: params.config,
     env: params.env,
-    record,
+    record: record.value,
     workspaceDir,
   });
   if (!ownerAgentId) {
@@ -167,13 +161,13 @@ async function migrateProposal(params: {
     );
   }
   const result = importLegacySkillProposal({
-    record,
+    record: record.value,
     rollback,
     ownerAgentId,
     workspaceDir,
     store: { env: params.env },
   });
-  await verifyImportedProposal({ env: params.env, record, rollback });
+  await verifyImportedProposal({ env: params.env, record: record.value, rollback });
   if (rollback) {
     await params.stateRoot.remove(`${proposalDir}/rollback.json`);
   }
@@ -232,8 +226,8 @@ export async function migrateLegacySkillWorkshopProposals(params: {
       });
       migrated += 1;
     } catch (error) {
-      if (isNotFoundError(error)) {
-        if (await readSkillProposalRecord(proposalId, { env })) {
+      if (isMissingPathError(error)) {
+        if (await readSkillProposal(proposalId, { env }, {}, { reconcile: false })) {
           continue;
         }
       }
@@ -242,7 +236,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   }
   await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH }).catch(
     (error: unknown) => {
-      if (!isNotFoundError(error)) {
+      if (!isMissingPathError(error)) {
         warnings.push(`Failed to remove legacy Skill Workshop proposal index: ${String(error)}`);
       }
     },

@@ -1,10 +1,10 @@
 /** Builds platform-specific log and start hints for daemon status output. */
-import { toPosixPath } from "./output.js";
+import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 // macOS display paths should not keep Windows drive prefixes from mocked envs.
 function toDarwinDisplayPath(value: string): string {
-  return toPosixPath(value).replace(/^[A-Za-z]:/, "");
+  return normalizeWindowsPathSeparators(value).replace(/^[A-Za-z]:/, "");
 }
 
 export function buildPlatformRuntimeLogHints(params: {

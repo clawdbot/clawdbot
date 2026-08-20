@@ -56,6 +56,16 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each([{}, { local: true }])("exposes usage cost in completion and help", (options) => {
+    const commands = getSlashCommands(options);
+    const usage = commands.find((command) => command.name === "usage");
+
+    expect(usage?.description).toContain("cost summary");
+    expect(usage?.getArgumentCompletions?.("co")).toEqual([{ value: "cost", label: "cost" }]);
+    expect(shouldSubmitExactArgumentCompletion("/usage cost", commands)).toBe(true);
+    expect(helpText(options)).toContain("/usage <off|tokens|full|cost|reset|");
+  });
+
   it.each([
     { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
     { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },
@@ -200,6 +210,25 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/openclaw [request]");
+  });
+
+  it.each(["goal", "btw", "queue", "stop"])(
+    "keeps /%s visible in completion and help across TUI modes",
+    (name) => {
+      for (const options of [{}, { local: true }]) {
+        expect(getSlashCommands(options).map((command) => command.name)).toContain(name);
+        expect(helpText(options)).toContain(`/${name}`);
+      }
+    },
+  );
+
+  it.each([{}, { local: true }])("shows required arguments in shared command help", (options) => {
+    const output = helpText(options);
+
+    expect(output).toContain("/goal start <objective>");
+    expect(output).toContain("/goal edit <objective>");
+    expect(output).toContain("/btw <side question>");
+    expect(output).not.toContain("/btw [side question]");
   });
 
   it("does not advertise Gateway-owned commands in local mode", () => {

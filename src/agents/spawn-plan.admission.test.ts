@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
+import {
+  reserveChildAdmissionSlot,
+  resolveChildAdmission,
+  type ChildAdmissionCap,
+} from "./child-admission.js";
 
 type AdmissionParams = Parameters<typeof resolveChildAdmission>[0];
 type AnnounceAdmissionParams = Extract<AdmissionParams, { collect: false }>;
@@ -78,5 +82,69 @@ describe("resolveChildAdmission", () => {
     if (!result.ok) {
       expect(result.error).toContain(governingCap);
     }
+  });
+
+  it("shares pending capacity by controller and releases reservations exactly once", () => {
+    let registeredChildren = 0;
+    const reserve = (controllerSessionKey = "agent:main:controller") =>
+      reserveChildAdmissionSlot({
+        controllerSessionKey,
+        resolveAdmission: (pendingChildren) =>
+          resolveChildAdmission(
+            announce({
+              activeChildren: registeredChildren + pendingChildren,
+              maxActiveChildren: 1,
+            }),
+          ),
+      });
+    const first = reserve();
+    const otherController = reserve("agent:main:other-controller");
+    if (!first.ok || !otherController.ok) {
+      throw new Error("Expected independent controller reservations");
+    }
+
+    expect(reserve()).toMatchObject({
+      ok: false,
+      governingCap: "subagents.maxChildrenPerAgent",
+    });
+    first.release();
+    first.release();
+    otherController.release();
+
+    const replacement = reserve();
+    if (!replacement.ok) {
+      throw new Error("Expected released controller capacity");
+    }
+    registeredChildren += 1;
+    replacement.release();
+    expect(reserve()).toMatchObject({
+      ok: false,
+      governingCap: "subagents.maxChildrenPerAgent",
+    });
+  });
+
+  it("preserves caller-owned fields on both admission outcomes", () => {
+    const reserve = (accept: boolean) =>
+      reserveChildAdmissionSlot({
+        controllerSessionKey: "agent:main:payload-controller",
+        resolveAdmission: () =>
+          accept
+            ? { ok: true as const, maxSpawnDepth: 2 }
+            : { ok: false as const, activeChildren: 1 },
+      });
+
+    const accepted = reserve(true);
+    if (!accepted.ok) {
+      throw new Error("Expected accepted child reservation");
+    }
+    expect(accepted.maxSpawnDepth).toBe(2);
+    accepted.release();
+
+    const rejected = reserve(false);
+    if (rejected.ok) {
+      rejected.release();
+      throw new Error("Expected rejected child reservation");
+    }
+    expect(rejected.activeChildren).toBe(1);
   });
 });

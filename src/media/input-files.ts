@@ -1,7 +1,12 @@
 // Input file helpers normalize inline, fetched, and local media inputs.
+import {
+  classifyAttachmentBytes,
+  type AttachmentClassification,
+} from "@openclaw/media-core/attachment-classify";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -12,7 +17,6 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
@@ -101,7 +105,6 @@ type InputFileSource =
 /** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {
   buffer: Buffer;
-  mimeType: string;
   contentType?: string;
 };
 
@@ -153,12 +156,6 @@ function rejectOversizedBase64Payload(params: {
       `${params.label} too large: ${estimated} bytes (limit: ${params.maxBytes} bytes)`,
     );
   }
-}
-
-/** Normalizes a MIME value by stripping parameters and lowercasing the media type. */
-export function normalizeMimeType(value: string | undefined): string | undefined {
-  const [raw] = value?.split(";") ?? [];
-  return normalizeOptionalLowercaseString(raw);
 }
 
 /** Parses a Content-Type header into normalized MIME and optional charset values. */
@@ -240,10 +237,8 @@ async function fetchWithGuard(params: {
 
     const buffer = await readResponseWithLimit(response, params.maxBytes);
 
-    const contentType = response.headers.get("content-type") || undefined;
-    const parsed = parseContentType(contentType);
-    const mimeType = parsed.mimeType ?? "application/octet-stream";
-    return { buffer, mimeType, contentType };
+    const contentType = response.headers.get("content-type") ?? undefined;
+    return { buffer, contentType };
   } finally {
     await release();
   }
@@ -335,20 +330,6 @@ async function normalizeInputImage(params: {
   };
 }
 
-async function resolveInputFileMime(params: {
-  buffer: Buffer;
-  declaredMime?: string;
-}): Promise<string | undefined> {
-  const sniffedMime = normalizeMimeType(await detectMime({ buffer: params.buffer }));
-  if (!sniffedMime) {
-    return params.declaredMime;
-  }
-  if (sniffedMime === "application/octet-stream") {
-    return params.declaredMime ?? sniffedMime;
-  }
-  return sniffedMime;
-}
-
 /** Extracts and normalizes an input_image source from base64 or guarded URL input. */
 export async function extractImageContentFromSource(
   source: InputImageSource,
@@ -390,7 +371,7 @@ export async function extractImageContentFromSource(
     });
     return await normalizeInputImage({
       buffer: result.buffer,
-      mimeType: result.mimeType,
+      mimeType: parseContentType(result.contentType).mimeType,
       limits,
     });
   }
@@ -403,6 +384,7 @@ export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
   config?: OpenClawConfig;
+  classification?: AttachmentClassification;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
   const filename = source.filename || "file";
@@ -437,7 +419,7 @@ export async function extractFileContentFromSource(params: {
       auditContext: "openresponses.input_file",
     });
     const parsed = parseContentType(result.contentType);
-    mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);
+    mimeType = parsed.mimeType;
     charset = parsed.charset;
     buffer = result.buffer;
   }
@@ -446,7 +428,12 @@ export async function extractFileContentFromSource(params: {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
 
-  mimeType = await resolveInputFileMime({ buffer, declaredMime: mimeType });
+  // Direct input_file callers declare their content type; the filename is
+  // display metadata and must not override an explicitly allowlisted MIME.
+  const classification =
+    params.classification ?? (await classifyAttachmentBytes({ buffer, declaredMime: mimeType }));
+  mimeType = classification.mime;
+  charset = classification.charset ?? charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");

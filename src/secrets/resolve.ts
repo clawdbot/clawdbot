@@ -1,4 +1,4 @@
-/** Resolves SecretRef values from env, file, and exec secret providers. */
+/** Resolves SecretRef values from env, file, exec, and store secret providers. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -16,7 +16,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -32,12 +32,13 @@ import {
 } from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isBuiltInDefaultSecretProviderRef,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
-  SINGLE_VALUE_FILE_REF_ID,
-  resolveDefaultSecretProviderAlias,
+  resolveSecretRefProviderSourceMismatch,
   secretRefKey,
+  SINGLE_VALUE_FILE_REF_ID,
 } from "./ref-contract.js";
 import {
   isMissingSecretRefResolutionError,
@@ -46,6 +47,7 @@ import {
   providerResolutionError,
   refResolutionError,
 } from "./resolve-errors.js";
+import { resolveStoreRefs } from "./resolve-store.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import {
   isNonEmptyString,
@@ -99,7 +101,17 @@ function throwUnknownProviderResolutionError(params: {
   if (isSecretResolutionError(params.err)) {
     throw params.err;
   }
+  // fs-safe 0.5 exposes one fail-closed receipt for failed permission inspection,
+  // unavailable ACL data, and indeterminate owner trust. Keep the diagnostic path-free.
+  const isWindowsPathSecurityFailure =
+    process.platform === "win32" &&
+    (params.source === "file" || params.source === "exec") &&
+    params.err instanceof FsSafeError &&
+    params.err.code === "permission-unverified";
   throw providerResolutionError({
+    ...(isWindowsPathSecurityFailure
+      ? { code: "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE" as const }
+      : {}),
     source: params.source,
     provider: params.provider,
     message: formatErrorMessage(params.err),
@@ -146,23 +158,29 @@ function resolveConfiguredProvider(params: {
 }): SecretProviderConfig {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
-  if (!providerConfig) {
-    if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
+  if (isBuiltInDefaultSecretProviderRef(config, ref)) {
+    if (ref.source === "env") {
       return { source: "env" };
     }
+    if (ref.source === "store") {
+      return { source: "store" };
+    }
+  }
+  if (!providerConfig) {
     throw providerResolutionError({
-      code: "SECRET_PROVIDER_INVALID",
+      code: "SECRET_PROVIDER_NOT_CONFIGURED",
       source: ref.source,
       provider: ref.provider,
       message: `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
     });
   }
-  if (providerConfig.source !== ref.source) {
+  const configuredSource = resolveSecretRefProviderSourceMismatch(config, ref);
+  if (configuredSource) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",
       source: ref.source,
       provider: ref.provider,
-      message: `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+      message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
     });
   }
   if (isPluginIntegrationSecretProviderConfig(providerConfig)) {
@@ -173,7 +191,7 @@ function resolveConfiguredProvider(params: {
         env: params.env,
         allowWorkspaceScopedSnapshot: true,
       })?.manifestRegistry ??
-      loadPluginManifestRegistry({
+      loadPluginManifestRegistryCore({
         config,
         env: params.env,
       });
@@ -200,7 +218,6 @@ async function assertSecurePath(params: {
   targetPath: string;
   label: string;
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
   allowSymlinkPath?: boolean;
 }): Promise<string> {
@@ -235,10 +252,6 @@ async function assertSecurePath(params: {
       throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
     }
   }
-  if (params.allowInsecurePath) {
-    return effectivePath;
-  }
-
   const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
     throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
@@ -250,8 +263,9 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
+    throw new FsSafeError(
+      "permission-unverified",
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
     );
   }
 
@@ -669,6 +683,13 @@ async function resolveProviderRefs(params: {
         cache: params.options.cache,
       });
     }
+    if (params.providerConfig.source === "store") {
+      return resolveStoreRefs({
+        refs: params.refs,
+        providerName: params.providerName,
+        database: { env: params.options.env ?? process.env },
+      });
+    }
     if (params.providerConfig.source === "exec") {
       if (isPluginIntegrationSecretProviderConfig(params.providerConfig)) {
         throw providerResolutionError({
@@ -722,6 +743,11 @@ function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
     if (ref.source === "file" && !isValidFileSecretRefId(id)) {
       throw new Error(
         `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
       );
     }
     if (ref.source === "exec" && !isValidExecSecretRefId(id)) {

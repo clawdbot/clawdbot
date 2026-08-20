@@ -1,5 +1,4 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
-// Telegram helper module supports config ui hints behavior.
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -25,55 +24,31 @@ export const telegramChannelConfigUiHints = {
       denyNote: "Native bot mentions still trigger.",
     },
     nativeCommands: true,
-  }),
-  streaming: {
-    label: "Telegram Streaming Mode",
-    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
-  },
-  "streaming.mode": {
-    label: "Telegram Streaming Mode",
-    help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
-  },
-  "streaming.chunkMode": {
-    label: "Telegram Chunk Mode",
-    help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
-  },
-  richMessages: {
-    label: "Telegram Rich Messages",
-    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
-  },
-  "streaming.block.enabled": {
-    label: "Telegram Block Streaming Enabled",
-    help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',
-  },
-  "streaming.block.coalesce": {
-    label: "Telegram Block Streaming Coalesce",
-    help: "Merge streamed Telegram block replies before sending final delivery.",
-  },
-  "streaming.preview.chunk.minChars": {
-    label: "Telegram Draft Chunk Min Chars",
-    help: 'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
-  },
-  "streaming.preview.chunk.maxChars": {
-    label: "Telegram Draft Chunk Max Chars",
-    help: 'Target max size for a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
-  },
-  "streaming.preview.chunk.breakPreference": {
-    label: "Telegram Draft Chunk Break Preference",
-    help: "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
-  },
-  "streaming.preview.toolProgress": {
-    label: "Telegram Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
-  },
-  "streaming.preview.commandText": {
-    label: "Telegram Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  ...createChannelConfigUiHints({
-    channelLabel: "Telegram",
+    streaming: {
+      "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "progress"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
+      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
+      chunkMode:
+        'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+      "block.enabled":
+        "Enable normal Telegram block replies. This takes precedence over editable preview delivery.",
+      "block.coalesce": "Merge streamed Telegram block replies before sending final delivery.",
+      "preview.chunk.minChars":
+        'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+      "preview.chunk.maxChars":
+        'Target max size for a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+      "preview.chunk.breakPreference":
+        "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
+      "preview.toolProgress":
+        "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
+      "preview.commandText":
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+    },
     progress: { includeCommentary: true, commentaryOrder: "after-command" },
   }),
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.2 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+  },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
     help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",

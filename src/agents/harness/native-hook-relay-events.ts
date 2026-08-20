@@ -1,11 +1,18 @@
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
+import { stableStringify } from "@openclaw/normalization-core";
+import {
+  getAgentToolResultMiddlewareMatcherScope,
+  listAgentToolResultMiddlewares,
+} from "../../plugins/agent-tool-result-middleware.js";
+import { getGlobalHookRunnerRegistry } from "../../plugins/hook-runner-global-state.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { getToolHookMatcherScope } from "../../plugins/hooks.js";
+import { mergePluginToolMatcherScopes } from "../../plugins/tool-hook-matcher.js";
+import { getTrustedToolPolicyMatcherScope } from "../../plugins/trusted-tool-policy.js";
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { stableStringify } from "../stable-stringify.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { payloadTextResult } from "../tools/common.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
@@ -29,6 +36,11 @@ import type {
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
+function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_tool_call") {
+  const registry = getGlobalHookRunnerRegistry();
+  return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
+}
+
 function nativePreToolUseMayRunLoopDetection(
   registration: ActiveNativeHookRelayRegistration,
 ): boolean {
@@ -39,7 +51,7 @@ function nativePreToolUseMayRunLoopDetection(
     cfg: registration.config,
     agentId: registration.agentId,
   });
-  return loopDetection?.enabled !== false;
+  return loopDetection?.enabled === true;
 }
 
 export function nativeHookRelayEventHasLocalWork(
@@ -58,6 +70,32 @@ export function nativeHookRelayEventHasLocalWork(
     return hasGlobalHooks("before_agent_finalize");
   }
   return true;
+}
+
+export function nativeHookRelayEventToolMatcher(
+  registration: ActiveNativeHookRelayRegistration,
+  event: NativeHookRelayEvent,
+): readonly string[] | undefined {
+  if (event === "pre_tool_use") {
+    if (nativePreToolUseMayRunLoopDetection(registration)) {
+      return undefined;
+    }
+    // Relay selection and policy execution must read the same scoped/root registry.
+    const policyRegistry = getGlobalHookRunnerRegistry();
+    const scope = mergePluginToolMatcherScopes([
+      getGlobalToolHookMatcherScope("before_tool_call"),
+      getTrustedToolPolicyMatcherScope(policyRegistry),
+    ]);
+    return scope?.matchAll ? undefined : scope?.toolNames;
+  }
+  if (event === "post_tool_use") {
+    const scope = mergePluginToolMatcherScopes([
+      getGlobalToolHookMatcherScope("after_tool_call"),
+      getAgentToolResultMiddlewareMatcherScope("codex"),
+    ]);
+    return scope?.matchAll ? undefined : scope?.toolNames;
+  }
+  return undefined;
 }
 
 export async function processNativeHookRelayInvocation(params: {
@@ -86,25 +124,35 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
-  const outcome = await runBeforeToolCallHook({
+  const policyRequest = {
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-    ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
     signal: params.registration.signal,
-    ctx: {
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      ...(params.registration.config ? { config: params.registration.config } : {}),
-      runId: params.registration.runId,
-      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.registration.requester ? { requester: params.registration.requester } : {}),
-      ...(params.invocation.cwd
-        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
-        : {}),
-    },
-  });
+  };
+  const outcome = params.registration.runBeforeToolCall
+    ? await params.registration.runBeforeToolCall({
+        ...policyRequest,
+        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ...(params.invocation.cwd ? { nativeOperation: { cwd: params.invocation.cwd } } : {}),
+      })
+    : await runBeforeToolCallHook({
+        ...policyRequest,
+        ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
+        ctx: {
+          ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+          sessionId: params.registration.sessionId,
+          ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+          ...(params.registration.config ? { config: params.registration.config } : {}),
+          runId: params.registration.runId,
+          ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+          ...(params.registration.requester ? { requester: params.registration.requester } : {}),
+          ...params.registration.approvalContext,
+          ...(params.invocation.cwd
+            ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+            : {}),
+        },
+      });
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(
       outcome.reason,

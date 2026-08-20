@@ -1,15 +1,22 @@
 // ClawHub lifecycle facade: public API plus install/update coordination.
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  downloadClawHubSkillArchive,
+  normalizeClawHubSha256Integrity,
+} from "../../infra/clawhub-artifacts.js";
 import type {
   ClawHubRiskAcknowledgementRequest,
   ClawHubTrustErrorCode,
 } from "../../infra/clawhub-install-trust.js";
 import {
-  downloadClawHubSkillArchive,
-  normalizeClawHubSha256Integrity,
-} from "../../infra/clawhub.js";
+  CLAWHUB_SKILLS_SH_REF_PREFIX,
+  fetchClawHubSkillVerification,
+  type ClawHubSkillVerificationResponse,
+} from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
 import {
   normalizeTrackedSkillSlug,
@@ -26,6 +33,7 @@ import {
   type InstallClawHubSkillResult,
   type Logger,
 } from "./clawhub-install-core.js";
+import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
 import {
   parseRequestedClawHubSkillRef,
@@ -51,6 +59,18 @@ export {
   untrackClawHubSkill,
   type ClawHubSkillsLockfileStatusRead,
 } from "./clawhub-store.js";
+
+export async function verifySkillWithClawHub(
+  params: Parameters<typeof fetchClawHubSkillVerification>[0],
+): Promise<Result<ClawHubSkillVerificationResponse, string>> {
+  try {
+    return ok(await fetchClawHubSkillVerification(params));
+  } catch (error) {
+    return resultError(
+      formatClawHubSkillRequestError(error, { slug: params.slug, operation: "verify" }),
+    );
+  }
+}
 
 type UpdateClawHubSkillResult =
   | {
@@ -87,7 +107,7 @@ async function resolveRequestedUpdateSlug(params: {
 }): Promise<string> {
   const requested = params.requestedSlug.trim();
   const requestedRef =
-    requested.startsWith("@") || requested.startsWith("skills-sh:")
+    requested.startsWith("@") || requested.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)
       ? parseRequestedClawHubSkillRef(requested)
       : { slug: normalizeTrackedSkillSlug(requested) };
   const trackedSlug = requestedRef.slug;
@@ -315,6 +335,7 @@ export async function installSkillFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   /** True when a Claw lifecycle caller already owns package coordination. */
   clawManaged?: boolean;
 }): Promise<InstallClawHubSkillResult> {
@@ -336,6 +357,7 @@ export async function updateSkillsFromClawHub(params: {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<UpdateClawHubSkillResult[]> {
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
   const slugs = params.slug
@@ -375,6 +397,7 @@ export async function updateSkillsFromClawHub(params: {
           onClawHubRisk: params.onClawHubRisk,
           logger: params.logger,
           config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
         }),
       { required: true },
     );

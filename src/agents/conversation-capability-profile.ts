@@ -7,6 +7,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -21,18 +23,37 @@ import {
   resolveRequesterToolPolicies,
   type RequesterToolPolicySource,
 } from "./requester-tool-policy.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
   type ToolPolicyLike,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 type ConversationCapabilityScope = "direct" | "shared" | "unknown";
+
+function resolveManifestToolProfileNames(
+  snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
+  profile: string | undefined,
+): string[] {
+  if (!profile) {
+    return [];
+  }
+  return uniqueStrings(
+    (snapshot?.plugins ?? []).flatMap((plugin) =>
+      (plugin.contracts?.tools ?? []).filter((toolName) =>
+        plugin.toolMetadata?.[toolName]?.profiles?.some((candidate) => candidate === profile),
+      ),
+    ),
+  );
+}
 
 export type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
@@ -51,6 +72,7 @@ export type ConversationCapabilityProfileParams = {
   chatType?: string;
   messageTo?: string | null;
   messageThreadId?: string | number | null;
+  conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string | null;
   currentMessagingTarget?: string | null;
   currentThreadTs?: string | null;
@@ -81,9 +103,10 @@ export type ConversationCapabilityProfileParams = {
   /** Persist the runtime allowlist as real parent authority on spawned children. */
   inheritRuntimeToolAllowlist?: boolean;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   inputProvenance?: InputProvenance;
-  /** Trusted in-process completion handoff; public callers cannot set this fact. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process completion capability; public callers cannot set this fact. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -229,13 +252,23 @@ export function resolveConversationCapabilityProfile(
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+    conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
-  const profilePolicy = resolveToolProfilePolicy(effective.profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(effective.profile),
+    resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
+  );
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(effective.providerProfile),
+    resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.providerProfile),
+  );
   const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,

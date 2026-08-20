@@ -900,7 +900,7 @@ test("adding a widget preserves the existing native webview identity", async () 
     message: { role: "assistant", content: [widgetBlock("first"), widgetBlock("second")] },
   });
   await harness.flushWidgets();
-  const layouts = harness.syncedWidgets().map((layout: object) => ({ ...layout }));
+  const layouts = harness.syncedWidgets().map((layout: object) => Object.assign({}, layout));
 
   assert.deepEqual(layouts[0], firstLayout);
   assert.equal(layouts[0].visible, true);

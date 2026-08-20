@@ -315,6 +315,28 @@ describe("OpenAI-compatible completions params", () => {
     }
   });
 
+  it("keeps explicit authorization headers when API-key auth is also present", async () => {
+    mockOpenAIOptionsRef.options = [];
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+
+    const result = await streamOpenAICompletions(
+      {
+        ...model,
+        provider: "llama-cpp",
+        headers: { Authorization: "Bearer proxy-key" },
+      },
+      context,
+      { apiKey: "ambient-key" },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockOpenAIOptionsRef.options).toHaveLength(1);
+    expect(mockOpenAIOptionsRef.options[0]).toMatchObject({
+      apiKey: "ambient-key",
+      defaultHeaders: { Authorization: "Bearer proxy-key" },
+    });
+  });
+
   it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
     mockChunksRef.chunks = [makeRefusalChunk("I can't help with that.")];
 
@@ -542,6 +564,46 @@ describe("OpenAI-compatible completions params", () => {
       type: "function",
       function: { name: "lookup" },
     });
+  });
+
+  it("keeps request bytes stable across equivalent tool input order", async () => {
+    const tools = [
+      {
+        name: "zeta_tool",
+        description: "Zeta tool",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "alpha_tool",
+        description: "Alpha tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+    const payloads: string[] = [];
+
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      const stream = streamOpenAICompletions(
+        model,
+        { ...context, tools: orderedTools },
+        {
+          apiKey: "sk-test",
+          onPayload(payload) {
+            payloads.push(JSON.stringify(payload));
+            throw new Error("stop before network");
+          },
+        },
+      );
+      await stream.result();
+    }
+
+    expect(payloads[0]).toBe(payloads[1]);
+    expect(
+      (
+        JSON.parse(payloads[0] ?? "{}") as {
+          tools: Array<{ function: { name: string } }>;
+        }
+      ).tools.map((tool) => tool.function.name),
+    ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
   it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
@@ -858,7 +920,7 @@ describe("OpenAI-compatible completions params", () => {
   });
 
   it("enables Z.AI thinking with the documented payload when requested", async () => {
-    const stream = streamOpenAICompletions(
+    const stream = streamSimpleOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
@@ -868,15 +930,16 @@ describe("OpenAI-compatible completions params", () => {
       context,
       {
         apiKey: "sk-test",
-        reasoningEffort: "high",
+        reasoning: "max",
       },
     );
 
     await stream.result();
 
     expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
-      thinking: { type: "enabled" },
+      thinking: { type: "enabled", clear_thinking: false },
     });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
@@ -1162,68 +1225,29 @@ describe("OpenAI-compatible completions params", () => {
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {
-  it("keeps literal reasoning tag examples visible when no reasoning field is mirrored", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Use `<think>private</think>` only as an example."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+  it.each([
+    {
+      title: "keeps literal reasoning tag examples visible when no reasoning field is mirrored",
       text: "Use `<think>private</think>` only as an example.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("The <reasoning> tag is deprecated in this example."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+      expectedText: "Use `<think>private</think>` only as an example.",
+    },
+    {
+      title: "keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning",
       text: "The <reasoning> tag is deprecated in this example.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unmatched close tags visible without mirrored reasoning", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Use </think> to close the tag."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+      expectedText: "The <reasoning> tag is deprecated in this example.",
+    },
+    {
+      title: "keeps prose mentions of unmatched close tags visible without mirrored reasoning",
       text: "Use </think> to close the tag.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("strips content-only reasoning tags from visible text", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Before <think>private reasoning</think> after"),
-      makeFinishChunk("stop"),
-    ];
+      expectedText: "Use </think> to close the tag.",
+    },
+    {
+      title: "strips content-only reasoning tags from visible text",
+      text: "Before <think>private reasoning</think> after",
+      expectedText: "Before  after",
+    },
+  ])("$title", async ({ text, expectedText }) => {
+    mockChunksRef.chunks = [makeTextChunk(text), makeFinishChunk("stop")];
 
     const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
@@ -1233,7 +1257,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(result.content).toContainEqual({
       type: "text",
-      text: "Before  after",
+      text: expectedText,
     });
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });

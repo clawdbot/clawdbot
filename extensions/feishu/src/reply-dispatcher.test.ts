@@ -1,6 +1,11 @@
 // Feishu tests cover reply dispatcher plugin behavior.
 import os from "node:os";
 import path from "node:path";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -316,10 +321,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   function toTypingDispatcherOptions(result: ReplyDispatcherPlan): TypingDispatcherOptions {
     return { ...result.dispatcherOptions, ...result.delivery };
-  }
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -1583,6 +1584,72 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(error).toBe(marker);
   });
 
+  it("never sends media fallback text after an accepted attachment loses its receipt", async () => {
+    useNonStreamingAutoAccount();
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("Feishu image send failed: no message_id returned"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(acceptedError);
+    const { result, options } = createDispatcherHarness();
+
+    const error = await options
+      .deliver(
+        {
+          text: "caption that must not be duplicated",
+          mediaUrl: "https://example.com/reply.mp3",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
+    await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: "text",
+      text: "already accepted",
+      provider: sendMessageFeishuMock,
+    },
+    {
+      kind: "card",
+      text: "| first | second |\n| - | - |",
+      provider: sendStructuredCardFeishuMock,
+    },
+  ])(
+    "never sends no-visible fallback after an accepted $kind reply loses its receipt",
+    async ({ text, provider }) => {
+      useNonStreamingAutoAccount();
+      const acceptedError = createChannelPartialDeliveryError(
+        new Error("Feishu reply failed: no message_id returned"),
+        { messageIds: [], visibleReplySent: true },
+      );
+      provider.mockRejectedValueOnce(acceptedError);
+      const { result, options } = createDispatcherHarness();
+
+      const error = await options
+        .deliver({ text }, { kind: "final" })
+        .catch((caught: unknown) => caught);
+
+      expect(isChannelPartialDeliveryError(error)).toBe(true);
+      expect(provider).toHaveBeenCalledOnce();
+      await Promise.resolve(options.onError?.(error, { kind: "final" }));
+      expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
+      await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
+      expect(provider).toHaveBeenCalledOnce();
+      if (provider !== sendMessageFeishuMock) {
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("retains the finalized streaming card when companion media never dispatches", async () => {
     const marker = Object.assign(
       new Error("media load failed", { cause: new Error("blocked local load") }),
@@ -2710,7 +2777,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       domain: "feishu",
       config: {
         renderMode: "card",
-        streaming: { mode: "partial" },
+        // Raw command text requires the documented commandText opt-in; the
+        // default "status" mode renders the tool label only.
+        streaming: { mode: "partial", progress: { commandText: "raw" } },
       },
     });
 
@@ -2865,6 +2934,156 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       visibleReplySent: false,
       skippedFinalReason: "silent",
     });
+  });
+
+  it("does not send no-visible-reply fallback after an intentional silent block", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
+  it("preserves a newer silent block when an older queued block fails", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.(
+      { text: "NO_REPLY" },
+      { kind: "block", reason: "silent", assistantMessageIndex: 2 },
+    );
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+    const earlierBlock = { text: "Earlier visible block" };
+    await options.beforeDeliver?.(earlierBlock, {
+      kind: "block",
+      assistantMessageIndex: 1,
+    });
+
+    await expect(options.deliver(earlierBlock, { kind: "block" })).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
+  it("recovers when an unindexed queued block fails after intentional silence", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(
+      options.deliver({ text: "Earlier visible block" }, { kind: "block" }),
+    ).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
+      "without visible content",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("recovers when an indexed block fails after an unindexed silent block", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    const laterBlock = { text: "Later visible block" };
+    await options.beforeDeliver?.(laterBlock, {
+      kind: "block",
+      assistantMessageIndex: 2,
+    });
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(options.deliver(laterBlock, { kind: "block" })).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toBe(
+      "Later visible block",
+    );
+    expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
+      "without visible content",
+    );
+  });
+
+  it("sends no-visible-reply fallback when a newer block fails after intentional silence", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.(
+      { text: "NO_REPLY" },
+      { kind: "block", reason: "silent", assistantMessageIndex: 1 },
+    );
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+    const laterBlock = { text: "Later visible block" };
+    await options.beforeDeliver?.(laterBlock, {
+      kind: "block",
+      assistantMessageIndex: 2,
+    });
+
+    await expect(options.deliver(laterBlock, { kind: "block" })).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toBe(
+      "Later visible block",
+    );
+    expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
+      "without visible content",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("preserves block ordering when a before-delivery hook replaces the payload", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.(
+      { text: "NO_REPLY" },
+      { kind: "block", reason: "silent", assistantMessageIndex: 1 },
+    );
+    const originalBlock = { text: "Later visible block" };
+    await options.beforeDeliver?.(originalBlock, {
+      kind: "block",
+      assistantMessageIndex: 2,
+    });
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(
+      options.deliver({ ...originalBlock, text: "Rewritten visible block" }, { kind: "block" }),
+    ).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toBe(
+      "Rewritten visible block",
+    );
+    expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
+      "without visible content",
+    );
   });
 
   it("sends no-visible-reply fallback when a final fails after an earlier silent skip", async () => {

@@ -1,7 +1,7 @@
 // Gateway session child-discovery helpers.
 // Finds direct parent/child relationships across canonical and legacy fields.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -34,7 +34,7 @@ export function findDirectChildSessionsForParent(params: {
   cfg: OpenClawConfig;
   parentKey: string;
 }): DirectChildSessionEntry[] {
-  const { store } = loadCombinedSessionStoreForGateway(params.cfg);
+  const { store } = loadCombinedSessionStoreForGatewayCore(params.cfg);
   return Object.entries(store)
     .filter(([sessionKey, entry]) =>
       isDirectChildSessionEntry({

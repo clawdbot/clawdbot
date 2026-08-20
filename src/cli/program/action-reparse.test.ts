@@ -61,6 +61,30 @@ describe("reparseProgramFromActionCommand", () => {
     });
   });
 
+  it("hoists a lazy-parent short option with an attached required value", async () => {
+    const root = new Command().name("openclaw");
+    const browser = root.command("browser").option("-p, --browser-profile <name>");
+    const tabs = browser.command("tabs");
+    await expectReparseArgv({
+      parent: browser,
+      action: tabs,
+      argv: ["node", "openclaw", "browser", "tabs", "-premote"],
+      expected: ["node", "openclaw", "browser", "-premote", "tabs"],
+    });
+  });
+
+  it("hoists a lazy-parent short option with an attached optional value", async () => {
+    const root = new Command().name("openclaw");
+    const browser = root.command("browser").option("-p, --browser-profile [name]");
+    const tabs = browser.command("tabs");
+    await expectReparseArgv({
+      parent: browser,
+      action: tabs,
+      argv: ["node", "openclaw", "browser", "tabs", "-premote"],
+      expected: ["node", "openclaw", "browser", "-premote", "tabs"],
+    });
+  });
+
   it("skips root option values that match the parent command name", async () => {
     const root = new Command().name("openclaw").option("--profile <name>");
     const browser = root.command("browser").option("--browser-profile <name>");
@@ -91,6 +115,18 @@ describe("reparseProgramFromActionCommand", () => {
     });
   });
 
+  it("skips an attached root option value that matches the parent command name", async () => {
+    const root = new Command().name("openclaw").option("-p, --profile <name>");
+    const browser = root.command("browser").option("--browser-profile <name>");
+    const tabs = browser.command("tabs");
+    await expectReparseArgv({
+      parent: browser,
+      action: tabs,
+      argv: ["node", "openclaw", "-pbrowser", "browser", "tabs", "--browser-profile", "remote"],
+      expected: ["node", "openclaw", "-pbrowser", "browser", "--browser-profile", "remote", "tabs"],
+    });
+  });
+
   it("hoists parent options after nested lazy commands", async () => {
     const root = new Command().name("openclaw");
     const browser = root.command("browser").option("--browser-profile <name>");
@@ -113,6 +149,79 @@ describe("reparseProgramFromActionCommand", () => {
     const argv = ["node", "openclaw", "browser", "extension", "pair", "--json"];
     await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
   });
+
+  it("leaves a child-owned attached short option after the child command", async () => {
+    const root = new Command().name("openclaw");
+    const browser = root.command("browser").option("-p, --browser-profile <name>");
+    const extension = browser.command("extension");
+    extension.command("pair").option("-p, --pairing-profile <name>");
+    const argv = ["node", "openclaw", "browser", "extension", "pair", "-premote"];
+    await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
+  });
+
+  it("preserves an unknown suffix after a child-owned boolean short flag", async () => {
+    const root = new Command().name("openclaw");
+    const browser = root.command("browser").option("-p, --browser-profile <name>");
+    const extension = browser.command("extension");
+    const pair = extension.command("pair").option("-p, --preview");
+
+    const parsed = pair.parseOptions(["-pfoo"]);
+
+    expect(parsed.unknown).toEqual(["-foo"]);
+    expect(pair.opts()).toEqual({ preview: true });
+
+    const argv = ["node", "openclaw", "browser", "extension", "pair", "-pfoo"];
+    await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
+  });
+
+  it.each([
+    {
+      label: "boolean flags",
+      retryFlags: "-r, --retry",
+      tokens: ["-pr"],
+      expected: { preview: true, retry: true },
+    },
+    {
+      label: "a required attached value",
+      retryFlags: "-r, --retry <value>",
+      tokens: ["-prremote"],
+      expected: { preview: true, retry: "remote" },
+    },
+    {
+      label: "a required separate value",
+      retryFlags: "-r, --retry <value>",
+      tokens: ["-pr", "remote"],
+      expected: { preview: true, retry: "remote" },
+    },
+    {
+      label: "an optional attached value",
+      retryFlags: "-r, --retry [value]",
+      tokens: ["-prremote"],
+      expected: { preview: true, retry: "remote" },
+    },
+    {
+      label: "an optional separate value",
+      retryFlags: "-r, --retry [value]",
+      tokens: ["-pr", "remote"],
+      expected: { preview: true, retry: "remote" },
+    },
+  ] as const)(
+    "preserves child-owned short groups with $label",
+    async ({ retryFlags, tokens, expected }) => {
+      const root = new Command().name("openclaw");
+      const browser = root.command("browser").option("-p, --browser-profile <name>");
+      const extension = browser.command("extension");
+      const pair = extension.command("pair").option("-p, --preview").option(retryFlags);
+
+      const parsed = pair.parseOptions([...tokens]);
+
+      expect(parsed.unknown).toEqual([]);
+      expect(pair.opts()).toEqual(expected);
+
+      const argv = ["node", "openclaw", "browser", "extension", "pair", ...tokens];
+      await expectReparseArgv({ parent: browser, action: extension, argv, expected: argv });
+    },
+  );
 
   it("hoists a parent option when only a sibling command owns the same flag", async () => {
     const root = new Command().name("openclaw");

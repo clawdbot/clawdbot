@@ -1,12 +1,16 @@
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  logVerbose,
+  warn,
+  createSubsystemLogger,
+  createNonExitingRuntime,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -42,7 +46,7 @@ import {
 } from "./provider.startup.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
+import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -60,7 +64,7 @@ export type MonitorDiscordOpts = {
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
@@ -214,12 +218,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ? discordCfg.applicationId.trim()
       : undefined;
   const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
-  const applicationId =
-    parsedApplicationId ??
-    (await discordProviderRuntime.fetchDiscordApplicationId(token, 4000, discordRestFetch));
-  if (!applicationId) {
-    throw new Error("Failed to resolve Discord application id");
+  const applicationIdProbe = parsedApplicationId
+    ? ({ kind: "resolved", applicationId: parsedApplicationId } as const)
+    : await discordProviderRuntime.probeDiscordApplicationId(token, 4000, discordRestFetch);
+  if (applicationIdProbe.kind !== "resolved") {
+    const at = Date.now();
+    const terminal = applicationIdProbe.kind === "rejected";
+    const probeError = formatErrorMessage(applicationIdProbe.error);
+    const message = `Failed to resolve Discord application id: ${probeError}`;
+    opts.setStatus?.({
+      connected: false,
+      lifecycle: terminal ? "blocked" : "recovering",
+      terminalDisconnect: terminal ? true : undefined,
+      lastEventAt: at,
+      lastDisconnect: {
+        at,
+        ...(applicationIdProbe.status !== null ? { status: applicationIdProbe.status } : {}),
+        error: probeError,
+      },
+      lastError: message,
+    });
+    throw new Error(message, { cause: applicationIdProbe.error });
   }
+  const applicationId = applicationIdProbe.applicationId;
   logDiscordStartupPhase({
     runtime,
     accountId: account.accountId,
@@ -233,9 +254,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime,
     nativeEnabled,
     nativeSkillsEnabled,
+    voiceEnabled,
     listSkillCommandsForAgents: discordProviderRuntime.listSkillCommandsForAgents,
     listNativeCommandSpecsForConfig: discordProviderRuntime.listNativeCommandSpecsForConfig,
-    getPluginCommandSpecs: discordProviderRuntime.getPluginCommandSpecs,
   });
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
   const threadBindings = threadBindingsEnabled
@@ -421,6 +442,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       token,
       runtime,
+      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
       botUserId,
@@ -482,7 +505,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }),
     );
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.(createConnectedChannelStatusPatch());
+      opts.setStatus?.(createDiscordReadyStatusPatch());
     }
 
     lifecycleStarted = true;

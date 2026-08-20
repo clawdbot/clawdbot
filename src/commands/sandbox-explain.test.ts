@@ -23,6 +23,32 @@ vi.mock("../config/config.js", async () => {
 });
 
 describe("sandbox explain command", () => {
+  it("honors an explicit agent in an ownerless multi-agent fleet", async () => {
+    mockCfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sandbox: { mode: "off" } },
+        list: [
+          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
+          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
+        ],
+      },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, agent: "research" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.agentId).toBe("research");
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-research-workspace"),
+    );
+  });
+
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = state.statePath(
@@ -127,7 +153,7 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "image"]);
+    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
     expect(parsed.sandbox.tools.deny).not.toContain("browser");
     expect(parsed.sandbox.tools.sources.allow).toEqual({
       source: "agent",
@@ -135,44 +161,49 @@ describe("sandbox explain command", () => {
     });
   });
 
-  it("reports the effective rw workspace and Docker mount without changing workspaceRoot", async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-            workspaceAccess: "rw",
-            workspaceRoot: "/tmp/openclaw-sandboxes",
+  it.each(["docker", "podman"])(
+    "reports the effective rw workspace and %s mount without changing workspaceRoot",
+    async (backend) => {
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend,
+              scope: "agent",
+              workspaceAccess: "rw",
+              workspaceRoot: "/tmp/openclaw-sandboxes",
+            },
           },
+          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
-      },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-    };
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
 
-    const logs: string[] = [];
-    await sandboxExplainCommand({ json: true, agent: "builder" }, {
-      log: (msg: string) => logs.push(msg),
-      error: (msg: string) => logs.push(msg),
-      exit: (_code: number) => {},
-    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, agent: "builder" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
-    const parsed = JSON.parse(logs.join(""));
-    const agentWorkspace = path.resolve("/tmp/openclaw-agent-workspace");
-    expect(parsed.sandbox.workspaceRoot).toBe("/tmp/openclaw-sandboxes");
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(agentWorkspace);
-    expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
-    expect(parsed.sandbox.workspaceSource).toBe("agent");
-    expect(parsed.sandbox.workspaceMounts).toEqual([
-      {
-        hostRoot: agentWorkspace,
-        containerRoot: "/workspace",
-        writable: true,
-        source: "workspace",
-      },
-    ]);
-  });
+      const parsed = JSON.parse(logs.join(""));
+      const agentWorkspace = path.resolve("/tmp/openclaw-agent-workspace");
+      expect(parsed.sandbox.backend).toBe(backend);
+      expect(parsed.sandbox.workspaceRoot).toBe("/tmp/openclaw-sandboxes");
+      expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(agentWorkspace);
+      expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
+      expect(parsed.sandbox.workspaceSource).toBe("agent");
+      expect(parsed.sandbox.workspaceMounts).toEqual([
+        {
+          hostRoot: agentWorkspace,
+          containerRoot: "/workspace",
+          writable: true,
+          source: "workspace",
+        },
+      ]);
+    },
+  );
 
   it("uses the canonical derived workspace for non-default agents", async () => {
     mockCfg = {
@@ -233,8 +264,11 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toMatch(
-      /^\/tmp\/openclaw-sandboxes\/agent-builder-/,
+    expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
+      path.resolve("/tmp/openclaw-sandboxes"),
+    );
+    expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
+      /^workspace-[a-f0-9]{32}$/,
     );
     expect(parsed.sandbox.workspaceSource).toBe("sandbox");
     expect(parsed.sandbox.workspaceMounts).toEqual([

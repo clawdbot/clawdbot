@@ -18,6 +18,7 @@ import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
 } from "../infra/plugin-approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { cloneHookIsolationValue } from "../plugins/hook-isolation.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -31,6 +32,7 @@ import type {
   HookContext,
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
+import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
@@ -149,6 +151,34 @@ function buildPluginApprovalFailureReason(params: {
   return `${params.fallbackReason}\n\n${setupText}`;
 }
 
+function resolveUnavailablePluginApprovalSurfaceReason(ctx?: HookContext): string | undefined {
+  const trigger = ctx?.trigger?.trim();
+  // Legacy/internal callers without run provenance still rely on the Gateway's
+  // live-client check. Embedded agent runs always carry an explicit trigger.
+  if (!trigger) {
+    return undefined;
+  }
+  const initiatingSurface = resolveApprovalInitiatingSurfaceState({
+    channel: ctx?.turnSourceChannel,
+    accountId: ctx?.turnSourceAccountId,
+    cfg: ctx?.config,
+    approvalKind: "plugin",
+  });
+  if (trigger !== "user") {
+    return `Plugin approval unavailable: ${trigger} runs have no approval-capable initiating surface.`;
+  }
+  if (!ctx?.turnSourceChannel?.trim() && !ctx?.approvalReviewerDeviceId?.trim()) {
+    return "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.";
+  }
+  if (initiatingSurface.kind === "disabled") {
+    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface is disabled.`;
+  }
+  if (initiatingSurface.kind === "unsupported") {
+    return `Plugin approval unavailable: the ${initiatingSurface.channelLabel} initiating surface does not support approvals.`;
+  }
+  return undefined;
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -228,38 +258,54 @@ async function requestPluginToolApproval(params: {
           };
     }
 
+    const unavailableSurfaceReason = resolveUnavailablePluginApprovalSurfaceReason(params.ctx);
+    if (unavailableSurfaceReason) {
+      notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
+      return {
+        blocked: true,
+        kind: "failure",
+        disposition: "failed",
+        deniedReason: "plugin-approval-unavailable",
+        reason: unavailableSurfaceReason,
+        params: params.baseParams,
+      };
+    }
+
     gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
       status?: string;
       decision?: unknown;
       deliveryRoute?: string;
-    } = await callGatewayTool(
-      "plugin.approval.request",
-      // Buffer beyond the approval timeout so the gateway can clean up
-      // and respond before the client-side RPC timeout fires.
-      { timeoutMs: gatewayTimeoutMs },
-      {
-        pluginId: approval.pluginId,
-        title: approval.title,
-        description: approval.description,
-        severity: approval.severity,
-        allowedDecisions: approval.allowedDecisions,
-        toolName: params.toolName,
-        toolCallId: params.toolCallId,
-        agentId: params.ctx?.agentId,
-        sessionKey: params.ctx?.sessionKey,
-        ...(params.ctx?.approvalReviewerDeviceId
-          ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
-          : {}),
-        turnSourceChannel: params.ctx?.turnSourceChannel,
-        turnSourceTo: params.ctx?.turnSourceTo,
-        turnSourceAccountId: params.ctx?.turnSourceAccountId,
-        turnSourceThreadId: params.ctx?.turnSourceThreadId,
-        timeoutMs,
-        twoPhase: true,
-      },
-      { expectFinal: false },
+    } = await withGatewayToolApprovalOwner(
+      approval.pluginId,
+      async () =>
+        await callGatewayTool(
+          "plugin.approval.request",
+          // Buffer beyond the approval timeout so the gateway can clean up
+          // and respond before the client-side RPC timeout fires.
+          { timeoutMs: gatewayTimeoutMs },
+          {
+            title: approval.title,
+            description: approval.description,
+            severity: approval.severity,
+            allowedDecisions: approval.allowedDecisions,
+            toolName: params.toolName,
+            toolCallId: params.toolCallId,
+            agentId: params.ctx?.agentId,
+            sessionKey: params.ctx?.sessionKey,
+            ...(params.ctx?.approvalReviewerDeviceId
+              ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
+              : {}),
+            turnSourceChannel: params.ctx?.turnSourceChannel,
+            turnSourceTo: params.ctx?.turnSourceTo,
+            turnSourceAccountId: params.ctx?.turnSourceAccountId,
+            turnSourceThreadId: params.ctx?.turnSourceThreadId,
+            timeoutMs,
+            twoPhase: true,
+          },
+          { expectFinal: false },
+        ),
     );
     gatewayApprovalPhase = "none";
     const id = requestResult?.id;
@@ -311,10 +357,11 @@ async function requestPluginToolApproval(params: {
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
           if (params.signal!.aborted) {
-            reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
             return;
           }
-          onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+          onAbort = () =>
+            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
           params.signal!.addEventListener("abort", onAbort, { once: true });
         });
         try {
@@ -446,18 +493,25 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
   if (!approval) {
     return undefined;
   }
+  // Detach the approval payload from plugin- and caller-owned objects before
+  // the request can outlive this policy pass.
+  const baseParamsSnapshot = cloneHookIsolationValue("before_tool_call", params.baseParams);
+  const overrideParamsSnapshot =
+    params.result?.params === undefined
+      ? undefined
+      : cloneHookIsolationValue("before_tool_call", params.result.params);
   warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
-      params: params.baseParams,
+      params: cloneHookIsolationValue("before_tool_call", baseParamsSnapshot),
       deferredApproval: {
         approval,
         toolName: params.toolName,
         ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
         ...(params.ctx ? { ctx: params.ctx } : {}),
-        baseParams: params.baseParams,
-        overrideParams: params.result?.params,
+        baseParams: baseParamsSnapshot,
+        overrideParams: overrideParamsSnapshot,
       },
     };
   }
@@ -469,7 +523,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
       disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: approval.description || approval.title || "Plugin approval required",
-      params: params.baseParams,
+      params: baseParamsSnapshot,
     };
   }
   if (params.approvalMode === "deny") {
@@ -479,7 +533,7 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
       kind: "veto",
       deniedReason: "plugin-approval",
       reason: "approval_required",
-      params: params.baseParams,
+      params: baseParamsSnapshot,
     };
   }
   return await requestPluginToolApproval({
@@ -488,8 +542,8 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
     ...(params.ctx ? { ctx: params.ctx } : {}),
     signal: params.signal,
-    baseParams: params.baseParams,
-    overrideParams: params.result?.params,
+    baseParams: baseParamsSnapshot,
+    overrideParams: overrideParamsSnapshot,
   });
 }
 
@@ -521,7 +575,7 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
 // Success output schemas do not describe policy-layer terminal results. Track
 // identity so catalog boundaries can reject them without trusting spoofable status fields.
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+function toApprovalErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
   }

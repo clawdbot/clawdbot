@@ -4,7 +4,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
+import { buildBackupStatusValue, readBackupFreshness } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusOverviewRowsFromSurface,
@@ -28,11 +30,39 @@ import {
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
-import type { StatusSummary } from "./status.types.js";
+
+type StatusDegradationSummary = Pick<StatusSummary, "degradedSecretOwners" | "degradedPlugins">;
+
+function buildStatusDegradationRows(
+  summary: StatusDegradationSummary,
+  decorate = (value: string) => value,
+) {
+  const rows: Array<{ Item: string; Value: string }> = [];
+  const secretOwners = summary.degradedSecretOwners ?? [];
+  if (secretOwners.length > 0) {
+    rows.push({
+      Item: "Degraded secrets",
+      Value: decorate(
+        `${secretOwners.length} degraded · ${secretOwners.map((owner) => `${owner.ownerKind}:${owner.ownerId}`).join(", ")}`,
+      ),
+    });
+  }
+  const plugins = summary.degradedPlugins ?? [];
+  if (plugins.length > 0) {
+    rows.push({
+      Item: "Degraded plugins",
+      Value: decorate(
+        `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+      ),
+    });
+  }
+  return rows;
+}
 
 /** Builds the default `openclaw status` overview rows from scan, health, memory, and session inputs. */
 export function buildStatusCommandOverviewRows(
   params: {
+    env: NodeJS.ProcessEnv;
     opts: {
       deep?: boolean;
     };
@@ -66,24 +96,6 @@ export function buildStatusCommandOverviewRows(
   const eventsValue = buildStatusEventsValue({
     queuedSystemEvents: params.summary.queuedSystemEvents,
   });
-  const degradedSecretOwners = params.summary.degradedSecretOwners ?? [];
-  const degradedSecretsValue =
-    degradedSecretOwners.length > 0
-      ? params.warn(
-          `${degradedSecretOwners.length} degraded · ${degradedSecretOwners
-            .map((owner) => `${owner.ownerKind}:${owner.ownerId}`)
-            .join(", ")}`,
-        )
-      : null;
-  const degradedPlugins = params.summary.degradedPlugins ?? [];
-  const degradedPluginsValue =
-    degradedPlugins.length > 0
-      ? params.warn(
-          `${degradedPlugins.length} configured-unavailable · ${degradedPlugins
-            .map((plugin) => plugin.pluginId)
-            .join(", ")}`,
-        )
-      : null;
   const tasksValue = buildStatusTasksValue({
     summary: params.summary,
     warn: params.warn,
@@ -119,6 +131,23 @@ export function buildStatusCommandOverviewRows(
     ok: params.ok,
     warn: params.warn,
   });
+  const hostDesktop = params.summary.hostDesktop ?? {
+    enabled: false,
+    state: "disabled" as const,
+    port: 5900,
+  };
+  const hostDesktopValue =
+    hostDesktop.state === "disabled"
+      ? params.muted("disabled")
+      : hostDesktop.state === "managed"
+        ? hostDesktop.managedState === "running"
+          ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
+          : hostDesktop.managedState === "failed"
+            ? `managed · failed: ${hostDesktop.error}`
+            : hostDesktop.managedState === "unknown"
+              ? "managed · runtime state unavailable"
+              : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
+        : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,
     decorateOk: params.ok,
@@ -133,12 +162,19 @@ export function buildStatusCommandOverviewRows(
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
         : []),
       { Item: "Memory", Value: memoryValue },
-      ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
-      ...(degradedPluginsValue ? [{ Item: "Degraded plugins", Value: degradedPluginsValue }] : []),
+      { Item: "Host desktop", Value: hostDesktopValue },
+      ...buildStatusDegradationRows(params.summary, params.warn),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
       { Item: "Tasks", Value: tasksValue },
+      {
+        Item: "Backups",
+        Value: buildBackupStatusValue({
+          freshness: readBackupFreshness(params.env),
+          formatTimeAgo: params.formatTimeAgo,
+        }),
+      },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
       {
@@ -158,6 +194,7 @@ export function buildStatusCommandOverviewRows(
 /** Builds the expanded status-all overview rows, including config and security hints. */
 export function buildStatusAllOverviewRows(params: {
   surface: StatusOverviewSurface;
+  summary: StatusDegradationSummary;
   osLabel: string;
   configPath: string;
   secretDiagnosticsCount: number;
@@ -189,6 +226,7 @@ export function buildStatusAllOverviewRows(params: {
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
         : []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
+      ...buildStatusDegradationRows(params.summary),
     ],
     agentsValue: buildStatusAllAgentsValue({
       agentStatus: params.agentStatus,

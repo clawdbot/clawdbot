@@ -33,25 +33,59 @@ import type { InboxEntry } from "./types.js";
 beforeEach(resetFlowStoresForTests);
 afterEach(resetFlowStoresForTests);
 
+type FlowOptions = ConstructorParameters<typeof ReefMessageFlow>[0];
+type TrustedReef = ReturnType<typeof trust>;
+
+function createFlow(params: {
+  alice: ReturnType<typeof generateIdentity>;
+  bob: ReturnType<typeof reefKeys>;
+  audit: MemoryAuditStore;
+  trusted?: TrustedReef;
+  relay?: ReturnType<typeof transport>;
+  onOwnerNotice?: FlowOptions["onOwnerNotice"];
+}): ReefMessageFlow {
+  return new ReefMessageFlow({
+    config: config(),
+    trust: (params.trusted ?? trust({ alice: peerTrust(params.alice) })).store,
+    keys: params.bob,
+    transport: (params.relay ?? transport()) as unknown as ReefTransportClient,
+    guard: guard(allow),
+    audit: params.audit,
+    replay: new MemoryReplayStore(),
+    ...flowStores(),
+    onIngress: async () => {},
+    onOwnerNotice: params.onOwnerNotice ?? (async () => {}),
+  });
+}
+
+function createReceiptNotifier(
+  trusted: TrustedReef,
+  notify: ConstructorParameters<typeof ReefReceiptNotifier>[0],
+): ReefReceiptNotifier {
+  return new ReefReceiptNotifier(notify, {
+    loadState: (peer) => trusted.store.rejectionNoticeState(peer),
+    reserve: (rejection, noticeState) =>
+      trusted.store.reserveOutboundRejectionNotice(
+        rejection.peer,
+        rejection.id,
+        rejection.recipient,
+        noticeState,
+      ),
+    complete: (rejection, noticeState) => {
+      if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
+        throw new Error(`missing rejection ${rejection.id}`);
+      }
+    },
+  });
+}
+
 describe("ReefMessageFlow delivery receipts", () => {
   it("quarantines an unmatched forged receipt without scanning audit history", async () => {
     const alice = generateIdentity();
     const bob = reefKeys();
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(17));
     const entries = vi.spyOn(audit, "entries");
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit });
     const id = "01JZ0000000000000000000130";
     const receipt = signReceipt(
       {
@@ -88,19 +122,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       audit,
       policyVersion: "v1",
     });
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit, trusted });
     const receipt = signReceipt(
       {
         id,
@@ -166,19 +188,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       },
     ];
     vi.spyOn(audit, "entries").mockResolvedValueOnce(entries);
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit });
     const receipt = signReceipt(
       {
         id,
@@ -223,19 +233,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       },
     ];
     vi.spyOn(audit, "entries").mockResolvedValueOnce(entries);
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(alice) }).store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit });
     const receipt = signReceipt(
       {
         id,
@@ -279,19 +277,7 @@ describe("ReefMessageFlow delivery receipts", () => {
     ];
     const auditEntries = vi.spyOn(audit, "entries").mockResolvedValueOnce(entries);
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit, trusted });
     const miss = signReceipt(
       {
         id: missId,
@@ -346,19 +332,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       audit,
       policyVersion: "v1",
     });
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit, trusted });
     const receipt = signReceipt(
       {
         id,
@@ -373,21 +347,7 @@ describe("ReefMessageFlow delivery receipts", () => {
       { seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 },
     ]);
     const notify = vi.fn(async () => {});
-    const receiptNotifier = new ReefReceiptNotifier(notify, {
-      loadState: (peer) => trusted.store.rejectionNoticeState(peer),
-      reserve: (rejection, noticeState) =>
-        trusted.store.reserveOutboundRejectionNotice(
-          rejection.peer,
-          rejection.id,
-          rejection.recipient,
-          noticeState,
-        ),
-      complete: (rejection, noticeState) => {
-        if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
-          throw new Error(`missing rejection ${rejection.id}`);
-        }
-      },
-    });
+    const receiptNotifier = createReceiptNotifier(trusted, notify);
 
     await receiptNotifier.notifyRejections(rejections);
 
@@ -418,34 +378,8 @@ describe("ReefMessageFlow delivery receipts", () => {
     const relay = transport();
     const trusted = trust({ alice: peerTrust(alice) });
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(11));
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
-    const receiptNotifier = new ReefReceiptNotifier(onOwnerNotice, {
-      loadState: (peer) => trusted.store.rejectionNoticeState(peer),
-      reserve: (rejection, noticeState) =>
-        trusted.store.reserveOutboundRejectionNotice(
-          rejection.peer,
-          rejection.id,
-          rejection.recipient,
-          noticeState,
-        ),
-      complete: (rejection, noticeState) => {
-        if (!trusted.store.completeOutboundRejection(rejection.peer, rejection.id, noticeState)) {
-          throw new Error(`missing rejection ${rejection.id}`);
-        }
-      },
-    });
+    const flow = createFlow({ alice, bob, audit, trusted, relay });
+    const receiptNotifier = createReceiptNotifier(trusted, onOwnerNotice);
     const id = await flow.send("alice", "ordinary coordination");
     const receipt = signReceipt(
       {
@@ -544,19 +478,7 @@ describe("ReefMessageFlow delivery receipts", () => {
     const trusted = trust({ alice: peerTrust(alice) });
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(12));
     const auditEntries = vi.spyOn(audit, "entries");
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit, trusted });
     const id = "01JZ0000000000000000000113";
     const receipt = signReceipt(
       {
@@ -608,19 +530,7 @@ describe("ReefMessageFlow delivery receipts", () => {
     const originalRecipient = reefPeerIdentity(originalTrust);
     const trusted = trust({ alice: originalTrust });
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(14));
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit, trusted });
     const id = await flow.send("alice", "expected body");
     const bodyHash = sha256Hex(canonicalBytes({ text: "expected body" }));
     trusted.values.set("alice", peerTrust(rotatedAlice, { keyEpoch: 2 }));
@@ -678,19 +588,7 @@ describe("ReefMessageFlow delivery receipts", () => {
     const bob = reefKeys();
     const trusted = trust({ alice: peerTrust(alice) });
     const audit = new MemoryAuditStore(new Uint8Array(32).fill(13));
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-
-      transport: transport() as unknown as ReefTransportClient,
-      guard: guard(allow),
-      audit,
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
-      onOwnerNotice: async () => {},
-    });
+    const flow = createFlow({ alice, bob, audit, trusted });
     const id = await flow.send("alice", "expected body");
     const receipt = signReceipt(
       {
@@ -779,16 +677,12 @@ describe("ReefMessageFlow overdue delivery follow-up", () => {
     const trusted = trust({ alice: peerTrust(alice) });
     const relay = transport();
     const onOwnerNotice = vi.fn(async (_text: string) => {});
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
+    const flow = createFlow({
+      alice,
+      bob,
       audit: new MemoryAuditStore(new Uint8Array(32).fill(23)),
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
+      trusted,
+      relay,
       onOwnerNotice,
     });
     const id = await flow.send("alice", "are you there?");
@@ -814,16 +708,12 @@ describe("ReefMessageFlow overdue delivery follow-up", () => {
     const trusted = trust({ alice: peerTrust(alice) });
     const relay = transport();
     const onOwnerNotice = vi.fn(async (_text: string) => {});
-    const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trusted.store,
-      keys: bob,
-      transport: relay as unknown as ReefTransportClient,
-      guard: guard(allow),
+    const flow = createFlow({
+      alice,
+      bob,
       audit: new MemoryAuditStore(new Uint8Array(32).fill(24)),
-      replay: new MemoryReplayStore(),
-      ...flowStores(),
-      onIngress: async () => {},
+      trusted,
+      relay,
       onOwnerNotice,
     });
     const id = await flow.send("alice", "quick ping");

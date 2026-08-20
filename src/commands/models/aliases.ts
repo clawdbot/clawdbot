@@ -16,34 +16,33 @@ export async function modelsAliasesListCommand(
   ensureFlagCompatibility(opts);
   const cfg = await loadModelsConfig({ commandName: "models aliases list", runtime });
   const models = cfg.agents?.defaults?.models ?? {};
-  const aliases = Object.entries(models).reduce<Record<string, string>>(
-    (acc, [modelKey, entry]) => {
+  const aliases = Object.fromEntries(
+    Object.entries(models).flatMap(([modelKey, entry]) => {
       const alias = entry?.alias?.trim();
-      if (alias) {
-        acc[alias] = modelKey;
-      }
-      return acc;
-    },
-    {},
+      return alias ? [[alias, modelKey] as const] : [];
+    }),
+  );
+  const aliasEntries = Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { aliases });
+    writeRuntimeJson(runtime, { aliases: Object.fromEntries(aliasEntries) });
     return;
   }
   if (opts.plain) {
-    for (const [alias, target] of Object.entries(aliases)) {
+    for (const [alias, target] of aliasEntries) {
       runtime.log(`${alias} ${target}`);
     }
     return;
   }
 
-  runtime.log(`Aliases (${Object.keys(aliases).length}):`);
-  if (Object.keys(aliases).length === 0) {
+  runtime.log(`Aliases (${aliasEntries.length}):`);
+  if (aliasEntries.length === 0) {
     runtime.log("- none");
     return;
   }
-  for (const [alias, target] of Object.entries(aliases)) {
+  for (const [alias, target] of aliasEntries) {
     runtime.log(`- ${alias} -> ${target}`);
   }
 }

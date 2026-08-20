@@ -5,8 +5,10 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
+  isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
@@ -17,6 +19,28 @@ import {
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
+import { missingMessageActionTargetError } from "./target-errors.js";
+
+export function resolveImplicitMessageActionTarget(
+  toolContext: ChannelThreadingToolContext | undefined,
+): string | undefined {
+  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
+    const target = normalizeOptionalString(value);
+    if (!target) {
+      continue;
+    }
+    if (isInternalNonDeliveryChannel(target)) {
+      continue;
+    }
+    // A session can arrive bare or wrapped as a channel target; neither is
+    // a transport destination. Keep searching for the real conversation.
+    if (parseAgentSessionKey(target.replace(/^channel:/i, ""))) {
+      continue;
+    }
+    return target;
+  }
+  return undefined;
+}
 
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
@@ -24,6 +48,7 @@ export function normalizeMessageActionInput(params: {
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
   targetAliasSpec?: ActionDeliveryTargetAliasSpec;
+  allowResourceOnly?: boolean;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
@@ -76,9 +101,7 @@ export function normalizeMessageActionInput(params: {
     actionRequiresTarget(action) &&
     (hasResourceReference || !actionHasTarget(action, normalizedArgs, { channel: inferredChannel }))
   ) {
-    const inferredTarget =
-      normalizeOptionalString(toolContext?.currentChannelId) ??
-      normalizeOptionalString(toolContext?.currentMessagingTarget);
+    const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }
@@ -107,9 +130,9 @@ export function normalizeMessageActionInput(params: {
   if (
     actionRequiresTarget(action) &&
     (!actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) ||
-      (hasResourceReference && !hasCanonicalTarget))
+      (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
-    throw new Error(`Action ${action} requires a target.`);
+    throw missingMessageActionTargetError(action);
   }
 
   return normalizedArgs;

@@ -1,7 +1,10 @@
 // Telegram plugin module builds transport-shared durable ingress monitors.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramBotInfo } from "./bot-info.js";
-import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
+import {
+  runWithTelegramUpdateProcessingFrame,
+  type TelegramMessageProcessingResult,
+} from "./bot-processing-outcome.js";
 import {
   createTelegramIngressMonitor,
   resolveTelegramAdoptionStallTimeoutMs,
@@ -60,9 +63,12 @@ export function createTelegramTransportIngressMonitor(
       if (params.dispatchUpdate) {
         return await params.dispatchUpdate(update, lifecycle);
       }
-      // Lifecycle is also on the spooled ALS frame (runWithTelegramSpooledReplayUpdate).
-      // bot-message merges it into turnAdoptionLifecycle for complete-at-adoption.
-      await params.bot.handleUpdate(update as never);
+      // grammY returns void, so carry its middleware-owned outcome back to durable ingress.
+      // The spooled lifecycle remains on its existing frame for complete-at-adoption.
+      const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+        await params.bot.handleUpdate(update as never);
+      });
+      return result;
     },
   });
 }

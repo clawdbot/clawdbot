@@ -1,13 +1,16 @@
 // Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
+import {
+  parseStrictPositiveInteger,
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { parseWindowsNetstatListeners } from "../infra/ports-netstat.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
-import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
 type PortProcess = { pid: number; command?: string };
@@ -295,10 +298,13 @@ function killPids(
   beforeSignal?: BeforePortSignal,
 ) {
   for (const proc of listeners) {
+    beforeSignal?.({ port, pid: proc.pid, signal });
     try {
-      beforeSignal?.({ port, pid: proc.pid, signal });
       process.kill(proc.pid, signal);
     } catch (err) {
+      if (getErrnoCode(err) === "ESRCH") {
+        continue;
+      }
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
         { cause: err },

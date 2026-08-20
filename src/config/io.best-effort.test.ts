@@ -154,6 +154,29 @@ describe("readBestEffortConfig", () => {
     });
   });
 
+  it("records why an unparseable config was ignored by best-effort reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = `${home}/.openclaw/openclaw.json`;
+      await fs.mkdir(`${home}/.openclaw`, { recursive: true });
+      await fs.writeFile(configPath, "{ definitely not json", "utf-8");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const config = await readSourceConfigBestEffort();
+
+        // The fallback value stays {} — but the degradation is recorded.
+        expect(config).toEqual({});
+        expect(
+          warn.mock.calls.some(([line]) =>
+            String(line).includes("best-effort read ignored unparseable config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   it("preserves Windows case-insensitive env lookup in isolated reads", async () => {
     await withTempHome(async (home) => {
       const mixedCaseKey = "OpenClaw_Config_Path";
@@ -196,11 +219,27 @@ describe("readBestEffortConfig", () => {
       expect(snapshot.sourceConfigBeforeMigrations).toEqual({ update: { channel: "beta" } });
       expect(snapshot.sourceConfig).toEqual({
         update: { channel: "beta" },
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
       });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
       expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
+    });
+  });
+
+  it("materializes fresh-install defaults when the config file is missing", async () => {
+    await withTempHome(async () => {
+      const { loadConfig } = await import("./io.runtime.js");
+
+      const snapshot = await readConfigFileSnapshot({ observe: false });
+      const loaded = loadConfig({ pin: false, skipPluginValidation: true });
+
+      expect(snapshot.exists).toBe(false);
+      // Missing config = fresh install; snapshot and load must produce the same
+      // out-of-box defaults an existing empty {} config gets (contextPruning
+      // stays provider-conditional, so compaction is the parity signal here).
+      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
     });
   });
 
@@ -222,8 +261,10 @@ describe("readBestEffortConfig", () => {
       const snapshot = await readConfigFileSnapshot();
       const bestEffort = await readBestEffortConfig();
 
-      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBeUndefined();
+      // Snapshot materialization must inject the same defaults as load; prepared-runtime
+      // exact-config resolution compares the two and diverging shapes fail it permanently.
+      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
 
       expect(bestEffort.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(bestEffort.agents?.defaults?.contextPruning?.ttl).toBe("1h");

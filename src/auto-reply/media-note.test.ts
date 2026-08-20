@@ -108,6 +108,8 @@ describe("buildInboundMediaNote", () => {
         {
           capability: "image",
           outcome: "skipped",
+          attachmentDispositions: { 0: { kind: "failed" } },
+          nativeVisionActive: false,
           attachments: [
             {
               attachmentIndex: 0,
@@ -249,6 +251,7 @@ describe("buildInboundMediaNote", () => {
         {
           capability: "audio",
           outcome: "success",
+          attachmentDispositions: { 99: { kind: "handled" } },
           attachments: [
             {
               attachmentIndex: 99,
@@ -369,6 +372,25 @@ describe("buildInboundMediaNote", () => {
     expect(note).toBe("[media attached: /tmp/document.pdf]");
   });
 
+  it.each([".aiff", ".aif", ".aifc", ".webm", ".wma", ".alac"])(
+    "strips transcribed %s audio without an explicit MIME type",
+    (extension) => {
+      const note = buildInboundMediaNote({
+        MediaPaths: [`/tmp/voice${extension}`, "/tmp/document.pdf"],
+        MediaUnderstanding: [
+          {
+            kind: "audio.transcription",
+            attachmentIndex: 0,
+            text: "Transcribed audio content",
+            provider: "whisper",
+          },
+        ],
+      });
+
+      expect(note).toBe("[media attached: /tmp/document.pdf]");
+    },
+  );
+
   it("strips a transcribed kind-only audio fact without relying on its filename", () => {
     const projection = buildInboundMediaNoteProjection({
       media: [
@@ -381,7 +403,7 @@ describe("buildInboundMediaNote", () => {
       ],
     });
 
-    expect(projection).toEqual({ media: [] });
+    expect(projection).toEqual({ media: [], mediaIndexes: [] });
   });
 
   it("keeps audio attachments when no transcription is available", () => {
@@ -450,6 +472,7 @@ describe("buildInboundMediaNote", () => {
           messageId: undefined,
         },
       ],
+      mediaIndexes: [0],
     });
 
     const multi = buildInboundMediaNoteProjection({

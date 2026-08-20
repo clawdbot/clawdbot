@@ -112,11 +112,10 @@ async function noteTwitchSetupHelp(prompter: WizardPrompter): Promise<void> {
 export async function promptToken(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
-  envToken: string | undefined,
 ): Promise<string> {
   const existingToken = account?.accessToken ?? "";
 
-  if (existingToken && !envToken) {
+  if (existingToken) {
     const keepToken = await prompter.confirm({
       message: t("wizard.twitch.accessTokenKeep"),
       initialValue: true,
@@ -129,7 +128,7 @@ export async function promptToken(
   return (
     await prompter.text({
       message: t("wizard.twitch.oauthTokenPrompt"),
-      initialValue: envToken ?? "",
+      sensitive: true,
       validate: (value) => {
         const raw = value?.trim() ?? "";
         if (!raw) {
@@ -191,6 +190,30 @@ export async function promptChannelName(
   );
 }
 
+async function promptRefreshCredential(params: {
+  prompter: WizardPrompter;
+  existingValue: string | undefined;
+  keepMessage: string;
+  inputMessage: string;
+}): Promise<string | undefined> {
+  const existingValue = params.existingValue?.trim();
+  if (existingValue) {
+    const keep = await params.prompter.confirm({
+      message: params.keepMessage,
+      initialValue: true,
+    });
+    if (keep) {
+      return existingValue;
+    }
+  }
+  const value = await params.prompter.text({
+    message: params.inputMessage,
+    sensitive: true,
+    validate: (input) => (input?.trim() ? undefined : "Required"),
+  });
+  return value.trim() || undefined;
+}
+
 export async function promptRefreshTokenSetup(
   prompter: WizardPrompter,
   account: TwitchAccountConfig | null,
@@ -204,18 +227,18 @@ export async function promptRefreshTokenSetup(
     return {};
   }
 
-  const clientSecret =
-    (await promptRequiredTwitchAccountValue(
-      prompter,
-      t("wizard.twitch.clientSecretPrompt"),
-      account?.clientSecret,
-    )) || undefined;
-  const refreshToken =
-    (await promptRequiredTwitchAccountValue(
-      prompter,
-      t("wizard.twitch.refreshTokenInputPrompt"),
-      account?.refreshToken,
-    )) || undefined;
+  const clientSecret = await promptRefreshCredential({
+    prompter,
+    existingValue: account?.clientSecret,
+    keepMessage: t("wizard.twitch.clientSecretKeep"),
+    inputMessage: t("wizard.twitch.clientSecretPrompt"),
+  });
+  const refreshToken = await promptRefreshCredential({
+    prompter,
+    existingValue: account?.refreshToken,
+    keepMessage: t("wizard.twitch.refreshTokenKeep"),
+    inputMessage: t("wizard.twitch.refreshTokenInputPrompt"),
+  });
 
   return { clientSecret, refreshToken };
 }
@@ -466,7 +489,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
     }
 
     const username = await promptUsername(prompter, account);
-    const token = await promptToken(prompter, account, envToken);
+    const token = await promptToken(prompter, account);
     const clientId = await promptClientId(prompter, account);
     const channelName = await promptChannelName(prompter, account);
     const { clientSecret, refreshToken } = await promptRefreshTokenSetup(prompter, account);
@@ -504,7 +527,6 @@ export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
     chatTypes: ["group"],
   },
   config: twitchConfigAdapter,
-  setup: twitchSetupAdapter,
   setupContract: twitchSetupContract,
   setupWizard: twitchSetupWizard,
 };

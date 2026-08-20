@@ -1,6 +1,7 @@
 // QA Lab Slack approval checkpoint and gateway decision RPC.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   formatApprovalResultValue,
@@ -9,8 +10,6 @@ import {
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS,
-  type SlackQaScenarioId,
-  type SlackQaApprovalKind,
   type SlackQaApprovalDecision,
   type SlackQaApprovalScenarioRun,
   type SlackQaScenarioContext,
@@ -74,12 +73,12 @@ async function waitForSlackApprovalCheckpointAck(params: {
 
 export async function writeSlackApprovalCheckpoint(params: {
   approvalId: string;
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   channelId: string;
   decision?: SlackQaApprovalDecision;
   message: SlackMessage;
   observedAt: string;
-  scenarioId: SlackQaScenarioId;
+  scenarioId: string;
   state: SlackApprovalCheckpointState;
 }) {
   const config = resolveSlackApprovalCheckpointConfig();
@@ -186,7 +185,7 @@ export async function requestSlackApproval(params: {
 export async function waitForApprovalDecision(params: {
   approvalId: string;
   context: Omit<SlackQaScenarioContext, "sentTs">;
-  kind: SlackQaApprovalKind;
+  kind: ChannelApprovalKind;
 }) {
   const method =
     params.kind === "exec" ? "exec.approval.waitDecision" : "plugin.approval.waitDecision";

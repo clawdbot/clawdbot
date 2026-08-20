@@ -1,11 +1,14 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, RouteMatch } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { ChatRouteData } from "./route-loader.ts";
+
+type SessionOwnerMatch = Pick<RouteMatch, "data">;
+const CHAT_PAGE_OWNER_KEY = "chat-page";
 
 function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   return html`
@@ -31,11 +34,37 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   `;
 }
 
+function sessionLoaderDeps(
+  face: BoardFace,
+  context: ApplicationContext,
+  location: RouteLocation,
+): string {
+  const search = new URLSearchParams(location.search);
+  const bridgedPath =
+    location.pathname === pathForRoute(face, context.basePath)
+      ? search.get(INTERNAL_SESSION_PATH_PARAM)
+      : null;
+  if (bridgedPath) {
+    search.delete(INTERNAL_SESSION_PATH_PARAM);
+  }
+  const serializedSearch = search.toString();
+  return `${bridgedPath ?? location.pathname}\u0000${
+    serializedSearch ? `?${serializedSearch}` : ""
+  }`;
+}
+
+function sessionRenderOwnerKey(match: SessionOwnerMatch): string | undefined {
+  const data = match.data as ChatRouteData | undefined;
+  return data?.kind === "ambiguous" ? undefined : CHAT_PAGE_OWNER_KEY;
+}
+
 function sessionPage(face: BoardFace) {
   return definePage({
     ...routePageSpec(face),
-    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-      `${location.pathname}\u0000${location.search}`,
+    // The application router temporarily maps dynamic session URLs onto the
+    // static face route. Both locations describe the same loader match.
+    loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
+      sessionLoaderDeps(face, context, location),
     loader: async (context: ApplicationContext, { location, signal }) => {
       const { loadChatRoute } = await import("./route-loader.ts");
       return await loadChatRoute(context, location, face, signal);
@@ -43,6 +72,9 @@ function sessionPage(face: BoardFace) {
     component: () =>
       import("./chat-page.ts").then(() => ({
         header: true,
+        // ChatPage's bounded inner cache owns per-session teardown, so session
+        // routes share the outer owner while their data and URL keep changing.
+        renderOwnerKey: sessionRenderOwnerKey,
         render: (data: unknown) => {
           const routeData = data as ChatRouteData | undefined;
           if (!routeData) {

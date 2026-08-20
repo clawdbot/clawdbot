@@ -8,8 +8,11 @@ export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
+  "image/avif": ".avif",
   "image/heic": ".heic",
+  "image/heic-sequence": ".heic",
   "image/heif": ".heif",
+  "image/heif-sequence": ".heif",
   "image/bmp": ".bmp",
   "image/jpg": ".jpg",
   "image/jpeg": ".jpg",
@@ -17,6 +20,8 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/svg+xml": ".svg",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "audio/aiff": ".aiff",
+  "audio/x-aiff": ".aiff",
   "audio/ogg": ".ogg",
   "audio/mpeg": ".mp3",
   "audio/mp3": ".mp3",
@@ -25,6 +30,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/x-wav": ".wav",
   "audio/flac": ".flac",
   "audio/aac": ".aac",
+  "audio/amr": ".amr",
   "audio/opus": ".opus",
   "audio/webm": ".webm",
   "audio/x-m4a": ".m4a",
@@ -32,6 +38,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/mp4": ".m4a",
   "audio/x-caf": ".caf",
   "video/x-msvideo": ".avi",
+  "video/x-m4v": ".m4v",
   "video/mp4": ".mp4",
   "video/x-matroska": ".mkv",
   "video/webm": ".webm",
@@ -74,15 +81,23 @@ const MIME_BY_EXT: Record<string, string> = {
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
   ".m2a": "audio/mpeg",
+  ".m4b": "audio/mp4",
   ".mp3": "audio/mpeg",
   ".oga": "audio/ogg",
   ".wav": "audio/wav",
   ".webm": "video/webm",
   // Additional extension aliases
+  ".aif": "audio/aiff",
+  ".aifc": "audio/aiff",
   ".jpeg": "image/jpeg",
+  ".cfg": "text/plain",
+  ".conf": "text/plain",
+  ".env": "text/plain",
+  ".ini": "text/plain",
   ".js": "text/javascript",
   ".log": "text/plain",
   ".htm": "text/html",
+  ".tsv": "text/tab-separated-values",
   ".xml": "text/xml",
   ".yml": "application/yaml",
 };
@@ -135,20 +150,30 @@ const ZIP_CONTAINER_MIMES = new Set([
   "model/3mf",
 ]);
 
-function isZipContainerMime(mime: string): boolean {
+export function isZipContainerMime(mime: string): boolean {
   return mime.endsWith("+zip") || ZIP_CONTAINER_MIMES.has(mime);
 }
 
-/** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
+// Registered/legacy synonym pairs fold to one canonical spelling so configured
+// allowlists and byte classification always compare the same value; without
+// this an operator's existing text/yaml allowlist stops matching .yaml files.
+const MIME_SYNONYMS: Record<string, string> = {
+  "image/apng": "image/png",
+  "text/yaml": "application/yaml",
+  "application/x-yaml": "application/yaml",
+  "application/xml": "text/xml",
+};
+
+/** Normalizes MIME strings by dropping parameters, lowercasing, and folding registered synonyms. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
   }
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
-  if (cleaned === "image/apng") {
-    return "image/png";
+  if (!cleaned) {
+    return undefined;
   }
-  return cleaned || undefined;
+  return MIME_SYNONYMS[cleaned] ?? cleaned;
 }
 
 /** Returns the bounded buffer prefix used for dependency MIME sniffing. */
@@ -282,6 +307,8 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
     return undefined;
   }
   switch (format.toLowerCase()) {
+    case "avif":
+      return "image/avif";
     case "jpg":
     case "jpeg":
       return "image/jpeg";

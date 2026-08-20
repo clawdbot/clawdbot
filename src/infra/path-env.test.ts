@@ -505,33 +505,43 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated).not.toContain(path.join("npm-prefix", "bin"));
   });
 
-  it("ignores package-manager env roots derived from the active workspace", () => {
-    const homeDir = abs("/tmp/openclaw-path/home");
-    const cwd = path.join(homeDir, "workspace");
-    const appBinDir = path.join(homeDir, "app-bin");
-    const appCli = path.join(appBinDir, "openclaw");
-    const pnpmHome = path.join(cwd, ".pnpm");
-    const npmPrefix = path.join(cwd, ".npm-prefix");
-    for (const dir of [homeDir, cwd, appBinDir, pnpmHome, path.join(pnpmHome, "bin"), npmPrefix]) {
-      setDir(dir);
-    }
-    setDir(path.join(npmPrefix, "bin"));
-    setExe(appCli);
-    resetBootstrapEnv("/usr/bin:/bin");
-    process.env.PNPM_HOME = pnpmHome;
-    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+  it.each([".pnpm", "..cache"])(
+    "ignores package-manager env roots derived from the active workspace (%s)",
+    (packageManagerDir) => {
+      const homeDir = abs("/tmp/openclaw-path/home");
+      const cwd = path.join(homeDir, "workspace");
+      const appBinDir = path.join(homeDir, "app-bin");
+      const appCli = path.join(appBinDir, "openclaw");
+      const pnpmHome = path.join(cwd, packageManagerDir);
+      const npmPrefix = path.join(cwd, ".npm-prefix");
+      for (const dir of [
+        homeDir,
+        cwd,
+        appBinDir,
+        pnpmHome,
+        path.join(pnpmHome, "bin"),
+        npmPrefix,
+      ]) {
+        setDir(dir);
+      }
+      setDir(path.join(npmPrefix, "bin"));
+      setExe(appCli);
+      resetBootstrapEnv("/usr/bin:/bin");
+      process.env.PNPM_HOME = pnpmHome;
+      process.env.NPM_CONFIG_PREFIX = npmPrefix;
 
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd,
-      homeDir,
-      platform: "linux",
-    });
+      const updated = bootstrapPath({
+        execPath: appCli,
+        cwd,
+        homeDir,
+        platform: "linux",
+      });
 
-    expect(updated).not.toContain(pnpmHome);
-    expect(updated).not.toContain(path.join(pnpmHome, "bin"));
-    expect(updated).not.toContain(path.join(npmPrefix, "bin"));
-  });
+      expect(updated).not.toContain(pnpmHome);
+      expect(updated).not.toContain(path.join(pnpmHome, "bin"));
+      expect(updated).not.toContain(path.join(npmPrefix, "bin"));
+    },
+  );
 
   it("ignores package-manager env roots whose existing parent resolves into the workspace", () => {
     const homeDir = abs("/tmp/openclaw-path/home");

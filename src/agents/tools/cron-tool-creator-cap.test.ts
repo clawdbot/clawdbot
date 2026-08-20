@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { mergeCronPayload } from "../../cron/service/payload-merge.js";
+import type { CronPayloadPatch } from "../../cron/types.js";
 import { capCronJobToolsAllowOnCreate, planCronJobUpdatePatch } from "./cron-tool-creator-cap.js";
 
 type CronJobUpdatePatchPlan = ReturnType<typeof planCronJobUpdatePatch>;
@@ -24,10 +26,11 @@ describe("cron tool creator cap", () => {
     capCronJobToolsAllowOnCreate(triggerJob, ["read", "cron"]);
     capCronJobToolsAllowOnCreate(plainJob, ["read", "cron"]);
 
+    // Legacy "cron" creator allowlists normalize to the canonical tool id.
     expect(triggerJob.payload).toEqual({
       kind: "systemEvent",
       text: "wake",
-      toolsAllow: ["read", "cron"],
+      toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
     expect(plainJob.payload).toEqual({ kind: "systemEvent", text: "wake" });
@@ -71,14 +74,17 @@ describe("cron tool creator cap", () => {
     ).toEqual({ kind: "needs-current-job" });
   });
 
-  it("preserves explicit narrower caps and re-derives stored defaults", () => {
+  it("preserves explicit narrower and default caps through canonical payload merge", () => {
+    const storedNarrowerPayload = {
+      kind: "agentTurn" as const,
+      message: "work",
+      toolsAllow: ["read"],
+    };
     const narrower = readReadyPatch(
       planCronJobUpdatePatch({
         patch: { payload: { message: "updated" } },
         creatorToolAllowlist: ["read", "exec", "cron"],
-        currentJob: {
-          payload: { kind: "agentTurn", message: "work", toolsAllow: ["read"] },
-        },
+        currentJob: { payload: storedNarrowerPayload },
       }),
     );
     const storedDefault = readReadyPatch(
@@ -96,16 +102,28 @@ describe("cron tool creator cap", () => {
       }),
     );
 
-    expect(narrower).toEqual({
-      payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] },
+    expect(narrower).toEqual({ payload: { kind: "agentTurn", message: "updated" } });
+    expect(mergeCronPayload(storedNarrowerPayload, narrower.payload as CronPayloadPatch)).toEqual({
+      kind: "agentTurn",
+      message: "updated",
+      toolsAllow: ["read"],
     });
-    expect(storedDefault).toEqual({
-      payload: {
-        kind: "agentTurn",
-        message: "updated",
-        toolsAllow: ["read", "cron"],
-        toolsAllowIsDefault: true,
-      },
+    expect(storedDefault).toEqual({ payload: { kind: "agentTurn", message: "updated" } });
+    expect(
+      mergeCronPayload(
+        {
+          kind: "agentTurn",
+          message: "work",
+          toolsAllow: ["read"],
+          toolsAllowIsDefault: true,
+        },
+        storedDefault.payload as CronPayloadPatch,
+      ),
+    ).toEqual({
+      kind: "agentTurn",
+      message: "updated",
+      toolsAllow: ["read"],
+      toolsAllowIsDefault: true,
     });
   });
 

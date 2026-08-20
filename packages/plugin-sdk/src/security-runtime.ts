@@ -47,6 +47,7 @@ export {
   SsrFBlockedError,
   statRegularFile,
   statRegularFileSync,
+  truncateSanitizedExternalContent,
   withTimeout,
   wrapExternalContent,
   wrapWebContent,

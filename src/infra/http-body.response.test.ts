@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cancelUnreadResponseBody,
   readResponseTextPrefix,
   readResponseTextSnippet,
   readResponseWithLimit,
@@ -103,6 +104,37 @@ async function expectReadResponseWithLimitFailureCase(params: {
   ).rejects.toThrow(params.expectedError);
 }
 
+describe("cancelUnreadResponseBody", () => {
+  it("cancels unread bodies and ignores cancellation failures", async () => {
+    const cancel = vi.fn(() => {
+      throw new Error("already closed");
+    });
+    const response = new Response(makeStallingStream([], cancel));
+
+    await expect(cancelUnreadResponseBody(response)).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("leaves consumed and absent bodies alone", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("done"));
+          controller.close();
+        },
+        cancel,
+      }),
+    );
+    await response.text();
+
+    await cancelUnreadResponseBody(response);
+    await cancelUnreadResponseBody(undefined);
+
+    expect(cancel).not.toHaveBeenCalled();
+  });
+});
+
 describe("readResponseWithLimit", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -183,6 +215,26 @@ describe("readResponseWithLimit", () => {
     5_000,
   );
 
+  it("names the default idle timeout for retry classifiers", async () => {
+    vi.useFakeTimers();
+    try {
+      const result = readResponseWithLimit(
+        new Response(makeStallingStream([new Uint8Array([1, 2])])),
+        1024,
+        { chunkTimeoutMs: 50 },
+      ).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(60);
+
+      await expect(result).resolves.toMatchObject({
+        name: "TimeoutError",
+        message: expect.stringMatching(/stalled/i),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     {
       name: "does not time out while chunks keep arriving",
@@ -260,6 +312,24 @@ describe("readResponseWithLimit", () => {
       expect(cancel).toHaveBeenCalledTimes(1);
       expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
       expect((cancel.mock.calls[0]?.[0] as Error | undefined)?.message).toBe("custom overall 100");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names the default overall timeout for retry classifiers", async () => {
+    vi.useFakeTimers();
+    try {
+      const result = readResponseWithLimit(new Response(makeTricklingStream(40)), 1024, {
+        timeoutMs: 50,
+      }).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(60);
+
+      await expect(result).resolves.toMatchObject({
+        name: "TimeoutError",
+        message: "Response body timed out after 50ms",
+      });
     } finally {
       vi.useRealTimers();
     }

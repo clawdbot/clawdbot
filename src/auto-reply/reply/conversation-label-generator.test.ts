@@ -1,329 +1,139 @@
 /** Tests generated conversation labels for reply sessions. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
-const logVerbose = vi.hoisted(() => vi.fn());
-const prepareSimpleCompletionModelForAgent = vi.hoisted(() => vi.fn());
+const runIsolatedCompletion = vi.hoisted(() => vi.fn());
 const resolveSimpleCompletionSelectionForAgent = vi.hoisted(() => vi.fn());
 
+vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion }));
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
   resolveSimpleCompletionSelectionForAgent,
 }));
-
-vi.mock("../../globals.js", () => ({ logVerbose }));
 
 import {
   generateConversationLabel,
   generateConversationLabelWithFallback,
 } from "./conversation-label-generator.js";
 
-function firstCompletionArgs() {
-  const call = completeWithPreparedSimpleCompletionModel.mock.calls.at(0);
-  if (!call) {
-    throw new Error("expected simple completion call");
-  }
-  return call[0];
+function resolveSelection({ modelRef, useUtilityModel, agentDir }: Record<string, unknown>) {
+  const ref =
+    typeof modelRef === "string"
+      ? modelRef
+      : useUtilityModel
+        ? "openai/gpt-mini@work"
+        : "openai/gpt-main@work";
+  const [rawModel, profileId] = ref.split("@");
+  const model = rawModel ?? "";
+  const slash = model.indexOf("/");
+  return {
+    provider: model.slice(0, slash),
+    modelId: model.slice(slash + 1),
+    profileId,
+    agentDir: typeof agentDir === "string" ? agentDir : "/tmp/openclaw-agent",
+  };
 }
 
 describe("generateConversationLabel", () => {
   beforeEach(() => {
-    completeWithPreparedSimpleCompletionModel.mockReset();
-    logVerbose.mockReset();
-    prepareSimpleCompletionModelForAgent.mockReset();
-
-    prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: {
-        provider: "openai",
-        modelId: "gpt-test",
-        agentDir: "/tmp/openclaw-agent",
-      },
-      model: { provider: "openai", id: "gpt-test", maxTokens: 8192 },
-      auth: { apiKey: "resolved-key", mode: "api-key" },
-    });
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: "Topic label" }],
-    });
+    runIsolatedCompletion.mockReset();
+    resolveSimpleCompletionSelectionForAgent.mockReset();
+    resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
+    runIsolatedCompletion.mockResolvedValue({ text: "Topic label" });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("prepares the configured utility model in the routed agent directory", async () => {
-    const cfg = { agents: { defaults: { utilityModel: "openai/gpt-test" } } };
-
-    await generateConversationLabel({
-      userMessage: "Need help with invoices",
-      prompt: "prompt",
-      cfg,
-      agentId: "billing",
-      agentDir: "/tmp/agents/billing/agent",
-    });
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith({
-      cfg,
-      agentId: "billing",
-      agentDir: "/tmp/agents/billing/agent",
-      useUtilityModel: true,
-      useAsyncModelResolution: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-  });
-
-  it("passes the label prompt and a reasoning-safe bounded completion budget", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_710_000_000_000);
-    const cfg = {};
-
-    await generateConversationLabel({
-      userMessage: "Need help with invoices",
-      prompt: "Generate a label",
-      cfg,
-    });
-
-    expect(firstCompletionArgs()).toMatchObject({
-      model: { provider: "openai", id: "gpt-test" },
-      auth: { apiKey: "resolved-key", mode: "api-key" },
-      cfg,
-      context: {
-        systemPrompt: "Generate a label",
-        messages: [
-          {
-            role: "user",
-            content: "Need help with invoices",
-            timestamp: 1_710_000_000_000,
-          },
-        ],
-      },
-      options: {
-        maxTokens: 4_096,
-        temperature: 0.3,
-      },
-    });
-    expect(firstCompletionArgs().options.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("caps the completion budget at the model output limit", async () => {
-    prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: {
-        provider: "openai",
-        modelId: "gpt-test",
-        agentDir: "/tmp/openclaw-agent",
-      },
-      model: { provider: "openai", id: "gpt-test", maxTokens: 1_024 },
-      auth: { apiKey: "resolved-key", mode: "api-key" },
-    });
-
-    await generateConversationLabel({
-      userMessage: "test topic creation",
-      prompt: "Generate a label",
-      cfg: {},
-    });
-
-    expect(firstCompletionArgs().options.maxTokens).toBe(1_024);
-  });
-
-  it("omits temperature for Codex Responses simple completions", async () => {
-    prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        agentDir: "/tmp/openclaw-agent",
-      },
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        maxTokens: 8192,
-      },
-      auth: { apiKey: "resolved-key", mode: "api-key" },
-    });
-
-    await generateConversationLabel({
-      userMessage: "test topic creation",
-      prompt: "Generate a label",
-      cfg: {},
-    });
-
-    expect(firstCompletionArgs().options).not.toHaveProperty("temperature");
-  });
-
-  it("returns null when utility model preparation fails", async () => {
-    prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      error: 'No API key resolved for provider "openai".',
-    });
+  it("routes the utility model through isolated completion with the selected auth owner", async () => {
+    const cfg = { agents: { defaults: { utilityModel: "openai/gpt-mini" } } };
 
     await expect(
       generateConversationLabel({
         userMessage: "Need help with invoices",
         prompt: "Generate a label",
-        cfg: {},
-      }),
-    ).resolves.toBeNull();
-
-    expect(logVerbose).toHaveBeenCalledWith(
-      'conversation-label-generator: No API key resolved for provider "openai".',
-    );
-    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the primary model when utility model preparation fails", async () => {
-    prepareSimpleCompletionModelForAgent
-      .mockResolvedValueOnce({
-        error: 'No API key resolved for provider "openai".',
-        selection: {
-          provider: "openai",
-          modelId: "gpt-5.6-luna",
-          agentDir: "/tmp/openclaw-agent",
-        },
-      })
-      .mockResolvedValueOnce({
-        selection: {
-          provider: "openai",
-          modelId: "gpt-5.6-sol",
-          agentDir: "/tmp/openclaw-agent",
-        },
-        model: { provider: "openai", id: "gpt-5.6-sol", maxTokens: 8192 },
-        auth: { apiKey: "test-api-key", mode: "api-key" },
-      });
-
-    await expect(
-      generateConversationLabel({
-        userMessage: "Need help with invoices",
-        prompt: "Generate a label",
-        cfg: {},
+        cfg,
+        agentId: "billing",
+        agentDir: "/tmp/agents/billing/agent",
       }),
     ).resolves.toBe("Topic label");
 
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ useUtilityModel: false }),
-    );
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletion).toHaveBeenCalledWith({
+      config: cfg,
+      provider: "openai",
+      model: "gpt-mini",
+      authProfileId: "work",
+      agentId: "billing",
+      agentDir: "/tmp/agents/billing/agent",
+      systemPrompt: "Generate a label",
+      prompt: "Need help with invoices",
+      timeoutMs: 15_000,
+      streamParams: { maxTokens: 4_096 },
+    });
   });
 
-  it("falls back to the primary model when the utility completion fails", async () => {
-    prepareSimpleCompletionModelForAgent
-      .mockResolvedValueOnce({
-        selection: {
-          provider: "openai",
-          modelId: "gpt-5.6-luna",
-          agentDir: "/tmp/openclaw-agent",
-        },
-        model: { provider: "openai", id: "gpt-5.6-luna", maxTokens: 8192 },
-        auth: { apiKey: "test-api-key", mode: "oauth" },
-      })
-      .mockResolvedValueOnce({
-        selection: {
-          provider: "openai",
-          modelId: "gpt-5.6-sol",
-          agentDir: "/tmp/openclaw-agent",
-        },
-        model: { provider: "openai", id: "gpt-5.6-sol", maxTokens: 8192 },
-        auth: { apiKey: "test-api-key", mode: "oauth" },
-      });
-    completeWithPreparedSimpleCompletionModel
-      .mockResolvedValueOnce({
-        content: [],
-        stopReason: "error",
-        errorMessage: "utility unavailable",
-      })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Primary title" }] });
+  it("uses one explicit model and timeout when supplied", async () => {
+    await generateConversationLabel({
+      userMessage: "Message",
+      prompt: "Prompt",
+      cfg: {},
+      modelRef: "anthropic/claude-haiku@team",
+      timeoutMs: 900,
+    });
+
+    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-haiku",
+        authProfileId: "team",
+        timeoutMs: 900,
+      }),
+    );
+  });
+
+  it("falls back to the primary after a utility failure", async () => {
+    runIsolatedCompletion
+      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockResolvedValueOnce({ text: "Primary title" });
 
     await expect(
-      generateConversationLabel({
-        userMessage: "Need help with invoices",
-        prompt: "Generate a label",
-        cfg: {},
-      }),
+      generateConversationLabel({ userMessage: "Message", prompt: "Prompt", cfg: {} }),
     ).resolves.toBe("Primary title");
 
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(2);
+    expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
+    expect(runIsolatedCompletion.mock.calls[1]?.[0]?.model).toBe("gpt-main");
   });
 
-  it("does not call the same primary model twice when utility routing resolves to it", async () => {
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [],
-      stopReason: "error",
-      errorMessage: "primary unavailable",
-    });
+  it("throws a sanitized error after every configured attempt fails", async () => {
+    runIsolatedCompletion.mockRejectedValue(new Error("secret-bearing provider failure"));
 
     await expect(
-      generateConversationLabel({
-        userMessage: "Need help with invoices",
-        prompt: "Generate a label",
-        cfg: {},
-      }),
+      generateConversationLabel({ userMessage: "Message", prompt: "Prompt", cfg: {} }),
+    ).rejects.toThrow("conversation label generation failed (utility, primary fallback)");
+  });
+
+  it("deduplicates utility and primary when they resolve to the same owner", async () => {
+    resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+      provider: "openai",
+      modelId: "same-model",
+      profileId: "work",
+      agentDir: "/tmp/openclaw-agent",
+    });
+    runIsolatedCompletion.mockResolvedValue({ text: "" });
+
+    await expect(
+      generateConversationLabel({ userMessage: "Message", prompt: "Prompt", cfg: {} }),
     ).resolves.toBeNull();
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(2);
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
   });
 
-  it("logs completion errors instead of treating them as empty labels", async () => {
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [],
-      stopReason: "error",
-      errorMessage: "Codex error: Instructions are required",
-    });
-
-    const label = await generateConversationLabel({
-      userMessage: "Need help with invoices",
-      prompt: "Generate a label",
-      cfg: {},
-    });
-
-    expect(label).toBeNull();
-    expect(logVerbose).toHaveBeenCalledWith(
-      "conversation-label-generator: completion failed: Codex error: Instructions are required",
-    );
-  });
-
-  it("bounds the generated label length", async () => {
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: "A very long generated topic label" }],
-    });
+  it("bounds labels without splitting surrogate pairs", async () => {
+    runIsolatedCompletion.mockResolvedValue({ text: `${"a".repeat(11)}😀tail` });
 
     await expect(
       generateConversationLabel({
-        userMessage: "Need help with invoices",
-        prompt: "Generate a label",
-        cfg: {},
-        maxLength: 12,
-      }),
-    ).resolves.toBe("A very long ");
-  });
-
-  it("drops a split emoji instead of returning a lone surrogate", async () => {
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: `${"a".repeat(11)}😀tail` }],
-    });
-
-    await expect(
-      generateConversationLabel({
-        userMessage: "Need help with invoices",
-        prompt: "Generate a label",
+        userMessage: "Message",
+        prompt: "Prompt",
         cfg: {},
         maxLength: 12,
       }),
     ).resolves.toBe("a".repeat(11));
-  });
-
-  it("returns null when the length cap cannot retain the first emoji", async () => {
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: "😀 label" }],
-    });
-
-    await expect(
-      generateConversationLabel({
-        userMessage: "Need help with invoices",
-        prompt: "Generate a label",
-        cfg: {},
-        maxLength: 1,
-      }),
-    ).resolves.toBeNull();
   });
 });
 
@@ -339,292 +149,78 @@ describe("generateConversationLabelWithFallback", () => {
   };
 
   beforeEach(() => {
-    completeWithPreparedSimpleCompletionModel.mockReset();
-    logVerbose.mockReset();
-    prepareSimpleCompletionModelForAgent.mockReset();
+    runIsolatedCompletion.mockReset();
     resolveSimpleCompletionSelectionForAgent.mockReset();
-    resolveSimpleCompletionSelectionForAgent.mockImplementation(({ modelRef }) => {
-      const [model, profileId] = modelRef.split("@");
-      const slash = model.indexOf("/");
-      return {
-        provider: model.slice(0, slash),
-        modelId: model.slice(slash + 1),
-        profileId,
-        agentDir: "/tmp/openclaw-agent",
-      };
-    });
-    prepareSimpleCompletionModelForAgent.mockImplementation(async ({ modelRef }) => {
-      const [model] = modelRef.split("@");
-      const slash = model.indexOf("/");
-      return {
-        selection: {
-          provider: model.slice(0, slash),
-          modelId: model.slice(slash + 1),
-          profileId: "work",
-          agentDir: "/tmp/openclaw-agent",
-        },
-        model: {
-          provider: model.slice(0, slash),
-          id: model.slice(slash + 1),
-          maxTokens: 8192,
-        },
-        auth: { apiKey: "resolved-key", mode: "api-key" },
-      };
-    });
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: "Utility title" }],
-    });
+    resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
+    runIsolatedCompletion.mockResolvedValue({ text: "Utility title" });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("uses the utility candidate once with the selected auth owner", async () => {
+  it("uses the utility candidate once", async () => {
     await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Utility title");
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledOnce();
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "billing",
-      agentDir: undefined,
-      modelRef: "openai/gpt-mini@work",
-      bindAuthOwner: true,
-      useAsyncModelResolution: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
+    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-mini",
+      authProfileId: "work",
     });
   });
 
   it("locks an inherited profile onto a same-provider utility ref", async () => {
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        utilityModelRef: "openai/gpt-mini",
-      }),
-    ).resolves.toBe("Utility title");
+    await generateConversationLabelWithFallback({ ...params, utilityModelRef: "openai/gpt-mini" });
 
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).toMatchObject({
-      modelRef: "openai/gpt-mini@work",
-      bindAuthOwner: true,
-    });
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).not.toHaveProperty(
-      "preferredProfile",
+    expect(resolveSimpleCompletionSelectionForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "openai/gpt-mini@work" }),
     );
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.authProfileId).toBe("work");
   });
 
-  it("does not force the regular profile onto a cross-provider utility model", async () => {
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        utilityModelRef: "anthropic/claude-haiku-4-5",
-      }),
-    ).resolves.toBe("Utility title");
-
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).toEqual({
-      cfg: {},
-      agentId: "billing",
-      agentDir: undefined,
-      modelRef: "anthropic/claude-haiku-4-5",
-      bindAuthOwner: true,
-      useAsyncModelResolution: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-  });
-
-  it("does not inherit profiles across logical providers sharing one runtime", async () => {
-    resolveSimpleCompletionSelectionForAgent.mockImplementation(({ modelRef }) => ({
-      provider: modelRef.startsWith("anthropic/") ? "anthropic" : "openai",
-      runtimeProvider: "openai",
-      modelId: modelRef.split("/").slice(1).join("/"),
-      agentDir: "/tmp/openclaw-agent",
-    }));
-
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        utilityModelRef: "anthropic/claude-haiku-4-5",
-      }),
-    ).resolves.toBe("Utility title");
-
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).not.toHaveProperty(
-      "preferredProfile",
-    );
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]?.modelRef).toBe(
-      "anthropic/claude-haiku-4-5",
-    );
-  });
-
-  it("falls back when utility preparation fails", async () => {
-    prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({ error: "missing auth" });
-    completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
-      content: [{ type: "text", text: "Regular title" }],
+  it("does not inherit a profile across providers", async () => {
+    await generateConversationLabelWithFallback({
+      ...params,
+      utilityModelRef: "anthropic/claude-haiku",
     });
 
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Regular title");
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(2);
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[1]?.[0]?.modelRef).toBe(
-      "openai/gpt-main@work",
-    );
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-haiku",
+    });
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "error stop reason",
-      first: { content: [], stopReason: "error", errorMessage: "utility failed" },
-    },
-    { name: "empty output", first: { content: [] } },
-  ])("falls back after utility $name", async ({ first }) => {
-    completeWithPreparedSimpleCompletionModel
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Regular title" }] });
-
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Regular title");
-
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back when utility output fails operation-specific normalization", async () => {
-    completeWithPreparedSimpleCompletionModel
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Title:" }] })
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Regular title" }] });
+  it("records an exhausted failure after fallback normalization rejects the result", async () => {
+    runIsolatedCompletion
+      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockResolvedValueOnce({ text: "Title:" });
 
     await expect(
       generateConversationLabelWithFallback({
         ...params,
         normalizeLabel: (label) => (label === "Title:" ? null : label),
       }),
-    ).resolves.toBe("Regular title");
+    ).rejects.toThrow("conversation label generation failed (utility)");
+    expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back after a utility completion exception", async () => {
-    completeWithPreparedSimpleCompletionModel
-      .mockRejectedValueOnce(new Error("transport failed"))
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Regular title" }] });
-
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBe("Regular title");
-  });
-
-  it("falls back after the utility attempt times out", async () => {
-    vi.useFakeTimers();
-    completeWithPreparedSimpleCompletionModel
-      .mockImplementationOnce(
-        ({ options }) =>
-          new Promise((_resolve, reject) => {
-            options.signal.addEventListener("abort", () => reject(new Error("aborted")));
-          }),
-      )
-      .mockResolvedValueOnce({ content: [{ type: "text", text: "Regular title" }] });
-
-    const generated = generateConversationLabelWithFallback(params);
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    await expect(generated).resolves.toBe("Regular title");
-  });
-
-  it("returns null when both explicit candidates fail", async () => {
-    prepareSimpleCompletionModelForAgent
-      .mockResolvedValueOnce({ error: "utility auth failed" })
-      .mockResolvedValueOnce({ error: "regular auth failed" });
-
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBeNull();
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(2);
-    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-  });
-
-  it("skips a regular candidate that resolves to the same model and profile", async () => {
-    resolveSimpleCompletionSelectionForAgent.mockReturnValue({
-      provider: "openai",
-      modelId: "same-model",
-      profileId: "work",
-      agentDir: "/tmp/openclaw-agent",
-    });
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({ content: [] });
-
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBeNull();
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledOnce();
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
-  });
-
-  it("deduplicates candidates after asynchronous preparation resolves them identically", async () => {
-    prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: {
-        provider: "openai",
-        modelId: "resolved-same-model",
-        profileId: "work",
-        agentDir: "/tmp/openclaw-agent",
-      },
-      model: { provider: "openai", id: "resolved-same-model", maxTokens: 8192 },
-      auth: { apiKey: "resolved-key", mode: "api-key" },
-    });
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({ content: [] });
-
-    await expect(generateConversationLabelWithFallback(params)).resolves.toBeNull();
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(2);
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
-  });
-
-  it("inherits the regular profile for unresolved same-provider utility refs", async () => {
-    resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
+  it("keeps an explicit runtime owner across utility and primary attempts", async () => {
+    runIsolatedCompletion
+      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockResolvedValueOnce({ text: "Primary title" });
 
     await expect(
       generateConversationLabelWithFallback({
         ...params,
-        utilityModelRef: "openai/gpt-mini",
+        agentHarnessRuntimeOverride: "codex",
       }),
-    ).resolves.toBe("Utility title");
+    ).resolves.toBe("Primary title");
 
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).toMatchObject({
-      modelRef: "openai/gpt-mini@work",
-      bindAuthOwner: true,
-    });
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).not.toHaveProperty(
-      "preferredProfile",
-    );
+    expect(
+      runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
+    ).toEqual(["codex", "codex"]);
   });
 
-  it("does not inherit the regular profile for unresolved cross-provider utility refs", async () => {
-    resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
-
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        utilityModelRef: "anthropic/claude-haiku-4-5",
-      }),
-    ).resolves.toBe("Utility title");
-
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]).not.toHaveProperty(
-      "preferredProfile",
-    );
-  });
-
-  it("deduplicates identical raw refs when selection resolution is unavailable", async () => {
-    resolveSimpleCompletionSelectionForAgent.mockReturnValue(null);
-    completeWithPreparedSimpleCompletionModel.mockResolvedValue({ content: [] });
-
-    await expect(
-      generateConversationLabelWithFallback({
-        ...params,
-        utilityModelRef: params.regularModelRef,
-      }),
-    ).resolves.toBeNull();
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledOnce();
-  });
-
-  it("uses the regular candidate directly when no utility model is available", async () => {
+  it("uses the regular candidate directly when no utility model exists", async () => {
     const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;
-
-    await expect(generateConversationLabelWithFallback(regularOnlyParams)).resolves.toBe(
-      "Utility title",
-    );
-
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledOnce();
-    expect(prepareSimpleCompletionModelForAgent.mock.calls[0]?.[0]?.modelRef).toBe(
-      "openai/gpt-main@work",
-    );
+    await generateConversationLabelWithFallback(regularOnlyParams);
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.model).toBe("gpt-main");
   });
 });

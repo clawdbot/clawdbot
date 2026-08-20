@@ -1,22 +1,10 @@
+import { safeParseJson } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 
-/** Parses a JSON object column, returning the fallback for malformed or non-object values. */
-export function parseJsonObject<T>(raw: string, fallback: T): T {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-/** Parses a JSON column without shape validation, returning the fallback only on parse failure. */
-export function parseJsonValue<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+export function tryParseJsonObject(raw: string): Record<string, unknown> | undefined {
+  const parsed = safeParseJson(raw);
+  return isRecord(parsed) ? parsed : undefined;
 }
 
 /** Normalizes SQLite number/bigint columns into JavaScript numbers. */
@@ -43,7 +31,7 @@ export function parseJsonArray(raw: string | null): string[] | undefined {
   if (!raw) {
     return undefined;
   }
-  const parsed = parseJsonObject<unknown>(raw, undefined);
+  const parsed = safeParseJson(raw);
   return Array.isArray(parsed)
     ? parsed.filter((item): item is string => typeof item === "string")
     : undefined;

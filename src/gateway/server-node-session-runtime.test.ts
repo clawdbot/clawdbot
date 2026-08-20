@@ -1,4 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -7,6 +12,7 @@ import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.j
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code?: number, reason?: string) => void;
@@ -21,7 +27,7 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
       role: "node",
       scopes: [],
       client: {
-        id: "node-client",
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "1.0.0",
         platform: "macos",
         mode: "node",
@@ -38,6 +44,7 @@ function createRuntime(
     Parameters<typeof createGatewayNodeSessionRuntime>[0]["isPairingStateCurrent"]
   > = (_nodeId, expected) =>
     expected.identity === "identity-a" && expected.generation === "generation-a",
+  onRunnerInventoryChanged?: (nodeId: string) => void,
 ) {
   return createGatewayNodeSessionRuntime({
     broadcast,
@@ -46,6 +53,7 @@ function createRuntime(
       generation: await resolveCurrentPairingGeneration(),
     }),
     isPairingStateCurrent,
+    onRunnerInventoryChanged,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
   });
@@ -58,6 +66,7 @@ function registerNode(
   frames: string[],
 ) {
   const socket: TestSocket = {
+    readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => frames.push(payload)),
     close: vi.fn(),
@@ -69,6 +78,65 @@ function registerNode(
 }
 
 describe("gateway node session runtime", () => {
+  test("publishes pairing-generation transitions to lifecycle consumers", () => {
+    const onPairingGenerationChanged = vi.fn();
+    const runtime = createGatewayNodeSessionRuntime({
+      broadcast: vi.fn(),
+      onPairingGenerationChanged,
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    });
+    registerNode(runtime, "conn-original", "generation-a", []);
+    registerNode(runtime, "conn-replacement", "generation-b", []);
+
+    expect(onPairingGenerationChanged).toHaveBeenCalledWith({
+      nodeId: "node-a",
+      previousPairingGeneration: "generation-a",
+      nextPairingGeneration: "generation-b",
+      preserveSessionState: false,
+    });
+  });
+
+  test("broadcasts and routes runner inventory changes from publication and replacement", () => {
+    const broadcast = vi.fn();
+    const onRunnerInventoryChanged = vi.fn();
+    const runtime = createRuntime(
+      async () => "generation-a",
+      broadcast,
+      undefined,
+      onRunnerInventoryChanged,
+    );
+    registerNode(runtime, "conn-original", "generation-a", []);
+
+    expect(
+      updateNodeRunnerInventory({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-original",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: false },
+        },
+      }),
+    ).toEqual({ changed: true });
+    expect(broadcast).toHaveBeenLastCalledWith(
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
+    expect(onRunnerInventoryChanged).toHaveBeenLastCalledWith("node-a");
+
+    registerNode(runtime, "conn-replacement", "generation-a", []);
+
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(onRunnerInventoryChanged).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith(
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
+  });
+
   test("forwards subscribed payload json without parsing it again", async () => {
     const frames: string[] = [];
     const runtime = createRuntime(async () => "generation-a");
@@ -140,6 +208,7 @@ describe("gateway node session runtime", () => {
     });
     const frames: string[] = [];
     const socket: TestSocket = {
+      readyState: WebSocket.OPEN,
       bufferedAmount: 0,
       send: vi.fn((payload: string) => frames.push(payload)),
       close: vi.fn(),
@@ -199,7 +268,6 @@ describe("gateway node session runtime", () => {
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-
     currentPairingGeneration = "generation-b";
     expect(
       runtime.nodeRegistry.updateSurface(

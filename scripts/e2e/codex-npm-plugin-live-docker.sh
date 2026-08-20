@@ -20,6 +20,9 @@ PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFI
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
+CODEX_PLUGIN_REGISTRY_PACKAGE=""
+CODEX_PLUGIN_REGISTRY_TARBALL=""
+CODEX_PLUGIN_REGISTRY_VERSION=""
 ASSERT_MAX_TEXT_FILE_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES 1048576
 )"
@@ -40,7 +43,7 @@ AGENT_TURN_TIMEOUT_SECONDS="$(
 )"
 SESSION_STORE_CONTRACT="${OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT:-}"
 if [[ -z "$SESSION_STORE_CONTRACT" ]]; then
-  if [[ -f "$CANDIDATE_ROOT/src/config/sessions/session-accessor.sqlite.ts" ]]; then
+  if [[ -f "$CANDIDATE_ROOT/src/config/sessions/session-accessor.sqlite-contract.ts" ]]; then
     SESSION_STORE_CONTRACT="sqlite"
   else
     # Trusted current harnesses also validate frozen targets from before the SQLite cutover.
@@ -55,6 +58,14 @@ if [[ -z "$BINDING_STORE_CONTRACT" ]]; then
     # Frozen targets before the binding-store migration persist a session sidecar.
     BINDING_STORE_CONTRACT="legacy-sidecar"
   fi
+fi
+if grep -q \
+  'continuesSourceReplyProgress' \
+  "$CANDIDATE_ROOT/extensions/codex/src/app-server/dynamic-tools.ts" 2>/dev/null; then
+  FOLLOWTHROUGH_PROGRESS_FINAL_MODE="explicit"
+else
+  # Frozen candidates continue after omitted finality; current candidates require false.
+  FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
 fi
 run_log=""
 
@@ -90,9 +101,39 @@ prepare_package_tgz() {
 
 prepare_package_tgz
 
+configure_codex_plugin_registry_candidate() {
+  local source_path="$1"
+  local container_path="/tmp/$(basename "$source_path")"
+  local package_json
+
+  # Local npm-pack installs must stay untrusted. Serve the exact candidate through the
+  # fixture registry so this lane exercises the post-publish official install shape.
+  package_json="$(tar -xOf "$source_path" package/package.json)"
+  CODEX_PLUGIN_REGISTRY_PACKAGE="$(
+    node -e '
+const pkg = JSON.parse(process.argv[1]);
+if (pkg.name !== "@openclaw/codex") {
+  throw new Error(`unexpected Codex package name: ${String(pkg.name)}`);
+}
+process.stdout.write(pkg.name);
+' "$package_json"
+  )"
+  CODEX_PLUGIN_REGISTRY_VERSION="$(
+    node -e '
+const pkg = JSON.parse(process.argv[1]);
+if (typeof pkg.version !== "string" || pkg.version.length === 0) {
+  throw new Error("packed Codex plugin is missing a version");
+}
+process.stdout.write(pkg.version);
+' "$package_json"
+  )"
+  CODEX_PLUGIN_REGISTRY_TARBALL="$container_path"
+  CODEX_PLUGIN_MOUNT=(-v "$source_path":"$container_path":ro)
+  CODEX_PLUGIN_SPEC="npm:${CODEX_PLUGIN_REGISTRY_PACKAGE}@${CODEX_PLUGIN_REGISTRY_VERSION}"
+}
+
 prepare_codex_plugin_spec() {
   local source_path
-  local container_path
   local pack_output
 
   if [ -z "$CODEX_PLUGIN_SPEC" ]; then
@@ -113,9 +154,7 @@ prepare_codex_plugin_spec() {
       exit 1
     fi
     source_path="${pack_output[0]}"
-    container_path="/tmp/$(basename "$source_path")"
-    CODEX_PLUGIN_MOUNT=(-v "$source_path":"$container_path":ro)
-    CODEX_PLUGIN_SPEC="npm-pack:$container_path"
+    configure_codex_plugin_registry_candidate "$source_path"
     return 0
   fi
 
@@ -128,9 +167,7 @@ prepare_codex_plugin_spec() {
       echo "Codex plugin npm-pack tarball not found: $source_path" >&2
       exit 1
     fi
-    container_path="/tmp/$(basename "$source_path")"
-    CODEX_PLUGIN_MOUNT=(-v "$source_path":"$container_path":ro)
-    CODEX_PLUGIN_SPEC="npm-pack:$container_path"
+    configure_codex_plugin_registry_candidate "$source_path"
   fi
 }
 
@@ -164,7 +201,11 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-openai/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_PACKAGE="$CODEX_PLUGIN_REGISTRY_PACKAGE" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL="$CODEX_PLUGIN_REGISTRY_TARBALL" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION="$CODEX_PLUGIN_REGISTRY_VERSION" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_BINDING_STORE_CONTRACT="$BINDING_STORE_CONTRACT" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_FOLLOWTHROUGH_PROGRESS_FINAL_MODE="$FOLLOWTHROUGH_PROGRESS_FINAL_MODE" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT="$SESSION_STORE_CONTRACT" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES=$ASSERT_MAX_ERROR_TAIL_BYTES" \
@@ -210,6 +251,9 @@ if [ -n "${OPENAI_BASE_URL:-}" ]; then
 fi
 
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:?missing OPENCLAW_CODEX_NPM_PLUGIN_SPEC}"
+CODEX_PLUGIN_REGISTRY_PACKAGE="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_PACKAGE:-}"
+CODEX_PLUGIN_REGISTRY_TARBALL="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_TARBALL:-}"
+CODEX_PLUGIN_REGISTRY_VERSION="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_VERSION:-}"
 MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_MODEL}"
 POST_UNINSTALL_MODEL_REF="$MODEL_REF"
 SESSION_ID="codex-npm-plugin-live"
@@ -222,9 +266,11 @@ fi
 
 dump_debug_logs() {
   local status="$1"
+  debug_logs_dumped=1
   echo "Codex npm plugin live scenario failed with exit code $status" >&2
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
+    /tmp/openclaw-codex-plugin-registry.log \
     /tmp/openclaw-codex-plugin-install.log \
     /tmp/openclaw-codex-plugin-enable.log \
     /tmp/openclaw-codex-plugins-list.json \
@@ -244,7 +290,20 @@ dump_debug_logs() {
     /tmp/openclaw-codex-agent-after-uninstall.json \
     /tmp/openclaw-codex-agent-after-uninstall.err
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+
+registry_pid=""
+debug_logs_dumped=0
+cleanup_scenario() {
+  local status=$?
+  trap - EXIT
+  set +e
+  openclaw_e2e_stop_process "${registry_pid:-}"
+  if [ "$status" -ne 0 ] && [ "$debug_logs_dumped" -eq 0 ]; then
+    dump_debug_logs "$status"
+  fi
+  exit "$status"
+}
+trap cleanup_scenario EXIT
 
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
@@ -252,6 +311,36 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
+
+if [ -n "$CODEX_PLUGIN_REGISTRY_TARBALL" ]; then
+  registry_port_file=/tmp/openclaw-codex-plugin-registry.port
+  rm -f "$registry_port_file"
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_CODEX_NPM_PLUGIN_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
+    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+      "$registry_port_file" \
+      "$CODEX_PLUGIN_REGISTRY_PACKAGE" \
+      "$CODEX_PLUGIN_REGISTRY_VERSION" \
+      "$CODEX_PLUGIN_REGISTRY_TARBALL" \
+      >/tmp/openclaw-codex-plugin-registry.log 2>&1 &
+  registry_pid=$!
+  for _ in $(seq 1 100); do
+    if [ -s "$registry_port_file" ]; then
+      break
+    fi
+    if ! kill -0 "$registry_pid" 2>/dev/null; then
+      openclaw_e2e_print_log /tmp/openclaw-codex-plugin-registry.log >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [ ! -s "$registry_port_file" ]; then
+    openclaw_e2e_print_log /tmp/openclaw-codex-plugin-registry.log >&2
+    echo "Timed out waiting for Codex plugin npm fixture registry." >&2
+    exit 1
+  fi
+  export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"
+  export npm_config_registry="$NPM_CONFIG_REGISTRY"
+fi
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
 openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
@@ -366,12 +455,25 @@ printf 'qa_beta=violet-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/
 printf 'qa_gamma=silver-%s\n' "$FOLLOWTHROUGH_SUFFIX" >"$FOLLOWTHROUGH_WORKSPACE/FOLLOWTHROUGH_GAMMA.md"
 rm -f "$FOLLOWTHROUGH_ARTIFACT"
 
+case "${OPENCLAW_CODEX_NPM_PLUGIN_FOLLOWTHROUGH_PROGRESS_FINAL_MODE:?missing follow-through final mode}" in
+  explicit)
+    FOLLOWTHROUGH_PROGRESS_INSTRUCTION="with final=false"
+    ;;
+  legacy)
+    FOLLOWTHROUGH_PROGRESS_INSTRUCTION="without passing final"
+    ;;
+  *)
+    echo "invalid follow-through final mode: $OPENCLAW_CODEX_NPM_PLUGIN_FOLLOWTHROUGH_PROGRESS_FINAL_MODE" >&2
+    exit 1
+    ;;
+esac
+
 FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
 Live release follow-through check.
 
-First call message(action=send) without passing final and send exactly
-$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. The final field must be
-omitted, not false. Make this progress send your only tool call in this step,
+First call message(action=send) $FOLLOWTHROUGH_PROGRESS_INSTRUCTION and send exactly
+$FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. Make this progress send
+your only tool call in this step,
 and wait for its result before calling any other tool.
 
 Only after that send succeeds, read FOLLOWTHROUGH_ALPHA.md,

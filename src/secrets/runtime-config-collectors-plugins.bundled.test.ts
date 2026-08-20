@@ -5,8 +5,9 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
+import { resolveSecretRefValues } from "./resolve.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
-import { createResolverContext } from "./runtime-shared.js";
+import { applyResolvedAssignments, createResolverContext } from "./runtime-shared.js";
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
@@ -138,6 +139,59 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         headers: {
           Authorization: "Bearer literal-token",
           "x-codex-client-session-token": "resolved-session-token",
+        },
+      },
+    });
+  });
+
+  it("resolves only explicitly referenced Google web-search headers", async () => {
+    expect(
+      findBundledPluginMetadataById("google", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.headers.*", expected: "string" }]);
+    const config = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          google: {
+            enabled: true,
+            config: {
+              webSearch: {
+                headers: {
+                  "X-Routing-Target": "staging",
+                  "X-Gateway-Token": envRef("GEMINI_GATEWAY_TOKEN"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const env = { GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
+    const context = createResolverContext({ sourceConfig: config, env });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["google", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.google.config.webSearch.headers.X-Gateway-Token",
+    ]);
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(config.plugins?.entries?.google?.config).toMatchObject({
+      webSearch: {
+        headers: {
+          "X-Routing-Target": "staging",
+          "X-Gateway-Token": "resolved-gateway-token",
         },
       },
     });

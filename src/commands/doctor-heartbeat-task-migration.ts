@@ -7,12 +7,15 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import { cronSchedulingInputsEqual } from "../cron/schedule-identity.js";
-import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
-import { computeJobNextRunAtMs, hasScheduledNextRunAtMs } from "../cron/service/jobs.js";
+import {
+  readHeartbeatMonitorScratch,
+  readHeartbeatMonitorScratchReadOnly,
+} from "../cron/scratch-store.js";
+import { computeJobNextRunAtMs, hasScheduledNextRunAtMs } from "../cron/service/jobs-scheduling.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import {
@@ -82,7 +85,7 @@ function migrationFinding(params: {
     path: params.storePath,
     target: params.agentId,
     requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into cron jobs.`,
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
   };
 }
 
@@ -94,9 +97,9 @@ export async function collectHeartbeatTaskMigrationFindings(
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const findings: HealthFinding[] = [];
   for (const agent of resolveHeartbeatAgents(cfg)) {
-    let monitor: ReturnType<typeof readHeartbeatMonitorScratch>;
+    let monitor: ReturnType<typeof readHeartbeatMonitorScratchReadOnly>;
     try {
-      monitor = readHeartbeatMonitorScratch(storePath, agent.agentId, { env });
+      monitor = readHeartbeatMonitorScratchReadOnly(storePath, agent.agentId, { env });
     } catch (error) {
       findings.push(
         migrationFinding({
@@ -377,7 +380,7 @@ async function clearLegacyTaskTimestamps(params: {
   env: NodeJS.ProcessEnv;
   tasks: readonly LegacyHeartbeatTask[];
 }): Promise<void> {
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath: params.storePath, sessionKey: params.sessionKey, env: params.env },
     (entry) => {
       const remaining = { ...entry.heartbeatTaskState };

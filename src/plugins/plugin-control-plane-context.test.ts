@@ -1,16 +1,25 @@
 // Verifies plugin control-plane context construction and boundaries.
 import { describe, expect, it } from "vitest";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 
-function createIndex(pluginId: string): InstalledPluginIndex {
+function createIndex(
+  pluginId: string,
+  options: {
+    doctorContractFile?: InstalledPluginIndex["plugins"][number]["doctorContractFile"];
+    doctorContractHash?: string;
+    generatedAtMs?: number;
+    packageBuild?: InstalledPluginIndex["plugins"][number]["packageBuild"];
+  } = {},
+): InstalledPluginIndex {
   return {
     version: 1,
     hostContractVersion: "test",
     compatRegistryVersion: "test",
     migrationVersion: 1,
     policyHash: "policy",
-    generatedAtMs: 1,
+    generatedAtMs: options.generatedAtMs ?? 1,
     installRecords: {},
     diagnostics: [],
     plugins: [
@@ -18,13 +27,18 @@ function createIndex(pluginId: string): InstalledPluginIndex {
         pluginId,
         manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
         manifestHash: `${pluginId}-manifest-hash`,
+        ...(options.doctorContractHash ? { doctorContractHash: options.doctorContractHash } : {}),
+        ...(options.doctorContractFile ? { doctorContractFile: options.doctorContractFile } : {}),
+        packageBuild: options.packageBuild ?? {
+          openclawVersion: "test",
+          bundledDist: false,
+        },
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -67,5 +81,76 @@ describe("plugin control-plane context", () => {
         activationFingerprint: "activation-a",
       }),
     ).not.toBe(base);
+  });
+
+  it("tracks doctor contract content but ignores index generation time", () => {
+    const baseIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      generatedAtMs: 1,
+    });
+    const changedContractIndex = createIndex("demo", {
+      doctorContractHash: "contract-b",
+      generatedAtMs: 1,
+    });
+    const regeneratedIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      generatedAtMs: 2,
+    });
+    const retimedContractIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      doctorContractFile: { size: 10, mtimeMs: 20, ctimeMs: 30 },
+      generatedAtMs: 1,
+    });
+    const rebuiltIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      packageBuild: { openclawVersion: "next", bundledDist: false },
+    });
+    const bundledDistIndex = createIndex("demo", {
+      doctorContractHash: "contract-a",
+      packageBuild: { openclawVersion: "test", bundledDist: true },
+    });
+    const reorderedIndexSource = createIndex("demo", {
+      doctorContractHash: "contract-a",
+    });
+    const { pluginId, ...reorderedPlugin } = reorderedIndexSource.plugins[0]!;
+    const reorderedIndex: InstalledPluginIndex = {
+      ...reorderedIndexSource,
+      plugins: [{ ...reorderedPlugin, pluginId }],
+    };
+    const resolveControlPlaneFingerprint = (index: InstalledPluginIndex) =>
+      resolvePluginControlPlaneFingerprint({
+        config: { plugins: { allow: ["demo"] } },
+        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+        index,
+        activationFingerprint: "activation-a",
+      });
+
+    const inventoryFingerprint = resolveInstalledManifestRegistryIndexFingerprint(baseIndex);
+    expect(resolveInstalledManifestRegistryIndexFingerprint(changedContractIndex)).not.toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(regeneratedIndex)).toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(retimedContractIndex)).toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(rebuiltIndex)).toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(bundledDistIndex)).not.toBe(
+      inventoryFingerprint,
+    );
+    expect(resolveInstalledManifestRegistryIndexFingerprint(reorderedIndex)).toBe(
+      inventoryFingerprint,
+    );
+
+    const controlPlaneFingerprint = resolveControlPlaneFingerprint(baseIndex);
+    expect(resolveControlPlaneFingerprint(changedContractIndex)).not.toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(regeneratedIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(retimedContractIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(rebuiltIndex)).toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(bundledDistIndex)).not.toBe(controlPlaneFingerprint);
+    expect(resolveControlPlaneFingerprint(reorderedIndex)).toBe(controlPlaneFingerprint);
   });
 });

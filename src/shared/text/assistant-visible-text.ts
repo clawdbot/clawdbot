@@ -815,11 +815,15 @@ export function stripDowngradedToolCallText(text: string): string {
 
   const stripToolCalls = (input: string): string => {
     const toolCallRe = /\[Tool Call:[^\]]*\]/gi;
+    const codeRegions = findCodeRegions(input);
     let result = "";
     let cursor = 0;
     for (const match of input.matchAll(toolCallRe)) {
       const start = match.index ?? 0;
       if (start < cursor) {
+        continue;
+      }
+      if (isInsideCode(start, codeRegions)) {
         continue;
       }
       result += input.slice(cursor, start);
@@ -871,11 +875,19 @@ export function stripDowngradedToolCallText(text: string): string {
   // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
   let cleaned = stripToolCalls(text);
 
-  // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
+  // Remove [Tool Result for ID ...] blocks and their content, unless the
+  // marker is quoted inside a fenced code block where it is reference material.
+  let codeRegions = findCodeRegions(cleaned);
+  cleaned = cleaned.replace(
+    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
+    (match, offset: number) => (isInsideCode(offset, codeRegions) ? match : ""),
+  );
 
   // Remove [Historical context: ...] markers (self-contained within brackets).
-  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
+  codeRegions = findCodeRegions(cleaned);
+  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, (match, offset: number) =>
+    isInsideCode(offset, codeRegions) ? match : "",
+  );
 
   return cleaned.trim();
 }
@@ -1046,7 +1058,7 @@ function applyAssistantVisibleTextStagePipeline(
       cleaned = stripAssistantInternalTraceLines(cleaned);
     }
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
-    cleaned = stripPlainTextToolCallBlocks(cleaned);
+    cleaned = stripPlainTextToolCallBlocks(cleaned, { resolveProtectedRanges: findCodeRegions });
     if (!options.preserveDowngradedToolText) {
       cleaned = stripDowngradedToolCallText(cleaned);
     }

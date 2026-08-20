@@ -1,6 +1,9 @@
 // Server HTTP probe tests cover readiness, health, disabled compat routes, and
 // auth handling through the in-memory HTTP harness.
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import os from "node:os";
+import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareGatewaySuspend,
@@ -11,6 +14,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import type { ChannelManager } from "./server-channels.js";
 import {
   AUTH_TOKEN,
@@ -20,7 +24,12 @@ import {
   dispatchRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
-import { createReadinessChecker, type ReadinessChecker } from "./server/readiness.js";
+import {
+  createReadinessChecker,
+  createStartupChecker,
+  type ReadinessChecker,
+  type StartupChecker,
+} from "./server/readiness.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type GatewayServerHarness = Parameters<typeof dispatchRequest>[0];
@@ -33,86 +42,283 @@ async function sendGatewayRequest(server: GatewayServerHarness, options: Gateway
   return { res, getBody };
 }
 
-describe("gateway OpenAI-compatible disabled HTTP routes", () => {
-  it("returns 404 when compat endpoints are disabled", async () => {
-    await withGatewayServer({
-      prefix: "openai-compat-disabled",
-      resolvedAuth: AUTH_NONE,
-      run: async (server) => {
-        for (const path of ["/v1/chat/completions", "/v1/responses"]) {
-          const { res, getBody } = await sendGatewayRequest(server, {
-            path,
+async function withMarkedControlUiRoot(run: (root: string) => Promise<void>): Promise<void> {
+  const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-http-routing-"));
+  try {
+    await fs.writeFile(nodePath.join(root, "index.html"), "<html>spa fallback</html>\n");
+    await run(root);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("startup plugin HTTP routing", () => {
+  it("keeps unclaimed webhook POSTs outside the root Control UI SPA", async () => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      let sidecarsReady = false;
+      const handlePluginRequest = vi.fn(async () => false);
+      await withGatewayServer({
+        prefix: "startup-plugin-post-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: () => false,
+          isStartupPluginRuntimeReady: () => sidecarsReady,
+        },
+        run: async (server) => {
+          const request = {
+            path: "/slack/events",
             method: "POST",
-            headers: { "content-type": "application/json" },
-          });
+            headers: { accept: "text/html" },
+          };
+          const starting = createResponse();
+          await dispatchRequest(server, createRequest(request), starting.res);
 
-          expect(res.statusCode, path).toBe(404);
-          expect(getBody(), path).toBe("Not Found");
-        }
-      },
+          expect(starting.res.statusCode).toBe(503);
+          expect(starting.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+          expect(starting.getBody()).toBe("Plugin runtime is starting");
+
+          sidecarsReady = true;
+          const ready = createResponse();
+          await dispatchRequest(server, createRequest(request), ready.res);
+
+          expect(ready.res.statusCode).toBe(404);
+          expect(ready.setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+          expect(ready.getBody()).toBe("Not Found");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+        },
+      });
     });
   });
 
-  it("returns 404 for disabled GET routes when the Control UI is root-mounted", async () => {
-    await withGatewayServer({
-      prefix: "openai-compat-disabled-root-control-ui",
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
-      },
-      run: async (server) => {
-        for (const path of [
-          "/v1",
-          "/v1/",
-          "/v1/models",
-          "/v1/models/openclaw",
-          "/v1/chat/completions",
-          "/v1/responses",
-          "/v1/embeddings",
-        ]) {
-          const { res, getBody } = await sendGatewayRequest(server, {
-            path,
-            method: "GET",
-          });
+  it("uses Accept to route only the unclaimed Control UI SPA fallback", async () => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      let sidecarsReady = false;
+      await withGatewayServer({
+        prefix: "startup-plugin-get-accept-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          handlePluginRequest: async () => false,
+          shouldEnforcePluginGatewayAuth: () => false,
+          isStartupPluginRuntimeReady: () => sidecarsReady,
+        },
+        run: async (server) => {
+          const htmlCases = [
+            {
+              name: "browser",
+              accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            { name: "bare curl", accept: "*/*" },
+            { name: "missing header", accept: undefined },
+            { name: "empty header", accept: "" },
+            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
+            { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
+            { name: "text wildcard", accept: "text/*" },
+          ];
+          const nonHtmlCases = [
+            { name: "JSON", accept: "application/json" },
+            { name: "event stream", accept: "text/event-stream" },
+            { name: "zero-quality HTML", accept: "text/html;q=0" },
+            { name: "zero-quality wildcard", accept: "*/*;q=0" },
+            { name: "mixed-case zero quality", accept: "text/html;Q=0" },
+            { name: "zero-quality text wildcard", accept: "text/*;q=0" },
+          ];
+          for (const ready of [false, true]) {
+            sidecarsReady = ready;
+            for (const testCase of htmlCases) {
+              const { res, getBody } = await sendGatewayRequest(server, {
+                path: "/unclaimed-spa-route",
+                method: "GET",
+                headers: testCase.accept === undefined ? undefined : { accept: testCase.accept },
+              });
 
-          expect(res.statusCode, path).toBe(404);
-          expect(getBody(), path).toBe("Not Found");
-        }
-      },
+              expect(res.statusCode, `${testCase.name} ready=${ready}`).toBe(200);
+              expect(getBody(), `${testCase.name} ready=${ready}`).toContain("spa fallback");
+            }
+
+            for (const testCase of nonHtmlCases) {
+              const response = createResponse();
+              await dispatchRequest(
+                server,
+                createRequest({
+                  path: "/unclaimed-spa-route",
+                  method: "GET",
+                  headers: { accept: testCase.accept },
+                }),
+                response.res,
+              );
+
+              expect(response.res.statusCode, `${testCase.name} ready=${ready}`).toBe(
+                ready ? 404 : 503,
+              );
+              expect(response.setHeader).toHaveBeenCalledWith(
+                "Content-Type",
+                "text/plain; charset=utf-8",
+              );
+              expect(response.getBody()).toBe(ready ? "Not Found" : "Plugin runtime is starting");
+              if (ready) {
+                expect(response.setHeader).not.toHaveBeenCalledWith("Retry-After", "1");
+              } else {
+                expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+              }
+            }
+          }
+        },
+      });
     });
   });
+});
+
+describe("standalone MCP App HTTP routing", () => {
+  it.each([
+    {
+      name: "disabled shell",
+      enabled: false,
+      requestPath: "/__openclaw__/mcp-app",
+    },
+    {
+      name: "disabled view",
+      enabled: false,
+      requestPath: "/__openclaw__/mcp-app/view",
+    },
+    {
+      name: "enabled malformed child",
+      enabled: true,
+      requestPath: "/__openclaw__/mcp-app/other",
+    },
+  ])(
+    "returns 404 for the $name instead of Control UI HTML",
+    async ({ name, enabled, requestPath }) => {
+      await withMarkedControlUiRoot(async (controlUiRoot) => {
+        await withGatewayServer({
+          prefix: `mcp-app-routing-${name}`,
+          resolvedAuth: AUTH_NONE,
+          overrides: {
+            controlUiEnabled: true,
+            controlUiBasePath: "",
+            controlUiRoot: { kind: "resolved", path: controlUiRoot },
+            getRuntimeConfig: () => ({
+              gateway: { trustedProxies: [] },
+              mcp: { apps: { enabled } },
+            }),
+          },
+          run: async (server) => {
+            const { res, getBody } = await sendGatewayRequest(server, {
+              path: requestPath,
+              method: "GET",
+            });
+
+            expect(res.statusCode).toBe(404);
+            expect(getBody()).toBe("Not Found");
+          },
+        });
+      });
+    },
+  );
 
   it.each([
-    { name: "chat completions", enabled: { openAiChatCompletionsEnabled: true } },
-    { name: "responses", enabled: { openResponsesEnabled: true } },
-  ])("keeps $name model discovery ahead of a root-mounted Control UI", async ({ enabled }) => {
+    { name: "disabled endpoint", enabled: false, requestPath: "/__openclaw__/mcp-app" },
+    { name: "malformed child", enabled: true, requestPath: "/__openclaw__/mcp-app/other" },
+  ])("preserves plugin precedence for a $name", async ({ enabled, requestPath }) => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
     await withGatewayServer({
-      prefix: "openai-compat-enabled-root-control-ui",
+      prefix: "mcp-app-routing-plugin-precedence",
       resolvedAuth: AUTH_NONE,
       overrides: {
         controlUiEnabled: true,
         controlUiBasePath: "",
-        ...enabled,
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => false,
+        getRuntimeConfig: () => ({
+          gateway: { trustedProxies: [] },
+          mcp: { apps: { enabled } },
+        }),
       },
       run: async (server) => {
-        const { res, getBody } = await sendGatewayRequest(server, {
-          path: "/v1/models",
+        const { res } = await sendGatewayRequest(server, {
+          path: requestPath,
           method: "GET",
-          headers: { "x-openclaw-scopes": "operator.read" },
         });
 
-        expect(res.statusCode).toBe(200);
-        expect(JSON.parse(getBody())).toMatchObject({
-          object: "list",
-          data: expect.arrayContaining([expect.objectContaining({ id: "openclaw/default" })]),
-        });
+        expect(res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledOnce();
       },
     });
   });
 });
 
 describe("gateway probe endpoints", () => {
+  it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["gateway-draining"],
+      uptimeMs: 1_000,
+    });
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      await withGatewayServer({
+        prefix: "probe-namespace-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          getReadiness,
+        },
+        run: async (server) => {
+          const exact = await sendGatewayRequest(server, { path: "/readyz" });
+          expect(exact.res.statusCode).toBe(503);
+          expect(JSON.parse(exact.getBody())).toMatchObject({ ready: false });
+
+          for (const routePath of [
+            "/health/",
+            "/healthz/details",
+            "/ready/",
+            "/readyz/details",
+            "/startup/",
+            "/startupz/details",
+          ]) {
+            const { res, getBody } = await sendGatewayRequest(server, { path: routePath });
+            expect(res.statusCode, routePath).toBe(404);
+            expect(getBody(), routePath).toBe("Not Found");
+          }
+        },
+      });
+    });
+  });
+
+  it("preserves plugin precedence for an unclaimed probe descendant", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    await withGatewayServer({
+      prefix: "probe-namespace-plugin-precedence",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => false,
+      },
+      run: async (server) => {
+        const { res } = await sendGatewayRequest(server, { path: "/readyz/details" });
+        expect(res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledOnce();
+      },
+    });
+  });
+
   it("keeps liveness green while a prepared suspension lease makes readiness red", async () => {
     resetGatewayWorkAdmission();
     const channelManager = {
@@ -344,6 +550,63 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("fails closed with guidance for unattributable proxied readiness", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: true,
+      failing: [],
+      uptimeMs: 45_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-unattributable-proxy",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/ready",
+          remoteAddress: "127.0.0.1",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+          headers: { forwarded: "for=203.0.113.10" },
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(getBody())).toEqual({
+          error: {
+            message:
+              "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+            type: "proxy_attribution_required",
+          },
+        });
+      },
+    });
+  });
+
+  it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
+    const handleHooksRequest = vi.fn(async () => true);
+    const handleWatchNodeRequest = vi.fn(async () => true);
+
+    await withGatewayServer({
+      prefix: "probe-unattributable-owned-routes",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { handleHooksRequest, handleWatchNodeRequest },
+      run: async (server) => {
+        for (const path of ["/hooks/test", "/api/nodes/watch/node-1"]) {
+          const { res, getBody } = await sendGatewayRequest(server, {
+            path,
+            remoteAddress: "127.0.0.1",
+            headers: { "x-forwarded-for": "203.0.113.10" },
+          });
+          expect(res.statusCode, path).toBe(403);
+          expect(getBody(), path).toContain("proxy_attribution_required");
+        }
+      },
+    });
+
+    expect(handleHooksRequest).not.toHaveBeenCalled();
+    expect(handleWatchNodeRequest).not.toHaveBeenCalled();
+  });
+
   it("re-resolves auth for remote /ready requests after shared auth rotation", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
@@ -428,6 +691,12 @@ describe("gateway probe endpoints", () => {
           },
           overrides: {
             getReadiness,
+            getRuntimeConfig: () => ({
+              gateway: {
+                trustedProxies: ["10.0.0.1"],
+                controlUi: { allowedOrigins: ["https://control.example"] },
+              },
+            }),
           },
           run: async (server) => {
             const { res, getBody } = await sendGatewayRequest(server, {
@@ -437,6 +706,7 @@ describe("gateway probe endpoints", () => {
               headers: {
                 origin: "https://evil.example",
                 forwarded: "for=203.0.113.10;proto=https;host=gateway.test",
+                "x-forwarded-for": "203.0.113.10",
                 "x-forwarded-user": "user@example.com",
                 "x-forwarded-proto": "https",
               },
@@ -484,6 +754,151 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(200);
         expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+      },
+    });
+  });
+
+  it("reports startup lifecycle independently of hard channel failures", async () => {
+    let startupPending = true;
+    let gatewayDraining = false;
+    const startedAt = Date.now() - 5_000;
+    const account = {
+      accountId: "default",
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+      lifecycle: "blocked" as const,
+      lastStartAt: startedAt,
+    };
+    const channelManager = {
+      getRuntimeSnapshot: () => ({
+        channels: { telegram: account },
+        channelAccounts: { telegram: { default: account } },
+      }),
+      getAutostartSuppression: () => null,
+      isAmbientAutostartSuppressed: () => false,
+    } as unknown as ChannelManager;
+    const startupDeps = {
+      startedAt,
+      getStartupPending: () => startupPending,
+      getStartupPendingReason: () => "plugin-convergence",
+      getGatewayDraining: () => gatewayDraining,
+    };
+    const getStartup = createStartupChecker(startupDeps);
+    const getReadiness = createReadinessChecker({
+      channelManager,
+      ...startupDeps,
+      cacheTtlMs: 0,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-startup-lifecycle",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness, getStartup },
+      run: async (server) => {
+        const starting = await sendGatewayRequest(server, { path: "/startupz" });
+        expect(starting.res.statusCode).toBe(503);
+        expect(JSON.parse(starting.getBody())).toMatchObject({
+          ok: false,
+          status: "starting",
+          version: resolveRuntimeServiceVersion(process.env),
+          uptimeMs: expect.any(Number),
+          pendingReason: "plugin-convergence",
+        });
+
+        gatewayDraining = true;
+        const drainingDuringStartup = await sendGatewayRequest(server, { path: "/startupz" });
+        expect(drainingDuringStartup.res.statusCode).toBe(503);
+        expect(JSON.parse(drainingDuringStartup.getBody())).toMatchObject({
+          ok: false,
+          status: "draining",
+          version: resolveRuntimeServiceVersion(process.env),
+          uptimeMs: expect.any(Number),
+        });
+
+        const drainingReadiness = await sendGatewayRequest(server, { path: "/readyz" });
+        expect(drainingReadiness.res.statusCode).toBe(503);
+        expect(JSON.parse(drainingReadiness.getBody())).toMatchObject({
+          ready: false,
+          failing: ["gateway-draining"],
+        });
+        gatewayDraining = false;
+
+        startupPending = false;
+        const started = await sendGatewayRequest(server, { path: "/startupz" });
+        expect(started.res.statusCode).toBe(200);
+        expect(JSON.parse(started.getBody())).toMatchObject({
+          ok: true,
+          status: "started",
+          version: resolveRuntimeServiceVersion(process.env),
+          uptimeMs: expect.any(Number),
+        });
+
+        const readiness = await sendGatewayRequest(server, { path: "/readyz" });
+        expect(readiness.res.statusCode).toBe(503);
+        expect(JSON.parse(readiness.getBody())).toMatchObject({
+          ready: false,
+          failing: ["telegram"],
+        });
+
+        const channelIndependentStartup = await sendGatewayRequest(server, {
+          path: "/startupz",
+        });
+        expect(channelIndependentStartup.res.statusCode).toBe(200);
+        expect(JSON.parse(channelIndependentStartup.getBody())).toMatchObject({
+          ok: true,
+          status: "started",
+        });
+
+        gatewayDraining = true;
+        const draining = await sendGatewayRequest(server, { path: "/startupz" });
+        expect(draining.res.statusCode).toBe(503);
+        expect(JSON.parse(draining.getBody())).toMatchObject({
+          ok: false,
+          status: "draining",
+          version: resolveRuntimeServiceVersion(process.env),
+          uptimeMs: expect.any(Number),
+        });
+      },
+    });
+  });
+
+  it("gates startup details to local or authenticated callers", async () => {
+    const getStartup = createStartupChecker({
+      startedAt: Date.now() - 8_000,
+      getStartupPending: () => true,
+      getStartupPendingReason: () => "startup-sidecars",
+      getGatewayDraining: () => false,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-startup-details",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getStartup },
+      run: async (server) => {
+        const remote = await sendGatewayRequest(server, {
+          path: "/startupz",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+        });
+        expect(remote.res.statusCode).toBe(503);
+        expect(JSON.parse(remote.getBody())).toEqual({ ok: false, status: "starting" });
+
+        const authenticated = await sendGatewayRequest(server, {
+          path: "/startupz",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+          authorization: "Bearer test-token",
+        });
+        expect(authenticated.res.statusCode).toBe(503);
+        expect(JSON.parse(authenticated.getBody())).toMatchObject({
+          ok: false,
+          status: "starting",
+          version: resolveRuntimeServiceVersion(process.env),
+          uptimeMs: expect.any(Number),
+          pendingReason: "startup-sidecars",
+        });
       },
     });
   });
@@ -561,6 +976,100 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(503);
         expect(getBody()).toBe("");
+      },
+    });
+  });
+
+  it("keeps GET and HEAD /startupz status and Content-Length in parity", async () => {
+    const getStartup: StartupChecker = () => ({
+      ok: false,
+      status: "draining",
+      uptimeMs: 5_000,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-startupz-head",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getStartup },
+      run: async (server) => {
+        const get = await sendGatewayRequest(server, { path: "/startupz" });
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/startupz", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(get.res.statusCode).toBe(503);
+        expect(head.res.statusCode).toBe(503);
+        expect(head.getBody()).toBe("");
+        expect(head.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength(get.getBody())),
+        );
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD probe responses matching the GET body", async () => {
+    await withGatewayServer({
+      prefix: "probe-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const get = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/healthz" }), get.res);
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/healthz", method: "HEAD" }),
+          head.res,
+        );
+
+        const expectedLength = String(Buffer.byteLength(get.getBody()));
+        expect(get.res.statusCode).toBe(200);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.getBody()).toBe("");
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", expectedLength);
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD responses for unclaimed paths", async () => {
+    await withGatewayServer({
+      prefix: "catch-all-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-such-route", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(head.res.statusCode).toBe(404);
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", "9");
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD responses while the plugin runtime starts", async () => {
+    await withGatewayServer({
+      prefix: "plugin-starting-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      overrides: { isStartupPluginRuntimeReady: () => false },
+      run: async (server) => {
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-such-route", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(head.res.statusCode).toBe(503);
+        expect(head.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength("Plugin runtime is starting")),
+        );
       },
     });
   });

@@ -8,17 +8,44 @@ import XCTest
 
 private actor AttachmentSendCapture {
     private(set) var attachments: [OpenClawChatAttachmentPayload] = []
+    private(set) var sends = 0
 
     func store(_ attachments: [OpenClawChatAttachmentPayload]) {
         self.attachments = attachments
+        self.sends += 1
     }
 
     func count() -> Int {
         self.attachments.count
     }
 
+    func sendCount() -> Int {
+        self.sends
+    }
+
     func first() -> OpenClawChatAttachmentPayload? {
         self.attachments.first
+    }
+}
+
+private enum AttachmentRouteLeaseAvailability: Sendable {
+    case available
+    case unsupported
+    case indeterminate
+}
+
+private actor AttachmentRouteLeasePlan {
+    private var availability: [AttachmentRouteLeaseAvailability]
+
+    init(_ availability: [AttachmentRouteLeaseAvailability]) {
+        self.availability = availability
+    }
+
+    func next() -> AttachmentRouteLeaseAvailability {
+        guard self.availability.count > 1 else {
+            return self.availability.first ?? .available
+        }
+        return self.availability.removeFirst()
     }
 }
 
@@ -58,6 +85,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     let responseStatus: String
     let returnsEmptyHistory: Bool
     let durableOutboxAvailable: Bool
+    let routeLeasePlan: AttachmentRouteLeasePlan?
 
     init(
         capture: AttachmentSendCapture? = nil,
@@ -65,7 +93,8 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         failsAmbiguously: Bool = false,
         responseStatus: String = "started",
         returnsEmptyHistory: Bool = false,
-        durableOutboxAvailable: Bool = true)
+        durableOutboxAvailable: Bool = true,
+        routeLeasePlan: AttachmentRouteLeasePlan? = nil)
     {
         self.capture = capture
         self.healthGate = healthGate
@@ -73,6 +102,7 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
         self.responseStatus = responseStatus
         self.returnsEmptyHistory = returnsEmptyHistory
         self.durableOutboxAvailable = durableOutboxAvailable
+        self.routeLeasePlan = routeLeasePlan
     }
 
     func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
@@ -117,8 +147,20 @@ private struct AttachmentProcessingTransport: OpenClawChatTransport {
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
-        guard self.durableOutboxAvailable else {
-            return .unavailable(reason: OpenClawChatTransportUpgradeMessage.routingContract)
+        let availability: AttachmentRouteLeaseAvailability = if let routeLeasePlan {
+            await routeLeasePlan.next()
+        } else {
+            self.durableOutboxAvailable ? .available : .unsupported
+        }
+        switch availability {
+        case .indeterminate:
+            return .unavailable(reason: nil)
+        case .unsupported:
+            return .unavailable(
+                reason: OpenClawChatTransportUpgradeMessage.routingContract,
+                allowsLiveSend: true)
+        case .available:
+            break
         }
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
@@ -233,6 +275,87 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertLessThanOrEqual(max(dimensions.width, dimensions.height), ChatImageProcessor.maxLongEdgePx)
         let errorText = await MainActor.run { viewModel.errorText }
         XCTAssertNil(errorText)
+    }
+
+    func testVideoFileStagesWithoutTranscodeAndSendsOriginalPayloadMetadata() async throws {
+        let capture = AttachmentSendCapture()
+        let data = Data("fixture-video-container".utf8)
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("composer-video-\(UUID().uuidString).mp4")
+        try data.write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: AttachmentProcessingTransport(capture: capture))
+        }
+
+        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
+        try await waitUntil("video attachment staged") {
+            await MainActor.run { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
+        }
+
+        let staged = try await MainActor.run { () throws -> (Data, String, String) in
+            let attachment = try XCTUnwrap(viewModel.attachments.first)
+            return (attachment.data, attachment.fileName, attachment.mimeType)
+        }
+        XCTAssertEqual(staged.0, data)
+        XCTAssertEqual(staged.1, fileURL.lastPathComponent)
+        XCTAssertEqual(staged.2, "video/mp4")
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("video attachment sent") {
+            await capture.count() == 1
+        }
+        let capturedPayload = await capture.first()
+        let payload = try XCTUnwrap(capturedPayload)
+        XCTAssertEqual(payload.type, "file")
+        XCTAssertEqual(payload.fileName, fileURL.lastPathComponent)
+        XCTAssertEqual(payload.mimeType, "video/mp4")
+        XCTAssertEqual(payload.content, data.base64EncodedString())
+    }
+
+    func testVideoFileUsesServerDefaultTwentyMiBCap() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("composer-video-oversize-\(UUID().uuidString).mp4")
+        try Data(count: OpenClawChatViewModel.maxVideoAttachmentBytes + 1).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
+        try await waitUntil("oversize video rejected") {
+            await MainActor.run { viewModel.errorText != nil }
+        }
+
+        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
+        XCTAssertTrue(state.0)
+        XCTAssertEqual(
+            state.1,
+            "Attachment \(fileURL.lastPathComponent) exceeds the 20 MB video limit")
+    }
+
+    func testUnsupportedAudioFileIsRejectedBeforeReadingItsPayload() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("composer-audio-oversize-\(UUID().uuidString).mp3")
+        XCTAssertTrue(FileManager.default.createFile(atPath: fileURL.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.truncate(atOffset: UInt64(OpenClawChatViewModel.maxVideoAttachmentBytes * 10))
+        try handle.close()
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await MainActor.run { viewModel.addAttachments(urls: [fileURL]) }
+        try await waitUntil("unsupported audio rejected") {
+            await MainActor.run { viewModel.errorText != nil }
+        }
+
+        let state = await MainActor.run { (viewModel.attachments.isEmpty, viewModel.errorText) }
+        XCTAssertTrue(state.0)
+        XCTAssertEqual(state.1, "Only image and video attachments are supported right now")
     }
 
     func testVoiceNoteAttachmentStagesAudioAndDeletesTemporaryFile() async throws {
@@ -502,6 +625,78 @@ final class ChatViewModelAttachmentTests: XCTestCase {
 
         let commands = await outbox.loadCommands()
         XCTAssertTrue(commands.isEmpty)
+    }
+
+    func testIndeterminateOutboxRouteRetainsAttachmentAndRetriesOnceAvailable() async throws {
+        let capture = AttachmentSendCapture()
+        let routeLeasePlan = AttachmentRouteLeasePlan([
+            .indeterminate,
+            .available,
+            .available,
+        ])
+        let outbox = try makeAttachmentOutbox()
+        let attachmentData = Data("retry-image".utf8)
+        let viewModel = await MainActor.run {
+            makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(
+                    capture: capture,
+                    returnsEmptyHistory: true,
+                    routeLeasePlan: routeLeasePlan),
+                outbox: outbox)
+        }
+        await MainActor.run { viewModel.load() }
+        try await waitUntil("attachment outbox bootstrap completed") {
+            await MainActor.run {
+                viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages
+            }
+        }
+        let attachmentID = await MainActor.run {
+            let attachment = OpenClawPendingAttachment(
+                url: nil,
+                data: attachmentData,
+                fileName: "retry.jpg",
+                mimeType: "image/jpeg",
+                preview: nil)
+            viewModel.input = "retry caption"
+            viewModel.attachments = [attachment]
+            viewModel.send()
+            return attachment.id
+        }
+
+        let routeError =
+            "Could not verify this attachment's delivery route. Reconnect, then try again."
+        try await waitUntil("indeterminate attachment route is visible") {
+            await MainActor.run { viewModel.errorText == routeError }
+        }
+        let retainedState = await MainActor.run {
+            (viewModel.input, viewModel.attachments.map(\.id))
+        }
+        XCTAssertEqual(retainedState.0, "retry caption")
+        XCTAssertEqual(retainedState.1, [attachmentID])
+        let retainedCommands = await outbox.loadCommands()
+        let initialSendCount = await capture.sendCount()
+        XCTAssertTrue(retainedCommands.isEmpty)
+        XCTAssertEqual(initialSendCount, 0)
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("attachment retry sent") {
+            await capture.sendCount() == 1
+        }
+        try await Task.sleep(for: .milliseconds(100))
+
+        let capturedPayload = await capture.first()
+        let payload = try XCTUnwrap(capturedPayload)
+        XCTAssertEqual(payload.fileName, "retry.jpg")
+        XCTAssertEqual(payload.mimeType, "image/jpeg")
+        XCTAssertEqual(payload.content, attachmentData.base64EncodedString())
+        let finalSendCount = await capture.sendCount()
+        XCTAssertEqual(finalSendCount, 1)
+        let sentState = await MainActor.run {
+            (viewModel.input, viewModel.attachments.isEmpty, viewModel.errorText)
+        }
+        XCTAssertEqual(sentState.0, "")
+        XCTAssertTrue(sentState.1)
+        XCTAssertNil(sentState.2)
     }
 
     func testLegacyGatewayRetainsAttachmentUntilOutboxRestoreCompletes() async throws {

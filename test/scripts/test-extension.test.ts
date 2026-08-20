@@ -11,7 +11,7 @@ import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
   listChangedExtensionIds,
-} from "../../scripts/lib/changed-extensions.mjs";
+} from "../../scripts/lib/changed-extensions.mts";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
@@ -21,21 +21,23 @@ import {
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
-} from "../../scripts/lib/extension-test-plan.mjs";
-import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
-import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mjs";
-import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mjs";
+} from "../../scripts/lib/extension-test-plan.mts";
+import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
+import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
+import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
-} from "../../scripts/test-extension-batch.mjs";
+} from "../../scripts/test-extension-batch.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
-const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
+const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -62,7 +64,7 @@ function createConcurrentExtensionBatchPlan() {
 }
 
 function runScriptResult(args: string[], cwd = process.cwd()) {
-  return spawnSync(process.execPath, [scriptPath, ...args], {
+  return spawnSync(process.execPath, ["--import", "tsx", scriptPath, ...args], {
     cwd,
     encoding: "utf8",
   });
@@ -95,12 +97,17 @@ function listExtensionTestFiles(extensionId: string): string[] {
   return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
+function expectedMatrixTestProcessCount() {
+  const testFileCount = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]).length;
+  return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
+}
+
 function expectPositiveIntegerMetric(value: number) {
   expect(Number.isInteger(value)).toBe(true);
   expect(value).toBeGreaterThan(0);
 }
 
-describe("scripts/test-extension.mjs", () => {
+describe("scripts/test-extension.mts", () => {
   let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
   let balancedExpectedExtensionIds: string[];
 
@@ -132,30 +139,25 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("resolves acpx onto the acpx vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "acpx", cwd: process.cwd() });
+  it.each([
+    { extensionId: "acpx" },
+    { extensionId: "diffs" },
+    { extensionId: "feishu" },
+    { extensionId: "matrix" },
+    { extensionId: "telegram" },
+    { extensionId: "whatsapp" },
+    { extensionId: "voice-call" },
+    { extensionId: "mattermost" },
+    { extensionId: "irc" },
+    { extensionId: "zalo" },
+    { extensionId: "msteams" },
+    { extensionId: "codex" },
+  ])("resolves $extensionId onto the $extensionId vitest config", ({ extensionId }) => {
+    const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
 
-    expect(plan.extensionId).toBe("acpx");
-    expect(plan.config).toBe("test/vitest/vitest.extension-acpx.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("acpx"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves diffs onto the diffs vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "diffs", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("diffs");
-    expect(plan.config).toBe("test/vitest/vitest.extension-diffs.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("diffs"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves feishu onto the feishu vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "feishu", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("feishu");
-    expect(plan.config).toBe("test/vitest/vitest.extension-feishu.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("feishu"));
+    expect(plan.extensionId).toBe(extensionId);
+    expect(plan.config).toBe(`test/vitest/vitest.extension-${extensionId}.config.ts`);
+    expect(plan.roots).toContain(bundledPluginRoot(extensionId));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -168,23 +170,26 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("resolves matrix onto the matrix vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "matrix", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("matrix");
-    expect(plan.config).toBe("test/vitest/vitest.extension-matrix.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("matrix"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("bounds Matrix test files across balanced process lifetimes", () => {
-    const config = "test/vitest/vitest.extension-matrix.config.ts";
-    const roots = [bundledPluginRoot("matrix")];
+  it.each([
+    {
+      name: "Matrix",
+      config: "test/vitest/vitest.extension-matrix.config.ts",
+      root: "matrix",
+      limit: 40,
+    },
+    {
+      name: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+      root: "telegram",
+      limit: 1,
+    },
+  ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
+    const roots = [bundledPluginRoot(root)];
     const expectedFiles = listExtensionTestFilesForRoots(roots);
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
-    expect(chunks).toHaveLength(3);
-    expect(chunks.every((chunk) => chunk.length <= 40)).toBe(true);
+    expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
     expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
       Math.min(...chunks.map((chunk) => chunk.length)) + 1,
     );
@@ -234,75 +239,12 @@ describe("scripts/test-extension.mjs", () => {
     ).toEqual([[root]]);
   });
 
-  it("resolves telegram onto the telegram vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "telegram", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("telegram");
-    expect(plan.config).toBe("test/vitest/vitest.extension-telegram.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("telegram"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves whatsapp onto the whatsapp vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "whatsapp", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("whatsapp");
-    expect(plan.config).toBe("test/vitest/vitest.extension-whatsapp.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("whatsapp"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves voice-call onto the voice-call vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "voice-call", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("voice-call");
-    expect(plan.config).toBe("test/vitest/vitest.extension-voice-call.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("voice-call"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves mattermost onto the mattermost vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "mattermost", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("mattermost");
-    expect(plan.config).toBe("test/vitest/vitest.extension-mattermost.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("mattermost"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves irc onto the irc vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "irc", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("irc");
-    expect(plan.config).toBe("test/vitest/vitest.extension-irc.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("irc"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves zalo onto the zalo vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "zalo", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("zalo");
-    expect(plan.config).toBe("test/vitest/vitest.extension-zalo.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("zalo"));
-    expect(plan.hasTests).toBe(true);
-  });
-
   it("resolves memory extensions onto the memory vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("memory-core");
     expect(plan.config).toBe("test/vitest/vitest.extension-memory.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves msteams onto the msteams vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "msteams", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("msteams");
-    expect(plan.config).toBe("test/vitest/vitest.extension-msteams.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("msteams"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -319,15 +261,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() }).config).toBe(
       "test/vitest/vitest.extension-misc.config.ts",
     );
-  });
-
-  it("resolves codex onto the codex vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "codex", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("codex");
-    expect(plan.config).toBe("test/vitest/vitest.extension-codex.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("codex"));
-    expect(plan.hasTests).toBe(true);
   });
 
   it("omits src/<extension> when no paired core root exists", () => {
@@ -374,7 +307,7 @@ describe("scripts/test-extension.mjs", () => {
       ids: number;
     }>(`
       const { detectChangedExtensionIds, listAvailableExtensionIds } =
-        await import("./scripts/lib/changed-extensions.mjs");
+        await import("./scripts/lib/changed-extensions.mts");
       const ids = listAvailableExtensionIds();
       const changed = detectChangedExtensionIds([
         "extensions/slack/src/channel.ts",
@@ -586,7 +519,7 @@ describe("scripts/test-extension.mjs", () => {
     }>(
       `
         const { createExtensionTestShards, resolveExtensionBatchPlan } =
-          await import("./scripts/lib/extension-test-plan.mjs");
+          await import("./scripts/lib/extension-test-plan.mts");
         const extensionIds = ["matrix", "openai", "slack", "telegram"];
         const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
         const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
@@ -846,22 +779,25 @@ describe("scripts/test-extension.mjs", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-chunks-"));
     const fakePnpmPath = path.join(root, "pnpm");
     const countPath = path.join(root, "count");
+    const expectedProcessCount = expectedMatrixTestProcessCount();
 
     writeFakePnpm(fakePnpmPath);
     try {
-      const result = spawnSync(process.execPath, [scriptPath, "matrix"], {
+      const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, "matrix"], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
           ...process.env,
           OPENCLAW_FAKE_PNPM_CALL_COUNT_PATH: countPath,
-          OPENCLAW_FAKE_PNPM_EXIT_CODES: "1,0,0",
+          OPENCLAW_FAKE_PNPM_EXIT_CODES: ["1", ...Array(expectedProcessCount - 1).fill("0")].join(
+            ",",
+          ),
           npm_execpath: fakePnpmPath,
         },
       });
 
       expect(result.status).toBe(1);
-      expect(readFileSync(countPath, "utf8")).toBe("3");
+      expect(readFileSync(countPath, "utf8")).toBe(String(expectedProcessCount));
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -877,7 +813,7 @@ describe("scripts/test-extension.mjs", () => {
       const signaledPath = path.join(root, "signaled");
 
       writeFakePnpm(fakePnpmPath);
-      const runner = spawn(process.execPath, [scriptPath, "firecrawl"], {
+      const runner = spawn(process.execPath, ["--import", "tsx", scriptPath, "firecrawl"], {
         cwd: process.cwd(),
         env: {
           ...process.env,
@@ -892,10 +828,8 @@ describe("scripts/test-extension.mjs", () => {
       let descendantPid = 0;
 
       try {
-        await waitFor(() => fileExists(childPidPath), 5_000);
-        await waitFor(() => fileExists(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
         expect(Number.isInteger(childPid)).toBe(true);
         expect(Number.isInteger(descendantPid)).toBe(true);
 
@@ -966,9 +900,9 @@ describe("scripts/test-extension.mjs", () => {
     );
 
     expect(result).toBe(0);
-    expect(runGroup).toHaveBeenCalledTimes(3);
+    expect(runGroup).toHaveBeenCalledTimes(expectedMatrixTestProcessCount());
     const calls = runGroup.mock.calls.map(([params]) => params as RunGroupParams);
-    expect(calls.every((call) => call.targets.length <= 40)).toBe(true);
+    expect(calls.every((call) => call.targets.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
     expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
   });
 
@@ -984,7 +918,7 @@ describe("scripts/test-extension.mjs", () => {
     );
 
     expect(result).toBe(1);
-    expect(runGroup).toHaveBeenCalledTimes(3);
+    expect(runGroup).toHaveBeenCalledTimes(expectedMatrixTestProcessCount());
   });
 
   it.each([

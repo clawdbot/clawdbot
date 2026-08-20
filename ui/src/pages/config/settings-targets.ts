@@ -9,6 +9,7 @@ export const CONNECTION_SETTINGS_TARGET_IDS = {
 } as const;
 
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
+  language: "settings-language",
   theme: "settings-appearance-theme",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
@@ -53,10 +54,16 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "quickSettings.security.gatewayAuth",
       "quickSettings.security.execPolicy",
-      "quickSettings.security.deviceAuth",
       "quickSettings.security.browserEnabled",
       "quickSettings.security.toolProfile",
     ],
+  },
+  secrets: {
+    routeId: "secrets",
+    labelKey: "tabs.secrets",
+    hash: "",
+    searchKeys: [],
+    aliases: "env team store",
   },
   system: {
     routeId: "connection",
@@ -102,6 +109,14 @@ export const SETTINGS_SEARCH_TARGETS = {
       "quickSettings.model.fastModes.standard",
     ],
   },
+  appearanceLanguage: {
+    routeId: "appearance",
+    labelKey: "quickSettings.language",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.language}`,
+    searchKeys: ["configView.syncedHint"],
+    aliases: "locale translation",
+  },
   appearanceTheme: {
     routeId: "appearance",
     labelKey: "configView.appearance.theme",
@@ -139,6 +154,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.sidebarPrefs.hint",
       "configView.sidebarPrefs.liveActivity",
       "configView.sidebarPrefs.liveActivityHint",
+      "chat.sidebar.hiddenSessionSections",
       "configView.sessionObserver.title",
       "configView.sessionObserver.hint",
       "configView.sessionObserver.toggle",

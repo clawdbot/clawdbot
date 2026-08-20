@@ -19,9 +19,9 @@ export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig
 }
 
 export function usesFullReplyRuntime(config: unknown): boolean {
-  return Boolean(
-    config &&
-    typeof config === "object" &&
-    replyConfigRuntimeModes.get(config as OpenClawConfig) === "full",
-  );
+  if (!config || typeof config !== "object") {
+    return false;
+  }
+  const mode = replyConfigRuntimeModes.get(config as OpenClawConfig);
+  return mode === "full";
 }

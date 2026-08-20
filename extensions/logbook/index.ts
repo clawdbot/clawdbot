@@ -113,13 +113,13 @@ export default definePluginEntry({
       handle: async (ctx) => {
         // Honor the operator's screen-capture kill switch: a screen.snapshot
         // deny must block this capture command too, not just the app node's.
-        const denied = ctx.config.gateway?.nodes?.denyCommands ?? [];
+        const denied = ctx.config.gateway?.nodes?.commands?.deny ?? [];
         if (denied.includes("screen.snapshot")) {
           return {
             ok: false,
             code: "SCREEN_CAPTURE_DENIED",
             message:
-              "screen capture is denied by gateway.nodes.denyCommands (screen.snapshot); Logbook capture stays blocked until it is removed",
+              "screen capture is denied by gateway.nodes.commands.deny (screen.snapshot); Logbook capture stays blocked until it is removed",
           };
         }
         return await ctx.invokeNode();
@@ -150,10 +150,18 @@ export default definePluginEntry({
     const registerWrite = (method: string, run: (params: unknown) => unknown) =>
       api.registerGatewayMethod(method, handle(run), { scope: "operator.write" });
 
+    // Process-wide service health does not read or mutate a user's durable profile/session state.
+    api.registerGatewayMethod(
+      "logbook.status",
+      handle(() => requireService().status()),
+      {
+        scope: "operator.read",
+        profileAccess: "independent",
+      },
+    );
+
     // Raw frame bytes are the most sensitive payload (full screen contents),
     // so they require write scope while derived text stays readable.
-    registerRead("logbook.status", () => requireService().status());
-
     registerRead("logbook.days", () => ({ days: requireService().listDays() }));
 
     registerRead("logbook.timeline", (params) => {

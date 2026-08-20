@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   archiveLegacyStateSource,
   legacyStateFileExists,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
@@ -21,12 +21,14 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "../dreaming-state.js";
+// Import from the defining modules, not the short-term-promotion barrel: the
+// barrel pulls memory-host-events/kysely, which doctor enumeration cold-loads.
+import { normalizeShortTermPhaseSignalStore } from "../short-term-promotion-store.js";
 import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
-  normalizeShortTermPhaseSignalStore,
-  normalizeShortTermRecallStore,
-} from "../short-term-promotion.js";
+} from "../short-term-promotion-types.js";
+import { normalizeShortTermRecallStore } from "../short-term-promotion-utils.js";
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
 import { dreamingStateComparison } from "./dreaming-state-comparison.js";
 
@@ -207,9 +209,17 @@ export const dreamingStateMigration: PluginDoctorStateMigration = {
           );
           continue;
         }
-        warnings.push(
-          `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows conflict with the legacy source; left legacy source in place`,
+        // Each retired journal mirrors the SQLite namespaces used by the runtime.
+        // Keep canonical state active and retain only the divergent rollback source.
+        changes.push(
+          `Resolved Memory Core ${source.label} legacy conflict by keeping canonical SQLite plugin state`,
         );
+        await archiveLegacyStateSource({
+          filePath: source.filePath,
+          label: `Memory Core ${source.label} conflicting legacy source`,
+          changes,
+          warnings,
+        });
         continue;
       }
       let imported: number;

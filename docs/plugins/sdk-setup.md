@@ -162,6 +162,8 @@ export const setupContract = defineChannelSetupContract({
 
 Supported field kinds are `string`, `boolean`, `integer`, `string-list`, and `choice`. Use `sensitive: true` for credentials. Each field key must equal the camelCased attribute name of its long CLI flag, including any negated form, such as `apiToken` for `--api-token`. Boolean fields may add `cli.negatedFlags` when both positive and `--no-*` forms are needed. `channel`, `account`, and the account display `name` remain the shared control envelope.
 
+For a boolean `useEnv` field, set `envVars` to the static environment variable names required by the plugin runtime. Non-interactive channel setup then rejects `--use-env` before writing config when any declared variable is empty. Set `envVarMode: "any"` when one variable from the list is sufficient, such as an inline credential or file-path alternative. Omitting `envVars` preserves the plugin's existing validation behavior.
+
 The released `setup`/`ChannelSetupInput` adapter stays available for existing external plugins. New plugins should expose `setupContract`; OpenClaw always prefers it when both are present.
 
 | Field                                  | Type       | What it means                                                                 |
@@ -266,27 +268,7 @@ Example:
   </Accordion>
 </AccordionGroup>
 
-### Deferred full load
-
-Channel plugins can opt into deferred loading with:
-
-```json
-{
-  "openclaw": {
-    "extensions": ["./index.ts"],
-    "setupEntry": "./setup-entry.ts",
-    "startup": {
-      "deferConfiguredChannelFullLoadUntilAfterListen": true
-    }
-  }
-}
-```
-
-When enabled, OpenClaw loads only `setupEntry` during the pre-listen startup phase, even for already-configured channels. The full entry loads after the gateway starts listening.
-
-<Warning>
-Only enable deferred loading when your `setupEntry` registers everything the gateway needs before it starts listening (channel registration, HTTP routes, gateway methods). If the full entry owns required startup capabilities, keep the default behavior.
-</Warning>
+### Setup-time gateway methods
 
 If your setup/full entry registers gateway RPC methods, keep them on a plugin-specific prefix. Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`, `update.*`) stay core-owned and always normalize to `operator.admin`.
 
@@ -373,15 +355,13 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
   <Accordion title="When OpenClaw uses setupEntry instead of the full entry">
     - The channel is disabled but needs setup/onboarding surfaces.
     - The channel is enabled but unconfigured.
-    - Deferred loading is enabled (`deferConfiguredChannelFullLoadUntilAfterListen`).
 
   </Accordion>
   <Accordion title="What setupEntry must register">
     - The channel plugin object (via `defineSetupPluginEntry`).
-    - Any HTTP routes required before gateway listen.
-    - Any gateway methods needed during startup.
+    - Setup-time runtime surfaces declared through `registerSetupRuntime`, when needed.
 
-    Those startup gateway methods should still avoid reserved core admin namespaces such as `config.*` or `update.*`.
+    Setup-time gateway methods should still avoid reserved core admin namespaces such as `config.*` or `update.*`.
 
   </Accordion>
   <Accordion title="What setupEntry should NOT include">
@@ -397,10 +377,10 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
 
 For hot setup-only paths, prefer the narrow setup helper seams over the broader `plugin-sdk/setup` umbrella when you only need part of the setup surface:
 
-| Import path                | Use it for                                                                                | Key exports                                                                                                                                                                                                                                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/setup-runtime` | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-| `plugin-sdk/setup-tools`   | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
+| Import path                | Use it for                                                     | Key exports                                                                                                                                                                                                                                                                                                           |
+| -------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/setup-runtime` | setup-time runtime helpers that stay available in `setupEntry` | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
+| `plugin-sdk/setup-tools`   | setup/install CLI/archive/docs helpers                         | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
 
 Use the broader `plugin-sdk/setup` seam when you want the full shared setup toolbox, including config-patch helpers such as `moveSingleAccountChannelSectionToDefaultAccount(...)`.
 

@@ -1,8 +1,24 @@
+import { inferControlUiFocusBasePath } from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
+export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
+export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
+export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
+export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
+
+export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
+export type PluginsHubRouteTab = "installed" | "discover";
+
+type AgentRoutePath = {
+  agentId: string;
+  panel: AgentsPanel;
+  panelSegment: AgentsPanel | null;
+  invalidPanel: boolean;
+};
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
@@ -12,6 +28,7 @@ const APP_ROUTE_DEFINITIONS = {
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
   apps: { path: "/apps" },
+  portals: { path: "/portals" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -22,6 +39,7 @@ const APP_ROUTE_DEFINITIONS = {
   lobsterdex: { path: "/settings/lobsterdex", aliases: ["/lobsterdex"] },
   notifications: { path: "/settings/notifications" },
   security: { path: "/settings/security" },
+  secrets: { path: "/settings/secrets" },
   advanced: { path: "/settings/advanced" },
   approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
@@ -30,6 +48,7 @@ const APP_ROUTE_DEFINITIONS = {
   talk: { path: "/settings/talk" },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   labs: { path: "/settings/labs" },
+  updates: { path: "/settings/updates" },
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
   "model-setup": { path: "/settings/model-setup", aliases: ["/model-setup"] },
@@ -46,9 +65,12 @@ const APP_ROUTE_DEFINITIONS = {
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
   plugins: { path: "/settings/plugins" },
-  cron: { path: "/cron" },
+  // Automations is the product name; /cron stays as a legacy alias for
+  // pre-rename bookmarks and deep links.
+  cron: { path: "/automations", aliases: ["/cron"] },
   tasks: { path: "/tasks" },
-  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
+  devices: { path: "/settings/devices", aliases: ["/nodes"] },
+  "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
 } as const;
 
@@ -91,6 +113,82 @@ export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   }
   const encodedBoardId = encodeURIComponent(boardId).replaceAll(".", "%2E");
   return `${pathForRoute("workboard", basePath)}/${encodedBoardId}`;
+}
+
+export function pathForAgentPanel(
+  agentId: string,
+  panel: AgentsPanel | null = null,
+  basePath = "",
+): string {
+  if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
+    throw new Error("Invalid agent id for a route path.");
+  }
+  const encodedAgentId = encodeURIComponent(agentId).replaceAll(".", "%2E");
+  const agentPath = `${pathForRoute("agents", basePath)}/${encodedAgentId}`;
+  return panel ? `${agentPath}/${panel}` : agentPath;
+}
+
+export function agentRouteFromPath(pathname: string, basePath = ""): AgentRoutePath | null {
+  const normalizedPath = normalizePath(pathname);
+  const agentsPath = pathForRoute("agents", basePath);
+  const prefix = `${agentsPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const segments = normalizedPath.slice(prefix.length).split("/");
+  if (segments.length > 2 || !segments[0]) {
+    return null;
+  }
+  let agentId: string;
+  try {
+    agentId = decodeURIComponent(segments[0]);
+  } catch {
+    return null;
+  }
+  if (!agentId || agentId.includes("/") || agentId === "." || agentId === "..") {
+    return null;
+  }
+  const rawPanel = segments[1] ?? null;
+  const panelSegment = rawPanel && isAgentsPanel(rawPanel) ? rawPanel : null;
+  return {
+    agentId,
+    panel: panelSegment ?? DEFAULT_AGENT_PANEL,
+    panelSegment,
+    invalidPanel: rawPanel !== null && panelSegment === null,
+  };
+}
+
+export function pathForMemoryTab(tab: MemoryRouteTab, basePath = ""): string {
+  const memoryPath = pathForRoute("memory", basePath);
+  return tab === "overview" ? memoryPath : `${memoryPath}/${tab}`;
+}
+
+export function memoryTabFromPath(pathname: string, basePath = ""): MemoryRouteTab | null {
+  const normalizedPath = normalizePath(pathname);
+  const memoryPath = pathForRoute("memory", basePath);
+  if (normalizedPath === memoryPath) {
+    return "overview";
+  }
+  const prefix = `${memoryPath}/`;
+  if (!normalizedPath.startsWith(prefix)) {
+    return null;
+  }
+  const segment = normalizedPath.slice(prefix.length);
+  return segment === "memories" || segment === "dreams" || segment === "settings" ? segment : null;
+}
+
+export function pathForPluginsHubTab(tab: PluginsHubRouteTab, basePath = ""): string {
+  const pluginsPath = pathForRoute("plugins", basePath);
+  return tab === "installed" ? pluginsPath : `${pluginsPath}/discover`;
+}
+
+export function pluginsHubTabFromPath(pathname: string, basePath = ""): PluginsHubRouteTab | null {
+  const normalizedPath = normalizePath(pathname);
+  const pluginsPath = pathForRoute("plugins", basePath);
+  if (normalizedPath === pluginsPath) {
+    return "installed";
+  }
+  return normalizedPath === `${pluginsPath}/discover` ? "discover" : null;
 }
 
 export function isSessionRouteId(routeId: string | null | undefined): routeId is BoardFace {
@@ -147,18 +245,31 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
+  if (agentRouteFromPath(normalizedPath, normalizedBasePath)) {
+    return "agents";
+  }
   if (workboardBoardIdFromPath(normalizedPath, normalizedBasePath)) {
     return "workboard";
+  }
+  if (memoryTabFromPath(normalizedPath, normalizedBasePath)) {
+    return "memory";
+  }
+  if (pluginsHubTabFromPath(normalizedPath, normalizedBasePath)) {
+    return "plugins";
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
   if (sessionNamespace) {
     return sessionNamespace;
   }
+  // uirouter matches static paths case-insensitively (pathKey lowercases), so
+  // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
+  // router, which would have matched it, ever starts.
+  const routePathKey = routePath.toLowerCase();
   for (const routeId of APP_ROUTE_IDS) {
     const definition = APP_ROUTE_DEFINITIONS[routeId];
     const paths: readonly string[] =
       "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
-    if (paths.some((candidate) => normalizePath(candidate) === routePath)) {
+    if (paths.some((candidate) => normalizePath(candidate) === routePathKey)) {
       return routeId;
     }
   }
@@ -200,6 +311,10 @@ function isRouteOwnedBasePath(basePath: string): boolean {
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
+  const focusBasePath = inferControlUiFocusBasePath(pathname);
+  if (focusBasePath !== null) {
+    return focusBasePath;
+  }
   const isMountRoot = pathname.trim().endsWith("/");
   const normalizedPath = normalizePath(pathname);
   if (normalizedPath.toLowerCase().endsWith("/index.html")) {
@@ -213,19 +328,44 @@ export function inferBasePathFromPathname(pathname: string): string {
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);
+    const dynamicAgentRoute = agentRouteFromPath(candidate) !== null;
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
-    const dynamicSessionRoute = sessionRouteNamespaceFromPath(candidate) !== null;
-    if (!routePath && !dynamicWorkboardRoute && !dynamicSessionRoute) {
+    const dynamicMemoryRoute = memoryTabFromPath(candidate) !== null;
+    const dynamicPluginsRoute = pluginsHubTabFromPath(candidate) !== null;
+    const sessionNamespace = sessionRouteNamespaceFromPath(candidate);
+    const dynamicSessionRoute = sessionNamespace !== null;
+    if (
+      !routePath &&
+      !dynamicAgentRoute &&
+      !dynamicWorkboardRoute &&
+      !dynamicMemoryRoute &&
+      !dynamicPluginsRoute &&
+      !dynamicSessionRoute
+    ) {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const firstRouteSegment = (routePath ?? APP_ROUTE_DEFINITIONS.workboard.path)
-      .split("/")
-      .find(Boolean);
+    const dynamicRoutePath = dynamicAgentRoute
+      ? APP_ROUTE_DEFINITIONS.agents.path
+      : dynamicWorkboardRoute
+        ? APP_ROUTE_DEFINITIONS.workboard.path
+        : dynamicMemoryRoute
+          ? APP_ROUTE_DEFINITIONS.memory.path
+          : dynamicPluginsRoute
+            ? APP_ROUTE_DEFINITIONS.plugins.path
+            : sessionNamespace
+              ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
+              : null;
+    const firstRouteSegment = (routePath ?? dynamicRoutePath ?? "").split("/").find(Boolean);
     if (
       index > 0 &&
       previousSegment === firstRouteSegment &&
-      (candidate === routePath || dynamicWorkboardRoute || dynamicSessionRoute)
+      (candidate === routePath ||
+        dynamicAgentRoute ||
+        dynamicWorkboardRoute ||
+        dynamicMemoryRoute ||
+        dynamicPluginsRoute ||
+        dynamicSessionRoute)
     ) {
       return "";
     }

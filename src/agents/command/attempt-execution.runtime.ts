@@ -12,6 +12,7 @@ export {
   emitAcpRuntimeEvent,
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
+  resolveCliTranscriptReplyText,
   runAgentAttempt,
   sessionFileHasContent,
 } from "./attempt-execution.js";

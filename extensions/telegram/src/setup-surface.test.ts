@@ -2,7 +2,11 @@
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
-import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
+import {
+  promptTelegramAllowFromForAccount,
+  telegramSetupAdapter,
+  telegramSetupContract,
+} from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -12,9 +16,22 @@ import {
 import { telegramSetupWizard } from "./setup-surface.js";
 
 describe("Telegram setup promotion contract", () => {
-  it("exposes webhookSecret without widening named-account promotion", () => {
+  it("covers named-account promotion and environment setup", () => {
+    const input = {
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    };
     expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
     expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
+    expect(
+      telegramSetupContract.metadata.fields.find((field) => field.key === "useEnv"),
+    ).toMatchObject({ kind: "boolean", envVars: ["TELEGRAM_BOT_TOKEN"] });
+    expect(telegramSetupContract.validateInput?.(input)).toBeNull();
+    const cfg = telegramSetupContract.applyAccountConfig(input);
+    expect(cfg.channels?.telegram).toEqual({ enabled: true });
+    expect(cfg.channels?.telegram?.botToken).toBeUndefined();
+    expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
   });
 });
 

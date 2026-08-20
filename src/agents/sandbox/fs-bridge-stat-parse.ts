@@ -3,8 +3,15 @@
  *
  * Handles GNU/BSD size and mtime formats returned through backend shell commands.
  */
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import {
+  asDateTimestampMs,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
+
+export function hasMultipleHardlinks(raw: string): boolean {
+  const linkCount = parseStrictNonNegativeInteger(raw);
+  return linkCount === undefined ? /^\d+$/.test(raw) : linkCount > 1;
+}
 
 /** Parses file sizes, capping huge integer strings at the largest safe JS integer. */
 export function parseSandboxStatSize(value: string | undefined): number {

@@ -13,9 +13,9 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 import type { SessionEntry } from "./types.js";
-import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "./types.js";
+import { resolveFreshSessionTotalTokens } from "./types.js";
 
-export type SqliteParentForkSourceTranscript = {
+export type ParentForkSourceTranscript = {
   appendMode?: "side";
   appendParentId: string | null;
   branchEntries: TranscriptEvent[];
@@ -42,16 +42,15 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
-export function resolveSqliteParentForkDecision(
+export function planParentForkDecision(
   parentEntry: SessionEntry,
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
+  options: { preferTranscriptEstimate?: boolean } = {},
 ): SessionParentForkDecision {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens =
-    resolveFreshSessionTotalTokens(parentEntry) ??
-    (transcriptEstimate?.kind === "exact-context"
-      ? transcriptEstimate.tokens
-      : maxPositiveTokenCount(transcriptEstimate?.tokens, resolveSessionTotalTokens(parentEntry)));
+  const parentTokens = options.preferTranscriptEstimate
+    ? transcriptEstimate?.tokens
+    : (resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens);
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -68,7 +67,7 @@ export function resolveSqliteParentForkDecision(
   };
 }
 
-export function estimateSqliteTranscriptPromptTokens(
+export function estimateTranscriptPromptTokens(
   events: readonly TranscriptEvent[],
 ): SqliteTranscriptParentTokenEstimate | undefined {
   let byteEstimate = 0;
@@ -97,6 +96,12 @@ export function estimateSqliteTranscriptPromptTokens(
       continue;
     }
     const contextUsage = readTranscriptContextUsage(usageRaw);
+    if (message?.api === "cli" && contextUsage === undefined) {
+      latestUsageEstimate = undefined;
+      latestUsageEstimateIsExactContext = false;
+      trailingBytes = 0;
+      continue;
+    }
     if (contextUsage?.state === "unavailable") {
       latestUsageEstimate = undefined;
       latestUsageEstimateIsExactContext = false;
@@ -161,17 +166,6 @@ function normalizePositiveTokenCount(value: unknown): number | undefined {
     : undefined;
 }
 
-function maxPositiveTokenCount(...values: Array<number | undefined>): number | undefined {
-  let max: number | undefined;
-  for (const value of values) {
-    const normalized = normalizePositiveTokenCount(value);
-    if (normalized !== undefined && (max === undefined || normalized > max)) {
-      max = normalized;
-    }
-  }
-  return max;
-}
-
 function readTranscriptContextUsage(
   usageRaw: Record<string, unknown>,
 ): { state: "available"; totalTokens: number } | { state: "unavailable" } | undefined {
@@ -189,9 +183,10 @@ function readTranscriptContextUsage(
   return totalTokens === undefined ? undefined : { state: "available", totalTokens };
 }
 
-export function resolveSqliteParentForkSourceTranscript(
+export function resolveParentForkSourceTranscript(
   fileEntries: readonly TranscriptEvent[],
-): SqliteParentForkSourceTranscript | null {
+  forkFrom?: "last-completed",
+): ParentForkSourceTranscript | null {
   if (fileEntries.length === 0) {
     return null;
   }
@@ -207,28 +202,47 @@ export function resolveSqliteParentForkSourceTranscript(
     appendPath,
     appendParentId: tree.appendParentId,
   });
-  const branchEntries = mergedPath.nodes.flatMap((node) => {
+  const visibleBranchEntries = mergedPath.nodes.flatMap((node) => {
     if (!isRecord(node.entry)) {
       return [];
     }
     const parentId = node.selectedParentId;
     return [node.entry.parentId === parentId ? node.entry : { ...node.entry, parentId }];
   });
+  const branchEntries =
+    forkFrom === "last-completed"
+      ? visibleBranchEntries.slice(0, findLastCompletedAssistantIndex(visibleBranchEntries) + 1)
+      : visibleBranchEntries;
   const pathEntryIds = new Set(
     branchEntries.flatMap((entry) =>
       isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
     ),
   );
   const lastLeafUpdateNode = tree.nodes.findLast((node) => node.leafId !== undefined);
+  const lastBranchEntry = branchEntries.at(-1);
+  const lastBranchEntryId =
+    isRecord(lastBranchEntry) && typeof lastBranchEntry.id === "string" ? lastBranchEntry.id : null;
   return {
-    appendParentId: mergedPath.appendParentId,
-    ...(lastLeafUpdateNode?.appendMode ? { appendMode: lastLeafUpdateNode.appendMode } : {}),
+    appendParentId: forkFrom === "last-completed" ? lastBranchEntryId : mergedPath.appendParentId,
+    ...(forkFrom !== "last-completed" && lastLeafUpdateNode?.appendMode
+      ? { appendMode: lastLeafUpdateNode.appendMode }
+      : {}),
     branchEntries,
     cwd: typeof header?.cwd === "string" ? header.cwd : undefined,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
-    leafId: tree.leafId,
-    preserveLeafControl: isSessionTranscriptLeafControl(lastLeafUpdateNode?.entry),
+    leafId: forkFrom === "last-completed" ? lastBranchEntryId : tree.leafId,
+    preserveLeafControl:
+      forkFrom !== "last-completed" && isSessionTranscriptLeafControl(lastLeafUpdateNode?.entry),
   };
+}
+
+function findLastCompletedAssistantIndex(entries: readonly TranscriptEvent[]): number {
+  return entries.findLastIndex((entry) => {
+    const message = isRecord(entry) && isRecord(entry.message) ? entry.message : undefined;
+    // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
+    // assistant message is a stable boundary, including legacy rows without a reason.
+    return message?.role === "assistant" && message.stopReason !== "toolUse";
+  });
 }
 
 function collectBranchLabels(params: {
@@ -292,9 +306,9 @@ function hasAssistantEntry(entries: readonly TranscriptEvent[]): boolean {
   );
 }
 
-export function buildSqliteForkedChildTranscriptEvents(params: {
+export function buildForkedChildTranscriptEvents(params: {
   parentSessionFile: string;
-  source: SqliteParentForkSourceTranscript;
+  source: ParentForkSourceTranscript;
   targetSessionId: string;
 }): TranscriptEvent[] {
   const header = {

@@ -10,7 +10,7 @@ import java.util.Locale
 const val actionAskOpenClaw = "ai.openclaw.app.action.ASK_OPENCLAW"
 
 /** Debug action that opens the Voice tab directly for Android E2E automation. */
-const val actionOpenVoiceE2e = "ai.openclaw.app.debug.OPEN_VOICE_E2E"
+val actionOpenVoiceE2e = "${BuildConfig.APPLICATION_ID}.OPEN_VOICE_E2E"
 
 /** Intent extra that carries an optional assistant prompt for app actions. */
 const val extraAssistantPrompt = "prompt"
@@ -22,7 +22,6 @@ enum class HomeDestination {
   Connect,
   Chat,
   Voice,
-  Screen,
   Settings,
 }
 
@@ -45,6 +44,7 @@ data class ShareLaunchRequest(
 enum class SharedAttachmentKind {
   Image,
   Audio,
+  Video,
   Document,
 }
 
@@ -63,6 +63,7 @@ internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
   setOf(
     "image/*",
     "audio/*",
+    "video/*",
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -71,7 +72,9 @@ internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
     "text/markdown",
   )
 
-internal val SHARED_AUDIO_DOCUMENT_MIME_TYPES = SHARED_ATTACHMENT_MIME_ALLOWLIST.filterNot { it == "image/*" }.toTypedArray()
+internal val SHARED_AUDIO_DOCUMENT_MIME_TYPES =
+  SHARED_ATTACHMENT_MIME_ALLOWLIST.filterNot { it == "image/*" || it == "video/*" }.toTypedArray()
+internal val SHARED_VIDEO_MIME_TYPES = arrayOf("video/*")
 
 /**
  * Parses app-owned navigation actions that should open a specific home tab.
@@ -197,6 +200,7 @@ internal fun sharedAttachmentKindForMimeType(mimeType: String?): SharedAttachmen
   return when {
     normalized.startsWith("image/") -> SharedAttachmentKind.Image
     normalized.startsWith("audio/") -> SharedAttachmentKind.Audio
+    normalized.startsWith("video/") -> SharedAttachmentKind.Video
     normalized in SHARED_ATTACHMENT_MIME_ALLOWLIST -> SharedAttachmentKind.Document
     else -> null
   }

@@ -1,6 +1,7 @@
 name: Vitest Cache Warm
 
 on:
+  workflow_dispatch:
   repository_dispatch:
     types: [vitest-cache-warm]
   schedule:
@@ -18,7 +19,7 @@ jobs:
     # Dependency snapshots are serialized before main CI fanout. This workflow
     # writes only the transform and compile caches from scheduled/trusted runs.
     if: github.repository == 'openclaw/openclaw'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -33,7 +34,6 @@ jobs:
           save-actions-cache: "true"
           save-node-compile-cache: "true"
           save-vitest-fs-cache: "true"
-          sticky-disk: "false"
           use-actions-cache: "true"
           vitest-fs-cache: "true"
 
@@ -41,47 +41,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'EOF'
+          node --import tsx --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
-          import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
+          import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";
 
-          // Warm whole configs for the striped unit-fast graph plus the import-
-          // bound graphs that remained cold in measured protected-cache readers.
-          const additionalShardNames = new Set([
-            "agentic-agents-embedded",
-            "agentic-gateway-methods",
-            "auto-reply-reply-commands-3",
-          ]);
-          const allShards = createNodeTestShards();
-          const coreShards = allShards.filter((candidate) =>
-            candidate.shardName.startsWith("core-unit-fast"),
-          );
-          if (coreShards.length === 0) {
-            throw new Error("core-unit-fast cache seed shards are missing");
-          }
-          const additionalShards = allShards.filter((candidate) =>
-            additionalShardNames.has(candidate.shardName),
-          );
-          const foundAdditionalShardNames = new Set(
-            additionalShards.map((shard) => shard.shardName),
-          );
-          const missingShardNames = [...additionalShardNames].filter(
-            (name) => !foundAdditionalShardNames.has(name),
-          );
-          if (missingShardNames.length > 0) {
-            throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
-          }
-          const shards = [...coreShards, ...additionalShards];
-          const configs = [...new Set(shards.flatMap((shard) => shard.configs))];
+          // Warm the selected planner envelopes for the striped unit-fast graph
+          // plus import-bound graphs that remained cold in protected-cache readers.
+          const groups = createVitestCacheWarmGroups();
           appendFileSync(
             process.env.GITHUB_ENV,
             [
-              `OPENCLAW_NODE_TEST_CONFIGS_JSON=${JSON.stringify(configs)}`,
-              "OPENCLAW_VITEST_SHARD_NAME=core-unit-fast",
+              `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
               "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
             ].join("\n") + "\n",
           );
           EOF
 
       - name: Warm transform and compile caches
-        run: node scripts/ci-run-node-test-shard.mjs
+        env:
+          # Match the CI shard lanes running the same envelopes: without the
+          # raised ceiling a heavy suite's worker can die under default heap
+          # (run 31874567859), skipping every cache save for the day.
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node --import tsx scripts/ci-run-node-test-shard.mts

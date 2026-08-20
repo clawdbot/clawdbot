@@ -1,21 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeControlUiBuildInfo } from "./build-info-normalizers.ts";
+import type { ControlUiBuildInfo } from "./build-info-types.ts";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
 describe("Control UI build info", () => {
   it("compares the normalized embedded version with the gateway", async () => {
-    vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
+    const injectedBuildInfo: ControlUiBuildInfo = {
       version: "2026.7.19",
+      commit: COMMIT,
+      commitAt: null,
+      builtAt: null,
+      branch: null,
+      dirty: null,
+      release: false,
       buildId: "test",
-    });
+    };
+    vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", injectedBuildInfo);
     vi.resetModules();
 
     try {
-      const { controlUiVersionDiffersFrom } = await import("./build-info.ts");
-      expect(controlUiVersionDiffersFrom(" 2026.7.19 ")).toBe(false);
-      expect(controlUiVersionDiffersFrom("2026.7.20")).toBe(true);
-      expect(controlUiVersionDiffersFrom(undefined)).toBe(false);
+      const { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } = await import("./build-info.ts");
+      expect(CONTROL_UI_BUILD_INFO).toBe(injectedBuildInfo);
+      expect(controlUiBuildDiffersFrom({ version: " 2026.7.19 " })).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: "2026.7.20" })).toBe(true);
+      expect(controlUiBuildDiffersFrom({ version: undefined })).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: "2026.7.19", buildId: "test" })).toBe(false);
+      expect(controlUiBuildDiffersFrom({ version: "2026.7.19", buildId: "other" })).toBe(true);
+      expect(
+        controlUiBuildDiffersFrom({
+          version: "2026.7.20",
+          controlUiBuildSource: "configured",
+        }),
+      ).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
+  });
+
+  it("normalizes the fallback when no build info is injected", async () => {
+    vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", undefined);
+    vi.resetModules();
+
+    try {
+      const { CONTROL_UI_BUILD_INFO } = await import("./build-info.ts");
+      expect(CONTROL_UI_BUILD_INFO).toEqual(normalizeControlUiBuildInfo(undefined));
     } finally {
       vi.unstubAllGlobals();
       vi.resetModules();
@@ -77,6 +107,7 @@ describe("Control UI build info", () => {
         builtAt: "later",
         branch: "HEAD",
         dirty: "yes",
+        release: "yes",
         buildId: "",
       }),
     ).toEqual({
@@ -86,14 +117,18 @@ describe("Control UI build info", () => {
       builtAt: null,
       branch: null,
       dirty: null,
+      release: false,
       buildId: "dev",
     });
   });
 
-  it("passes through normalized branch and boolean dirty state", () => {
-    expect(normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false })).toMatchObject({
+  it("passes through normalized branch, dirty state, and release identity", () => {
+    expect(
+      normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false, release: true }),
+    ).toMatchObject({
       branch: "feature/x",
       dirty: false,
+      release: true,
     });
   });
 
@@ -103,7 +138,8 @@ describe("Control UI build info", () => {
         version: "2026.7.10",
         commit: COMMIT,
         builtAt: "2026-07-10T12:34:56.000Z",
+        release: true,
       }).buildId,
-    ).toBe("2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z");
+    ).toBe("2026.7.10-release-0123456789ab-2026-07-10T12-34-56.000Z");
   });
 });

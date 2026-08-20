@@ -1,10 +1,12 @@
 /** Pure, non-resolving credential availability checks shared by status and route selection. */
+import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSecretRef,
   LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX,
   resolveSecretInputRef,
 } from "../../config/types.secrets.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
   isValidSecretRef,
   resolveDefaultSecretProviderAlias,
@@ -19,10 +21,6 @@ import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-
 import type { AuthProfileCredential } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
-
-function hasSecret(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function hasMalformedSecretInputSyntax(value: unknown): boolean {
   if (typeof value !== "string") {
@@ -44,21 +42,23 @@ export function resolveSecretRefReadOnlyAvailability(
   if (!isSecretRef(value) || !isValidSecretRef(value)) {
     return false;
   }
-  const source = cfg.secrets?.providers?.[value.provider];
-  if (
-    (!source &&
-      (value.source !== "env" ||
-        value.provider !== resolveDefaultSecretProviderAlias(cfg, "env"))) ||
-    (source && source.source !== value.source)
-  ) {
-    return false;
-  }
   if (value.source === "env") {
-    return source?.source === "env" && source.allowlist && !source.allowlist.includes(value.id)
-      ? false
-      : hasSecret(env[value.id])
-        ? true
-        : undefined;
+    if (
+      !canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: value.provider,
+        id: value.id,
+      })
+    ) {
+      return false;
+    }
+    return hasSecret(env[value.id]) ? true : undefined;
+  }
+  const source = cfg.secrets?.providers?.[value.provider];
+  const isImplicitProvider =
+    value.source === "store" && value.provider === resolveDefaultSecretProviderAlias(cfg, "store");
+  if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
+    return false;
   }
   if (
     value.source === "file" &&

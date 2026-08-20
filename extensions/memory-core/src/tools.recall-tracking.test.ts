@@ -2,12 +2,9 @@
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import {
-  resetMemoryToolMockState,
-  setMemoryBackend,
-  setMemorySearchImpl,
-} from "./memory-tool-manager.test-mocks.js";
+import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool } from "./tools.js";
+import { asOpenClawConfig } from "./tools.test-helpers.js";
 
 type RecordShortTermRecallsFn = (params: {
   workspaceDir?: string;
@@ -25,10 +22,6 @@ vi.mock("./short-term-promotion.js", () => ({
   recordShortTermRecalls: recallTrackingMock.recordShortTermRecalls,
 }));
 
-function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config;
-}
-
 function createSearchTool(config: OpenClawConfig) {
   const tool = createMemorySearchTool({ config });
   if (!tool) {
@@ -42,65 +35,6 @@ describe("memory_search recall tracking", () => {
     resetMemoryToolMockState();
     recallTrackingMock.recordShortTermRecalls.mockReset();
     recallTrackingMock.recordShortTermRecalls.mockResolvedValue(undefined);
-  });
-
-  it("records only surfaced results after qmd clamp", async () => {
-    setMemoryBackend("qmd");
-    setMemorySearchImpl(async () => [
-      {
-        path: "memory/2026-04-03.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.95,
-        snippet: "A".repeat(80),
-        source: "memory" as const,
-      },
-      {
-        path: "memory/2026-04-02.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.92,
-        snippet: "B".repeat(80),
-        source: "memory" as const,
-      },
-    ]);
-
-    const tool = createSearchTool(
-      asOpenClawConfig({
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        memory: {
-          backend: "qmd",
-          citations: "on",
-          qmd: { limits: { maxInjectedChars: 100 } },
-        },
-      }),
-    );
-
-    const result = await tool.execute("call_recall_clamp", { query: "backup glacier" });
-    const details = result.details as { results: Array<{ path: string }> };
-    expect(details.results).toHaveLength(1);
-    expect(details.results[0]?.path).toBe("memory/2026-04-03.md");
-
-    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
-    const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
-    if (!firstCall) {
-      throw new Error("expected short-term recall tracking call");
-    }
-    const recallParams = firstCall[0];
-    expect(recallParams.results).toHaveLength(1);
-    expect(recallParams.results[0]?.path).toBe("memory/2026-04-03.md");
-    expect(recallParams.results[0]?.snippet).not.toContain("Source:");
   });
 
   it("does not block tool results on slow best-effort recall writes", async () => {

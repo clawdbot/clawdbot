@@ -548,7 +548,7 @@ function createCodexInstallFixture(root: string) {
   });
   chmodSync(codexBin, 0o755);
   writeJson(path.join(stateDir, "openclaw.json"), {
-    agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
   });
   writePluginInstallIndexForE2E(
@@ -880,9 +880,35 @@ describe("Codex install helpers", () => {
     expect(result.stderr).toContain("expected all workspace work to settle before completion");
   });
 
+  it("accepts a terminal completion message without the optional final marker", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-legacy-completion-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      messageFinals: [undefined, undefined],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts explicit progress and completion final controls", () => {
+    const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-explicit-finals-");
+    const fixture = createCodexNpmPluginLiveFollowthroughFixture({
+      root,
+      messageFinals: [false, true],
+    });
+
+    const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it.each([
-    ["explicit progress", [false, true]],
-    ["missing completion", [undefined, undefined]],
+    ["terminal progress", [true, true]],
+    ["nonfinal completion", [undefined, false]],
   ] as const)("rejects %s Codex message final controls", (_label, messageFinals) => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-followthrough-final-controls-");
     const fixture = createCodexNpmPluginLiveFollowthroughFixture({
@@ -893,7 +919,9 @@ describe("Codex install helpers", () => {
     const result = runCodexNpmPluginLiveFollowthroughAssertions(fixture);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("expected exact message final controls");
+    expect(result.stderr).toContain(
+      "expected ordered message sends with an optional final completion marker",
+    );
   });
 
   it("accepts the explicit frozen-target JSON session and sidecar binding contract", () => {

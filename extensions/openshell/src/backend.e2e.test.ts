@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import {
+  createSandboxTestContext,
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
@@ -520,6 +520,7 @@ describe("openshell sandbox backend e2e", () => {
         scope: "session" as const,
         workspaceAccess: "rw" as const,
         workspaceRoot: path.join(rootDir, "sandboxes"),
+        dockerTmpfsSource: "configured" as const,
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",

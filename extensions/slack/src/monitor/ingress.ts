@@ -1,6 +1,7 @@
 // Slack plugin module owns durable Events API admission and replay.
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
@@ -17,11 +18,6 @@ import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 const SLACK_INGRESS_PAYLOAD_VERSION = 1;
 const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
-const SLACK_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const SLACK_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const SLACK_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const SLACK_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const SLACK_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
@@ -112,12 +108,7 @@ type SlackDurableIngress = {
   waitForIdle: () => Promise<void>;
 };
 
-class SlackIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SlackIngressPayloadError";
-  }
-}
+const SlackIngressPayloadError = createChannelIngressError("SlackIngressPayloadError");
 
 function resolveSlackEventId(body: unknown): string | null {
   const eventId = asOptionalRecord(body)?.event_id;
@@ -135,7 +126,15 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
       .find((value) => typeof value === "string" && value.trim())
       ?.toString()
       .trim() || "workspace";
-  const channelId = [event?.channel, event?.channel_id, item?.channel, assistantThread?.channel_id]
+  // New-channel traffic must stay behind channel_id_changed migration work.
+  // The new ID owns the post-change conversation lane, not the retired old ID.
+  const channelId = [
+    event?.channel,
+    event?.channel_id,
+    event?.new_channel_id,
+    item?.channel,
+    assistantThread?.channel_id,
+  ]
     .find((value) => typeof value === "string" && value.trim())
     ?.toString()
     .trim();
@@ -297,13 +296,7 @@ export function createSlackDurableIngress(
       });
     },
     pollIntervalMs: options.pollIntervalMs ?? SLACK_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: SLACK_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: SLACK_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SLACK_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SLACK_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SLACK_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     appendRetryDelaysMs: [0],
     drain: {
       resolveNonRetryableFailure: resolveSlackIngressNonRetryableFailure,

@@ -26,7 +26,6 @@ export type { BoardCommandEvent };
 export type { BoardProvider } from "./provider-types.ts";
 export type { BoardViewCallbacks, BoardWidgetAppViewState } from "./view-types.ts";
 export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
-export { GatewayBoardProvider } from "./gateway-provider.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
 
@@ -90,6 +89,7 @@ class NullProvider implements BoardProvider {
   readonly canGrant = false;
   readonly canPinWidgets = false;
   readonly canPinMcpApps = false;
+  readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
@@ -129,6 +129,7 @@ class MockBoardProvider implements BoardProvider {
   readonly canGrant = true;
   readonly canPinWidgets = true;
   readonly canPinMcpApps = true;
+  readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -164,42 +165,21 @@ class MockBoardProvider implements BoardProvider {
   }
 
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
-    const snapshot = this.snapshotSignal.value;
     const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = normalizeBoardWidgetTitle(input.title);
-    const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
-    const tabs = snapshot.tabs.length
-      ? snapshot.tabs
-      : [
-          {
-            tabId: "main",
-            title: t("chat.board.defaultTab"),
-            position: 0,
-            chatDock: "right" as const,
-          },
-        ];
-    const existing = snapshot.widgets.find((widget) => widget.name === name);
-    const widgets = snapshot.widgets.filter((widget) => widget.name !== name);
-    widgets.push({
-      name,
-      tabId,
-      ...(title ? { title } : {}),
-      contentKind: "html",
-      sizeW: existing?.sizeW ?? 6,
-      sizeH: existing?.sizeH ?? 4,
-      position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
-      grantState: "none",
-      revision: (existing?.revision ?? 0) + 1,
-      frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}`,
-    });
-    this.snapshotSignal.set(
-      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
-    );
+    this.pinMockBoardWidget(input, name, "html");
   }
 
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    const snapshot = this.snapshotSignal.value;
     const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
+    this.pinMockBoardWidget(input, name, "mcp-app");
+  }
+
+  private pinMockBoardWidget(
+    input: BoardPinWidgetInput | BoardPinMcpAppInput,
+    name: string,
+    contentKind: "html" | "mcp-app",
+  ): void {
+    const snapshot = this.snapshotSignal.value;
     const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
@@ -218,20 +198,18 @@ class MockBoardProvider implements BoardProvider {
       name,
       tabId,
       ...(title ? { title } : {}),
-      contentKind: "mcp-app",
+      contentKind,
       sizeW: existing?.sizeW ?? 6,
       sizeH: existing?.sizeH ?? 4,
       position: existing?.position ?? widgets.filter((widget) => widget.tabId === tabId).length,
       grantState: "none",
       revision: (existing?.revision ?? 0) + 1,
+      ...(contentKind === "html"
+        ? { frameUrl: `about:blank#board-widget=${encodeURIComponent(name)}` }
+        : {}),
     });
     this.snapshotSignal.set(
-      normalizeMockBoardSnapshot({
-        ...snapshot,
-        revision: snapshot.revision + 1,
-        tabs,
-        widgets,
-      }),
+      normalizeMockBoardSnapshot({ ...snapshot, revision: snapshot.revision + 1, tabs, widgets }),
     );
   }
 
@@ -266,6 +244,7 @@ type BoardProviderCapabilities = Pick<
 // Snapshots and gateway subscriptions are session-owned, but authority belongs
 // to each live consumer; sharing it would let another dashboard widen an action.
 class ScopedGatewayBoardProvider implements BoardProvider {
+  readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private active = true;
@@ -274,6 +253,7 @@ class ScopedGatewayBoardProvider implements BoardProvider {
     private readonly transport: GatewayBoardProvider,
     private capabilities: BoardProviderCapabilities,
   ) {
+    this.loadError$ = transport.loadError$;
     this.snapshot$ = transport.snapshot$;
     this.events = transport.events;
   }

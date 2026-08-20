@@ -41,6 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
+  vi.unstubAllEnvs();
   if (originalAgentDir === undefined) {
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
   } else {
@@ -53,6 +54,14 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
+  it("treats trimmed on as the canonical offline opt-in", async () => {
+    vi.stubEnv("OPENCLAW_OFFLINE", " ON ");
+    const { ensureTool } = await import("./tools-manager.js");
+
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("cancels release-check error bodies before releasing guarded fetches", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const release = vi.fn(async () => {});

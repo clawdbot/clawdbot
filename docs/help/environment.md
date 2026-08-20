@@ -7,14 +7,14 @@ read_when:
 title: "Environment variables"
 ---
 
-OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
+OpenClaw pulls environment variables from multiple sources. The normal rule is **never override existing values**. For an OpenClaw-installed systemd service, the global `.env` may replace only service values that OpenClaw recorded as managed; operator-owned service values still take precedence.
 Workspace `.env` files are a lower-trust source: OpenClaw ignores provider credentials and protected runtime controls from workspace `.env` before applying precedence.
 
 ## Precedence (highest to lowest)
 
 1. **Process environment** (what the Gateway process already has from the parent shell/daemon).
 2. **`.env` in the current working directory** (dotenv default; does not override; provider credentials and protected runtime controls are ignored).
-3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; recommended for provider API keys; does not override).
+3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; recommended for provider API keys; does not override except for recorded OpenClaw-managed systemd service values).
 4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
 5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
 
@@ -101,20 +101,20 @@ See [Workspace `.env` files](/gateway/security#workspace-env-files) for the secu
 
 ## Config `env` block
 
-Two equivalent ways to set inline env vars (both are non-overriding):
+Set inline env vars under `env.vars` (values are non-overriding):
 
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
     vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
       GROQ_API_KEY: "gsk-...",
     },
   },
 }
 ```
 
-The config `env` block accepts literal string values only. It does not expand
+The config `env.vars` block accepts literal string values only. It does not expand
 `file:...` values; for example, `XAI_API_KEY: "file:secrets/xai-api-key.txt"`
 is passed to providers as that exact string.
 
@@ -166,6 +166,14 @@ Env var equivalents:
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000` (default `15000`)
 
+For Bash, the import uses an interactive login shell (`bash -lic`) so `PS1` is initialized
+before login startup files run. Bash reads `/etc/profile` and the first available user login
+profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`); many login profiles also source
+`~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
+failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
+This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
+discovery during ordinary Gateway commands remains noninteractive.
+
 ## Exec shell snapshots
 
 On non-Windows Gateway hosts, bash and zsh `exec` commands use a startup snapshot by default.
@@ -206,6 +214,8 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
   },
 }
 ```
+
+A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
 
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
@@ -249,6 +259,8 @@ unavailable instead of triggering a network request.
 ### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
+
+`OPENCLAW_HOME` does not grant ownership of the OS account's native Gateway service. Gateway service-management commands treat a relocated home as isolated state; use the OS account home and a named profile when a separate native service identity is required.
 
 **Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
 

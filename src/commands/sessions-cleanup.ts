@@ -4,6 +4,7 @@
  * It can delegate cleanup to a live gateway or run local store maintenance,
  * with dry-run tables that explain every planned pruning action.
  */
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -33,7 +34,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = "prune-model-run".length;
+const ACTION_PAD = "archive-dashboard".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -57,6 +58,9 @@ function formatCleanupActionCell(
   if (action === "keep") {
     return theme.muted(label);
   }
+  if (action === "archive-dashboard") {
+    return theme.warn(label);
+  }
   if (action === "prune-missing") {
     return theme.error(label);
   }
@@ -79,9 +83,9 @@ function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
+  archivedKeys?: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
-  budgetEvictedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
   // Recompute row actions from the preview sets so dry-run output uses the same
@@ -93,9 +97,9 @@ function buildActionRows(params: {
         key: row.key,
         missingKeys: params.missingKeys,
         modelRunPrunedKeys: params.modelRunPrunedKeys,
+        archivedKeys: params.archivedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
-        budgetEvictedKeys: params.budgetEvictedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
     }),
@@ -112,7 +116,7 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep") {
+    if (actionRow.action === "keep" || actionRow.action === "archive-dashboard") {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -129,15 +133,15 @@ function renderLabelSummaries(params: {
   if (summaries.length === 0) {
     return;
   }
-  const labelPad = Math.max(...summaries.map((summary) => summary.label.length));
+  const labelPad = Math.max(...summaries.map((summary) => visibleWidth(summary.label)));
   const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
   const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
   params.runtime.log("");
   params.runtime.log("Summary by Label:");
   for (const summary of summaries) {
-    params.runtime.log(
-      `${summary.label.padEnd(labelPad)}  ${summary.kept} kept, ${summary.pruned} pruned`,
-    );
+    const remaining = labelPad - visibleWidth(summary.label);
+    const paddedLabel = remaining > 0 ? `${summary.label}${" ".repeat(remaining)}` : summary.label;
+    params.runtime.log(`${paddedLabel}  ${summary.kept} kept, ${summary.pruned} pruned`);
   }
   params.runtime.log(`Total: ${totalKept} kept, ${totalPruned} pruned`);
 }
@@ -171,6 +175,7 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
+  params.runtime.log(`Would archive inactive dashboard sessions: ${params.summary.archived ?? 0}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -301,6 +306,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       allAgents: opts.allAgents,
     },
     runtime,
+    json: opts.json,
   });
   if (!targets) {
     return;

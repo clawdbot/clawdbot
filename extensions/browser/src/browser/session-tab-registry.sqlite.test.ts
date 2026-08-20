@@ -45,6 +45,7 @@ function clearProcessLocalTabState(): void {
   const state = globalThis as Record<symbol, unknown>;
   for (const name of [
     "openclaw.browser.session-tabs.volatile",
+    "openclaw.browser.session-tabs.volatile-cleanup",
     "openclaw.browser.session-tabs.active-durable-keys",
     "openclaw.browser.session-tabs.cold-native-activity",
     "openclaw.browser.session-tabs.interaction-storage-keys",
@@ -177,7 +178,7 @@ describe("durable session tab registry", () => {
     first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       ownership: ownership("REMOTE-NATIVE"),
     });
@@ -210,7 +211,7 @@ describe("durable session tab registry", () => {
     registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       ownership: ownership("NATIVE-BRIDGE"),
       now: 2_000,
@@ -219,14 +220,14 @@ describe("durable session tab registry", () => {
     registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       now: 3_000,
     });
     registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
     });
 
@@ -890,6 +891,16 @@ describe("durable session tab registry", () => {
     } satisfies DurableRecord;
     openStore().register("wrong-storage-key", validRecord);
     openStore().register("invalid-record", { version: 999, sessionKey: "agent:main:main" });
+    openStore().register("partial-cleanup", {
+      ...validRecord,
+      nativeTargetId: "NATIVE-PARTIAL",
+      cleanupRequestedAt: 2_000,
+    });
+    openStore().register("noncanonical-aliases", {
+      ...validRecord,
+      nativeTargetId: "NATIVE-ALIASES",
+      profileAliases: ["zeta", "alpha"],
+    });
     const warnings: string[] = [];
     const registry = await freshRegistry("invalid");
 
@@ -900,7 +911,7 @@ describe("durable session tab registry", () => {
     });
     expect(openStore().entries()).toEqual([]);
     expect(cdpMocks.closeTrackedCdpTarget).not.toHaveBeenCalled();
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(4);
   });
 
   it("keeps non-durable tabs out of SQLite but shared across duplicate bundles", async () => {

@@ -21,7 +21,6 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -57,14 +56,15 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
-import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
+  resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import type { StatusMessageParts } from "./status-message.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
-import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
+import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
@@ -101,7 +101,7 @@ function resolveStatusChannelFeatureLine(params: {
   );
   const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
   if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.1 sendRichMessage enabled";
+    return "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled";
   }
   return accountConfig?.richMessages === false
     ? "Telegram rich messages: off · enable richMessages for this Telegram account"
@@ -184,11 +184,7 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
     if (!credential) {
       return undefined;
     }
-    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
-    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
-    return resolvedProvider === "openai" ||
-      credentialProvider === "openai-codex" ||
-      credentialProvider === "codex-cli"
+    return normalizeOptionalLowercaseString(credential.provider) === "openai"
       ? normalizedProfileId
       : undefined;
   } catch {
@@ -310,6 +306,14 @@ async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
 // Public status text builder for CLI/chat status commands. It resolves dynamic
 // runtime details just-in-time and returns the formatted multiline status body.
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
+  return (await buildStatusReplyParts(params)).text;
+}
+
+// Status body plus its structured presentation mirror, for chat replies whose
+// channel can render native tables; plain channels keep the text verbatim.
+export async function buildStatusReplyParts(
+  params: BuildStatusTextParams,
+): Promise<StatusMessageParts> {
   const {
     cfg,
     sessionEntry,
@@ -546,14 +550,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
-    const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
+    const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const runs = listControlledSubagentRuns(requesterKey);
+    const subagentReadContext = buildControlledSubagentRunsReadContext(requesterKey);
+    const runs = subagentReadContext.runs;
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
       runs,
       verboseEnabled,
-      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
+      pendingDescendantsForRun: (entry) =>
+        subagentReadContext.countPendingDescendantRuns(entry.childSessionKey),
     });
   }
   const groupActivation = isGroup
@@ -586,35 +592,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     statusAccountId: params.statusAccountId,
     sessionEntry,
   });
-  const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const { buildStatusMessageParts } = await loadStatusMessageRuntime();
   await waitForContextWindowCacheLoad();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const configuredContextTokens =
-    typeof agentConfig?.contextTokens === "number" && agentConfig.contextTokens > 0
-      ? agentConfig.contextTokens
-      : typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-        ? agentDefaults.contextTokens
-        : undefined;
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
-  const selectedContextTokens = resolveStatusRuntimeContextTokens({
-    cfg,
-    provider: selectedStatusProvider,
-    model: modelRefs.selected.model || selectedLookupModel,
-  });
-  const statusAgentContextTokens =
-    typeof contextTokens === "number" &&
-    contextTokens > 0 &&
-    (activeRuntimeIsAuthoritative ||
-      contextTokens === configuredContextTokens ||
-      contextTokens === selectedContextTokens)
-      ? contextTokens
-      : undefined;
   const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
     ? (runtimeContextTokens ??
       (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
@@ -662,7 +649,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
               ? "active-or-bundled"
               : "active",
         });
-  return buildStatusMessage({
+  return buildStatusMessageParts({
     config: cfg,
     agent: {
       ...agentDefaults,
@@ -671,9 +658,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
-      ...(statusAgentContextTokens !== undefined
-        ? { contextTokens: statusAgentContextTokens }
-        : {}),
       thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
@@ -681,7 +665,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    explicitConfiguredContextTokens: configuredContextTokens,
     runtimeContextTokens: statusRuntimeContextTokens,
     sessionEntry,
     sessionKey,
@@ -697,7 +680,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
-    uptimeLine: buildStatusUptimeLine(),
+    uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

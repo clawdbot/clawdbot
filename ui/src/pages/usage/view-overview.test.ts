@@ -7,7 +7,9 @@ import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } 
 import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderDailyChartCompact,
+  renderCostBreakdownCompact,
   renderCostWindowComparison,
+  renderFilterChips,
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
@@ -298,6 +300,74 @@ describe("renderUsageHeatmap", () => {
   });
 });
 
+describe("usage overview presentation owners", () => {
+  it.each(["tokens", "cost"] as const)("preserves ordered %s breakdown categories", (mode) => {
+    const container = document.createElement("div");
+    render(
+      renderCostBreakdownCompact(
+        {
+          ...totals,
+          totalCost: 1,
+          outputCost: 0.2,
+          inputCost: 0.1,
+          cacheWriteCost: 0.3,
+          cacheReadCost: 0.4,
+        },
+        mode,
+      ),
+      container,
+    );
+
+    const categories = ["output", "input", "cache-write", "cache-read"];
+    expect(
+      [...container.querySelectorAll(".cost-breakdown-bar .cost-segment")].map((segment) =>
+        categories.find((category) => segment.classList.contains(category)),
+      ),
+    ).toEqual(categories);
+    expect(
+      [...container.querySelectorAll(".cost-breakdown-legend .legend-item")].map((entry) =>
+        entry.textContent?.replaceAll(/\s+/g, " ").trim(),
+      ),
+    ).toEqual(
+      mode === "tokens"
+        ? ["Output 40", "Input 100", "Cache Write 600", "Cache Read 300"]
+        : ["Output $0.20", "Input $0.10", "Cache Write $0.30", "Cache Read $0.40"],
+    );
+  });
+
+  it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
+    const container = document.createElement("div");
+    const onClearDays = vi.fn();
+    const onClearHours = vi.fn();
+    const onClearSessions = vi.fn();
+    render(
+      renderFilterChips(
+        ["2026-08-01"],
+        [8],
+        ["agent:main:usage"],
+        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+        onClearDays,
+        onClearHours,
+        onClearSessions,
+        vi.fn(),
+      ),
+      container,
+    );
+
+    const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
+    expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
+      "Remove days filter",
+      "Remove hours filter",
+      "Remove session filter",
+    ]);
+    expect(chips.map((chip) => chip.getAttribute("title"))).toEqual([null, null, "Usage thread"]);
+    chips.forEach((chip) => chip.querySelector<HTMLButtonElement>("button")?.click());
+    expect(onClearDays).toHaveBeenCalledOnce();
+    expect(onClearHours).toHaveBeenCalledOnce();
+    expect(onClearSessions).toHaveBeenCalledOnce();
+  });
+});
+
 describe("renderDailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
     const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
@@ -335,8 +405,8 @@ describe("renderDailyChartCompact", () => {
     );
 
     expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
+      Array.from(container.querySelectorAll(".daily-chart-scale span")).map(
+        (entry) => entry.textContent,
       ),
     ).toEqual(["$2.00", "$1.00", "$0.00"]);
     expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
@@ -486,6 +556,67 @@ describe("renderCostWindowComparison", () => {
 
 describe("renderSessionsCard", () => {
   const noop = () => {};
+
+  it("renders named native session toggles while preserving shift selection and separate copy", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onSelectSession = vi.fn<(key: string, shiftKey: boolean) => void>();
+    const sessions = [
+      {
+        key: "agent:main:selected",
+        label: "Selected thread",
+        updatedAt: 2,
+        usage: { ...totals, totalTokens: 200 },
+      },
+      {
+        key: "agent:main:next",
+        label: "Next thread",
+        updatedAt: 1,
+        usage: { ...totals, totalTokens: 100 },
+      },
+    ] as UsageSessionEntry[];
+
+    render(
+      renderSessionsCard(
+        sessions,
+        ["agent:main:selected"],
+        [],
+        true,
+        "tokens",
+        "desc",
+        [],
+        "all",
+        onSelectSession,
+        noop,
+        noop,
+        noop,
+        [],
+        sessions.length,
+        noop,
+      ),
+      container,
+    );
+
+    const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
+    const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
+    const next = rows[1]?.querySelector<HTMLButtonElement>(".session-bar-selection");
+    expect(selected).toBeInstanceOf(HTMLButtonElement);
+    expect(selected?.type).toBe("button");
+    expect(selected?.getAttribute("aria-label")).toBe("Selected thread");
+    expect(selected?.getAttribute("aria-pressed")).toBe("true");
+    expect(next?.getAttribute("aria-label")).toBe("Next thread");
+    expect(next?.getAttribute("aria-pressed")).toBe("false");
+    next?.focus();
+    expect(document.activeElement).toBe(next);
+    next?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    expect(onSelectSession).toHaveBeenCalledOnce();
+    expect(onSelectSession).toHaveBeenCalledWith("agent:main:next", true);
+
+    rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button")?.click();
+    expect(onSelectSession).toHaveBeenCalledOnce();
+    rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
+    expect(onSelectSession).toHaveBeenCalledWith("agent:main:selected", false);
+  });
 
   it("sorts cost by the selected day values when day filters are active", () => {
     const container = document.createElement("div");

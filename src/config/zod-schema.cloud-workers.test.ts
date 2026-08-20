@@ -22,6 +22,18 @@ describe("OpenClawSchema cloudWorkers config", () => {
             title?: string;
             description?: string;
             properties?: {
+              desktop?: {
+                title?: string;
+                description?: string;
+              };
+              projectProfiles?: {
+                title?: string;
+                description?: string;
+                additionalProperties?: {
+                  title?: string;
+                  description?: string;
+                };
+              };
               profiles?: {
                 title?: string;
                 description?: string;
@@ -36,10 +48,15 @@ describe("OpenClawSchema cloudWorkers config", () => {
         };
       }
     ).properties?.cloudWorkers;
+    const desktop = properties?.properties?.desktop;
+    const projectProfiles = properties?.properties?.projectProfiles;
     const profiles = properties?.properties?.profiles;
     const profile = profiles?.additionalProperties;
 
     for (const [path, schema] of [
+      ["cloudWorkers.desktop", desktop],
+      ["cloudWorkers.projectProfiles", projectProfiles],
+      ["cloudWorkers.projectProfiles.*", projectProfiles?.additionalProperties],
       ["cloudWorkers.profiles", profiles],
       ["cloudWorkers.profiles.*", profile],
       ["cloudWorkers.profiles.*.provider", profile?.properties?.provider],
@@ -56,6 +73,36 @@ describe("OpenClawSchema cloudWorkers config", () => {
   it("is absent by default and accepts an empty opt-in block", () => {
     expect(OpenClawSchema.parse({}).cloudWorkers).toBeUndefined();
     expect(parseCloudWorkers({})).toStrictEqual({});
+  });
+
+  it("accepts the desktop Labs gate only as a boolean", () => {
+    expect(parseCloudWorkers({ desktop: true })).toStrictEqual({ desktop: true });
+    expect(OpenClawSchema.safeParse({ cloudWorkers: { desktop: "true" } }).success).toBe(false);
+  });
+
+  it("accepts normalized per-project default profiles", () => {
+    expect(
+      parseCloudWorkers({
+        projectProfiles: {
+          "github.com/acme/app": "development",
+        },
+      }),
+    ).toStrictEqual({
+      projectProfiles: {
+        "github.com/acme/app": "development",
+      },
+    });
+  });
+
+  it.each([
+    { "github.com/acme/app": "" },
+    { "github.com/acme/app": " " },
+    { "github.com/acme/app": 42 },
+    { "GitHub.com/acme/app": "development" },
+    { "github.com/acme/app.git": "development" },
+    { "github.com/acme": "development" },
+  ])("rejects invalid per-project profile mappings %#", (projectProfiles) => {
+    expect(OpenClawSchema.safeParse({ cloudWorkers: { projectProfiles } }).success).toBe(false);
   });
 
   it("accepts provider-owned settings", () => {
@@ -91,6 +138,37 @@ describe("OpenClawSchema cloudWorkers config", () => {
               provider: "default",
               id: "/cloud-workers/development/privateKey",
             },
+          },
+        },
+      },
+    });
+  });
+
+  it("defaults a minimal Crabbox profile to bundle installation", () => {
+    expect(
+      parseCloudWorkers({
+        profiles: {
+          aws: {
+            provider: "crabbox",
+            settings: {
+              provider: "aws",
+              class: "standard",
+              ttl: "8h",
+              idleTimeout: "45m",
+            },
+          },
+        },
+      }),
+    ).toStrictEqual({
+      profiles: {
+        aws: {
+          provider: "crabbox",
+          install: "bundle",
+          settings: {
+            provider: "aws",
+            class: "standard",
+            ttl: "8h",
+            idleTimeout: "45m",
           },
         },
       },

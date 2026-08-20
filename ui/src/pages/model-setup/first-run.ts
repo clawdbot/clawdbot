@@ -4,7 +4,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { cacheModelSetupDetection } from "./detect-cache.ts";
+import { cacheModelSetupDetection, type ModelSetupDetectionConnection } from "./detect-cache.ts";
 import { detectModelSetup } from "./rpc.ts";
 
 export function isDefaultChatLanding(
@@ -64,13 +64,19 @@ function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
 }): () => void {
-  let attempted = false;
+  let detection:
+    | {
+        connection: ModelSetupDetectionConnection;
+        attempts: number;
+        phase: "in-flight" | "retry-ready" | "settled";
+      }
+    | undefined;
   let redirected = false;
+  let disposed = false;
   const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
     snapshot,
   ) => {
     if (
-      attempted ||
       redirected ||
       snapshot.phase !== "connected" ||
       !snapshot.client ||
@@ -79,21 +85,62 @@ function startModelSetupFirstRunRedirect(params: {
     ) {
       return;
     }
-    attempted = true;
-    const client = snapshot.client;
-    void detectModelSetup(client)
+    const agentId = params.context.agentSelection.state.selectedId;
+    const connection = { client: snapshot.client, hello: snapshot.hello, agentId };
+    const previous = detection;
+    const sameGeneration =
+      connection.client === previous?.connection.client &&
+      connection.hello === previous?.connection.hello &&
+      connection.agentId === previous?.connection.agentId;
+    if (sameGeneration && previous?.phase !== "retry-ready") {
+      return;
+    }
+    detection =
+      sameGeneration && previous
+        ? { connection, attempts: previous.attempts + 1, phase: "in-flight" }
+        : { connection, attempts: 1, phase: "in-flight" };
+    const attempt = detection;
+    void detectModelSetup(snapshot.client, agentId ?? undefined)
       .then((result) => {
-        cacheModelSetupDetection(client, result);
+        if (disposed || detection !== attempt) {
+          return;
+        }
+        const current = params.context.gateway.snapshot;
+        if (
+          current.phase !== "connected" ||
+          current.client !== connection.client ||
+          current.hello !== connection.hello ||
+          params.context.agentSelection.state.selectedId !== connection.agentId
+        ) {
+          return;
+        }
+        detection = { ...attempt, phase: "settled" };
+        cacheModelSetupDetection(connection, result);
         if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
           redirected = true;
           params.context.replace("model-setup", { search: "?firstRun=1" });
         }
       })
       .catch(() => {
-        // First-run guidance is best effort. The page offers an explicit retry.
+        if (disposed || detection !== attempt) {
+          return;
+        }
+        // One same-generation retry absorbs a transient startup race without
+        // turning first-run guidance into a background retry loop.
+        detection = { ...attempt, phase: attempt.attempts < 2 ? "retry-ready" : "settled" };
+        if (detection.phase === "retry-ready" && params.isStillDefaultLanding()) {
+          handleSnapshot(params.context.gateway.snapshot);
+        }
       });
   };
   const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
+  const unsubscribeSelection = params.context.agentSelection.subscribe(() =>
+    handleSnapshot(params.context.gateway.snapshot),
+  );
   handleSnapshot(params.context.gateway.snapshot);
-  return unsubscribe;
+  return () => {
+    disposed = true;
+    unsubscribe();
+    unsubscribeSelection();
+  };
 }

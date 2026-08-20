@@ -3,7 +3,9 @@
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
 // same config draft, so both stay in sync without narrowing the schema.
 import { html, nothing, type TemplateResult } from "lit";
+import { renderModelPicker } from "../../components/model-picker.ts";
 import {
+  renderDocsLink,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsSegmented,
@@ -52,6 +54,8 @@ type TalkViewProps = {
 };
 
 const TALK_PICKER_UNSET = "";
+
+const TALK_DOCS_URL = "https://docs.openclaw.ai/nodes/talk";
 
 /** Config may name a provider by alias; pickers always speak canonical ids. */
 function findProviderOption(
@@ -239,13 +243,16 @@ function renderModelRow(props: TalkViewProps) {
     // A hand-edited model stays selectable instead of snapping to default.
     ...(model && !known.includes(model) ? [{ value: model, label: model }] : []),
   ];
-  return renderTalkSelectRow({
+  return renderSettingsRow({
     title: t("talkPage.model.title"),
     description: t("talkPage.model.description"),
-    value: model ?? TALK_PICKER_UNSET,
-    options,
-    disabled: props.configBusy,
-    onChange: (value) => props.onModelChange(value || null),
+    control: renderModelPicker({
+      label: t("talkPage.model.title"),
+      value: model ?? TALK_PICKER_UNSET,
+      options: options.map(({ value, label }) => ({ value, label, provider: provider.id })),
+      disabled: props.configBusy,
+      onChange: (value) => props.onModelChange(value || null),
+    }),
   });
 }
 
@@ -301,6 +308,9 @@ export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
       <div class="settings-page">
+        <p class="settings-page__intro">
+          ${t("talkPage.intro")} ${renderDocsLink(TALK_DOCS_URL, t("common.learnMore"))}
+        </p>
         ${renderSettingsSection(
           {
             title: t("talkPage.voiceSection.title"),

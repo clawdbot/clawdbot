@@ -8,7 +8,11 @@ import {
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  asRecord,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -111,14 +115,10 @@ function resolveModelHeaders(model: StreamModel): Record<string, string> | undef
   return model.headers;
 }
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function shouldPreloadLmstudioModels(value: unknown): boolean {
-  const providerConfig = toRecord(value);
-  const params = toRecord(providerConfig?.params);
-  return params?.preload !== false;
+  const providerConfig = asRecord(value);
+  const params = asRecord(providerConfig.params);
+  return params.preload !== false;
 }
 
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {

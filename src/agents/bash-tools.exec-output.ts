@@ -14,6 +14,17 @@ export function renderExecOutputText(value: string | undefined): string {
   return value || EXEC_NO_OUTPUT_PLACEHOLDER;
 }
 
+/** Render the authoritative process exit without inventing a successful code. */
+export function renderExecExitLabel(exit: {
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | number | null;
+}): string {
+  if (exit.exitSignal != null) {
+    return `signal ${exit.exitSignal}`;
+  }
+  return typeof exit.exitCode === "number" ? `code ${exit.exitCode}` : "unknown exit code";
+}
+
 /** Render the text shown in exec progress updates, including warnings first. */
 export function renderExecUpdateText(params: { tailText?: string; warnings: string[] }): string {
   const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";

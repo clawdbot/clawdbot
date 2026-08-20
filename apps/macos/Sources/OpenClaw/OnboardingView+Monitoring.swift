@@ -1,27 +1,6 @@
 import Foundation
-import OpenClawIPC
 
 extension OnboardingView {
-    @MainActor
-    func refreshPerms() async {
-        await permissionMonitor.refreshNow()
-    }
-
-    @MainActor
-    func request(_ cap: Capability) async {
-        guard !isRequesting else { return }
-        isRequesting = true
-        defer { isRequesting = false }
-        _ = await PermissionManager.ensure([cap], interactive: true)
-        await self.refreshPerms()
-    }
-
-    func updatePermissionMonitoring(for pageIndex: Int) {
-        PermissionMonitoringSupport.setMonitoring(
-            pageIndex == permissionsPageIndex,
-            monitoring: &monitoringPermissions)
-    }
-
     func updateDiscoveryMonitoring(for pageIndex: Int) {
         let isConnectionPage = pageIndex == connectionPageIndex
         let shouldMonitor = isConnectionPage
@@ -40,11 +19,9 @@ extension OnboardingView {
     }
 
     func updateMonitoring(for pageIndex: Int) {
-        self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
         self.maybeStartAISetup(for: pageIndex)
-        self.updateMemoryImportMonitoring(for: pageIndex)
     }
 
     func maybeInstallCLI(for pageIndex: Int) {
@@ -100,6 +77,39 @@ extension OnboardingView {
         isLocal && executableReady && !installing
     }
 
+    static func shouldReviseCLIActivationFailure(
+        gatewayStatus: GatewayProcessManager.Status,
+        isLocal: Bool,
+        executableReady: Bool,
+        installed: Bool) -> Bool
+    {
+        guard isLocal, executableReady, !installed else { return false }
+        return switch gatewayStatus {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
+    }
+
+    func reviseCLIActivationFailureIfGatewayReady(_ status: GatewayProcessManager.Status) {
+        guard Self.shouldReviseCLIActivationFailure(
+            gatewayStatus: status,
+            isLocal: state.connectionMode == .local,
+            executableReady: cliExecutableReady,
+            installed: cliInstalled)
+        else { return }
+        cliInstalled = true
+        cliStatusKnown = true
+        cliStatus = nil
+    }
+
+    /// LocalGatewayActivation.failed carries the reason bound to that specific activation
+    /// attempt. Append it here so onboarding does not fall back to a generic retry message
+    /// with no diagnosable cause.
+    static func gatewayStartFailureMessage(prefix: String, reason: String?) -> String {
+        guard let reason, !reason.isEmpty else { return prefix }
+        return "\(prefix) (\(reason))"
+    }
+
     func finishExistingCLIActivation() async {
         defer {
             installingCLI = false
@@ -121,9 +131,11 @@ extension OnboardingView {
         case .deferred:
             cliInstalled = false
             cliStatus = "OpenClaw is paused. Resume it, then retry setup to start the Gateway."
-        case .failed:
+        case let .failed(reason):
             cliInstalled = false
-            cliStatus = "OpenClaw is installed, but the Gateway did not start. Retry setup."
+            cliStatus = Self.gatewayStartFailureMessage(
+                prefix: "OpenClaw is installed, but the Gateway did not start. Retry setup.",
+                reason: reason)
         }
     }
 
@@ -134,10 +146,6 @@ extension OnboardingView {
         // Cmd-W bypasses the disabled close button; the delegate asks first.
         OnboardingController.shared.busyReason = "OpenClaw is installing the Gateway service."
         Task { @MainActor in await self.runCLIInstall() }
-    }
-
-    func stopPermissionMonitoring() {
-        PermissionMonitoringSupport.stopMonitoring(&monitoringPermissions)
     }
 
     func stopDiscovery() {
@@ -178,8 +186,10 @@ extension OnboardingView {
             cliStatus = "OpenClaw Gateway is ready."
         case .deferred:
             cliStatus = "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
-        case .failed:
-            cliStatus = "OpenClaw was installed, but the Gateway did not start. Retry setup."
+        case let .failed(reason):
+            cliStatus = Self.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: reason)
             return
         }
         cliInstalled = true
@@ -202,20 +212,23 @@ extension OnboardingView {
     func refreshLocalGatewayProbe() async {
         let port = GatewayEnvironment.gatewayPort()
         let desc = await PortGuardian.shared.describe(port: port)
+        let managedServicePID: Int32? = if AppProfile.current.isActive, desc != nil {
+            await GatewayLaunchAgentManager.runningGatewayPID()
+        } else {
+            nil
+        }
         await MainActor.run {
             guard let desc else {
                 self.localGatewayProbe = nil
                 return
             }
             let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
-            let expectedTokens = ["node", "openclaw", "tsx", "pnpm", "bun"]
-            let lower = command.lowercased()
-            let expected = expectedTokens.contains { lower.contains($0) }
             self.localGatewayProbe = LocalGatewayProbe(
                 port: port,
                 pid: desc.pid,
                 command: command,
-                expected: expected)
+                profile: .current,
+                managedServicePID: managedServicePID)
         }
     }
 }

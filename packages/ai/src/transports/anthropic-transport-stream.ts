@@ -1,13 +1,13 @@
 import type {
-  AssistantMessageDiagnostic,
+  AssistantMessage,
+  AssistantMessageEvent,
   Context,
   ImageContent,
   Model,
   SimpleStreamOptions,
   StreamFn,
   TextContent,
-  ThinkingLevel,
-  Usage,
+  ToolCall,
 } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
@@ -24,7 +24,7 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
-import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
   omitFoundryBearerCredentialHeaders,
@@ -32,14 +32,16 @@ import {
 } from "../providers/anthropic-auth-headers.js";
 import {
   applyClaudeRequestContract,
+  ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
+  ANTHROPIC_CLAUDE_CODE_VERSION,
   defaultsClaudeAdaptiveThinking,
+  mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
   requiresClaudeAdaptiveThinking,
-  resolveClaudeNativeThinkingLevelMap,
+  resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
@@ -57,18 +59,20 @@ import {
   findActiveAnthropicToolTurnAssistantIndex,
 } from "../providers/anthropic-thinking-replay.js";
 import {
+  normalizeAnthropicToolCallId,
+  normalizeAnthropicToolChoice,
   projectAnthropicTools,
   reconcileAnthropicToolChoice,
   resolveOriginalAnthropicToolName,
-  type AnthropicProjectedToolChoice,
+  toClaudeCodeToolName,
   type AnthropicToolProjection,
 } from "../providers/anthropic-tool-projection.js";
 import {
-  readAnthropicPromptUsageSnapshot,
-  readAnthropicUsageTokenCount,
-  readLastAnthropicIterationUsage,
+  applyAnthropicMessageDeltaUsage,
+  applyAnthropicMessageStartUsage,
   type AnthropicPromptUsageSnapshot,
 } from "../providers/anthropic-usage.js";
+import { adjustMaxTokensForThinking } from "../providers/simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
@@ -79,6 +83,13 @@ import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import {
+  buildAnthropicReplayPlan,
+  createCompactionCapture,
+  isAnthropicReplayRejection,
+  suppressAnthropicCompaction,
+  type AnthropicCompactionBlock,
+} from "./anthropic-compaction-replay.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -94,6 +105,7 @@ import {
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
+  finalizeTerminalToolCallArguments,
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
@@ -109,10 +121,6 @@ import {
   resolveSecretSentinel,
 } from "./transport-utils.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
-
-const CLAUDE_CODE_VERSION = "2.1.75";
-const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
@@ -121,36 +129,16 @@ const ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR = 4;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
-const CLAUDE_CODE_TOOLS = [
-  "Read",
-  "Write",
-  "Edit",
-  "Bash",
-  "Grep",
-  "Glob",
-  "AskUserQuestion",
-  "EnterPlanMode",
-  "ExitPlanMode",
-  "KillShell",
-  "NotebookEdit",
-  "Skill",
-  "Task",
-  "TaskOutput",
-  "TodoWrite",
-  "WebFetch",
-  "WebSearch",
-] as const;
-const CLAUDE_CODE_TOOL_LOOKUP = new Map(
-  CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
-);
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
   headers?: Record<string, string>;
   provider: string;
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">;
-type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop"> & {
+    anthropicServerCompaction?: boolean;
+    authProfileId?: string;
+  };
 type AnthropicMessagesClient = {
   messages: {
     stream(
@@ -176,95 +164,21 @@ type TransportContentBlock =
       redacted?: boolean;
       index?: number;
     }
-  | {
+  | ({
       type: "toolCall";
       id: string;
       name: string;
-      arguments: unknown;
+      arguments: Record<string, unknown>;
       partialJson?: string;
       index?: number;
-    };
+    } & ToolCall);
 
-type MutableAssistantOutput = {
-  role: "assistant";
+type MutableAssistantOutput = Omit<AssistantMessage, "api" | "content"> & {
   content: Array<TransportContentBlock>;
   api: "anthropic-messages";
-  provider: string;
-  model: string;
-  responseModel?: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    contextUsage?: ContextUsage;
-    totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  errorMessage?: string;
-  diagnostics?: AssistantMessageDiagnostic[];
 };
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
-
-function normalizeAnthropicToolChoice(
-  thinkingEnabled: boolean,
-  toolChoice: NonNullable<AnthropicTransportOptions["toolChoice"]>,
-): AnthropicProjectedToolChoice {
-  if (
-    thinkingEnabled &&
-    (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
-  ) {
-    return { type: "auto" as const };
-  }
-  return typeof toolChoice === "string" ? { type: toolChoice } : toolChoice;
-}
-
-function supportsNativeXhighEffort(model: AnthropicTransportModel): boolean {
-  return supportsClaudeNativeXhighEffort(model);
-}
-
-function supportsAdaptiveThinking(model: AnthropicTransportModel): boolean {
-  return supportsClaudeAdaptiveThinking(model);
-}
-
-function mapThinkingLevelToEffort(
-  level: ThinkingLevel | "off",
-  model: AnthropicTransportModel,
-): AnthropicAdaptiveEffort {
-  const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
-  const clampModel = {
-    ...model,
-    ...(typeof model.params?.canonicalModelId === "string" ? { reasoning: true } : {}),
-    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-  };
-  const resolvedLevel = clampThinkingLevel(clampModel, level);
-  const mapped = thinkingLevelMap?.[resolvedLevel];
-  if (typeof mapped === "string") {
-    return mapped as AnthropicAdaptiveEffort;
-  }
-  switch (resolvedLevel) {
-    case "off":
-    case "minimal":
-    case "low":
-      return "low";
-    case "medium":
-      return "medium";
-    case "xhigh":
-      return supportsNativeXhighEffort(model) ? "xhigh" : "high";
-    case "max":
-      return supportsClaudeNativeMaxEffort(model) ? "max" : "high";
-    default:
-      return "high";
-  }
-}
-
-function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
-  return level === "xhigh" || level === "max" ? "high" : level;
-}
 
 function resolvePositiveAnthropicTokenLimit(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -305,29 +219,6 @@ function resolveAnthropicMessagesMaxTokens(params: {
       );
 }
 
-function adjustMaxTokensForThinking(params: {
-  baseMaxTokens: number;
-  modelMaxTokens: number;
-  reasoningLevel: ThinkingLevel;
-  customBudgets?: SimpleStreamOptions["thinkingBudgets"];
-}): { maxTokens: number; thinkingBudget: number } {
-  const budgets = {
-    minimal: 1024,
-    low: 2048,
-    medium: 8192,
-    high: 16384,
-    ...params.customBudgets,
-  };
-  const minOutputTokens = 1024;
-  const level = clampReasoningLevel(params.reasoningLevel);
-  let thinkingBudget = budgets[level];
-  const maxTokens = Math.min(params.baseMaxTokens + thinkingBudget, params.modelMaxTokens);
-  if (maxTokens <= thinkingBudget) {
-    thinkingBudget = Math.max(0, maxTokens - minOutputTokens);
-  }
-  return { maxTokens, thinkingBudget };
-}
-
 function isAnthropicOAuthToken(apiKey: string): boolean {
   // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
   const resolved = resolveSecretSentinel(apiKey);
@@ -338,7 +229,7 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
   if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
     return false;
   }
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
   return endpointClass === "default" || endpointClass === "anthropic-public";
 }
 
@@ -362,7 +253,7 @@ function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean
 function supportsReasoningContentReplay(
   model: Pick<AnthropicTransportModel, "provider" | "baseUrl">,
 ): boolean {
-  return resolveProviderEndpoint(model.baseUrl).endpointClass === "xiaomi-native";
+  return resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
 }
 
 function buildAnthropicBetaHeader(
@@ -376,10 +267,6 @@ function buildAnthropicBetaHeader(
   return params.oauth
     ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
     : betaFeatures.join(",");
-}
-
-function toClaudeCodeName(name: string): string {
-  return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
@@ -444,10 +331,6 @@ async function convertContentBlocks(
   return blocks;
 }
 
-function normalizeToolCallId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-}
-
 async function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
@@ -455,6 +338,7 @@ async function convertAnthropicMessages(
   options: {
     allowReasoningContentReplay?: boolean;
     cacheBreakpointOptOutMessageIndexes: Set<number>;
+    compaction?: AnthropicCompactionBlock;
     replayThinkingEnabled?: boolean;
   },
 ): Promise<Array<Record<string, unknown>>> {
@@ -462,7 +346,11 @@ async function convertAnthropicMessages(
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
-  const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
+  const transformedMessages = transformTransportMessages(
+    messages,
+    model,
+    normalizeAnthropicToolCallId,
+  );
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
@@ -537,7 +425,8 @@ async function convertAnthropicMessages(
       continue;
     }
     if (msg.role === "assistant") {
-      const blocks: Array<Record<string, unknown>> = [];
+      const blocks: Array<Record<string, unknown>> =
+        i === 0 && options.compaction ? [options.compaction] : [];
       const reasoningContent: string[] = [];
       let omittedThinking = false;
       for (const block of msg.content) {
@@ -601,7 +490,7 @@ async function convertAnthropicMessages(
           blocks.push({
             type: "tool_use",
             id: block.id,
-            name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
+            name: isOAuthToken ? toClaudeCodeToolName(block.name) : block.name,
             input: coerceTransportToolCallArguments(block.arguments),
           });
         }
@@ -666,7 +555,7 @@ function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>
 
 function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   const projection = projectAnthropicTools(tools ?? [], (name) =>
-    isOAuthToken ? toClaudeCodeName(name) : name,
+    isOAuthToken ? toClaudeCodeToolName(name) : name,
   );
   const converted: Array<{
     name: string;
@@ -687,28 +576,10 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   return { projection, tools: converted };
 }
 
-function parseAnthropicToolCallArguments(inputJson: string): unknown {
-  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
-}
-
-function mapStopReason(reason: string | undefined): string {
-  switch (reason) {
-    case "end_turn":
-      return "stop";
-    case "max_tokens":
-      return "length";
-    case "tool_use":
-      return "toolUse";
-    case "pause_turn":
-      return "stop";
-    case "refusal":
-    case "sensitive":
-      return "error";
-    case "stop_sequence":
-      return "stop";
-    default:
-      throw new Error(`Unhandled stop reason: ${String(reason)}`);
-  }
+function parseAnthropicToolCallArguments(inputJson: string): Record<string, unknown> {
+  return coerceTransportToolCallArguments(
+    parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson),
+  );
 }
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
@@ -942,7 +813,7 @@ function createAnthropicTransportClient(params: {
 }) {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
-    (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model);
+    (options?.interleavedThinking ?? true) && !supportsClaudeAdaptiveThinking(model);
   // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
   // the OpenAI SDK compatibility sanitizer can stall before the text block.
   const fetch =
@@ -1008,7 +879,7 @@ function createAnthropicTransportClient(params: {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
             ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-            "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
+            "user-agent": `claude-cli/${ANTHROPIC_CLAUDE_CODE_VERSION}`,
             "x-app": "cli",
           },
           model.headers,
@@ -1050,6 +921,7 @@ async function buildAnthropicParams(
 ): Promise<{
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
+  usedCompactionReplay: boolean;
 }> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
@@ -1063,19 +935,28 @@ async function buildAnthropicParams(
       `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
     );
   }
-  const payloadPolicy = resolveAnthropicPayloadPolicy({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    cacheRetention: options?.cacheRetention,
-    enableCacheControl: true,
-  });
+  const payloadPolicy = resolveAnthropicPayloadPolicy(
+    {
+      provider: model.provider,
+      api: model.api,
+      baseUrl: model.baseUrl,
+      cacheRetention: options?.cacheRetention,
+      enableCacheControl: true,
+    },
+    model,
+  );
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const messages = await convertAnthropicMessages(context.messages, model, isOAuthToken, {
+  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
+    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+  });
+  const messages = await convertAnthropicMessages(replayPlan.messages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     cacheBreakpointOptOutMessageIndexes,
+    compaction: replayPlan.compaction,
     replayThinkingEnabled,
   });
   const params: Record<string, unknown> = {
@@ -1095,7 +976,7 @@ async function buildAnthropicParams(
       // Anthropic requires this first block to route Claude subscription OAuth billing.
       {
         type: "text",
-        text: CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
+        text: ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
       },
       {
         type: "text",
@@ -1121,7 +1002,7 @@ async function buildAnthropicParams(
   if (
     options?.temperature !== undefined &&
     !options.thinkingEnabled &&
-    !supportsNativeXhighEffort(model)
+    !supportsClaudeNativeXhighEffort(model)
   ) {
     params.temperature = options.temperature;
   }
@@ -1136,9 +1017,9 @@ async function buildAnthropicParams(
       params.tools = convertedTools.tools;
     }
   }
-  if (mandatoryAdaptiveThinking || model.reasoning || supportsAdaptiveThinking(model)) {
+  if (mandatoryAdaptiveThinking || model.reasoning || supportsClaudeAdaptiveThinking(model)) {
     if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
-      if (supportsAdaptiveThinking(model)) {
+      if (supportsClaudeAdaptiveThinking(model)) {
         // Default display to "summarized" so Opus 4.7+/Fable 5 return a thinking
         // summary like older Claude 4 models — mirrors the provider path
         // (llm/providers/anthropic.ts). Without it the adaptive request omits the
@@ -1176,7 +1057,7 @@ async function buildAnthropicParams(
     }
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
-  return { params, toolProjection };
+  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }
 
 function resolveAnthropicTransportOptions(
@@ -1220,6 +1101,8 @@ function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     reasoning,
+    ...(options?.anthropicServerCompaction === true ? { anthropicServerCompaction: true } : {}),
+    ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   };
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
@@ -1232,19 +1115,17 @@ function resolveAnthropicTransportOptions(
     }
     return resolved;
   }
-  if (supportsAdaptiveThinking(model)) {
+  if (supportsClaudeAdaptiveThinking(model)) {
     resolved.thinkingEnabled = true;
-    resolved.effort = mapThinkingLevelToEffort(reasoning, model) as NonNullable<
-      AnthropicOptions["effort"]
-    >;
+    resolved.effort = resolveAnthropicThinkingEffort(model, reasoning);
     return resolved;
   }
-  const adjusted = adjustMaxTokensForThinking({
+  const adjusted = adjustMaxTokensForThinking(
     baseMaxTokens,
-    modelMaxTokens: reasoningModelMaxTokens,
-    reasoningLevel: reasoning,
-    customBudgets: options?.thinkingBudgets,
-  });
+    reasoningModelMaxTokens,
+    reasoning === "max" ? "high" : reasoning,
+    options?.thinkingBudgets,
+  );
   // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
   // consumers (payload, replay, temperature, tool-choice) see consistent state.
   const thinkingEnabled = adjusted.thinkingBudget >= 1024;
@@ -1274,7 +1155,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // Classifier refusals can invalidate partial output, so no event is safe
       // to expose until the terminal stop reason is known.
       const refusalBuffer = usesClaudeStreamingRefusalContract(model)
-        ? createDeferredEventBuffer<unknown>(stream, () =>
+        ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
             notifyLlmRequestActivity(options?.signal),
           )
         : undefined;
@@ -1283,6 +1164,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
       // swaps this to the fallback model's cost table.
       let costModel = model;
       let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
+      let usedCompactionReplay = false;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1302,6 +1184,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           isOAuthToken,
           transportOptions,
         );
+        usedCompactionReplay = builtParams.usedCompactionReplay;
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
         const nextParams = await transportOptions.onPayload?.(params, model);
@@ -1315,6 +1198,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
+        const sealedToolCalls: Array<{
+          block: Extract<TransportContentBlock, { type: "toolCall" }>;
+          contentIndex: number;
+        }> = [];
+        const compactionCapture = createCompactionCapture(output, model, transportOptions);
         // Signature deltas are opaque and only complete at content_block_stop.
         // Keep partial bytes out of output so interrupted streams cannot poison replay.
         const pendingThinkingSignatures = new Map<number, string>();
@@ -1357,8 +1245,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             eventSink.push({
               type: "thinking_start",
               contentIndex,
-              partial: output as never,
+              partial: output,
             });
+          }
+          if (contentIndex === undefined) {
+            return false;
           }
           block.thinking += text;
           block.thinkingSignature = "reasoning_content";
@@ -1366,7 +1257,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             type: "thinking_delta",
             contentIndex,
             delta: text,
-            partial: output as never,
+            partial: output,
           });
           return true;
         };
@@ -1395,15 +1286,18 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             eventSink.push({
               type: "text_start",
               contentIndex,
-              partial: output as never,
+              partial: output,
             });
+          }
+          if (contentIndex === undefined) {
+            return false;
           }
           block.text += text;
           eventSink.push({
             type: "text_delta",
             contentIndex,
             delta: text,
-            partial: output as never,
+            partial: output,
           });
           return true;
         };
@@ -1418,7 +1312,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "thinking_end",
                 contentIndex: thinkingContentIndex,
                 content: block.thinking,
-                partial: output as never,
+                partial: output,
               });
             }
           }
@@ -1433,7 +1327,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               type: "text_end",
               contentIndex: textContentIndex,
               content: block.text,
-              partial: output as never,
+              partial: output,
             });
           }
         };
@@ -1449,51 +1343,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
             output.responseModel = typeof message?.model === "string" ? message.model : undefined;
-            const promptUsage = readAnthropicPromptUsageSnapshot(usage);
-            const messageStartPromptTokens = promptUsage
-              ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
-              : 0;
-            messageStartPromptUsage = messageStartPromptTokens > 0 ? promptUsage : undefined;
-            const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
-            if (inputTokens !== undefined) {
-              output.usage.input = inputTokens;
-            }
-            const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
-            if (outputTokens !== undefined) {
-              output.usage.output = outputTokens;
-            }
-            const cacheReadTokens =
-              usage.cache_read_input_tokens == null
-                ? 0
-                : readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
-            if (cacheReadTokens !== undefined) {
-              output.usage.cacheRead = cacheReadTokens;
-            }
-            const cacheWriteTokens =
-              usage.cache_creation_input_tokens == null
-                ? 0
-                : readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
-            if (cacheWriteTokens !== undefined) {
-              output.usage.cacheWrite = cacheWriteTokens;
-            }
-            output.usage.totalTokens =
-              output.usage.input +
-              output.usage.output +
-              output.usage.cacheRead +
-              output.usage.cacheWrite;
-            if (messageStartPromptUsage && outputTokens !== undefined) {
-              output.usage.contextUsage = {
-                state: "available",
-                promptTokens: messageStartPromptTokens,
-                totalTokens: messageStartPromptTokens + output.usage.output,
-              };
-            }
+            messageStartPromptUsage = applyAnthropicMessageStartUsage(output.usage, usage);
             calculateCost(costModel, output.usage);
             // Defer start until after message_start so that pre-stream SSE errors
             // (e.g. invalid thinking signatures) arrive before any non-error event
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
             // and allowing the thinking-block recovery retry to fire.
-            eventSink.push({ type: "start", partial: output as never });
+            eventSink.push({ type: "start", partial: output });
             continue;
           }
           if (event.type === "message_stop") {
@@ -1503,6 +1359,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_start") {
             const contentBlock = event.content_block as Record<string, unknown> | undefined;
             const index = typeof event.index === "number" ? event.index : -1;
+            if (
+              transportOptions.anthropicServerCompaction === true &&
+              compactionCapture.begin(index, contentBlock, output.content.length)
+            ) {
+              continue;
+            }
             const fallbackBoundary = refusalBuffer
               ? readAnthropicFallbackBoundary(contentBlock)
               : null;
@@ -1512,6 +1374,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // events reference them, so rebuild the deferred timeline from
               // the surviving text prefix the fallback model continued from.
               refusalBuffer?.discard();
+              sealedToolCalls.length = 0;
               pendingTextEnds.length = 0;
               blockIndexes.clear();
               pendingThinkingSignatures.clear();
@@ -1520,9 +1383,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 boundary: fallbackBoundary,
                 provider: model.provider,
               });
-              // Cost intentionally mirrors top-level usage (serving attempt at
-              // serving-model rates). A mid-stream decline's billed partial is
-              // only in usage.iterations and is not folded in here.
+              // Fallback-only iteration partials stay outside the serving-model
+              // estimate. Compaction responses are the exception: usage policy
+              // aggregates their complete billed iteration list.
               costModel = {
                 ...model,
                 cost: resolveAnthropicFallbackServingModelCost({
@@ -1532,7 +1395,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 }),
               };
               calculateCost(costModel, output.usage);
-              eventSink.push({ type: "start", partial: output as never });
+              eventSink.push({ type: "start", partial: output });
               for (const [i, block] of output.content.entries()) {
                 if (block.type !== "text") {
                   continue;
@@ -1541,21 +1404,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 eventSink.push({
                   type: "text_start",
                   contentIndex: i,
-                  partial: output as never,
+                  partial: output,
                 });
                 if (block.text) {
                   eventSink.push({
                     type: "text_delta",
                     contentIndex: i,
                     delta: block.text,
-                    partial: output as never,
+                    partial: output,
                   });
                 }
                 pendingTextEnds.push({
                   type: "text_end",
                   contentIndex: i,
                   content: block.text,
-                  partial: output as never,
+                  partial: output,
                 });
               }
               continue;
@@ -1573,14 +1436,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "text_start",
                 contentIndex,
-                partial: output as never,
+                partial: output,
               });
               if (text.length > 0) {
                 eventSink.push({
                   type: "text_delta",
                   contentIndex,
                   delta: text,
-                  partial: output as never,
+                  partial: output,
                 });
               }
               continue;
@@ -1601,14 +1464,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "thinking_start",
                 contentIndex,
-                partial: output as never,
+                partial: output,
               });
               if (thinking.length > 0) {
                 eventSink.push({
                   type: "thinking_delta",
                   contentIndex,
                   delta: thinking,
-                  partial: output as never,
+                  partial: output,
                 });
               }
               continue;
@@ -1626,7 +1489,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "thinking_start",
                 contentIndex: output.content.length - 1,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1654,7 +1517,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
-                partial: output as never,
+                partial: output,
               });
             }
             continue;
@@ -1662,6 +1525,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_delta") {
             const delta = event.delta as Record<string, unknown> | undefined;
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            if (eventIndex !== undefined && compactionCapture.delta(eventIndex, delta)) {
+              continue;
+            }
             let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
             let block = index === undefined ? undefined : blocks[index];
             if (allowReasoningContentReplay) {
@@ -1682,13 +1548,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               ) {
                 const text = sanitizeTransportPayloadText(delta.content);
                 if (text.length > 0) {
-                  if (block?.type === "text") {
+                  if (block?.type === "text" && index !== undefined) {
                     block.text += text;
                     eventSink.push({
                       type: "text_delta",
                       contentIndex: index,
                       delta: text,
-                      partial: output as never,
+                      partial: output,
                     });
                     appendedContent = true;
                   } else {
@@ -1711,8 +1577,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "text_start",
                 contentIndex: index,
-                partial: output as never,
+                partial: output,
               });
+            }
+            if (index === undefined) {
+              continue;
             }
             if (
               block?.type === "text" &&
@@ -1724,7 +1593,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "text_delta",
                 contentIndex: index,
                 delta: delta.text,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1738,7 +1607,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "thinking_delta",
                 contentIndex: index,
                 delta: delta.thinking,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1754,7 +1623,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "toolcall_delta",
                 contentIndex: index,
                 delta: delta.partial_json,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1776,6 +1645,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
           if (event.type === "content_block_stop") {
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
+            if (eventIndex !== undefined && compactionCapture.complete(eventIndex)) {
+              continue;
+            }
             const pendingSignature =
               eventIndex === undefined ? undefined : pendingThinkingSignatures.get(eventIndex);
             if (eventIndex !== undefined) {
@@ -1794,7 +1666,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "text_end",
                 contentIndex: index,
                 content: block.text,
-                partial: output as never,
+                partial: output,
               });
               finishReasoningContentSidecars(event.index);
               continue;
@@ -1807,19 +1679,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "thinking_end",
                 contentIndex: index,
                 content: block.thinking,
-                partial: output as never,
+                partial: output,
               });
               finishReasoningContentSidecars(event.index);
               continue;
             }
             if (block.type === "toolCall") {
-              delete block.partialJson;
-              eventSink.push({
-                type: "toolcall_end",
-                contentIndex: index,
-                toolCall: block as never,
-                partial: output as never,
-              });
+              sealedToolCalls.push({ block, contentIndex: index });
               finishReasoningContentSidecars(event.index);
             }
             continue;
@@ -1833,59 +1699,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               if (delta.stop_reason === "refusal") {
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
-                output.stopReason = mapStopReason(delta.stop_reason);
+                output.stopReason = mapAnthropicStopReason(delta.stop_reason);
               }
             }
-            const inputTokens = readAnthropicUsageTokenCount(usage?.input_tokens);
-            if (inputTokens !== undefined) {
-              output.usage.input = inputTokens;
-            }
-            const outputTokens = readAnthropicUsageTokenCount(usage?.output_tokens);
-            if (outputTokens !== undefined) {
-              output.usage.output = outputTokens;
-            }
-            // Match the SDK stream accumulator: null means no update, not a zero counter.
-            const cacheReadTokens = readAnthropicUsageTokenCount(usage?.cache_read_input_tokens);
-            if (cacheReadTokens !== undefined) {
-              output.usage.cacheRead = cacheReadTokens;
-            }
-            const cacheWriteTokens = readAnthropicUsageTokenCount(
-              usage?.cache_creation_input_tokens,
-            );
-            if (cacheWriteTokens !== undefined) {
-              output.usage.cacheWrite = cacheWriteTokens;
-            }
-            output.usage.totalTokens =
-              output.usage.input +
-              output.usage.output +
-              output.usage.cacheRead +
-              output.usage.cacheWrite;
-            const iterationUsage = readLastAnthropicIterationUsage(usage ?? {});
-            if (iterationUsage.state === "valid") {
-              output.usage.contextUsage = {
-                state: "available",
-                promptTokens: iterationUsage.usage.contextPromptTokens,
-                totalTokens: iterationUsage.usage.totalTokens,
-              };
-            } else if (iterationUsage.state === "invalid") {
-              output.usage.contextUsage = { state: "unavailable" };
-            } else if (
-              outputTokens !== undefined &&
-              (messageStartPromptUsage !== undefined ||
-                (inputTokens !== undefined &&
-                  cacheReadTokens !== undefined &&
-                  cacheWriteTokens !== undefined))
-            ) {
-              const promptTokens =
-                output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
-              output.usage.contextUsage = {
-                state: "available",
-                promptTokens,
-                totalTokens: promptTokens + output.usage.output,
-              };
-            } else {
-              output.usage.contextUsage = { state: "unavailable" };
-            }
+            applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
             calculateCost(costModel, output.usage);
             // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
             // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
@@ -1899,7 +1716,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             flushPendingTextEnds();
           }
         }
-        if (refusalBuffer && !sawMessageStop) {
+        // Anthropic completes every SSE response with message_stop. Compatible
+        // proxy providers are not held to that first-party transport contract.
+        if (isDirectAnthropicModel(model) && !sawMessageStop) {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {
@@ -1907,6 +1726,23 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
+        }
+        if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
+          throw new Error("Provider completed stream with an incomplete tool call");
+        }
+        finalizeTerminalToolCallArguments(
+          sealedToolCalls.map(({ block }) => block),
+          (block) =>
+            block.partialJson && block.partialJson.length > 0 ? block.partialJson : block.arguments,
+        );
+        for (const sealed of sealedToolCalls) {
+          delete sealed.block.partialJson;
+          eventSink.push({
+            type: "toolcall_end",
+            contentIndex: sealed.contentIndex,
+            toolCall: sealed.block,
+            partial: output,
+          });
         }
         refusalBuffer?.flush();
         // Backstop: streaming tags commentary at the tool-boundary above, but
@@ -1926,6 +1762,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (refusalBuffer) {
           refusalBuffer.discard();
           output.content = [];
+        } else {
+          output.content = output.content.filter((block) => block.type !== "toolCall");
+        }
+        if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
+          suppressAnthropicCompaction(output, model, options);
         }
         failTransportStream({
           stream,
@@ -1940,7 +1781,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         });
       }
     })();
-    return eventStream as ReturnType<StreamFn>;
+    return eventStream;
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

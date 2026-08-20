@@ -1,10 +1,10 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
-import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasAgentRosterProperty,
   listAgentEntries,
+  listAgentEntriesWithSource,
   readAgentRosterProperty,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
@@ -13,8 +13,16 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
+import { containsEnvVarReference } from "./env-substitution.js";
+import { coerceConfig } from "./io.read-helpers.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
+import {
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+  hasUnresolvedConfigPathInSubtree,
+} from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -26,15 +34,6 @@ class DuplicateAgentRosterIdError extends Error {
   constructor(agentId: string) {
     super(`Config write cannot canonicalize duplicate normalized agent id "${agentId}".`);
     this.name = "DuplicateAgentRosterIdError";
-  }
-}
-
-class UnresolvedAgentRosterIdError extends Error {
-  constructor(authoredId: string) {
-    super(
-      `Config write cannot safely resolve an explicitly replaced agent list slot for id "${authoredId}"; use a resolved literal id before writing the roster.`,
-    );
-    this.name = "UnresolvedAgentRosterIdError";
   }
 }
 
@@ -51,16 +50,6 @@ function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void 
     normalizedIds.add(agentId);
   }
 }
-
-type ManifestModelIdNormalizationProvider = {
-  aliases?: Record<string, string>;
-  stripPrefixes?: string[];
-  prefixWhenBare?: string;
-  prefixWhenBareAfterAliasStartsWith?: {
-    modelPrefix: string;
-    prefix: string;
-  }[];
-};
 
 // Clone config fragments before patching so mutation preparation never aliases callers.
 function cloneUnknown<T>(value: T): T {
@@ -322,6 +311,100 @@ function deletePathValue(value: unknown, path: string[]): unknown {
   return next;
 }
 
+function normalizeTouchedAgentModelMapEntries(params: {
+  projectedSource: unknown;
+  patch: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitSetValueSource: unknown;
+}): unknown {
+  const touchedMaps = new Map<string, { path: string[]; canonicalKeys: Set<string> }>();
+  const addKey = (path: string[], modelId: string) => {
+    const serialized = path.join("\0");
+    const target = touchedMaps.get(serialized) ?? { path, canonicalKeys: new Set<string>() };
+    target.canonicalKeys.add(normalizeAgentModelRefForConfig(modelId));
+    touchedMaps.set(serialized, target);
+  };
+
+  const defaultsModelsPatch = getPathValue(params.patch, ["agents", "defaults", "models"]);
+  if (isRecord(defaultsModelsPatch)) {
+    for (const modelId of Object.keys(defaultsModelsPatch)) {
+      addKey(["agents", "defaults", "models"], modelId);
+    }
+  }
+  const entriesPatch = getPathValue(params.patch, ["agents", "entries"]);
+  if (isRecord(entriesPatch)) {
+    for (const [agentId, entryPatch] of Object.entries(entriesPatch)) {
+      if (isRecord(entryPatch) && isRecord(entryPatch.models)) {
+        for (const modelId of Object.keys(entryPatch.models)) {
+          addKey(["agents", "entries", agentId, "models"], modelId);
+        }
+      }
+    }
+  }
+  const explicitModelMaps: string[][] = [["agents", "defaults", "models"]];
+  const explicitEntries = getPathValue(params.explicitSetValueSource, ["agents", "entries"]);
+  if (isRecord(explicitEntries)) {
+    for (const agentId of Object.keys(explicitEntries)) {
+      explicitModelMaps.push(["agents", "entries", agentId, "models"]);
+    }
+  }
+  for (const modelMapPath of explicitModelMaps) {
+    for (const explicitPath of params.explicitSetPaths ?? []) {
+      if (pathStartsWith(explicitPath, modelMapPath) && explicitPath.length > modelMapPath.length) {
+        const modelId = explicitPath[modelMapPath.length];
+        if (modelId) {
+          addKey(modelMapPath, modelId);
+        }
+        continue;
+      }
+      if (
+        !pathStartsWith(explicitPath, modelMapPath) &&
+        !pathStartsWith(modelMapPath, explicitPath)
+      ) {
+        continue;
+      }
+      const explicitModels = getPathValue(params.explicitSetValueSource, modelMapPath);
+      if (!isRecord(explicitModels)) {
+        continue;
+      }
+      for (const modelId of Object.keys(explicitModels)) {
+        addKey(modelMapPath, modelId);
+      }
+    }
+  }
+
+  let next = params.projectedSource;
+  for (const { path, canonicalKeys } of touchedMaps.values()) {
+    const models = getPathValue(next, path);
+    if (!isRecord(models)) {
+      continue;
+    }
+    const touchedEntries: Array<[string, unknown]> = [];
+    const untouchedEntries: Array<[string, unknown]> = [];
+    let hasRetiredTouchedKey = false;
+    for (const [modelId, entry] of Object.entries(models)) {
+      const normalizedModelId = normalizeAgentModelRefForConfig(modelId);
+      if (!canonicalKeys.has(normalizedModelId)) {
+        untouchedEntries.push([modelId, entry]);
+        continue;
+      }
+      touchedEntries.push([modelId, entry]);
+      hasRetiredTouchedKey ||= normalizedModelId !== modelId;
+    }
+    if (hasRetiredTouchedKey) {
+      const normalizedTouchedEntries = normalizeAgentModelMapForConfig(
+        Object.fromEntries(touchedEntries),
+      );
+      next = setPathValue(
+        next,
+        path,
+        Object.fromEntries([...untouchedEntries, ...Object.entries(normalizedTouchedEntries)]),
+      );
+    }
+  }
+  return next;
+}
+
 function preserveSourceValueAtPath(params: {
   persistedCandidate: unknown;
   sourceConfig: unknown;
@@ -416,176 +499,6 @@ function preserveAuthoredAgentParams(params: {
     });
   }
   return next;
-}
-
-function normalizeAgentModelConfigForWrite(value: unknown): unknown {
-  if (typeof value === "string") {
-    const normalized = normalizeAgentModelRefForConfig(value);
-    return normalized === value ? value : normalized;
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  let mutated = false;
-  const next: Record<string, unknown> = { ...value };
-  if (typeof value.primary === "string") {
-    const primary = normalizeAgentModelRefForConfig(value.primary);
-    if (primary !== value.primary) {
-      next.primary = primary;
-      mutated = true;
-    }
-  }
-  if (Array.isArray(value.fallbacks)) {
-    const fallbacks = value.fallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-    if (!isDeepStrictEqual(fallbacks, value.fallbacks)) {
-      next.fallbacks = fallbacks;
-      mutated = true;
-    }
-  }
-  return mutated ? next : value;
-}
-
-const AGENT_MODEL_CONFIG_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
-
-function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
-  const value = getPathValue(config, path);
-  if (value === undefined) {
-    return config;
-  }
-  const normalizedModel = normalizeAgentModelConfigForWrite(value);
-  return normalizedModel !== value ? setPathValue(config, path, normalizedModel) : config;
-}
-
-function normalizeModelStringPathForWrite(config: unknown, path: string[]): unknown {
-  const value = getPathValue(config, path);
-  if (typeof value !== "string") {
-    return config;
-  }
-  const normalized = normalizeAgentModelRefForConfig(value);
-  return normalized !== value ? setPathValue(config, path, normalized) : config;
-}
-
-function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]): unknown {
-  const agent = getPathValue(config, path);
-  if (!isRecord(agent)) {
-    return config;
-  }
-
-  let next = config;
-  for (const key of AGENT_MODEL_CONFIG_KEYS) {
-    next = normalizeModelConfigPathForWrite(next, [...path, key]);
-  }
-  for (const key of ["image", "video", "music"] as const) {
-    next = normalizeModelConfigPathForWrite(next, [...path, "mediaModels", key]);
-  }
-  next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
-  next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
-  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "memoryFlush", "model"]);
-
-  const models = getPathValue(next, [...path, "models"]);
-  if (isRecord(models)) {
-    const normalizedModels = normalizeAgentModelMapForConfig(models);
-    if (normalizedModels !== models) {
-      next = setPathValue(next, [...path, "models"], normalizedModels);
-    }
-  }
-  return next;
-}
-
-function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
-  const entries = getPathValue(config, ["agents", "entries"]);
-  if (!isRecord(entries)) {
-    return config;
-  }
-
-  let mutated = false;
-  const nextEntries = Object.fromEntries(
-    Object.entries(entries).map(([agentId, agent]) => {
-      if (!isRecord(agent)) {
-        return [agentId, agent];
-      }
-
-      const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
-        agent: unknown;
-      };
-      if (normalized.agent !== agent) {
-        mutated = true;
-        return [agentId, normalized.agent];
-      }
-      return [agentId, agent];
-    }),
-  );
-
-  return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
-}
-
-function normalizeToolsModelRefsForWrite(config: unknown): unknown {
-  return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
-}
-
-function normalizeModelProviderCatalogRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
-  const providers = getPathValue(config, ["models", "providers"]);
-  if (!isRecord(providers)) {
-    return config;
-  }
-
-  let mutated = false;
-  const nextProviders: Record<string, unknown> = { ...providers };
-  for (const [provider, providerConfig] of Object.entries(providers)) {
-    if (!isRecord(providerConfig) || !Array.isArray(providerConfig.models)) {
-      continue;
-    }
-
-    let providerMutated = false;
-    const models = providerConfig.models.map((model) => {
-      if (!isRecord(model) || typeof model.id !== "string") {
-        return model;
-      }
-      const trimmed = model.id.trim();
-      if (!trimmed) {
-        return model;
-      }
-      const id = normalizeConfiguredProviderCatalogModelId(
-        provider,
-        trimmed,
-        modelIdNormalizationPolicies,
-      );
-      if (id === model.id) {
-        return model;
-      }
-      providerMutated = true;
-      return { ...model, id };
-    });
-
-    if (providerMutated) {
-      nextProviders[provider] = { ...providerConfig, models };
-      mutated = true;
-    }
-  }
-
-  return mutated ? setPathValue(config, ["models", "providers"], nextProviders) : config;
-}
-
-function normalizeModelRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
-  return normalizeModelProviderCatalogRefsForWrite(
-    normalizeToolsModelRefsForWrite(
-      normalizeAgentListModelRefsForWrite(
-        normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
-      ),
-    ),
-    modelIdNormalizationPolicies,
-  );
 }
 
 type IncludeSiblingProjection =
@@ -997,20 +910,29 @@ function assertCanonicalAgentRosterRetainsEntries(params: {
 
 type ProjectedRosterValue = { present: false } | { present: true; value: unknown };
 
-function containsAuthoredRosterReference(value: unknown): boolean {
+function containsAuthoredRosterReference(value: unknown, includeEnvStrings: boolean): boolean {
   if (typeof value === "string") {
-    return value.includes("${");
+    return includeEnvStrings && containsEnvVarReference(value);
   }
   if (Array.isArray(value)) {
-    return value.some(containsAuthoredRosterReference);
+    return value.some((entry) => containsAuthoredRosterReference(entry, includeEnvStrings));
   }
   if (!isRecord(value)) {
     return false;
   }
-  if (typeof value.source === "string" && typeof value.id === "string") {
-    return true;
-  }
-  return Object.values(value).some(containsAuthoredRosterReference);
+  return (
+    isSecretRefShape(value) ||
+    Object.values(value).some((entry) => containsAuthoredRosterReference(entry, includeEnvStrings))
+  );
+}
+
+function indexAgentRosterSourcePaths(config: OpenClawConfig): Map<string, string> {
+  return new Map(
+    listAgentEntriesWithSource(config).map(({ entry, source }) => [
+      normalizeAgentId(entry.id),
+      source.kind === "list" ? `agents.list[${source.index}]` : `agents.entries.${source.key}`,
+    ]),
+  );
 }
 
 function projectAuthoredRosterValue(params: {
@@ -1195,6 +1117,11 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     listAgentEntries(params.nextConfig as OpenClawConfig),
   ) as Record<string, unknown>;
   const explicitRoster = readAgentRosterProperty(params.valueSource);
+  const rosterFactOwner = coerceConfig(
+    params.sourceConfigBeforeMigrations ?? params.rootAuthoredConfig,
+  );
+  const sourcePathsByAgentId = indexAgentRosterSourcePaths(rosterFactOwner);
+  const resolutionEvaluated = getConfigResolutionFacts(rosterFactOwner) !== null;
   const renamedLegacyIndexes = new Set(
     (params.explicitSetPaths ?? []).flatMap((path) => {
       if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
@@ -1229,7 +1156,12 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
         ? explicitRoster.value[index]
         : undefined;
-    if (isRecord(entry) && typeof entry.id === "string" && entry.id.includes("${")) {
+    if (
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      (hasUnresolvedConfigPath(rosterFactOwner, `agents.list[${index}].id`) ||
+        (!resolutionEvaluated && containsEnvVarReference(entry.id)))
+    ) {
       throw new Error(
         "Config write cannot safely resolve an env-backed renamed agent id; set the resolved literal id or rename the authored entry directly.",
       );
@@ -1252,7 +1184,10 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         return resolvedEntry.id;
       }
     }
-    return explicitId.includes("${") ? undefined : explicitId;
+    return hasUnresolvedConfigPath(rosterFactOwner, `agents.list[${index}].id`) ||
+      containsEnvVarReference(explicitId)
+      ? undefined
+      : explicitId;
   };
   if (explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)) {
     const normalizedIds = new Set<string>();
@@ -1287,7 +1222,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
                 : entry.id;
             if (typeof id !== "string") {
               if (structurallyExplicitLegacyIndexes.has(index) && typeof entry.id === "string") {
-                throw new UnresolvedAgentRosterIdError(entry.id);
+                throw new Error(
+                  `Config write cannot safely resolve an explicitly replaced agent list slot for id "${entry.id}"; use a resolved literal id before writing the roster.`,
+                );
               }
               return [];
             }
@@ -1394,7 +1331,13 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const ambiguousRemovedIds = removedIds.filter((id) => !claimedPriorIds.has(id));
   if (
     ambiguousAddedIds.length > 0 &&
-    ambiguousRemovedIds.some((id) => containsAuthoredRosterReference(authoredEntries[id]))
+    ambiguousRemovedIds.some((id) => {
+      const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(id));
+      return (
+        containsAuthoredRosterReference(authoredEntries[id], !resolutionEvaluated) ||
+        Boolean(sourcePath && hasUnresolvedConfigPathInSubtree(rosterFactOwner, sourcePath))
+      );
+    })
   ) {
     throw new Error(
       "Config write cannot safely match renamed agent entries with authored references; rename agents one at a time.",
@@ -1420,9 +1363,14 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       const value = projected.present ? projected.value : nextEntry;
       if (isRecord(value) && isRecord(nextEntry)) {
         if (Object.hasOwn(nextEntry, "default")) {
+          const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(priorId));
           const preservesAuthoredReference =
             Object.hasOwn(value, "default") &&
-            containsAuthoredRosterReference(value.default) &&
+            (containsAuthoredRosterReference(value.default, !resolutionEvaluated) ||
+              Boolean(
+                sourcePath &&
+                hasUnresolvedConfigPathInSubtree(rosterFactOwner, `${sourcePath}.default`),
+              )) &&
             ((Object.hasOwn(runtimeEntries, priorId) &&
               isRecord(runtimeEntries[priorId]) &&
               isDeepStrictEqual(runtimeEntries[priorId].default, nextEntry.default)) ||
@@ -1581,10 +1529,15 @@ export function resolvePersistCandidateForWrite(params: {
   explicitSetValueSource?: unknown;
   allowedAgentRosterRemovals?: readonly string[];
   allowIncludeAncestorExplicitSetPaths?: boolean;
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
+  preserveLegacyAgentRoster?: boolean;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
-  const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
+  const projectedSource = normalizeTouchedAgentModelMapEntries({
+    projectedSource: projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig),
+    patch,
+    explicitSetPaths: params.explicitSetPaths,
+    explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
+  });
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
   const persistCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
@@ -1643,8 +1596,6 @@ export function resolvePersistCandidateForWrite(params: {
   if (persistCanonicalRoster) {
     persistedBase = deletePathValue(persistedBase, ["agents", "entries"]);
     persistedBase = deletePathValue(persistedBase, ["agents", "list"]);
-  } else if (canCanonicalizeAgentRoster(params.nextConfig)) {
-    persistedBase = restoreAuthoredAgentRoster(persistedBase, rootAuthoredConfig);
   }
   const persisted = injectExplicitlySetPaths({
     valueSource: explicitSetValueSource,
@@ -1665,19 +1616,25 @@ export function resolvePersistCandidateForWrite(params: {
         persistedCandidate: persisted,
       })
     : persisted;
+  const preserveAuthoredRoster =
+    canCanonicalizeAgentRoster(params.nextConfig) || params.preserveLegacyAgentRoster === true;
+  const withAuthoredRoster =
+    persistCanonicalRoster || !preserveAuthoredRoster
+      ? withPreservedIncludes
+      : restoreAuthoredAgentRoster(withPreservedIncludes, rootAuthoredConfig);
   if (persistCanonicalRoster) {
     // A roster rewrite must never drop entries the mutation did not explicitly delete.
     // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
     assertCanonicalAgentRosterRetainsEntries({
       currentConfig: params.sourceConfig,
-      canonicalConfig: withPreservedIncludes,
+      canonicalConfig: withAuthoredRoster,
       allowedRemovals: params.allowedAgentRosterRemovals,
     });
   }
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,
     nextConfig: params.nextConfig,
-    persistedCandidate: withPreservedIncludes,
+    persistedCandidate: withAuthoredRoster,
   });
   const withAuthoredParams = preserveAuthoredAgentParams({
     sourceConfig: params.sourceConfig,
@@ -1686,7 +1643,7 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
-  return normalizeModelRefsForWrite(withAuthoredParams, params.modelIdNormalizationPolicies);
+  return withAuthoredParams;
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

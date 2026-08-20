@@ -1,4 +1,5 @@
 // Defines plugin entry and install configuration types.
+import type { InstallRecordBase } from "./types.installs.js";
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
@@ -29,10 +30,17 @@ export type PluginEntryConfig = {
     /** Explicitly allow this plugin to request a model override for api.runtime.llm.complete. */
     allowModelOverride?: boolean;
     /**
-     * Allowed completion model override targets as canonical provider/model refs.
+     * Allowed override targets as canonical provider/model refs.
      * Use "*" to explicitly allow any model for this plugin.
      */
     allowedModels?: string[];
+    /**
+     * Allowed models for every completion, including host-resolved defaults and overrides.
+     * Use "*" to explicitly allow any model for this plugin.
+     */
+    allowedCompletionModels?: string[];
+    /** Allow explicit auth-profile selection for isolated agent-runtime completions. */
+    allowAuthProfileOverride?: boolean;
     /** Explicitly allow this plugin to run completions against a non-default agent id. */
     allowAgentIdOverride?: boolean;
   };
@@ -75,4 +83,3 @@ export type PluginsConfig = {
    */
   installs?: Record<string, PluginInstallRecord>;
 };
-import type { InstallRecordBase } from "./types.installs.js";

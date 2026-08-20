@@ -2,6 +2,8 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { TailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "../../state/openclaw-agent-db-migration-required.js";
 import { testing } from "./run.test-support.js";
 
 const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
@@ -20,6 +22,20 @@ function createLogger() {
 }
 
 describe("supervised gateway lock recovery", () => {
+  it("uses exit 78 for an ambiguous persistent Tailscale route", () => {
+    expect(
+      testing.resolveGatewayStartupFailureExitCode(new TailscaleRouteOwnershipConflictError()),
+    ).toBe(78);
+  });
+
+  it("uses exit 78 for offline agent database migration requirements", () => {
+    expect(
+      testing.resolveGatewayStartupFailureExitCode(
+        new OpenClawAgentDatabaseMediaMigrationRequiredError("/tmp/openclaw-agent.sqlite", 14),
+      ),
+    ).toBe(78);
+  });
+
   it("does not retry gateway lock errors outside a supervisor", async () => {
     const err = new GatewayLockError("gateway already running");
     const startLoop = vi.fn(async () => {
@@ -91,6 +107,30 @@ describe("supervised gateway lock recovery", () => {
     expect(startLoop).toHaveBeenCalledTimes(1);
     expect(probeHealth).toHaveBeenCalledWith({ host: "127.0.0.1", port: 18789 });
     expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(78);
+  });
+
+  it("preserves an agent-embedded owner error under a supervisor", async () => {
+    const err = new GatewayLockError(
+      "another embedded OpenClaw state writer is active (pid 123); lock timeout after 5000ms",
+    );
+    const startLoop = vi.fn(async () => {
+      throw err;
+    });
+    const probeHealth = vi.fn(async () => true);
+
+    await expect(
+      testing.runGatewayLoopWithSupervisedLockRecovery({
+        startLoop,
+        supervisor: "systemd",
+        port: 18789,
+        healthHost: "127.0.0.1",
+        log: createLogger(),
+        probeHealth,
+      }),
+    ).rejects.toBe(err);
+
+    expect(startLoop).toHaveBeenCalledTimes(1);
+    expect(probeHealth).not.toHaveBeenCalled();
   });
 
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {

@@ -1,5 +1,7 @@
 // Irc plugin module implements monitor behavior.
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
@@ -19,7 +21,7 @@ type IrcMonitorOptions = {
   config?: CoreConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
   ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
@@ -135,6 +137,7 @@ export async function monitorIrcProvider(
     if (stopped || monitorAbort.signal.aborted || reconnectTimer) {
       return;
     }
+    opts.statusSink?.({ lifecycle: "recovering" });
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connect().catch((error: unknown) => {
@@ -215,6 +218,7 @@ export async function monitorIrcProvider(
       return;
     }
     ingress.start();
+    opts.statusSink?.(channelReadyPatch());
 
     logger.info(
       `[${account.accountId}] connected to ${account.host}:${account.port}${account.tls ? " (tls)" : ""} as ${nextClient.nick}`,

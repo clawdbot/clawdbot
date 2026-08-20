@@ -36,6 +36,16 @@ function requireLmstudioResetValidator(): NonNullable<
   return validator;
 }
 
+function requireAppGuidedDetectAvailability(): NonNullable<
+  NonNullable<ProviderAuthMethod["appGuidedSetup"]>["detectAvailability"]
+> {
+  const method = registerProvider().auth[0];
+  if (!method?.appGuidedSetup?.detectAvailability) {
+    throw new Error("expected the LM Studio provider to register detectAvailability");
+  }
+  return method.appGuidedSetup.detectAvailability;
+}
+
 function createLmstudioResetValidationContext(
   opts: Record<string, unknown> = {},
   resolvedApiKey: { key: string; source: "flag" | "env" | "profile" } | null = null,
@@ -78,11 +88,24 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockReset();
   });
 
+  it("registers llama.cpp GBNF tool-schema projection", () => {
+    expect(registerProvider()).toMatchObject({
+      normalizeToolSchemas: expect.any(Function),
+      inspectToolSchemas: expect.any(Function),
+    });
+  });
+
   it("preflights the requested LM Studio model before destructive non-interactive reset", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "qwen/qwen3.5-9b" }],
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/api/v1/",
@@ -101,11 +124,79 @@ describe("lmstudio plugin", () => {
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("detects a reachable LM Studio service without requiring a loaded model", async () => {
+    const detectAvailability = requireAppGuidedDetectAvailability();
+    fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
+
+    await expect(detectAvailability({ config: {}, env: {} })).resolves.toBe(true);
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      timeoutMs: 5000,
+    });
+  });
+
+  it("does not mark an unreachable LM Studio service as available", async () => {
+    const detectAvailability = requireAppGuidedDetectAvailability();
+    fetchLmstudioModelsMock.mockResolvedValue({ reachable: false, models: [] });
+
+    await expect(detectAvailability({ config: {}, env: {} })).resolves.toBe(false);
+  });
+
+  it("uses the Docker host default for availability detection during Docker setup", async () => {
+    const detectAvailability = requireAppGuidedDetectAvailability();
+    fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
+
+    await detectAvailability({
+      config: {},
+      env: { OPENCLAW_DOCKER_SETUP: "1" },
+    });
+
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://host.docker.internal:1234/v1",
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      timeoutMs: 5000,
+    });
+  });
+
+  it("detects availability through an explicitly configured provider base URL", async () => {
+    const detectAvailability = requireAppGuidedDetectAvailability();
+    fetchLmstudioModelsMock.mockResolvedValue({ reachable: true, status: 200, models: [] });
+
+    await detectAvailability({
+      config: {
+        models: {
+          mode: "merge",
+          providers: {
+            lmstudio: {
+              api: "openai-completions",
+              baseUrl: "http://lmstudio.internal:1234/api/v1/",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      timeoutMs: 5000,
+    });
+  });
+
   it("uses the provider-specific API key for read-only reset discovery", async () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "qwen/qwen3.5-9b" }],
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext(
       {
@@ -166,7 +257,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "phi-4" }],
+      models: [
+        {
+          type: "llm",
+          key: "phi-4",
+          loaded_instances: [{ id: "phi", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/v1",
@@ -185,7 +282,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "qwen/qwen3.5-9b" }],
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/v1",
@@ -213,7 +316,26 @@ describe("lmstudio plugin", () => {
     await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      "No LM Studio LLM models were found at http://lmstudio.internal:1234/v1.\nLoad at least one model in LM Studio (or run lms load), then re-run setup.",
+      "No loaded LM Studio LLM models were found at http://lmstudio.internal:1234/v1.\nLoad a model in LM Studio (or run lms load <model>), then re-run setup.",
+    );
+    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects an installed but unloaded LM Studio model before destructive reset", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [{ type: "llm", key: "qwen/qwen3.5-9b", loaded_instances: [] }],
+    });
+    const ctx = createLmstudioResetValidationContext({
+      customBaseUrl: "http://lmstudio.internal:1234/v1",
+      customModelId: "qwen/qwen3.5-9b",
+    });
+
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
+
+    expect(ctx.runtime.error).toHaveBeenCalledWith(
+      "LM Studio model qwen/qwen3.5-9b is installed but not loaded at http://lmstudio.internal:1234/v1.\nLoad that model in LM Studio, then re-run setup.",
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
   });

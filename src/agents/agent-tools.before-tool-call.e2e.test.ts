@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
  */
 import os from "node:os";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
@@ -38,6 +39,7 @@ import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -279,13 +281,16 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
-  function createGenericReadRepeatFixture() {
+  function createGenericReadRepeatFixture(
+    loopDetectionContext?: Parameters<typeof createWrappedTool>[2],
+  ) {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
     return {
-      tool: createWrappedTool("read", execute),
+      tool: createWrappedTool("read", execute, loopDetectionContext),
+      execute,
       params: { path: "/tmp/file" },
     };
   }
@@ -341,12 +346,7 @@ describe("before_tool_call loop detection behavior", () => {
     return result;
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function requireArray(value: unknown, label: string): unknown[] {
     expect(Array.isArray(value)).toBe(true);
@@ -493,6 +493,49 @@ describe("before_tool_call loop detection behavior", () => {
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+  });
+
+  it("blocks changing-argument terminal exec failures and escalates vetoes", async () => {
+    const output = "Traceback: missing package\n\n(Command exited with code 1)";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: output }],
+      details: { status: "completed", exitCode: 1, aggregated: output },
+    });
+    const tool = createWrappedTool("exec", execute);
+
+    await withToolLoopEvents(async (emitted) => {
+      for (let index = 0; index <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const result = await tool.execute(
+          `exec-semantic-${index}`,
+          { command: `python job-${index}.py` },
+          undefined,
+          undefined,
+        );
+        if (index >= CRITICAL_THRESHOLD) {
+          expectToolLoopBlockedResult(
+            result,
+            index === GLOBAL_CIRCUIT_BREAKER_THRESHOLD
+              ? "global circuit breaker"
+              : "identical outcomes",
+          );
+        }
+      }
+
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+      expect(emitted.find((event) => event.detector === "generic_repeat")).toMatchObject({
+        level: "critical",
+        action: "block",
+        count: CRITICAL_THRESHOLD,
+        toolName: "exec",
+      });
+      expect(emitted.at(-1)).toMatchObject({
+        detector: "global_circuit_breaker",
+        level: "critical",
+        action: "block",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+        toolName: "exec",
+      });
+    });
   });
 
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {
@@ -918,12 +961,29 @@ describe("before_tool_call loop detection behavior", () => {
 
   it("escalates repeated critical vetoes to the global circuit breaker", async () => {
     await withToolLoopEvents(async (emitted) => {
-      const { tool, params } = createGenericReadRepeatFixture();
+      const runId = "codex-native-global-breaker";
+      const { tool, params, execute } = createGenericReadRepeatFixture({
+        ...enabledLoopDetectionContext,
+        runId,
+      });
 
-      for (let i = 0; i <= 30; i += 1) {
-        await tool.execute(`read-global-${i}`, params, undefined, undefined);
+      for (let i = 0; i <= GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `read-global-${i}`;
+        const nativeOutcome = await runBeforeToolCallHook({
+          toolName: "read",
+          params,
+          toolCallId,
+          ctx: {
+            agentId: enabledLoopDetectionContext.agentId,
+            sessionKey: enabledLoopDetectionContext.sessionKey,
+            runId,
+          },
+        });
+        expect(nativeOutcome.blocked).toBe(false);
+        await tool.execute(toolCallId, params, undefined, undefined);
       }
 
+      expect(execute).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
       expect(emitted.at(-1)).toMatchObject({
         type: "tool.loop",
         level: "critical",
@@ -1145,6 +1205,7 @@ describe("before_tool_call loop detection behavior", () => {
         agentId: "main",
         sessionKey: "session-key",
         runId: "run-1",
+        loopDetection: { enabled: true },
       },
     );
 
@@ -1435,6 +1496,15 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+      expect(consumeRunSkillUsage("run-1")).toEqual([
+        {
+          name: "demo-skill",
+          source: "workspace",
+          activation: "read",
+          skillFile: skillFilePath,
+        },
+      ]);
+      expect(consumeRunSkillUsage("run-1")).toEqual([]);
     });
   });
 
@@ -1954,12 +2024,7 @@ describe("before_tool_call requireApproval handling", () => {
   let hookRunner: TestHookRunner;
   const mockCallGateway = vi.mocked(callGatewayTool);
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function requireHookCall(
     index: number,
@@ -3110,6 +3175,80 @@ describe("before_tool_call requireApproval handling", () => {
     expect(requestParams.turnSourceTo).toBeUndefined();
     expect(requestParams.turnSourceAccountId).toBeUndefined();
     expect(requestParams.turnSourceThreadId).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "cron",
+      trigger: "cron",
+      reason: "Plugin approval unavailable: cron runs have no approval-capable initiating surface.",
+    },
+    {
+      label: "heartbeat hook",
+      trigger: "heartbeat",
+      reason:
+        "Plugin approval unavailable: heartbeat runs have no approval-capable initiating surface.",
+    },
+    {
+      label: "non-interactive CLI",
+      trigger: "user",
+      reason:
+        "Plugin approval unavailable: non-interactive CLI runs have no approval-capable initiating surface.",
+    },
+  ])("fails fast when a $label run requires plugin approval", async ({ trigger, reason }) => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Unattended approval",
+        description: "Command needs review",
+        onResolution,
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "gh run view 1" },
+      ctx: { agentId: "main", sessionKey: "main", trigger },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      disposition: "failed",
+      deniedReason: "plugin-approval-unavailable",
+      reason,
+      params: { command: "gh run view 1" },
+    });
+    expect(mockCallGateway).not.toHaveBeenCalled();
+    expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("keeps waiting when an interactive approval surface is bound", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Interactive approval",
+        description: "CLI command needs review",
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "interactive-id", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "gh run view 1" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        trigger: "user",
+        approvalReviewerDeviceId: "device-tui-reviewer",
+      },
+    });
+
+    expect(result).toMatchObject({ blocked: false, approvalResolution: "allow-once" });
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
   });
 });
 

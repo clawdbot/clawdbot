@@ -11,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  registerNodeSqliteKyselyQueryErrorHandler,
 } from "./kysely-sync.js";
 
 type SyncHelperTestDatabase = {
@@ -375,6 +376,26 @@ describe("kysely sync helpers", () => {
     expect(prepares.calls()).toBe(2);
   });
 
+  it("reports query failures without replacing the original database error", () => {
+    database = new DatabaseSync(":memory:");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const malformedJson = db.selectNoFrom(
+      /* kysely-allow-raw: failure reporting needs a deterministic SQLite step error. */
+      sql<string>`json(${"{"})`.as("value"),
+    );
+    const observed: unknown[] = [];
+    registerNodeSqliteKyselyQueryErrorHandler(database, (error) => {
+      observed.push(error);
+      throw new Error("handler failure");
+    });
+
+    const thrown = captureError(() => executeSqliteQuerySync(database!, malformedJson));
+
+    expect(observed).toEqual([thrown]);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/malformed JSON/iu);
+  });
+
   it("preserves close return values and double-close errors", () => {
     const baseline = new DatabaseSync(":memory:");
     expect(baseline.close()).toBeUndefined();
@@ -583,7 +604,7 @@ function runRetentionScenario(options: {
       };
     }
 
-    process.stdout.write(JSON.stringify(await runScenario()));
+    process.stdout.write(JSON.stringify(await runScenario()), () => process.exit(0));
   `;
   const result = spawnSync(
     process.execPath,

@@ -1,29 +1,27 @@
 // Zalouser tests cover monitor.account scope plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send.test-mocks.js";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 import {
   createRawZalouserMessageFromNormalized,
   waitForZalouserIngressVerdict,
   withZalouserIngressTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
-import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 
 type ZaloJsModule = typeof import("./zalo-js.js");
 type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
@@ -148,5 +146,50 @@ describe("zalouser monitor pairing account scoping", () => {
     expect(pairingRequest.id).toBe("attacker");
     expect(pairingRequest.accountId).toBe("beta");
     expect(sendMessageZalouserMock).toHaveBeenCalled();
+  });
+});
+
+describe("zalouser monitor lifecycle", () => {
+  it("publishes ready after the listener starts", async () => {
+    setZalouserRuntime({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime);
+    startZaloListenerMock.mockResolvedValueOnce({ stop: vi.fn() });
+    const statusSink = vi.fn();
+
+    await withZalouserIngressTestQueue(async (ingressQueue) => {
+      const abortController = new AbortController();
+      const run = monitorZalouserProvider({
+        account: {
+          accountId: "default",
+          enabled: true,
+          profile: "default",
+          authenticated: true,
+          config: {},
+        },
+        config: {},
+        runtime: createZalouserRuntimeEnv(),
+        abortSignal: abortController.signal,
+        statusSink,
+        ingressQueue,
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(statusSink).toHaveBeenCalledWith({
+            running: true,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        });
+      } finally {
+        abortController.abort();
+        await run;
+      }
+    });
   });
 });

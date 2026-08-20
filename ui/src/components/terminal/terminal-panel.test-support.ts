@@ -3,7 +3,9 @@ import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 export type CreateOptions = {
   parent: HTMLElement;
+  readOnly?: boolean;
   terminalOptions?: {
+    fontSize?: number;
     fontFamily?: string;
     theme?: { background?: string; foreground?: string };
   };

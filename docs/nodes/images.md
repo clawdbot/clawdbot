@@ -7,6 +7,10 @@ title: "Image and media support"
 
 The WhatsApp channel runs on Baileys Web. This page covers media handling rules for send, gateway, and agent replies.
 
+For inline audio and video in the Control UI and native apps, including
+portable formats, byte limits, and lazy transcoding, see
+[Media playback](/nodes/media-playback).
+
 ## Goals
 
 - Send media with an optional caption via `openclaw message send --media`.
@@ -19,7 +23,7 @@ The WhatsApp channel runs on Baileys Web. This page covers media handling rules 
 
 - `--media <path-or-url>` — attach media (image/audio/video/document); accepts local paths or URLs. Optional; caption can be empty for media-only sends.
 - `--gif-playback` — treat video media as GIF playback (WhatsApp only).
-- `--force-document` — send media as a document to avoid channel compression (Telegram, WhatsApp); applies to images, GIFs, and videos.
+- `--force-document` — preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.
 - `--reply-to <id>`, `--thread-id <id>`, `--pin`, `--silent` — delivery/threading options shared with text-only sends.
 - `--dry-run` — print the resolved payload and skip sending.
 - `--json` — print the result as JSON: `{ action, channel, dryRun, handledBy, messageId?, payload }` (`payload` carries the channel-specific send result, including any media reference).
@@ -90,4 +94,5 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 
 - [Camera capture](/nodes/camera)
 - [Media understanding](/nodes/media-understanding)
+- [Media playback](/nodes/media-playback)
 - [Audio and voice notes](/nodes/audio)

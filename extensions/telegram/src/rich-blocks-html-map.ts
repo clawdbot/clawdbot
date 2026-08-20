@@ -203,14 +203,14 @@ function tableCellFromElement(
 ): RichBlockTableCell {
   const attrs = parseHtmlAttrs(node.raw);
   const text = htmlNodesToRichText(node.children);
-  const colspan = Number.parseInt(attrs.get("colspan") ?? "", 10);
-  const rowspan = Number.parseInt(attrs.get("rowspan") ?? "", 10);
+  const colspan = strictNumber(attrs.get("colspan"), /^\d+$/u) ?? Number.NaN;
+  const rowspan = strictNumber(attrs.get("rowspan"), /^\d+$/u) ?? Number.NaN;
   const align = attrs.get("align")?.toLowerCase();
   return {
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
-    ...(Number.isFinite(colspan) && colspan > 1 ? { colspan } : {}),
-    ...(Number.isFinite(rowspan) && rowspan > 1 ? { rowspan } : {}),
+    ...(Number.isSafeInteger(colspan) && colspan > 1 ? { colspan } : {}),
+    ...(Number.isSafeInteger(rowspan) && rowspan > 1 ? { rowspan } : {}),
     ...(align && CELL_ALIGN_VALUES.has(align)
       ? { align: align as RichBlockTableCell["align"] }
       : {}),
@@ -317,8 +317,8 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
 
 // Full-string numeric parse: prefix-tolerant parseFloat would silently map
 // malformed coordinates like "48.8north" to an unintended location.
-function strictNumber(value: string | undefined): number | undefined {
-  if (value === undefined || !/^-?\d+(?:\.\d+)?$/.test(value.trim())) {
+function strictNumber(value: string | undefined, token = /^-?\d+(?:\.\d+)?$/): number | undefined {
+  if (value === undefined || !token.test(value.trim())) {
     return undefined;
   }
   return Number.parseFloat(value);

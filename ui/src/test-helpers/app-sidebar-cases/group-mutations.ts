@@ -1,12 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
+  deferred,
   mountSidebar,
   type SessionGroupMutationResult,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -39,6 +42,15 @@ function dispatchDragEvent(
 
 describe("AppSidebar group mutation collapsed state", () => {
   const COLLAPSED_STORAGE_KEY = "openclaw:sidebar:sessions:collapsed-sections";
+  let restoreDialogPolyfill: () => void;
+
+  beforeEach(() => {
+    restoreDialogPolyfill = installDialogPolyfill();
+  });
+
+  afterEach(() => {
+    restoreDialogPolyfill();
+  });
 
   async function mountCollapsedGroup(options: {
     groupsRename?: () => Promise<SessionGroupMutationResult>;
@@ -72,7 +84,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   async function openGroupMenu(sidebar: SidebarLifecycleState) {
     const actions = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-section="category:Alpha"] .sidebar-session-group-actions',
+      '[data-session-section="category:Alpha"] .sidebar-session-group-actions[aria-haspopup="menu"]',
     );
     if (!actions) {
       throw new Error("expected group actions trigger");
@@ -86,29 +98,65 @@ describe("AppSidebar group mutation collapsed state", () => {
     return menu;
   }
 
+  function selectGroupMenuAction(menu: Element, value: string) {
+    const item = menu.querySelector(`[value="${value}"]`);
+    if (!item) {
+      throw new Error(`expected ${value} group action`);
+    }
+    menu.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value } },
+      }),
+    );
+  }
+
+  async function renameGroupThroughDialog(sidebar: SidebarLifecycleState, name: string) {
+    const menu = await openGroupMenu(sidebar);
+    selectGroupMenuAction(menu, "rename-group");
+    await waitForFast(() => {
+      const input = document.body.querySelector('openclaw-modal-dialog input[name="value"]');
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error("expected group rename input");
+      }
+      return input;
+    });
+    await submitInputDialog(name);
+  }
+
+  async function deleteGroupThroughConfirm(sidebar: SidebarLifecycleState) {
+    const menu = await openGroupMenu(sidebar);
+    selectGroupMenuAction(menu, "delete-group");
+    const confirm = await waitForFast(() => {
+      const button = document.body.querySelector<HTMLButtonElement>(
+        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
+      );
+      if (!button) {
+        throw new Error("expected the group delete confirm");
+      }
+      return button;
+    });
+    confirm.click();
+  }
+
   it("keeps collapsed keys when group rename is rejected", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({
       groupsRename: () => Promise.reject(new Error("rename failed")),
     });
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
-    const menu = await openGroupMenu(sidebar);
-    const rename = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0];
-    rename?.click();
+    await renameGroupThroughDialog(sidebar, "Beta");
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-    promptSpy.mockRestore();
   });
 
   it("rewrites collapsed keys only after group rename succeeds", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({
       groupsRename: () => Promise.resolve("completed"),
     });
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
-    const menu = await openGroupMenu(sidebar);
-    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    await renameGroupThroughDialog(sidebar, "Beta");
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
     await Promise.resolve();
     await Promise.resolve();
@@ -116,7 +164,6 @@ describe("AppSidebar group mutation collapsed state", () => {
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([
       "category:Beta",
     ]);
-    promptSpy.mockRestore();
   });
 
   it("ignores a stale group rename after its Gateway reconnects with the same client", async () => {
@@ -127,9 +174,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({
       groupsRename: () => rename,
     });
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
-    const menu = await openGroupMenu(sidebar);
-    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    await renameGroupThroughDialog(sidebar, "Beta");
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
 
     gatewayHarness.publish({ phase: "stopped" });
@@ -139,39 +184,191 @@ describe("AppSidebar group mutation collapsed state", () => {
     await Promise.resolve();
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-    promptSpy.mockRestore();
   });
 
   it("keeps collapsed keys when group delete is rejected", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({
       groupsDelete: () => Promise.reject(new Error("delete failed")),
     });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const menu = await openGroupMenu(sidebar);
-    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
-    items[items.length - 1]?.click();
+    await deleteGroupThroughConfirm(sidebar);
     await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-    confirmSpy.mockRestore();
   });
 
   it("drops collapsed keys only after group delete succeeds", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({
       groupsDelete: () => Promise.resolve("completed"),
     });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const menu = await openGroupMenu(sidebar);
-    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
-    items[items.length - 1]?.click();
+    await deleteGroupThroughConfirm(sidebar);
     await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
-    confirmSpy.mockRestore();
+  });
+
+  it("keeps a reconnected group delete retryable after its confirm opened", async () => {
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({});
+    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    await toast.updateComplete;
+    const menu = await openGroupMenu(sidebar);
+    selectGroupMenuAction(menu, "delete-group");
+    const confirm = await waitForFast(() => {
+      const button = document.body.querySelector<HTMLButtonElement>(
+        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
+      );
+      if (!button) {
+        throw new Error("expected the group delete confirm");
+      }
+      return button;
+    });
+
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
+    confirm.click();
+    await waitForFast(() =>
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+    );
+
+    expect(harness.groupsDelete).not.toHaveBeenCalled();
+    expect(harness.sessions.state.groups).toEqual(["Alpha"]);
+    expect(harness.sessions.state.result?.sessions[1]?.category).toBe("Alpha");
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
+        'Gateway connection replaced before "Alpha" was deleted. Try again.',
+      ),
+    );
+    toast.remove();
+  });
+
+  it("rejects a folder listing from a retired same-client connection", async () => {
+    const listing = deferred<{
+      path: string;
+      home: string;
+      entries: Array<{ name: string; path: string; type: "directory" }>;
+    }>();
+    const client = {
+      request: async (method: string) => {
+        if (method === "fs.listDir") {
+          return await listing.promise;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      },
+    } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+
+    const pending = sidebar.listSessionGroupFolders("/repos/client");
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
+    listing.resolve({
+      path: "/repos/client",
+      home: "/home/peter",
+      entries: [],
+    });
+
+    await expect(pending).rejects.toThrow(
+      "Gateway connection replaced before the defaults were saved. Try again.",
+    );
+  });
+
+  it("rejects repository inspection from a retired same-client connection", async () => {
+    const inspection = deferred<{
+      branches: Array<{ kind: "local"; name: string }>;
+      defaultBranch: string;
+      repositoryStatus: "git";
+    }>();
+    const client = {
+      request: async (method: string) => {
+        if (method === "worktrees.branches") {
+          return await inspection.promise;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      },
+    } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+
+    const pending = sidebar.inspectSessionGroupRepository("/repos/client");
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
+    inspection.resolve({
+      branches: [{ kind: "local", name: "main" }],
+      defaultBranch: "main",
+      repositoryStatus: "git",
+    });
+
+    await expect(pending).rejects.toThrow(
+      "Gateway connection replaced before the defaults were saved. Try again.",
+    );
+  });
+
+  it("leaves the catalog alone when the delete confirm is cancelled", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({});
+    const menu = await openGroupMenu(sidebar);
+    selectGroupMenuAction(menu, "delete-group");
+    // Cancel is the focused default; answering it must end the flow with the
+    // group, its members and the collapsed key untouched.
+    const cancel = await waitForFast(() => {
+      const buttons = document.body.querySelectorAll<HTMLButtonElement>(
+        "openclaw-modal-dialog .exec-approval-actions .btn",
+      );
+      if (buttons.length !== 2) {
+        throw new Error("expected the group delete confirm");
+      }
+      return buttons[1]!;
+    });
+    cancel.click();
+    await waitForFast(() =>
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+    );
+
+    expect(harness.groupsDelete).not.toHaveBeenCalled();
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+  });
+
+  it("disables only group actions whose exact method is unavailable", async () => {
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({});
+    gatewayHarness.publish({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.write"] },
+        features: { methods: ["sessions.groups.put"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await sidebar.updateComplete;
+    const menu = await openGroupMenu(sidebar);
+    const dropdown = menu.closest("wa-dropdown");
+    const rename = menu.querySelector<HTMLElement>('[value="rename-group"]');
+    const create = menu.querySelector<HTMLElement>('[value="new-group"]');
+    const remove = menu.querySelector<HTMLElement>('[value="delete-group"]');
+
+    expect(rename?.hasAttribute("disabled")).toBe(true);
+    expect(create?.hasAttribute("disabled")).toBe(false);
+    expect(remove?.hasAttribute("disabled")).toBe(true);
+
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value: "rename-group" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: { value: "delete-group" } },
+      }),
+    );
+
+    expect(harness.groupsRename).not.toHaveBeenCalled();
+    expect(harness.groupsDelete).not.toHaveBeenCalled();
   });
 });
 

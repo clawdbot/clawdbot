@@ -5,7 +5,7 @@ import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   runAgentEndSideEffects,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
@@ -55,24 +55,10 @@ export function estimateCodexAppServerProjectedTurnTokens(params: {
 
 export async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
   const normalized = path.resolve(workspaceDir);
+  // Workspace teardown clears this cache before cleanup; never stat a stable path per turn.
   if (codexWorkspaceDirCache.has(normalized)) {
-    try {
-      const stat = await fs.stat(normalized);
-      if (stat.isDirectory()) {
-        return;
-      }
-    } catch (error) {
-      const code =
-        typeof error === "object" && error ? (error as { code?: unknown }).code : undefined;
-      if (code !== "ENOENT") {
-        throw error;
-      }
-    }
-    codexWorkspaceDirCache.delete(normalized);
+    return;
   }
-  // Codex attempts re-enter the same workspace repeatedly; caching successful
-  // mkdirs avoids repeated fs work while still recovering if cleanup prunes
-  // the directory between attempts.
   await fs.mkdir(normalized, { recursive: true });
   codexWorkspaceDirCache.add(normalized);
 }

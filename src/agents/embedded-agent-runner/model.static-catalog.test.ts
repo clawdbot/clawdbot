@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
   listOpenClawPluginManifestMetadata: vi.fn(),
   loadPluginManifest: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistryCore: vi.fn(),
 }));
 const providerMocks = vi.hoisted(() => ({
   normalizePluginDiscoveryResult: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
 
 vi.mock("../../plugins/manifest-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/manifest-registry.js")>()),
-  loadPluginManifestRegistry: manifestMocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: manifestMocks.loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../../plugins/providers.js", async (importOriginal) => ({
@@ -47,6 +48,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
   runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
 }));
 
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
   createBundledProviderStaticCatalogContextResolver,
@@ -123,7 +125,7 @@ function createMistralManifestPlugin(overrides?: {
 }
 
 function setConflictingAzureAliasPlugins() {
-  manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
     plugins: [
       {
         id: "openai",
@@ -154,7 +156,7 @@ function setConflictingAzureAliasPlugins() {
 }
 
 function setConditionalSuppressionAliasPlugin(params?: { unconditional?: boolean }) {
-  manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
     plugins: [
       {
         id: "conditional-provider",
@@ -191,10 +193,11 @@ function expectManifestAliasResolution(
 }
 
 beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
   manifestMocks.loadPluginManifest.mockReset();
-  manifestMocks.loadPluginManifestRegistry.mockReset();
+  manifestMocks.loadPluginManifestRegistryCore.mockReset();
   providerMocks.normalizePluginDiscoveryResult.mockReset();
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockReset();
   providerMocks.resolveBundledProviderCompatPluginIds.mockReset();
@@ -203,7 +206,7 @@ beforeEach(() => {
   providerMocks.runProviderStaticCatalog.mockReset();
   setManifestPlugins([]);
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
-  manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
+  manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
     ({ pluginIds }: { pluginIds: string[] }) => pluginIds,
   );
@@ -216,7 +219,7 @@ beforeEach(() => {
 
 describe("canonicalizeManifestModelCatalogProviderAlias", () => {
   it("canonicalizes unambiguous manifest-owned aliases", () => {
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "moonshot",
@@ -260,7 +263,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     expect(canonicalizeManifestModelCatalogProviderAlias({ provider: "moonshot-ai" })).toBe(
       "moonshot",
     );
-    expect(manifestMocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
       config: undefined,
       env: process.env,
@@ -289,7 +292,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
   it("keeps custom environments on their own manifest registry context", () => {
     const env = { HOME: "/custom-home" };
     manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "moonshot",
@@ -309,7 +312,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       "moonshot",
     );
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+    expect(manifestMocks.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
       config: undefined,
       env,
       workspaceDir: undefined,
@@ -343,7 +346,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
         discovery: { openai: "runtime" },
       },
     };
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [plugin] });
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [plugin] });
 
     expectManifestAliasResolution(
       {
@@ -472,7 +475,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
   });
 
   it("accepts activated config-load-path alias owners", () => {
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "config-provider",
@@ -660,13 +663,11 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       staticCatalog: { run: vi.fn() },
     };
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
-          id: "google",
-          origin: "bundled",
+        createManifestRecord("google", {
           providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
+        }),
       ],
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
@@ -705,7 +706,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
   it("skips bundled providers without discovery entries during context warmup", async () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "openai"]);
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "google",
@@ -727,18 +728,14 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
   it("keeps successful provider context rows when another static catalog fails", async () => {
     providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google", "minimax"]);
-    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
-        {
-          id: "google",
-          origin: "bundled",
+        createManifestRecord("google", {
           providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
-        },
-        {
-          id: "minimax",
-          origin: "bundled",
+        }),
+        createManifestRecord("minimax", {
           providerDiscoverySource: "/fixtures/minimax/provider-discovery.ts",
-        },
+        }),
       ],
     });
     providerMocks.resolveRuntimePluginDiscoveryProviders.mockImplementation(
@@ -774,6 +771,12 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
 
   it("resolves exact rows from bundled provider static catalogs", async () => {
     const cfg = { plugins: { entries: { google: { enabled: true } } } };
+    const metadataSnapshot = {
+      plugins: [],
+      owners: {},
+      index: {},
+      manifestRegistry: { plugins: [] },
+    } as never;
     const provider = {
       id: "google",
       pluginId: "google",
@@ -810,6 +813,7 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
       cfg,
+      metadataSnapshot,
     });
 
     expect(model).toMatchObject({
@@ -840,13 +844,9 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       requireCompleteDiscoveryEntryCoverage: true,
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
+      pluginMetadataSnapshot: metadataSnapshot,
     });
-    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({
-      provider,
-      config: cfg,
-      workspaceDir: undefined,
-      env: process.env,
-    });
+    expect(providerMocks.runProviderStaticCatalog).toHaveBeenCalledWith({ provider });
   });
 
   it("does not load bundled provider static catalogs when owner policy blocks the plugin", async () => {

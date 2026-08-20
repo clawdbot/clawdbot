@@ -16,7 +16,7 @@ import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
-  createGatewayStartupTrace,
+  createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
@@ -34,6 +34,7 @@ import { defaultRuntime } from "./runtime.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
+  { wrapperBasename: "openclaw.mjs", entryBasename: "entry.mjs" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
 
@@ -46,6 +47,13 @@ async function writeCapturedCliArgumentError(message: string): Promise<void> {
   await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   const { enableConsoleCapture } = await import("./logging.js");
   enableConsoleCapture();
+  const [{ formatCliJsonFailure }, { isJsonOutputModeActive }] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+  ]);
+  if (isJsonOutputModeActive(process.argv)) {
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
+  }
   console.error(`[openclaw] ${message}`);
 }
 
@@ -94,7 +102,7 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   return false;
 }
 
-const gatewayEntryStartupTrace = createGatewayStartupTrace(process.argv, "entry");
+const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv, "entry");
 
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
@@ -213,7 +221,11 @@ export async function tryHandleRootHelpFastPath(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<boolean> {
-  if (resolveCliContainerTarget(argv, deps.env)) {
+  const env = deps.env ?? process.env;
+  if (
+    env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1" ||
+    resolveCliContainerTarget(argv, env)
+  ) {
     return false;
   }
   if (!isRootHelpInvocation(argv)) {
@@ -230,7 +242,7 @@ export async function tryHandleRootHelpFastPath(
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
       deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
       (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
-    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(deps.env);
+    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
     if (!liveRootHelpOptions) {
       const outputPrecomputedRootHelpText =
         deps.outputPrecomputedRootHelpText ??
@@ -265,7 +277,10 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
   }
 }
 
-async function runMainOrRootHelp(argv: string[]): Promise<void> {
+export async function runMainOrRootHelp(
+  argv: string[],
+  deps: RunMainOrRootHelpDeps = {},
+): Promise<void> {
   await runCliWithExitFinalization({
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
@@ -285,9 +300,13 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
-        () => import("./cli/run-main.js"),
+        deps.loadRunCli ?? (() => import("./cli/run-main.js")),
       );
-      await runCli(argv, { additionalStartupTrace: gatewayEntryStartupTrace });
+      await runCli(argv, {
+        additionalStartupTrace: gatewayEntryStartupTrace,
+        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+        retainConsoleRoutingUntilProcessExit: true,
+      });
     },
     onError: async (error) => {
       const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
@@ -295,7 +314,11 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
       await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
       const { enableConsoleCapture } = await import("./logging.js");
       enableConsoleCapture();
-      const { formatCliFailureLines } = await import("./cli/failure-output.js");
+      const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
+        await Promise.all([import("./cli/failure-output.js"), import("./cli/json-output-mode.js")]);
+      if (isJsonOutputModeActive(argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(error));
+      }
       for (const line of formatCliFailureLines({
         title: "Could not start the CLI.",
         error,
@@ -307,3 +330,7 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     },
   });
 }
+
+type RunMainOrRootHelpDeps = {
+  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
+};

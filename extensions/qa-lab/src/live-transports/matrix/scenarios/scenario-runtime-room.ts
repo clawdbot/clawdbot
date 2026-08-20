@@ -45,6 +45,7 @@ export {
 export {
   runPartialStreamingPreviewScenario,
   runQuietStreamingPreviewScenario,
+  runStreamingReplacementRetentionScenario,
 } from "./scenario-runtime-streaming-preview.js";
 
 export {
@@ -357,8 +358,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     observedEvents: context.observedEvents,
     reactionTargetEventId: thread.reply.eventId,
     roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
   advanceMatrixQaActorCursor({

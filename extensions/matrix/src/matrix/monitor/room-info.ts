@@ -97,18 +97,28 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
     if (memberDisplayNameCache.has(cacheKey)) {
       return memberDisplayNameCache.get(cacheKey) ?? userId;
     }
-    const memberState = await client
-      .getRoomStateEvent(roomId, "m.room.member", userId)
-      .catch(() => null);
+    let memberState: Record<string, unknown>;
+    try {
+      memberState = await client.getRoomStateEvent(roomId, "m.room.member", userId);
+    } catch {
+      // A transient homeserver failure is not authoritative room state; retry
+      // the next lookup instead of pinning the fallback user ID for the session.
+      return userId;
+    }
     const displayName =
       memberState && typeof memberState.displayname === "string" ? memberState.displayname : userId;
     setBoundedMap(memberDisplayNameCache, cacheKey, displayName, MAX_MEMBER_DISPLAY_NAMES);
     return displayName;
   };
 
+  const invalidateMemberDisplayName = (roomId: string, userId: string): void => {
+    memberDisplayNameCache.delete(`${roomId}:${userId}`);
+  };
+
   return {
     getRoomAliases,
     getRoomInfo,
     getMemberDisplayName,
+    invalidateMemberDisplayName,
   };
 }

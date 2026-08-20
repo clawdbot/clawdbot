@@ -1,17 +1,25 @@
 // Whatsapp plugin module implements approval reactions behavior.
 import type { WAMessage } from "baileys";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
+  approvalReactionDecisionSetsMatch,
+  buildApprovalReactionDeliveredBindingMarker,
   createApprovalReactionTargetStore,
   listApprovalReactionBindings,
+  readApprovalReactionDecisionList,
+  readApprovalReactionDeliveredBinding,
+  readApprovalReactionPresentationBinding,
   resolveTypedApprovalReactionTarget,
-  type ApprovalReactionDecisionBinding,
+  type ApprovalReactionDeliveryBinding,
   type ApprovalReactionTargetRecord,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
@@ -22,25 +30,16 @@ const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 const DELIVERY_BINDING_CHANNEL_DATA_KEY = "whatsappApprovalReactionBindingV1";
 
-type WhatsAppApprovalKind = "exec" | "plugin";
-
-type WhatsAppApprovalDeliveryBinding = {
-  version: 1;
-  approvalId: string;
-  approvalKind: WhatsAppApprovalKind;
-  allowedDecisions: ExecApprovalReplyDecision[];
-};
-
-type WhatsAppApprovalReactionBinding = ApprovalReactionDecisionBinding;
+type WhatsAppApprovalDeliveryBinding = ApprovalReactionDeliveryBinding;
 
 type WhatsAppApprovalReactionResolution = {
   approvalId: string;
-  approvalKind: WhatsAppApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalReplyDecision;
 };
 
 type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord & {
-  approvalKind: WhatsAppApprovalKind;
+  approvalKind: ChannelApprovalKind;
 };
 
 type WhatsAppApprovalReactionEvent = {
@@ -54,7 +53,17 @@ type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution
   remoteJid: string;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
+);
+
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalWhatsAppRuntime,
+  "whatsapp",
+  "approval-reaction-state",
+  "WhatsApp persistent approval reaction state failed",
+);
 
 const whatsappApprovalReactionTargets =
   createApprovalReactionTargetStore<WhatsAppApprovalReactionTarget>({
@@ -65,8 +74,6 @@ const whatsappApprovalReactionTargets =
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
-
-const loadApprovalResolver = resolverRuntimeLoader;
 
 function buildReactionTargetKey(params: {
   accountId: string;
@@ -86,16 +93,6 @@ function addCandidateRemoteJid(target: string[], value: string | null | undefine
   const remoteJid = value?.trim();
   if (remoteJid && !target.includes(remoteJid)) {
     target.push(remoteJid);
-  }
-}
-
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalWhatsAppRuntime()
-      ?.logging.getChildLogger({ plugin: "whatsapp", feature: "approval-reaction-state" })
-      .warn("WhatsApp persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break WhatsApp reactions.
   }
 }
 
@@ -122,104 +119,23 @@ function readPersistedTarget(target: unknown): WhatsAppApprovalReactionTarget | 
   if (
     !value ||
     typeof value.approvalId !== "string" ||
-    !Array.isArray(value.allowedDecisions) ||
     (value.approvalKind !== "exec" && value.approvalKind !== "plugin")
   ) {
+    return null;
+  }
+  const allowedDecisions = readApprovalReactionDecisionList(value.allowedDecisions);
+  if (!allowedDecisions) {
     return null;
   }
   return {
     approvalId: value.approvalId,
     approvalKind: value.approvalKind,
-    allowedDecisions: value.allowedDecisions,
+    allowedDecisions,
   };
-}
-
-function listWhatsAppApprovalReactionBindings(
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): WhatsAppApprovalReactionBinding[] {
-  return listApprovalReactionBindings({ allowedDecisions });
 }
 
 const APPROVAL_ID_LINE_RE = /^\s*ID:\s*(\S(?:.*\S)?)\s*$/i;
 const APPROVAL_KIND_LINE_RE = /^\s*(?:\S+\s+)?(Exec|Plugin) approval required\s*$/i;
-
-function isApprovalDecision(value: unknown): value is ExecApprovalReplyDecision {
-  return value === "allow-once" || value === "allow-always" || value === "deny";
-}
-
-function readStrictDecisionList(value: unknown): ExecApprovalReplyDecision[] | null {
-  if (!Array.isArray(value) || value.length === 0 || !value.every(isApprovalDecision)) {
-    return null;
-  }
-  return new Set(value).size === value.length ? [...value] : null;
-}
-
-function readStrictApprovalMetadata(payload: ReplyPayload): WhatsAppApprovalDeliveryBinding | null {
-  const value = payload.channelData?.execApproval;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const approvalId = record.approvalId;
-  const approvalKind = record.approvalKind;
-  const allowedDecisions = readStrictDecisionList(record.allowedDecisions);
-  if (
-    typeof approvalId !== "string" ||
-    !approvalId ||
-    approvalId !== approvalId.trim() ||
-    (approvalKind !== "exec" && approvalKind !== "plugin") ||
-    !allowedDecisions
-  ) {
-    return null;
-  }
-  return { version: 1, approvalId, approvalKind, allowedDecisions };
-}
-
-function listTypedApprovalActions(presentation: MessagePresentation) {
-  return presentation.blocks.flatMap((block) => {
-    if (block.type === "buttons") {
-      return block.buttons.flatMap((button) =>
-        button.action?.type === "approval" ? [button.action] : [],
-      );
-    }
-    return [];
-  });
-}
-
-function decisionSetsMatch(
-  left: readonly ExecApprovalReplyDecision[],
-  right: readonly ExecApprovalReplyDecision[],
-): boolean {
-  return left.length === right.length && left.every((decision) => right.includes(decision));
-}
-
-function readTypedApprovalDeliveryBinding(params: {
-  payload: ReplyPayload;
-  presentation: MessagePresentation;
-}): WhatsAppApprovalDeliveryBinding | null {
-  const metadata = readStrictApprovalMetadata(params.payload);
-  if (!metadata) {
-    return null;
-  }
-  const actions = listTypedApprovalActions(params.presentation);
-  if (
-    actions.length === 0 ||
-    actions.some(
-      (action) =>
-        action.approvalId !== metadata.approvalId || action.approvalKind !== metadata.approvalKind,
-    )
-  ) {
-    return null;
-  }
-  const actionDecisions = actions.map((action) => action.decision);
-  if (
-    new Set(actionDecisions).size !== actionDecisions.length ||
-    !decisionSetsMatch(metadata.allowedDecisions, actionDecisions)
-  ) {
-    return null;
-  }
-  return metadata;
-}
 
 function visibleApprovalBindingMatches(
   text: string | null | undefined,
@@ -269,43 +185,17 @@ function visibleApprovalBindingMatches(
     decisionLines.push(decisionLine);
     cursor += 1;
   }
-  const knownBindings = listWhatsAppApprovalReactionBindings([
-    "allow-once",
-    "allow-always",
-    "deny",
-  ]);
+  const knownBindings = listApprovalReactionBindings({
+    allowedDecisions: ["allow-once", "allow-always", "deny"],
+  });
   const visibleDecisions = decisionLines.map(
     (line) => knownBindings.find((entry) => `${entry.emoji} ${entry.label}` === line)?.decision,
   );
-  if (!visibleDecisions.every(isApprovalDecision)) {
+  const decisions = readApprovalReactionDecisionList(visibleDecisions);
+  if (!decisions) {
     return false;
   }
-  return (
-    new Set(visibleDecisions).size === visibleDecisions.length &&
-    decisionSetsMatch(binding.allowedDecisions, visibleDecisions)
-  );
-}
-
-function readDeliveredApprovalBinding(
-  payload: ReplyPayload,
-): WhatsAppApprovalDeliveryBinding | null {
-  const metadata = readStrictApprovalMetadata(payload);
-  const value = payload.channelData?.[DELIVERY_BINDING_CHANNEL_DATA_KEY];
-  if (!metadata || !value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const allowedDecisions = readStrictDecisionList(record.allowedDecisions);
-  if (
-    record.version !== 1 ||
-    record.approvalId !== metadata.approvalId ||
-    record.approvalKind !== metadata.approvalKind ||
-    !allowedDecisions ||
-    !decisionSetsMatch(metadata.allowedDecisions, allowedDecisions)
-  ) {
-    return null;
-  }
-  return metadata;
+  return approvalReactionDecisionSetsMatch(binding.allowedDecisions, decisions);
 }
 
 /** Preserve a validated typed approval binding until the platform message id is known. */
@@ -313,7 +203,7 @@ export function prepareWhatsAppApprovalPayloadForDelivery(params: {
   payload: ReplyPayload;
   presentation: MessagePresentation;
 }): ReplyPayload | null {
-  const binding = readTypedApprovalDeliveryBinding(params);
+  const binding = readApprovalReactionPresentationBinding(params);
   if (!binding) {
     return null;
   }
@@ -325,7 +215,7 @@ export function prepareWhatsAppApprovalPayloadForDelivery(params: {
     ...params.payload,
     channelData: {
       ...params.payload.channelData,
-      [DELIVERY_BINDING_CHANNEL_DATA_KEY]: binding,
+      [DELIVERY_BINDING_CHANNEL_DATA_KEY]: buildApprovalReactionDeliveredBindingMarker(binding),
     },
   };
 }
@@ -335,15 +225,15 @@ export function registerWhatsAppApprovalReactionTarget(params: {
   remoteJid: string;
   messageId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): WhatsAppApprovalReactionTarget | null {
   const key = buildReactionTargetKey(params);
   const approvalId = params.approvalId.trim();
-  const allowedDecisions = listWhatsAppApprovalReactionBindings(params.allowedDecisions).map(
-    (binding) => binding.decision,
-  );
+  const allowedDecisions = listApprovalReactionBindings({
+    allowedDecisions: params.allowedDecisions,
+  }).map((binding) => binding.decision);
   if (
     !key ||
     !approvalId ||
@@ -410,7 +300,10 @@ export function registerWhatsAppApprovalReactionTargetForDeliveredPayload(params
   if (params.target.channel.trim().toLowerCase() !== "whatsapp") {
     return false;
   }
-  const binding = readDeliveredApprovalBinding(params.payload);
+  const binding = readApprovalReactionDeliveredBinding({
+    payload: params.payload,
+    channelDataKey: DELIVERY_BINDING_CHANNEL_DATA_KEY,
+  });
   if (!binding) {
     return false;
   }
@@ -609,13 +502,15 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveWhatsAppApproval } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
-    const result = await resolveWhatsAppApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "whatsapp",
+      accountId: params.accountId,
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });
@@ -653,5 +548,5 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
 
 export function clearWhatsAppApprovalReactionTargetsForTest(): void {
   whatsappApprovalReactionTargets.clearForTest();
-  resolverRuntimeLoader.clear();
+  loadResolveApprovalOverGateway.clear();
 }

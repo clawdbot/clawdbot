@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CHAT_HISTORY_MAX_ENTRIES } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
@@ -25,12 +26,38 @@ export const LogsTailResultSchema = closedObject({
 export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+  cursor: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/**
+ * Bounded forward catch-up response. Clients replay `messages` as `session.message`
+ * payloads. There is no continuation loop: more than 200 raw events or the byte
+ * budget returns `reset`, and the client fetches a fresh tail page.
+ */
+export const ChatHistoryDeltaResultSchema = closedObject({
+  kind: Type.Literal("delta"),
+  messages: Type.Array(Type.Unknown()),
+  deltaCursor: Type.String(),
+  sessionInfo: Type.Unknown(),
+  agentsList: Type.Optional(Type.Unknown()),
+  metadata: Type.Optional(Type.Unknown()),
+});
+
+/** Normal cursor discontinuity; clients recover with a fresh tail request. */
+export const ChatHistoryResetResultSchema = closedObject({
+  kind: Type.Literal("reset"),
+});
+
+/** Closed cursor outcome union. */
+export const ChatHistoryCursorResultSchema = Type.Union([
+  ChatHistoryDeltaResultSchema,
+  ChatHistoryResetResultSchema,
+]);
 
 /** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
 export const ChatMetadataParamsSchema = closedObject({
@@ -82,8 +109,24 @@ export const ChatMessageGetResultSchema = closedObject({
 /** Typed result shape for callers that branch on message availability. */
 export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 
-/** Attachment envelope shared by chat.send and session creation's initial turn. */
-export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
+/** Permissive attachment envelope shared by chat and session entrypoints. */
+export const ChatAttachmentSchema = Type.Object(
+  {
+    type: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+    fileName: Type.Optional(Type.String()),
+    // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
+    content: Type.Optional(Type.Unknown()),
+    sizeBytes: Type.Optional(Type.Number()),
+    durationMs: Type.Optional(Type.Number()),
+    width: Type.Optional(Type.Number()),
+    height: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: true },
+);
+
+/** Attachment list shared by chat.send and session creation's initial turn. */
+export const ChatAttachmentsSchema = Type.Array(ChatAttachmentSchema);
 
 /** Opaque, out-of-band plugin bindings carried separately from model input. */
 const RunToolBindingsSchema = Type.Record(
@@ -91,6 +134,9 @@ const RunToolBindingsSchema = Type.Record(
   Type.Unknown(),
   { maxProperties: 16 },
 );
+
+const QUEUE_MODES = ["steer", "followup", "collect", "interrupt"] as const;
+export type QueueMode = (typeof QUEUE_MODES)[number];
 
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
@@ -103,7 +149,7 @@ export const ChatSendParamsSchema = closedObject({
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   // One-turn override for active-run queue admission.
-  queueMode: Type.Optional(Type.String({ enum: ["steer", "followup", "collect", "interrupt"] })),
+  queueMode: Type.Optional(Type.String({ enum: [...QUEUE_MODES] })),
   deliver: Type.Optional(Type.Boolean()),
   originatingChannel: Type.Optional(Type.String()),
   originatingTo: Type.Optional(Type.String()),
@@ -118,8 +164,9 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
-  // Client's believed active-branch leaf entry id. A mismatch with the
-  // session's current active leaf rejects the send so stale views cannot post elsewhere.
+  // Transcript-branch CAS for non-steer interactive sends: the client's displayed
+  // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
+  // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,

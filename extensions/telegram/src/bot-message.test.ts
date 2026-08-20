@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
@@ -69,7 +70,35 @@ describe("telegram bot message processor", () => {
   const baseTurnContext = {
     cfg: {},
     telegramCfg: {},
-  } satisfies import("./bot-message.js").TelegramMessageProcessorTurnContext;
+  } satisfies TelegramMessageProcessorTurnContext;
+
+  it("passes the effective per-DM history limit into message context", async () => {
+    buildTelegramMessageContext.mockResolvedValue(null);
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+
+    await processSampleMessage(
+      processMessage,
+      {
+        telegramCfg: {
+          dmHistoryLimit: 5,
+          dms: {
+            "42": { historyLimit: 0 },
+          },
+        },
+      },
+      {
+        message: {
+          chat: { id: 123, type: "private", title: "chat" },
+          message_id: 456,
+          from: { id: 42, first_name: "Pat" },
+        },
+      },
+    );
+
+    expect(buildTelegramMessageContext).toHaveBeenCalledWith(
+      expect.objectContaining({ dmHistoryLimit: 0 }),
+    );
+  });
 
   const baseDeps = {
     bot: {},
@@ -94,7 +123,7 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
-    turnContext?: Partial<import("./bot-message.js").TelegramMessageProcessorTurnContext>,
+    turnContext?: Partial<TelegramMessageProcessorTurnContext>,
     primaryCtxOverrides: Record<string, unknown> = {},
     options: Parameters<typeof processMessage>[4] = {},
     allMedia: Parameters<typeof processMessage>[1] = [],
@@ -628,7 +657,7 @@ describe("telegram bot message processor", () => {
     await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
   });
 
-  it("settles an abandoned deferred turn as skipped", async () => {
+  it("settles an abandoned deferred turn as retryable", async () => {
     buildTelegramMessageContext.mockResolvedValue(createMessageContext());
     const finalizeSpooledReplayResult = vi.fn(
       async (result: TelegramMessageProcessingResult): Promise<TelegramMessageProcessingResult> =>
@@ -646,10 +675,15 @@ describe("telegram bot message processor", () => {
       processSampleMessage(processMessage, { finalizeSpooledReplayResult }, { update }),
     );
 
-    expect(replay.value).toEqual({ kind: "skipped" });
-    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "skipped" });
+    expect(replay.value).toMatchObject({ kind: "failed-retryable" });
+    await expect(replay.deferredWork?.task).resolves.toMatchObject({
+      kind: "failed-retryable",
+    });
     expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
-    expect(finalizeSpooledReplayResult).toHaveBeenCalledWith({ kind: "skipped" }, "terminal");
+    expect(finalizeSpooledReplayResult).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "failed-retryable" }),
+      "terminal",
+    );
   });
 
   it("keeps isolated retry settlement separate from the outer spool participant", async () => {
@@ -721,7 +755,10 @@ describe("telegram bot message processor", () => {
     await deferred;
     outerAbortController.abort(new Error("outer spool timeout"));
 
-    await expect(processing).resolves.toEqual({ kind: "skipped" });
+    await expect(processing).resolves.toEqual({
+      kind: "failed-retryable",
+      error: "turn-abandoned",
+    });
     expect(queuedAbortSignal?.aborted).toBe(true);
   });
 

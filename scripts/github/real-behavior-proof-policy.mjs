@@ -2,6 +2,17 @@
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
 
+/** @typedef {Record<string, unknown>} PullRequest */
+/** @typedef {Record<string, unknown>} Comment */
+/**
+ * @typedef {object} Evaluation
+ * @property {string} status
+ * @property {string} reason
+ * @property {boolean} applies
+ * @property {boolean} passed
+ * @property {string[]} missingSections
+ */
+
 /** ClawSweeper-owned labels that OpenClaw preserves but does not mutate. */
 export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
@@ -88,6 +99,13 @@ async function withGitHubApiTimeout(label, timeoutMs, run) {
   }
 }
 
+/**
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} [maxBytes]
+ * @param {{ timeoutMs?: number }} [options]
+ * @returns {Promise<unknown>}
+ */
 export async function readBoundedGitHubApiJson(
   response,
   label,
@@ -181,6 +199,17 @@ function isExternalPullRequest(pullRequest) {
   return !privilegedAuthorAssociations.has(authorAssociation);
 }
 
+/**
+ * @param {{
+ *   token?: string,
+ *   org?: string,
+ *   login?: string,
+ *   teamSlug?: string,
+ *   fetch?: typeof globalThis.fetch,
+ *   timeoutMs?: number,
+ * }} [params]
+ * @returns {Promise<boolean>}
+ */
 export async function isMaintainerTeamMember({
   token,
   org,
@@ -286,6 +315,10 @@ function extractMarkdownSections(headingRegex, body = "") {
   return sections;
 }
 
+/**
+ * @param {string} heading
+ * @param {string} [body]
+ */
 export function hasAuthoredPullRequestSection(heading, body = "") {
   const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegExp(heading)}\\b[^\\n]*$`, "im");
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
@@ -361,6 +394,12 @@ function isMissingValue(value) {
   return missingValueRegex.test(trimmed);
 }
 
+/**
+ * @param {string} status
+ * @param {string} reason
+ * @param {Partial<Evaluation>} [details]
+ * @returns {Evaluation}
+ */
 function result(status, reason, details = {}) {
   return {
     status,
@@ -390,8 +429,16 @@ function isTrustedClawSweeperComment(comment) {
   return CLAWSWEEPER_BOT_LOGINS.has(login) && userType === "Bot";
 }
 
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {boolean}
+ */
 export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
-  const pullNumber = String(pullRequest?.number ?? "");
+  const rawPullNumber = pullRequest?.number;
+  const pullNumber =
+    typeof rawPullNumber === "string" || typeof rawPullNumber === "number"
+      ? String(rawPullNumber)
+      : "";
   const headSha = String(pullRequest?.head?.sha ?? pullRequest?.head_sha ?? "").toLowerCase();
   if (!pullNumber || !/^[0-9a-f]{40}$/i.test(headSha)) {
     return false;
@@ -401,7 +448,7 @@ export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}
     if (!isTrustedClawSweeperComment(comment)) {
       continue;
     }
-    const body = String(comment?.body ?? "");
+    const body = typeof comment?.body === "string" ? comment.body : "";
     const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
     for (const marker of markers) {
       const item = extractMarkerField(marker, "item");
@@ -414,6 +461,10 @@ export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}
   return false;
 }
 
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {Evaluation}
+ */
 export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
   if (hasClawSweeperExactHeadProof({ pullRequest, comments })) {
     return result(
@@ -424,6 +475,10 @@ export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] }
   return result("insufficient", "No exact-head ClawSweeper proof verdict was found.");
 }
 
+/**
+ * @param {{ pullRequest?: PullRequest }} [params]
+ * @returns {Evaluation}
+ */
 export function evaluatePullRequestContext({ pullRequest } = {}) {
   if (!isExternalPullRequest(pullRequest)) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
@@ -456,6 +511,10 @@ export function evaluatePullRequestContext({ pullRequest } = {}) {
   return result("passed", "External PR includes problem context and evidence.");
 }
 
+/**
+ * @param {Evaluation} evaluation
+ * @returns {string[]}
+ */
 export function labelsForPullRequestContext(evaluation) {
   if (evaluation.status === "missing" || evaluation.status === "insufficient") {
     return [NEEDS_PR_CONTEXT_LABEL];

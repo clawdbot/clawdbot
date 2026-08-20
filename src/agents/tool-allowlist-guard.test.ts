@@ -46,6 +46,32 @@ describe("tool allowlist guard", () => {
     ).toBeNull();
   });
 
+  it("allows inherited config allowlists when runtime toolsAllow is explicitly empty", () => {
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "tools.allow", entries: ["*", "read", "cron"] }],
+        callableToolNames: [],
+        toolsEnabled: true,
+        toolsAllowExplicitlyEmpty: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("still enforces command-time allowlists for explicitly tool-less runs", () => {
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [
+        { label: "tools.allow", entries: ["read"] },
+        { label: "runtime toolsAllow", entries: ["query_db"], enforceWhenToolsDisabled: true },
+      ],
+      callableToolNames: [],
+      toolsEnabled: true,
+      toolsAllowExplicitlyEmpty: true,
+    });
+
+    expect(error?.message).toContain("runtime toolsAllow: query_db");
+    expect(error?.message).not.toContain("tools.allow: read");
+  });
+
   it("fails closed when the selected model cannot use requested tools", () => {
     const error = buildEmptyExplicitToolAllowlistError({
       sources: [{ label: "agents.db.tools.allow", entries: ["query_db"] }],

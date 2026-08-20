@@ -11,6 +11,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) historyOnly = false;
   @property({ attribute: false }) canGoBack = false;
   @property({ attribute: false }) canGoForward = false;
+  @property({ attribute: false }) newSessionDisabledReason?: string;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onOpenNewSession?: () => void;
@@ -54,9 +55,11 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
               ${this.navCollapsed
                 ? this.renderButton({
                     // While the sidebar rail is collapsed, this mirrors the native
-                    // ⌘N item and stays deliberately free of connection state.
+                    // new-session item and its current Gateway authorization.
                     label: t("chat.runControls.newSession"),
+                    tooltip: this.newSessionDisabledReason,
                     icon: icons.plus,
+                    disabled: Boolean(this.newSessionDisabledReason),
                     onClick: this.onOpenNewSession,
                     className: "macos-titlebar-controls__new-session",
                   })

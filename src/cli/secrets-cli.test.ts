@@ -240,6 +240,7 @@ describe("secrets CLI", () => {
         plaintextCount: 1,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
+        storeResidueCount: 0,
         legacyResidueCount: 0,
       },
       resolution: {
@@ -271,6 +272,7 @@ describe("secrets CLI", () => {
         plaintextCount: 0,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
+        storeResidueCount: 0,
         legacyResidueCount: 0,
       },
       resolution: {
@@ -550,6 +552,15 @@ describe("secrets CLI", () => {
     const errorOutput = runtimeErrors.join("\n");
     expect(errorOutput).toContain("Secrets plan file not found: /nonexistent/path/plan.json");
     expect(errorOutput).not.toContain("ENOENT");
+    expect(runSecretsApply).not.toHaveBeenCalled();
+  });
+
+  it("treats --help as the required --from value", async () => {
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", "--help"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.join("\n")).toContain("Secrets plan file not found: --help");
     expect(runSecretsApply).not.toHaveBeenCalled();
   });
 

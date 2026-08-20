@@ -1,6 +1,6 @@
 // Tests subagent utility helpers for label, routing, and transcript handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import {
   resolveSubagentLabel,
   resolveSubagentTargetFromRuns,
@@ -9,8 +9,16 @@ import {
 
 const NOW_MS = 1_700_000_000_000;
 
-function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+type RunOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+function makeRun(overrides: RunOverrides): SubagentRunRecord {
   const id = overrides.runId ?? "run-default";
+  const { startedAt, endedAt, outcome, execution, ...recordOverrides } = overrides;
   return {
     runId: id,
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${id}`,
@@ -19,7 +27,12 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     task: overrides.task ?? "default task",
     cleanup: overrides.cleanup ?? "keep",
     createdAt: overrides.createdAt ?? NOW_MS - 2_000,
-    ...overrides,
+    ...recordOverrides,
+    execution:
+      execution ??
+      (endedAt === undefined
+        ? { status: "running", startedAt }
+        : { status: "terminal", startedAt, endedAt, outcome }),
   };
 }
 

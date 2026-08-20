@@ -1,11 +1,11 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
@@ -30,6 +30,115 @@ import {
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
 
+const MEDIA_PRIVATE_FIELDS = ["data", "blob", "path", "file", "filePath", "localPath"] as const;
+const MEDIA_REFERENCE_FIELDS = ["url", "openUrl", "image_url", "audio_url", "video_url"] as const;
+const MEDIA_FACT_PRIVATE_FIELDS = [
+  "workspaceDir",
+  ...MEDIA_PRIVATE_FIELDS.filter((field) => field !== "path"),
+] as const;
+
+function projectChatHistoryMediaReference(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const reference = value.trim();
+  if (/^\/(?:api\/chat\/media\/outgoing|media|__openclaw__)\//u.test(reference)) {
+    return reference.split(/[?#]/u, 1)[0];
+  }
+  try {
+    if (/^media:/iu.test(reference)) {
+      return parseInboundMediaUri(reference)?.normalizedSource;
+    }
+    const url = new URL(reference);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    url.username = url.password = url.search = url.hash = "";
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = false): boolean {
+  if (!fact && (typeof entry.type !== "string" || !/^(?:image|audio|video)$/u.test(entry.type))) {
+    return false;
+  }
+  const media = entry as typeof entry & { type: "image" | "audio" | "video" };
+  const hasTopLevelPayload = typeof media.data === "string" || typeof media.blob === "string";
+  const source = fact ? undefined : readRecord(media.source);
+  const projectedSource = source ? { ...source } : undefined;
+  const records: Record<string, unknown>[] = [media, ...(projectedSource ? [projectedSource] : [])];
+  if (projectedSource) {
+    media.source = projectedSource;
+  }
+  const privateFields = fact ? MEDIA_FACT_PRIVATE_FIELDS : MEDIA_PRIVATE_FIELDS;
+  const referenceFields = fact ? (["path", "url"] as const) : MEDIA_REFERENCE_FIELDS;
+  const sourceIsReference =
+    !source &&
+    (!fact ||
+      typeof media.source !== "string" ||
+      /^(?:[a-z][a-z0-9+.-]*:|~?[\\/])|[\\/]/iu.test(media.source));
+  let encodedPayload: string | undefined;
+  for (const record of records) {
+    let omitted = false;
+    const payload = typeof record.data === "string" ? record.data : record.blob;
+    if (encodedPayload === undefined && typeof payload === "string") {
+      encodedPayload = payload;
+    }
+    for (const field of privateFields) {
+      if (!Object.hasOwn(record, field)) {
+        continue;
+      }
+      delete record[field];
+      omitted = true;
+    }
+    const recordReferences =
+      record === media && sourceIsReference ? [...referenceFields, "source"] : referenceFields;
+    for (const field of recordReferences) {
+      if (!Object.hasOwn(record, field)) {
+        continue;
+      }
+      // Managed inbound file paths persisted on media facts are host-local absolute
+      // paths; rewrite them to canonical `media://inbound/<id>` URIs the UI loads through
+      // the authenticated assistant-media route, instead of redacting the reference entirely.
+      const inboundUri = fact ? buildInboundMediaUriFromPath(String(record[field])) : undefined;
+      const projected = inboundUri ?? projectChatHistoryMediaReference(record[field]);
+      record[field] = projected;
+      if (projected === undefined) {
+        delete record[field];
+        omitted = true;
+      }
+    }
+    if (!fact && omitted) {
+      // Preserve shipped image/audio omission ownership; new video blocks mark both levels.
+      if (record === media || media.type !== "image") {
+        record.omitted = true;
+      }
+      if (record === media || media.type !== "audio") {
+        media.omitted = true;
+      }
+    }
+  }
+  if (!fact && encodedPayload !== undefined) {
+    (media.type === "audio" && !hasTopLevelPayload && projectedSource
+      ? projectedSource
+      : media
+    ).bytes = estimateBase64DecodedBytes(encodedPayload);
+  }
+  return true;
+}
+
+function projectChatHistoryMediaFacts(value: unknown): unknown[] | undefined {
+  return Array.isArray(value)
+    ? value.map((fact) => {
+        const projected = { ...readRecord(fact) };
+        projectChatHistoryMediaBlock(projected, true);
+        return projected;
+      })
+    : undefined;
+}
+
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
   opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
@@ -52,25 +161,17 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
   }
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    if (preserveExactToolPayload) {
-      entry.text = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+    if (!preserveExactToolPayload) {
+      const res = truncateChatHistoryText(entry.text, maxChars);
       entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   }
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    if (preserveExactToolPayload) {
-      entry.content = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+    if (!preserveExactToolPayload) {
+      const res = truncateChatHistoryText(entry.content, maxChars);
       entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   }
   if (typeof entry.partialJson === "string" && !preserveExactToolPayload) {
@@ -96,25 +197,8 @@ export function sanitizeChatHistoryContentBlock(
     delete entry.openclawReasoningReplay;
     changed = true;
   }
-  const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = estimateBase64DecodedBytes(entry.data);
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
-  }
-  if (type === "audio" && entry.source && typeof entry.source === "object") {
-    const source = { ...(entry.source as Record<string, unknown>) };
-    if (source.type === "base64" && typeof source.data === "string") {
-      const bytes = estimateBase64DecodedBytes(source.data);
-      delete source.data;
-      source.omitted = true;
-      source.bytes = bytes;
-      entry.source = source;
-      changed = true;
-    }
-  }
+  const mediaChanged = projectChatHistoryMediaBlock(entry);
+  changed ||= mediaChanged;
   return { block: changed ? entry : block, changed };
 }
 
@@ -127,9 +211,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
       return false;
     }
     const entry = block as { type?: unknown; textSignature?: unknown };
-    return (
-      entry.type === "text" && Boolean(parseAssistantTextSignature(entry.textSignature)?.phase)
-    );
+    return entry.type === "text" && Boolean(parseAssistantTextSignature(entry)?.phase);
   });
   if (!hasExplicitPhasedText) {
     return { content, changed: false };
@@ -142,7 +224,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
     if (entry.type !== "text") {
       return true;
     }
-    return parseAssistantTextSignature(entry.textSignature)?.phase === "final_answer";
+    return parseAssistantTextSignature(entry)?.phase === "final_answer";
   });
   return {
     content: filtered,
@@ -150,7 +232,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   };
 }
 
-function projectAssistantTextFromMixedToolContent(
+function projectAssistantMixedToolContent(
   content: unknown[],
   maxChars: number,
 ): { content: unknown[]; changed: boolean } | null {
@@ -164,27 +246,30 @@ function projectAssistantTextFromMixedToolContent(
     return null;
   }
 
-  const textBlocks: unknown[] = [];
+  let hasVisibleText = false;
+  const projectedContent: unknown[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text" || typeof entry.text !== "string" || !entry.text.trim()) {
+    if (!isAssistantTextContentType(entry.type)) {
+      projectedContent.push(block);
       continue;
     }
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const truncated = truncateChatHistoryText(stripped.text, maxChars);
+    if (typeof entry.text !== "string" || !entry.text.trim()) {
+      continue;
+    }
+    const truncated = truncateChatHistoryText(entry.text, maxChars);
     if (truncated.text.trim()) {
-      textBlocks.push({ type: "text", text: truncated.text });
+      projectedContent.push({ type: "text", text: truncated.text });
+      hasVisibleText = true;
     }
   }
 
-  return textBlocks.length > 0 ? { content: textBlocks, changed: true } : null;
-}
-
-function toFiniteNumber(x: unknown): number | undefined {
-  return asFiniteNumber(x);
+  // Mixed messages supply both the visible bubble and its reasoning/tool trace.
+  // Keep structured siblings or a history reload loses activity shown while live.
+  return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
 function sanitizeCost(raw: unknown): Record<string, number> | undefined {
@@ -194,7 +279,7 @@ function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   const c = raw as Record<string, unknown>;
   const out: Record<string, number> = {};
   for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
-    const value = toFiniteNumber(c[key]);
+    const value = asFiniteNumber(c[key]);
     if (value !== undefined) {
       out[key] = value;
     }
@@ -229,7 +314,7 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   ];
 
   for (const k of knownFields) {
-    const n = toFiniteNumber(u[k]);
+    const n = asFiniteNumber(u[k]);
     if (n !== undefined) {
       out[k] = n;
     }
@@ -287,6 +372,29 @@ export function sanitizeChatHistoryMessage(
   }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
+  if ("providerReplay" in entry) {
+    delete entry.providerReplay;
+    changed = true;
+  }
+  const openClawMeta = readRecord(entry["__openclaw"]);
+  if (openClawMeta && ("upstreamUserText" in openClawMeta || "media" in openClawMeta)) {
+    // Codex retains the decorated upstream prompt for transcript reconstruction.
+    // It is not display data and can otherwise evict the visible row from history.
+    const projectedMeta = { ...openClawMeta };
+    delete projectedMeta.upstreamUserText;
+    if ("media" in projectedMeta) {
+      projectedMeta.media = projectChatHistoryMediaFacts(projectedMeta.media);
+      if (projectedMeta.media === undefined) {
+        delete projectedMeta.media;
+      }
+    }
+    if (Object.keys(projectedMeta).length > 0) {
+      entry["__openclaw"] = projectedMeta;
+    } else {
+      delete entry["__openclaw"];
+    }
+    changed = true;
+  }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
   const preserveExactToolPayload =
     role === "toolresult" ||
@@ -346,18 +454,16 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(stripped.text)
-      : stripped.text;
-    changed ||= controlStripped !== stripped.text;
+      ? stripSuppressedControlReplyToken(entry.content)
+      : entry.content;
+    changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
       entry.content = controlStripped;
-      changed ||= stripped.changed;
     } else {
       const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => {
@@ -387,9 +493,9 @@ export function sanitizeChatHistoryMessage(
       changed = true;
     }
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const mixedToolText = projectAssistantTextFromMixedToolContent(entry.content, maxChars);
-      if (mixedToolText) {
-        entry.content = mixedToolText.content;
+      const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
+      if (mixedToolContent) {
+        entry.content = mixedToolContent.content;
         if (entry.phase === "commentary") {
           delete entry.phase;
         }
@@ -405,18 +511,16 @@ export function sanitizeChatHistoryMessage(
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(stripped.text)
-      : stripped.text;
-    changed ||= controlStripped !== stripped.text;
+      ? stripSuppressedControlReplyToken(entry.text)
+      : entry.text;
+    changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {
       entry.text = controlStripped;
-      changed ||= stripped.changed;
     } else {
       const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
+      changed ||= res.truncated;
     }
   }
 
@@ -467,11 +571,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  // Classify after removing UI-only directives, before sanitization can erase
-  // the control token and leave a blank assistant row behind.
-  const displayText =
-    text === undefined ? undefined : stripInlineDirectiveTagsForDisplay(text).text;
-  if (displayText === undefined || !isSuppressedControlReplyText(displayText)) {
+  if (text === undefined || !isSuppressedControlReplyText(text)) {
     return false;
   }
   return !hasAssistantDisplayableNonTextContent(message);

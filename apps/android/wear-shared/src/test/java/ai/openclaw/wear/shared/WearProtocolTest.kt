@@ -10,7 +10,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WearProtocolTest {
@@ -66,6 +68,7 @@ class WearProtocolTest {
     val methodNames =
       mapOf(
         WearRpcMethod.ProxyStatus to "proxy.status",
+        WearRpcMethod.AgentPulse to "agent.pulse",
         WearRpcMethod.SessionsList to "sessions.list",
         WearRpcMethod.AgentsList to "agents.list",
         WearRpcMethod.AgentsSelect to "agents.select",
@@ -103,7 +106,31 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
-    assertEquals("/openclaw/wear/v1/realtime/audio", WearProtocol.REALTIME_AUDIO_CHANNEL_PATH)
+    assertEquals(10_000L, WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS)
+    assertEquals(15_000L, WearProtocol.REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS)
+    assertTrue(
+      WearProtocol.REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS >
+        WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS,
+    )
+    val realtimePath = WearProtocol.realtimeAudioChannelPath("attempt-7")
+    assertEquals(
+      "/openclaw/wear/v1/realtime/audio",
+      WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+    )
+    assertEquals(
+      "/openclaw/wear/v1/realtime/audio/9804dc90c374fd8e83c9b95a75611f9bec6e0c6ecdcbed5319d6491208417521",
+      realtimePath,
+    )
+    assertEquals(realtimePath, WearProtocol.realtimeAudioChannelPath("attempt-7"))
+    assertTrue(WearProtocol.isRealtimeAudioChannelPath(realtimePath))
+    assertTrue(WearProtocol.isAttemptScopedRealtimeAudioChannelPath(realtimePath))
+    assertTrue(WearProtocol.isRealtimeAudioChannelPath(WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH))
+    assertFalse(
+      WearProtocol.isAttemptScopedRealtimeAudioChannelPath(
+        WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+      ),
+    )
+    assertFalse(WearProtocol.isRealtimeAudioChannelPath("$realtimePath/extra"))
     assertEquals("openclaw_phone_proxy_v1", WearProtocol.PHONE_CAPABILITY)
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
     assertEquals("gateway_offline", WearConnectionFailure.GatewayOffline.wireValue)
@@ -117,6 +144,11 @@ class WearProtocolTest {
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
     assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)
     assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
+    assertEquals("agent-pulse", WearProxyCapability.AgentPulse.wireValue)
+    assertEquals(
+      "attempt-scoped-realtime-audio",
+      WearProxyCapability.AttemptScopedRealtimeAudio.wireValue,
+    )
     assertEquals(WearProxyCapability.AgentControls, WearProxyCapability.fromWireValue("agent-controls"))
     assertEquals(null, WearProxyCapability.fromWireValue("future-capability"))
   }

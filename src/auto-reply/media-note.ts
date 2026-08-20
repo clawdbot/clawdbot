@@ -1,5 +1,6 @@
 /** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
@@ -61,34 +62,18 @@ function formatMediaAttachedLine(params: {
   return `${prefix}${pathValue}${typePart}${urlPart}]`;
 }
 
-// Common audio file extensions for transcription detection
-const AUDIO_EXTENSIONS = new Set([
-  ".ogg",
-  ".opus",
-  ".mp3",
-  ".m4a",
-  ".m2a",
-  ".wav",
-  ".webm",
-  ".flac",
-  ".aac",
-  ".wma",
-  ".aiff",
-  ".alac",
-  ".oga",
-]);
+// WebM is ambiguous, while WMA and ALAC do not have canonical extension mappings.
+const AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME = [".webm", ".wma", ".alac"] as const;
 
 function isAudioPath(pathLocal: string | undefined): boolean {
   if (!pathLocal) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
-  for (const ext of AUDIO_EXTENSIONS) {
-    if (lower.endsWith(ext)) {
-      return true;
-    }
+  if (isAudioFileName(pathLocal)) {
+    return true;
   }
-  return false;
+  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
+  return AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME.some((extension) => lower.endsWith(extension));
 }
 
 function isValidAttachmentIndex(index: number, attachmentCount: number): boolean {
@@ -142,6 +127,8 @@ function collectDescribedImageAttachmentIndices(ctx: MsgContext): Set<number> {
 type InboundMediaNoteProjection = {
   text?: string;
   media: MediaFact[];
+  /** Original ctx.media fact positions aligned with `media`, for index-based identity. */
+  mediaIndexes?: number[];
 };
 
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
@@ -162,7 +149,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       : [];
   });
   if (entries.length === 0) {
-    return { media: [] };
+    return { media: [], mediaIndexes: [] };
   }
 
   const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, facts.length);
@@ -190,13 +177,14 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
     return true;
   });
   if (visibleEntries.length === 0) {
-    return { media: [] };
+    return { media: [], mediaIndexes: [] };
   }
   const describedImageIndices = collectDescribedImageAttachmentIndices(ctx);
   const media = visibleEntries.map((entry) => ({
     ...entry.fact,
     ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
   }));
+  const mediaIndexes = visibleEntries.map((entry) => entry.index);
   if (visibleEntries.length === 1) {
     return {
       text: formatMediaAttachedLine({
@@ -205,6 +193,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
         url: visibleEntries[0]?.url,
       }),
       media,
+      mediaIndexes,
     };
   }
 
@@ -221,5 +210,5 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       }),
     );
   }
-  return { text: lines.join("\n"), media };
+  return { text: lines.join("\n"), media, mediaIndexes };
 }

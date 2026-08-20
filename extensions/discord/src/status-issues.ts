@@ -5,11 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import {
   appendMatchMetadata,
-  asString,
   isRecord,
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordIntentSummary = {
   messageContent?: "enabled" | "limited" | "disabled";
@@ -66,17 +66,17 @@ function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsA
           if (!isRecord(entry)) {
             return null;
           }
-          const channelId = asString(entry.channelId);
+          const channelId = normalizeOptionalString(entry.channelId);
           if (!channelId) {
             return null;
           }
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
           const missing = Array.isArray(entry.missing)
-            ? entry.missing.map((v) => asString(v)).filter(Boolean)
+            ? entry.missing.map((v) => normalizeOptionalString(v)).filter(Boolean)
             : undefined;
-          const error = asString(entry.error) ?? null;
-          const matchKey = asString(entry.matchKey) ?? undefined;
-          const matchSource = asString(entry.matchSource) ?? undefined;
+          const error = normalizeOptionalString(entry.error) ?? null;
+          const matchKey = normalizeOptionalString(entry.matchKey);
+          const matchSource = normalizeOptionalString(entry.matchSource);
           return {
             channelId,
             ok,
@@ -96,39 +96,13 @@ export function collectDiscordStatusIssues(
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readAccountStatusSnapshot(entry, ["healthState", "application", "audit"]);
+    const account = readAccountStatusSnapshot(entry, ["application", "audit"]);
     if (!account) {
       continue;
     }
     const accountId = resolveEnabledConfiguredAccountId(account);
     if (!accountId) {
       continue;
-    }
-
-    const running = account.running === true;
-    const healthState = asString(account.healthState);
-    if (
-      healthState === "stale-socket" ||
-      healthState === "stuck" ||
-      healthState === "disconnected" ||
-      healthState === "not-running"
-    ) {
-      const runningLabel = running ? "running" : "not running";
-      issues.push({
-        channel: "discord",
-        accountId,
-        kind: "runtime",
-        message: `Discord gateway transport is degraded (${healthState}; account is ${runningLabel}).`,
-        fix: "Check gateway event-loop health and Discord connectivity, then restart the Discord channel or gateway if the transport does not recover.",
-      });
-    } else if (running && account.connected === false) {
-      issues.push({
-        channel: "discord",
-        accountId,
-        kind: "runtime",
-        message: "Discord gateway transport is running but disconnected.",
-        fix: "Check gateway logs for Discord websocket errors and wait for reconnect; restart the Discord channel or gateway if it does not recover.",
-      });
     }
 
     const app = readDiscordApplicationSummary(account.application);

@@ -1,8 +1,11 @@
 import {
-  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
@@ -32,6 +35,10 @@ export async function resolveMatrixInboundContext(config: {
   core: PluginRuntime;
   cfg: CoreConfig;
   accountId: string;
+  resolveMessageIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { kind: "direct" | "channel"; id: string; threadId?: string },
+  ) => Promise<ResolvedChannelMessageIngress>;
   runtime: RuntimeEnv;
   logVerboseMessage: (message: string) => void;
   roomId: string;
@@ -81,6 +88,7 @@ export async function resolveMatrixInboundContext(config: {
     core,
     cfg,
     accountId,
+    resolveMessageIngress,
     runtime,
     logVerboseMessage,
     roomId,
@@ -219,7 +227,22 @@ export async function resolveMatrixInboundContext(config: {
       senderAllowed: replySenderAllowed,
     }).include,
   );
-  const ctxPayload = buildChannelInboundEventContext({
+  // Thread and conversation bindings finalize the Matrix session after the access preflight.
+  const channelIngress = await resolveMessageIngress(
+    {
+      agentId: _route.agentId,
+      sessionKey: _route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    },
+    {
+      kind: isDirectMessage ? "direct" : "channel",
+      id: roomId,
+      threadId: threadTarget,
+    },
+  );
+  const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress,
     channel: "matrix",
     contextVisibility: contextVisibilityMode,
     finalize: finalizeInboundContext,
@@ -238,7 +261,7 @@ export async function resolveMatrixInboundContext(config: {
       },
       groupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
     },
-    media: toInboundMediaFacts(
+    media: await toInboundMediaFactsWithMetadata(
       media
         ? [
             {
@@ -302,7 +325,6 @@ export async function resolveMatrixInboundContext(config: {
     extra: {
       GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
       GroupId: isRoom ? roomId : undefined,
-      GroupChannel: isRoom ? roomId : undefined,
       ...locationPayload?.context,
       CommandSource: "text" as const,
       NativeDirectUserId: isDirectMessage ? senderId : undefined,
@@ -334,7 +356,6 @@ export async function resolveMatrixInboundContext(config: {
         isDirect: isDirectMessage,
         isGroup: isRoom,
         isMentionableGroup: isRoom,
-        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,

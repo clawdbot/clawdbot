@@ -22,6 +22,108 @@ describe("session branch diff stats", () => {
       cwd: root,
     });
 
+  const writeFile = (file: string, contents: string | Uint8Array) =>
+    fs.writeFile(path.join(root, file), contents);
+  const appendFile = (file: string, contents: string) =>
+    fs.appendFile(path.join(root, file), contents);
+
+  const commit = async (message: string, ...files: string[]) => {
+    await git("add", ...files);
+    await git("commit", "-m", message);
+  };
+
+  const writeCommit = async (file: string, contents: string, message: string) => {
+    await writeFile(file, contents);
+    await commit(message, file);
+  };
+
+  const appendCommit = async (file: string, contents: string, message: string) => {
+    await appendFile(file, contents);
+    await commit(message, file);
+  };
+
+  const trackRemote = (branch: string, revision = "HEAD") =>
+    git("update-ref", `refs/remotes/origin/${branch}`, revision);
+  const resolveRevision = async (revision: string) =>
+    (await git("rev-parse", revision)).stdout.trim();
+
+  const initializeRepo = async (initialContents = "one\n") => {
+    await git("init", "--initial-branch=main", ".");
+    await writeCommit("a.txt", initialContents, "base");
+  };
+
+  const initializeFeatureBranch = async (initialContents = "one\n") => {
+    await initializeRepo(initialContents);
+    await trackRemote("main");
+    await git("checkout", "-b", "feature");
+  };
+
+  type FeatureWorkOptions = {
+    message?: string;
+    trackFeature?: boolean;
+    trackMain?: boolean;
+  };
+
+  const initializeFeatureWork = async ({
+    message = "feature work",
+    trackMain = true,
+    trackFeature = false,
+  }: FeatureWorkOptions = {}) => {
+    await initializeRepo();
+    if (trackMain) {
+      await trackRemote("main");
+    }
+    await git("checkout", "-b", "feature");
+    await appendCommit("a.txt", "two\n", message);
+    if (trackFeature) {
+      await trackRemote("feature");
+    }
+  };
+
+  const initializeFeatureHead = async (options: FeatureWorkOptions = {}) => {
+    await initializeFeatureWork(options);
+    return resolveRevision(options.trackFeature ? "refs/remotes/origin/feature" : "HEAD");
+  };
+
+  const mergedPull = (headSha: string, overrides: Record<string, unknown> = {}) =>
+    pullListItem({
+      state: "closed",
+      merged_at: "2026-07-01T00:00:00Z",
+      head: { sha: headSha },
+      ...overrides,
+    });
+
+  const loadBranchState = async ({
+    pullRequests,
+    defaultBranch = "main",
+  }: {
+    pullRequests?: Array<Record<string, unknown>>;
+    defaultBranch?: string | null;
+  } = {}) => {
+    const routes = [{ match: "/pulls?head=", response: () => githubJson(pullRequests ?? []) }];
+    if (pullRequests === undefined) {
+      routes.push({
+        match: "/repos/openclaw/openclaw",
+        response: () => githubJson({ fork: false }),
+      });
+    }
+    return loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl: routedFetch(routes),
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          ...(defaultBranch === null ? {} : { defaultBranch }),
+        }),
+      },
+    );
+  };
+
+  const loadMergedBranchState = (headSha: string, overrides: Record<string, unknown> = {}) =>
+    loadBranchState({ pullRequests: [mergedPull(headSha, overrides)] });
+
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-prs-")));
   });
@@ -32,929 +134,318 @@ describe("session branch diff stats", () => {
   });
 
   it("counts committed and uncommitted changes vs the origin default merge base", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\ntwo\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
+    await initializeFeatureBranch("one\ntwo\n");
     // Stand in for the remote default branch without a real remote.
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.writeFile(path.join(root, "a.txt"), "one\nthree\n");
-    await fs.writeFile(path.join(root, "b.txt"), "committed\n");
-    await git("add", "a.txt", "b.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await writeFile("a.txt", "one\nthree\n");
+    await writeFile("b.txt", "committed\n");
+    await commit("feature work", "a.txt", "b.txt");
+    await trackRemote("feature");
     // Uncommitted work counts too: the row sizes the PR the push would open.
-    await fs.appendFile(path.join(root, "b.txt"), "pending\n");
+    await appendFile("b.txt", "pending\n");
     // Untracked files count toward additions as well.
-    await fs.writeFile(path.join(root, "c.txt"), "brand new\n");
+    await writeFile("c.txt", "brand new\n");
 
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
+    const result = await loadBranchState();
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 4,
       deletions: 1,
+      changedFiles: 3,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
 
   it("skips non-regular and binary untracked files without blocking", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    await fs.writeFile(path.join(root, "text.txt"), "alpha\nbeta\n");
-    await fs.writeFile(path.join(root, "blob.bin"), Buffer.from([0x50, 0x00, 0x4b, 0x03]));
+    await initializeFeatureWork({ trackFeature: true });
+    await writeFile("text.txt", "alpha\nbeta\n");
+    await writeFile("blob.bin", Buffer.from([0x50, 0x00, 0x4b, 0x03]));
     if (process.platform !== "win32") {
       // A named pipe must not block the stats path until the git timeout.
       await execFileAsync("mkfifo", [path.join(root, "pipe")]);
     }
 
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
+    const result = await loadBranchState();
     // 1 committed line + 2 untracked text lines; binary and pipe count 0.
     expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
   });
 
   it("omits the branch payload when the remote branch has nothing to compare", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await initializeFeatureBranch();
+    await trackRemote("feature");
 
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
+    const result = await loadBranchState();
     // origin/feature == origin/main: GitHub would answer "nothing to compare".
     expect(result.branch).toBeUndefined();
   });
 
   it("reports local changes without createUrl until the branch exists on origin", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "local only");
+    await initializeFeatureBranch();
+    await appendCommit("a.txt", "two\n", "local only");
 
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // GitHub's pull/new page 404s for unpushed branches, so no Create PR
-    // link — but the session's changed files still get a row.
+    const result = await loadBranchState();
+    // Unpushed branches have no GitHub pull/new page, but changed files still get a row.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
   it("reports uncommitted changes when the remote branch has nothing to compare", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    await fs.appendFile(path.join(root, "a.txt"), "pending\n");
+    await initializeFeatureBranch();
+    await trackRemote("feature");
+    await appendFile("a.txt", "pending\n");
 
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // origin/feature == origin/main, so no Create PR link yet, but the dirty
-    // working tree is visible work the row must surface.
+    const result = await loadBranchState();
+    // With equal remote refs, dirty work remains visible without a Create PR link.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
   it("drops the Create PR row once the pushed tip is a merged PR's head", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "refs/remotes/origin/feature")).stdout.trim();
+    const mergedHead = await initializeFeatureHead({ trackFeature: true });
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
     expect(result.pullRequests[0]?.state).toBe("merged");
-    // A squash merge keeps origin/feature "ahead" of origin/main forever, but
-    // the landed tip must not resurrect a Create PR invitation to duplicate it.
+    // A squash-merged remote tip must not resurrect a duplicate Create PR invitation.
     expect(result.branch).toBeUndefined();
   });
 
   it("sizes only post-merge work, without a create link, once the PR landed", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "refs/remotes/origin/feature")).stdout.trim();
-    await fs.appendFile(path.join(root, "a.txt"), "follow-up\n");
+    const mergedHead = await initializeFeatureHead({ trackFeature: true });
+    await appendFile("a.txt", "follow-up\n");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The stale merge base would replay the merged +1 as pending; only the
-    // uncommitted follow-up line counts, and no Create PR link is offered.
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
+    // Ignore the stale merged +1; only the uncommitted follow-up counts.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
   it("keeps the Create PR row when the PR merged into a non-default base", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "refs/remotes/origin/feature")).stdout.trim();
+    const mergedHead = await initializeFeatureHead({ trackFeature: true });
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-              base: { ref: "release", repo: { name: "openclaw", owner: { login: "openclaw" } } },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // Merging into release does not land the work on main; the affordance to
-    // open a PR against the default branch must survive.
+    const result = await loadMergedBranchState(mergedHead, {
+      base: { ref: "release", repo: { name: "openclaw", owner: { login: "openclaw" } } },
+    });
+    // A release-branch merge leaves the default-branch Create PR available.
     expect(result.branch?.createUrl).toBe("https://github.com/openclaw/openclaw/pull/new/feature");
   });
 
   it("suppresses the row via local HEAD when the merged remote ref was pruned", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    // No origin/feature ref: GitHub deleted the head branch on merge and a
-    // pruned fetch removed the remote-tracking ref.
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
+    // Model a merge-deleted head branch after its remote-tracking ref was pruned.
+    const mergedHead = await initializeFeatureHead();
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
     // Without this, the stale merge base replays the landed diff forever.
     expect(result.branch).toBeUndefined();
   });
 
   it("suppresses the row when the local checkout trails the merged remote tip", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    const staleHead = (await git("rev-parse", "HEAD")).stdout.trim();
-    // Another checkout pushed a final commit before the merge; this session's
-    // HEAD trails the merged remote tip.
-    await fs.appendFile(path.join(root, "a.txt"), "review fix\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "review fix");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
+    const staleHead = await initializeFeatureHead();
+    // This checkout's HEAD trails the final commit pushed and merged elsewhere.
+    await appendCommit("a.txt", "review fix\n", "review fix");
+    await trackRemote("feature");
+    const mergedHead = await resolveRevision("HEAD");
     await git("reset", "--hard", staleHead);
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // Everything committed here is contained in the merge; a clean tree gets
-    // no row, and the stale merge base must not replay the landed subset.
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
+    // The clean, fully merged stale checkout must not replay a landed subset.
     expect(result.branch).toBeUndefined();
   });
 
   it("restores Create PR for a branch rebased past the landing with new work", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
-    // Squash-land on main, then reuse the branch: reset onto updated main,
-    // add new work, force-push.
+    const mergedHead = await initializeFeatureHead({ trackMain: false });
+    // Reuse the branch after squash-landing it: reset to main, add work, and force-push.
     await git("checkout", "main");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "squash land");
-    const mergeCommit = (await git("rev-parse", "HEAD")).stdout.trim();
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await appendCommit("a.txt", "two\n", "squash land");
+    const mergeCommit = await resolveRevision("HEAD");
+    await trackRemote("main");
     await git("checkout", "feature");
     await git("reset", "--hard", "refs/remotes/origin/main");
-    await fs.writeFile(path.join(root, "b.txt"), "second round\n");
-    await git("add", "b.txt");
-    await git("commit", "-m", "second PR work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await writeCommit("b.txt", "second round\n", "second PR work");
+    await trackRemote("feature");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-              merge_commit_sha: mergeCommit,
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The merge base contains the PR's merge commit, proving the rebase went
-    // past the landing: the new commit is a genuine second PR.
+    const result = await loadMergedBranchState(mergedHead, { merge_commit_sha: mergeCommit });
+    // A merge base containing the landing proves this new commit is a second PR.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
 
   it("counts a release-branch landing once its merge commit reaches main", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
+    const mergedHead = await initializeFeatureHead({ trackMain: false, trackFeature: true });
     // The PR merged into a release branch whose squash later reached main.
     await git("checkout", "main");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "release merge propagated");
-    const mergeCommit = (await git("rev-parse", "HEAD")).stdout.trim();
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await appendCommit("a.txt", "two\n", "release merge propagated");
+    const mergeCommit = await resolveRevision("HEAD");
+    await trackRemote("main");
     await git("checkout", "feature");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-              merge_commit_sha: mergeCommit,
-              base: { ref: "release", repo: { name: "openclaw", owner: { login: "openclaw" } } },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The release landing propagated to main, so the branch is landed work;
-    // no Create PR row despite the non-default PR base.
+    const result = await loadMergedBranchState(mergedHead, {
+      merge_commit_sha: mergeCommit,
+      base: { ref: "release", repo: { name: "openclaw", owner: { login: "openclaw" } } },
+    });
+    // Once the release landing reaches main, its non-default base no longer matters.
     expect(result.branch).toBeUndefined();
   });
 
   it("restores Create PR atop a merge-commit landing without a rebase", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
+    const mergedHead = await initializeFeatureHead({ trackMain: false });
     // A merge-commit landing keeps the head an ancestor of main.
     await git("checkout", "main");
     await git("merge", "--no-ff", "feature", "-m", "merge PR");
-    const mergeCommit = (await git("rev-parse", "HEAD")).stdout.trim();
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    const mergeCommit = await resolveRevision("HEAD");
+    await trackRemote("main");
     await git("checkout", "feature");
-    await fs.writeFile(path.join(root, "b.txt"), "follow-up\n");
-    await git("add", "b.txt");
-    await git("commit", "-m", "follow-up work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await writeCommit("b.txt", "follow-up\n", "follow-up work");
+    await trackRemote("feature");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-              merge_commit_sha: mergeCommit,
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The merged head is contained in the merge base, so a new PR's compare
-    // holds only the follow-up commit; no rebase is required here.
+    const result = await loadMergedBranchState(mergedHead, { merge_commit_sha: mergeCommit });
+    // The merge base contains the merged head, leaving only the follow-up to compare.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
   });
 
   it("keeps Create PR off while a newer squash landing is unincorporated", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
     // PR1: squash-land, then the branch rebases past it.
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "pr1 work");
-    const pr1Head = (await git("rev-parse", "HEAD")).stdout.trim();
+    const pr1Head = await initializeFeatureHead({ message: "pr1 work", trackMain: false });
     await git("checkout", "main");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "squash pr1");
-    const pr1Merge = (await git("rev-parse", "HEAD")).stdout.trim();
+    await appendCommit("a.txt", "two\n", "squash pr1");
+    const pr1Merge = await resolveRevision("HEAD");
     await git("checkout", "feature");
     await git("reset", "--hard", "main");
-    // PR2 on the rebased branch: squash-lands on main, but the branch does
-    // not rebase again before the follow-up commit.
-    await fs.writeFile(path.join(root, "b.txt"), "pr2\n");
-    await git("add", "b.txt");
-    await git("commit", "-m", "pr2 work");
-    const pr2Head = (await git("rev-parse", "HEAD")).stdout.trim();
+    // PR2 squash-lands, but the branch is not rebased again before its follow-up.
+    await writeCommit("b.txt", "pr2\n", "pr2 work");
+    const pr2Head = await resolveRevision("HEAD");
     await git("checkout", "main");
-    await fs.writeFile(path.join(root, "b.txt"), "pr2\n");
-    await git("add", "b.txt");
-    await git("commit", "-m", "squash pr2");
-    const pr2Merge = (await git("rev-parse", "HEAD")).stdout.trim();
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await writeCommit("b.txt", "pr2\n", "squash pr2");
+    const pr2Merge = await resolveRevision("HEAD");
+    await trackRemote("main");
     await git("checkout", "feature");
-    await fs.writeFile(path.join(root, "c.txt"), "follow-up\n");
-    await git("add", "c.txt");
-    await git("commit", "-m", "follow-up work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await writeCommit("c.txt", "follow-up\n", "follow-up work");
+    await trackRemote("feature");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              number: 2,
-              state: "closed",
-              merged_at: "2026-07-02T00:00:00Z",
-              head: { sha: pr2Head },
-              merge_commit_sha: pr2Merge,
-            }),
-            pullListItem({
-              number: 1,
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: pr1Head },
-              merge_commit_sha: pr1Merge,
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
+    const result = await loadBranchState({
+      pullRequests: [
+        mergedPull(pr2Head, {
+          number: 2,
+          merged_at: "2026-07-02T00:00:00Z",
+          merge_commit_sha: pr2Merge,
         }),
-      },
-    );
-
-    // PR1's landing is in the merge base but PR2's is not: a new PR would
-    // replay PR2's diff, so only the follow-up shows and the link stays off.
+        mergedPull(pr1Head, { number: 1, merge_commit_sha: pr1Merge }),
+      ],
+    });
+    // Only PR1 is in the merge base, so show the follow-up but keep Create PR off.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
   it("offers no Create PR from a stale tracking ref behind the merged head", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    const staleSha = (await git("rev-parse", "HEAD")).stdout.trim();
-    await fs.appendFile(path.join(root, "a.txt"), "final fix\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "final fix");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
-    // Another clone pushed the final commit and merged; this checkout's
-    // tracking ref and HEAD still sit at the earlier commit.
-    await git("update-ref", "refs/remotes/origin/feature", staleSha);
+    const staleSha = await initializeFeatureHead();
+    await appendCommit("a.txt", "final fix\n", "final fix");
+    const mergedHead = await resolveRevision("HEAD");
+    // This checkout's tracking ref and HEAD predate a final commit merged elsewhere.
+    await trackRemote("feature", staleSha);
     await git("reset", "--hard", staleSha);
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The stale ref is not proof of new pushed work; everything here is
-    // contained in the merged head, so no row and no Create PR invitation.
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
+    // A stale ref is not new work when the merged head already contains it.
     expect(result.branch).toBeUndefined();
   });
 
   it("prefers the newer merge base after the default branch was merged back in", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
-    // Squash-land on main, main moves on, then the session merges main back
-    // into the still-checked-out feature branch.
+    const mergedHead = await initializeFeatureHead({ trackMain: false, trackFeature: true });
+    // Main advances after the squash landing, then is merged back into the feature.
     await git("checkout", "main");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "squash land");
-    await fs.writeFile(path.join(root, "b.txt"), "unrelated\n");
-    await git("add", "b.txt");
-    await git("commit", "-m", "unrelated main work");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await appendCommit("a.txt", "two\n", "squash land");
+    await writeCommit("b.txt", "unrelated\n", "unrelated main work");
+    await trackRemote("main");
     await git("checkout", "feature");
     await git("merge", "refs/remotes/origin/main", "-m", "merge main");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The merge base (main's tip) already carries the landed content; sizing
-    // against the older merged head would replay main's progress as pending.
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
+    // Main's merge-base tip carries the landing; the older head would replay its progress.
     expect(result.branch).toBeUndefined();
   });
 
   it("ignores the merged tip as a diff base when the branch was reset onto main", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "HEAD")).stdout.trim();
+    const mergedHead = await initializeFeatureHead({ trackMain: false, trackFeature: true });
     // Squash-land the same content on main, then main moves on.
     await git("checkout", "main");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "squash land");
-    await fs.writeFile(path.join(root, "b.txt"), "unrelated\n");
-    await git("add", "b.txt");
-    await git("commit", "-m", "unrelated main work");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    // The session resets its branch onto updated main; origin/feature still
-    // points at the merged head.
+    await appendCommit("a.txt", "two\n", "squash land");
+    await writeCommit("b.txt", "unrelated\n", "unrelated main work");
+    await trackRemote("main");
+    // Reset the branch onto updated main while origin/feature stays on the merged head.
     await git("checkout", "feature");
     await git("reset", "--hard", "refs/remotes/origin/main");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // Diffing against the stale merged tip would report main's unrelated
-    // progress as pending feature work; the merge-base path reports nothing.
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
+    // The merge base excludes unrelated main progress that a stale-tip diff would replay.
     expect(result.branch).toBeUndefined();
   });
 
   it("keeps post-merge commits as a stats-only row until the branch rebases", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
-    await git("update-ref", "refs/remotes/origin/main", "HEAD");
-    await git("checkout", "-b", "feature");
-    await fs.appendFile(path.join(root, "a.txt"), "two\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "feature work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
-    const mergedHead = (await git("rev-parse", "refs/remotes/origin/feature")).stdout.trim();
-    await fs.appendFile(path.join(root, "a.txt"), "three\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "post-merge work");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    const mergedHead = await initializeFeatureHead({ trackFeature: true });
+    await appendCommit("a.txt", "three\n", "post-merge work");
+    await trackRemote("feature");
 
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () =>
-          githubJson([
-            pullListItem({
-              state: "closed",
-              merged_at: "2026-07-01T00:00:00Z",
-              head: { sha: mergedHead },
-            }),
-          ]),
-      },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        resolveGitContext: async () => ({
-          ...context,
-          branch: "feature",
-          root,
-          defaultBranch: "main",
-        }),
-      },
-    );
-
-    // The post-merge commit counts (not the landed diff), but GitHub's
-    // compare for this un-rebased tip would replay the landed changes, so the
-    // Create PR link stays off until the branch incorporates the landing.
+    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
+    // Count the post-merge commit, but hide Create PR until the branch incorporates the landing.
     expect(result.branch).toEqual({
       owner: "openclaw",
       repo: "openclaw",
       branch: "feature",
       additions: 1,
       deletions: 0,
+      changedFiles: 1,
     });
   });
 
   it("omits the branch payload when the default branch is unknown", async () => {
-    await git("init", "--initial-branch=main", ".");
-    await fs.writeFile(path.join(root, "a.txt"), "one\n");
-    await git("add", "a.txt");
-    await git("commit", "-m", "base");
+    await initializeRepo();
     await git("checkout", "-b", "feature");
-    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await trackRemote("feature");
 
-    const fetchImpl = routedFetch([
-      { match: "/pulls?head=", response: () => githubJson([]) },
-      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
-    ]);
-    const result = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      {
-        fetchImpl,
-        // No defaultBranch: origin/HEAD unresolvable in this checkout.
-        resolveGitContext: async () => ({ ...context, branch: "feature", root }),
-      },
-    );
-
+    const result = await loadBranchState({
+      // No defaultBranch: origin/HEAD unresolvable in this checkout.
+      defaultBranch: null,
+    });
     // Fail closed: without a default branch there is nothing to compare against.
     expect(result.branch).toBeUndefined();
   });

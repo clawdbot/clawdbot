@@ -2,7 +2,7 @@ import { validateNodeEventParams } from "../../../packages/gateway-protocol/src/
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
-} from "../../infra/node-pairing-state.js";
+} from "../../infra/device-pairing-node-state.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
@@ -90,6 +90,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
         authorizeNodeSystemRunEvent: (eventParams) =>
           context.nodeRegistry.authorizeSystemRunEvent({
             nodeId: eventParams.nodeId,

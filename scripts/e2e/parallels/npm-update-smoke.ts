@@ -11,7 +11,10 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
-import { formatDurationCompact } from "../../../src/infra/format-time/format-duration.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import prettyMilliseconds from "pretty-ms";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import {
   die,
   ensureValue,
@@ -523,16 +526,22 @@ export function parseArgs(argv: string[]): NpmUpdateOptions {
   return options;
 }
 
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
-}
-
 function platformRecord<T>(value: T): Record<Platform, T> {
   return { linux: value, macos: value, windows: value };
 }
 
 function formatDuration(durationMs: number): string {
-  return formatDurationCompact(durationMs, { spaced: true }) ?? "0ms";
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "0ms";
+  }
+  const roundedMs = Math.round(durationMs);
+  if (roundedMs < 1000) {
+    return prettyMilliseconds(roundedMs);
+  }
+  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
+    hideYear: true,
+    unitCount: 2,
+  });
 }
 
 function readHarnessCheckoutVersion(): string {
@@ -554,14 +563,6 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
   return resolveOpenClawRegistryVersion(value) || "";
 }
 
-function readString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 export function parseRegistryPackageMetadata(raw: string): {
   gitHead: string;
   tarball: string;
@@ -578,9 +579,9 @@ export function parseRegistryPackageMetadata(raw: string): {
     }
     const dist = isRecord(parsed.dist) ? parsed.dist : {};
     return {
-      gitHead: readString(parsed.gitHead),
-      tarball: readString(parsed["dist.tarball"]) || readString(dist.tarball),
-      version: readString(parsed.version),
+      gitHead: readStringValue(parsed.gitHead) ?? "",
+      tarball: readStringValue(parsed["dist.tarball"]) || readStringValue(dist.tarball) || "",
+      version: readStringValue(parsed.version) ?? "",
     };
   } catch {
     return { gitHead: "", tarball: "", version: "" };
@@ -618,6 +619,7 @@ export class NpmUpdateSmoke {
   private targetRegistryUrl = "";
   private macosVm = macosVmDefault;
   private linuxVm = linuxVmDefault;
+  private options: NpmUpdateOptions;
 
   private freshStatus = platformRecord("skip");
   private freshTargetStatus = platformRecord("skip");
@@ -625,7 +627,8 @@ export class NpmUpdateSmoke {
   private updateVersion = platformRecord("skip");
   private timings: NpmUpdateSummary["timings"] = [];
 
-  constructor(private options: NpmUpdateOptions) {
+  constructor(options: NpmUpdateOptions) {
+    this.options = options;
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,

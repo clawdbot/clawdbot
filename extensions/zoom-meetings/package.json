@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/zoom-meetings",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "description": "OpenClaw Zoom browser meeting participant plugin.",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "typebox": "1.3.6"
@@ -12,7 +15,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -23,11 +26,22 @@
     "extensions": [
       "./index.ts"
     ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/zoom-meetings",
+      "npmSpec": "@openclaw/zoom-meetings",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.7.2"
+    },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2"
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

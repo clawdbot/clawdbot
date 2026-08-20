@@ -1,10 +1,11 @@
 // Handles /loop by rewriting chat sugar into a cron-tool work order.
 import { createHash } from "node:crypto";
+import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
-import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
-import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
+import { commandReply as directReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import type { CommandHandler } from "./commands-types.js";
 
 const LOOP_COMMAND_PREFIX = "/loop";
 const LOOP_MIN_INTERVAL_MS = 30_000;
@@ -12,10 +13,6 @@ const LOOP_DEFAULT_INTERVAL_MS = 15 * 60_000;
 const LOOP_NAME_MAX_LENGTH = 40;
 const LOOP_USAGE =
   "Usage: /loop [interval] <prompt> — repeat a prompt in this chat (e.g. /loop 5m check deploy status). Without interval the loop self-paces between 1m and 1h. /loop status lists loops; /loop stop [name] stops.";
-
-function directReply(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
-}
 
 function loopShortName(prompt: string): string {
   return truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
@@ -49,7 +46,7 @@ function buildLoopPayloadMessage(params: {
   ];
   if (params.selfPaced) {
     lines.push(
-      'Before replying, ALWAYS call the cron tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.',
+      `Before replying, ALWAYS call the ${AUTOMATIONS_TOOL_NAME} tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.`,
     );
   }
   return lines.join("\n");
@@ -59,19 +56,19 @@ function buildFixedLoopWorkOrder(prompt: string, everyMs: number, sessionKey: st
   const shortName = loopShortName(prompt);
   const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: false });
-  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildSelfPacedLoopWorkOrder(prompt: string, sessionKey: string): string {
   const shortName = loopShortName(prompt);
   const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: true });
-  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildLoopStatusWorkOrder(sessionKey: string): string {
   const prefix = loopNamePrefix(sessionKey);
-  return `Use the cron tool (action:"list", includeDisabled:true) and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, enabled, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
+  return `Use the ${AUTOMATIONS_TOOL_NAME} tool (action:"list", includeDisabled:true) and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, enabled, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
@@ -79,65 +76,62 @@ function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
   const matchInstruction = name
     ? ` Among those, match ${JSON.stringify(name)} against the job name.`
     : "";
-  return `List cron jobs (action:"list", includeDisabled:true) and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
+  return `List automations (action:"list", includeDisabled:true) and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 /** Command handler for conversation-bound recurring loops. */
-export const handleLoopCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const trimmed = params.command.commandBodyNormalized.trim();
-  const commandEnd = trimmed.search(/\s/u);
-  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-  if (commandToken.toLowerCase() !== LOOP_COMMAND_PREFIX) {
-    return null;
-  }
-  const unauthorized = rejectUnauthorizedCommand(params, LOOP_COMMAND_PREFIX);
-  if (unauthorized) {
-    return unauthorized;
-  }
-  const nonOwner = rejectNonOwnerCommand(params, LOOP_COMMAND_PREFIX);
-  if (nonOwner) {
-    return nonOwner;
-  }
-
-  const spec = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
-  if (!spec || spec.toLowerCase() === "help") {
-    return directReply(LOOP_USAGE);
-  }
-  if (spec.toLowerCase() === "status") {
-    applyCommandTextToParams(params, buildLoopStatusWorkOrder(params.sessionKey));
-    return { shouldContinue: true };
-  }
-
-  const [firstToken = ""] = spec.split(/\s+/u);
-  if (firstToken.toLowerCase() === "stop") {
-    const name = spec.slice(firstToken.length).trim();
-    applyCommandTextToParams(params, buildLoopStopWorkOrder(name, params.sessionKey));
-    return { shouldContinue: true };
-  }
-
-  let everyMs: number | undefined;
-  // Preserve parseDurationMs semantics: bare numbers are milliseconds.
-  // The 30s floor rejects hot-loop values instead of reinterpreting them as prompt text.
-  try {
-    everyMs = parseDurationMs(firstToken);
-  } catch {
-    everyMs = undefined;
-  }
-  if (everyMs !== undefined) {
-    if (everyMs < LOOP_MIN_INTERVAL_MS) {
-      return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
-    }
-    const prompt = spec.slice(firstToken.length).trim();
-    if (!prompt) {
+export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
+  {
+    label: LOOP_COMMAND_PREFIX,
+    match: (body) => {
+      const trimmed = body.trim();
+      const commandEnd = trimmed.search(/\s/u);
+      const token = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
+      return token.toLowerCase() === LOOP_COMMAND_PREFIX
+        ? commandEnd === -1
+          ? ""
+          : trimmed.slice(commandEnd).trim()
+        : null;
+    },
+    ownerOnly: true,
+  },
+  (params, spec) => {
+    if (!spec || spec.toLowerCase() === "help") {
       return directReply(LOOP_USAGE);
     }
-    applyCommandTextToParams(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
-    return { shouldContinue: true };
-  }
+    if (spec.toLowerCase() === "status") {
+      applyCommandTextToParams(params, buildLoopStatusWorkOrder(params.sessionKey));
+      return { shouldContinue: true };
+    }
 
-  applyCommandTextToParams(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
-  return { shouldContinue: true };
-};
+    const [firstToken = ""] = spec.split(/\s+/u);
+    if (firstToken.toLowerCase() === "stop") {
+      const name = spec.slice(firstToken.length).trim();
+      applyCommandTextToParams(params, buildLoopStopWorkOrder(name, params.sessionKey));
+      return { shouldContinue: true };
+    }
+
+    let everyMs: number | undefined;
+    // Preserve parseDurationMs semantics: bare numbers are milliseconds.
+    // The 30s floor rejects hot-loop values instead of reinterpreting them as prompt text.
+    try {
+      everyMs = parseDurationMs(firstToken);
+    } catch {
+      everyMs = undefined;
+    }
+    if (everyMs !== undefined) {
+      if (everyMs < LOOP_MIN_INTERVAL_MS) {
+        return directReply(`${LOOP_USAGE} Minimum interval 30s.`);
+      }
+      const prompt = spec.slice(firstToken.length).trim();
+      if (!prompt) {
+        return directReply(LOOP_USAGE);
+      }
+      applyCommandTextToParams(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
+      return { shouldContinue: true };
+    }
+
+    applyCommandTextToParams(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
+    return { shouldContinue: true };
+  },
+);

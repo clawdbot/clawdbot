@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DIR_FETCH_HARD_MAX_BYTES, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 
 let tmpRoot: string;
 
@@ -37,12 +38,13 @@ async function createTarBuffer(params: {
 async function importTool(tarBuffer: Buffer) {
   const archivePath = path.join(tmpRoot, `archive-${randomUUID()}.tar.gz`);
   const appendFileTransferAudit = vi.fn(async () => undefined);
+  const saveMediaBuffer = vi.fn(async () => {
+    await fs.writeFile(archivePath, tarBuffer);
+    return { path: archivePath };
+  });
   vi.resetModules();
   vi.doMock("openclaw/plugin-sdk/media-store", () => ({
-    saveMediaBuffer: vi.fn(async () => {
-      await fs.writeFile(archivePath, tarBuffer);
-      return { path: archivePath };
-    }),
+    saveMediaBuffer,
   }));
   vi.doMock("../shared/audit.js", () => ({ appendFileTransferAudit }));
   vi.doMock("./node-tool-invoke.js", () => ({
@@ -59,7 +61,7 @@ async function importTool(tarBuffer: Buffer) {
         tarBase64: tarBuffer.toString("base64"),
         tarBytes: tarBuffer.byteLength,
         sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
-        fileCount: 1,
+        fileCount: 3,
       },
       startedAt: Date.now(),
     })),
@@ -67,6 +69,7 @@ async function importTool(tarBuffer: Buffer) {
   return {
     archivePath,
     appendFileTransferAudit,
+    saveMediaBuffer,
     module: await import("./dir-fetch-tool.js"),
   };
 }
@@ -81,31 +84,49 @@ async function executeDirFetch(module: typeof import("./dir-fetch-tool.js")) {
 describe("dir.fetch archive extraction", () => {
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
     const tarBuffer = await createTarBuffer({
-      entries: ["ok.txt"],
+      entries: ["ok.txt", "nested"],
       setup: async (sourceDir) => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
+        await fs.mkdir(path.join(sourceDir, "nested"));
+        await fs.writeFile(path.join(sourceDir, "nested", "also-ok.txt"), "also ok");
       },
     });
-    const { appendFileTransferAudit, module } = await importTool(tarBuffer);
+    const { appendFileTransferAudit, module, saveMediaBuffer } = await importTool(tarBuffer);
 
     const result = await executeDirFetch(module);
 
     expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("Fetched 2 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 1,
-        files: [
-          {
-            relPath: "ok.txt",
-            size: 2,
-            sha256: crypto.createHash("sha256").update("ok").digest("hex"),
-          },
-        ],
+        fileCount: 2,
       },
     });
-    const localPath = (result.details as { files: Array<{ localPath: string }> }).files[0]
-      ?.localPath;
+    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
+      .files;
+    expect(files).toHaveLength(2);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relPath: "ok.txt",
+          size: 2,
+          sha256: crypto.createHash("sha256").update("ok").digest("hex"),
+        }),
+        expect.objectContaining({
+          relPath: path.join("nested", "also-ok.txt"),
+          size: 7,
+          sha256: crypto.createHash("sha256").update("also ok").digest("hex"),
+        }),
+      ]),
+    );
+    const localPath = files.find((file) => file.relPath === "ok.txt")?.localPath;
     await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      tarBuffer,
+      "application/gzip",
+      FILE_TRANSFER_SUBDIR,
+      DIR_FETCH_HARD_MAX_BYTES,
+    );
     expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
       expect.objectContaining({ decision: "allowed" }),
     );

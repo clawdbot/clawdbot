@@ -92,11 +92,24 @@ export function requireQaBusMessageForAccount(params: {
   messages: Map<string, QaBusMessage>;
   input: Pick<QaBusReadMessageInput, "accountId" | "messageId">;
 }): QaBusMessage {
-  const message = params.messages.get(params.input.messageId);
-  if (!message || message.accountId !== normalizeAccountId(params.input.accountId)) {
+  const accountId = normalizeAccountId(params.input.accountId);
+  let match: QaBusMessage | undefined;
+  for (const message of params.messages.values()) {
+    if (message.id !== params.input.messageId || message.accountId !== accountId) {
+      continue;
+    }
+    // Reads have no conversation selector, so never guess which chat to mutate.
+    if (match) {
+      throw new Error(
+        `qa-bus message id is ambiguous for selected account: ${params.input.messageId}`,
+      );
+    }
+    match = message;
+  }
+  if (!match) {
     throw new Error(`qa-bus message not found: ${params.input.messageId}`);
   }
-  return message;
+  return match;
 }
 
 export function readQaBusMessage(params: {
@@ -115,7 +128,7 @@ export function searchQaBusMessages(params: {
   const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
   const query = normalizeOptionalLowercaseString(params.input.query);
   return Array.from(params.messages.values())
-    .filter((message) => message.accountId === accountId)
+    .filter((message) => message.accountId === accountId && !message.deleted)
     .filter((message) =>
       params.input.conversationId !== undefined
         ? message.conversation.id === params.input.conversationId

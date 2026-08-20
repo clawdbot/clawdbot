@@ -1,5 +1,6 @@
 // Store entry lookup resolves canonical keys and safe legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeConversationPeerId } from "../../routing/conversation-ref.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
@@ -10,6 +11,8 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
 import type { SessionEntry } from "./types.js";
+
+type SessionCanonicalDeliveryEvidence = Pick<SessionEntry, "delivery" | "groupId">;
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
   return normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
@@ -49,7 +52,7 @@ function normalizeEntryTarget(value: unknown): string {
   return trimmed.slice(Math.min(...sigilIndexes));
 }
 
-function entryDeliveryTargets(entry: SessionEntry | undefined): string[] {
+function entryDeliveryTargets(entry: SessionCanonicalDeliveryEvidence | undefined): string[] {
   const context = deliveryContextFromSession(entry);
   const origin = sessionDeliveryOrigin(entry);
   const candidates = [context?.to, origin?.nativeChannelId, origin?.to, entry?.groupId];
@@ -66,7 +69,7 @@ function normalizeEntryThreadId(value: unknown): string {
   return String(value).trim();
 }
 
-function entryThreadId(entry: SessionEntry | undefined): string {
+function entryThreadId(entry: SessionCanonicalDeliveryEvidence | undefined): string {
   return normalizeEntryThreadId(deliveryContextFromSession(entry)?.threadId);
 }
 
@@ -74,7 +77,7 @@ function entryThreadId(entry: SessionEntry | undefined): string {
  *  folded key is treated as a legacy alias. Segment-preserved legacy keys
  *  (Signal groups) keep their old permissive lowercase fallback. */
 export function isConfirmedLowercasedLegacyAlias(
-  entry: SessionEntry | undefined,
+  entry: SessionCanonicalDeliveryEvidence | undefined,
   normalizedKey: string,
 ): boolean {
   if (!entry) {
@@ -98,7 +101,7 @@ export function isConfirmedLowercasedLegacyAlias(
 }
 
 export function hasMismatchedCaseSensitiveDeliveryProof(
-  entry: SessionEntry | undefined,
+  entry: SessionCanonicalDeliveryEvidence | undefined,
   normalizedKey: string,
 ): boolean {
   if (!entry || !requiresFoldedSessionKeyAliasProof(normalizedKey)) {
@@ -115,12 +118,75 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   return Boolean(threadId && storedThreadId && storedThreadId !== threadId);
 }
 
+/** Restores an opaque case-sensitive peer only when the row's delivery target proves it. */
+export function resolveDeliveryProvenCanonicalSessionKey(
+  sessionKey: string,
+  entry: SessionCanonicalDeliveryEvidence,
+): string {
+  const normalizedKey = normalizeStoreSessionKey(sessionKey);
+  const delivery = deliveryContextFromSession(entry);
+  const channel = delivery?.channel?.trim().toLowerCase();
+  const peerId =
+    channel && delivery?.to ? normalizeConversationPeerId(channel, delivery.to) : undefined;
+  if (!channel || !peerId) {
+    return normalizedKey;
+  }
+  const parsedThread = parseThreadSessionSuffix(normalizedKey);
+  const baseSessionKey = parsedThread.baseSessionKey ?? normalizedKey;
+  const foldedBase = baseSessionKey.toLowerCase();
+  let peerStart = -1;
+  // Direct peer ids are lowercase-canonical; only case-preserving channel/group
+  // contracts can restore an opaque mixed-case id from delivery proof.
+  for (const peerKind of ["channel", "group"] as const) {
+    const marker = `${channel}:${peerKind}:`;
+    const nestedMarkerIndex = foldedBase.lastIndexOf(`:${marker}`);
+    const markerIndex = foldedBase.startsWith(marker)
+      ? 0
+      : nestedMarkerIndex >= 0
+        ? nestedMarkerIndex + 1
+        : -1;
+    if (markerIndex >= 0) {
+      peerStart = Math.max(peerStart, markerIndex + marker.length);
+    }
+  }
+  if (peerStart < 0) {
+    return normalizedKey;
+  }
+  const storedPeerId = baseSessionKey.slice(peerStart);
+  if (storedPeerId.toLowerCase() !== peerId.toLowerCase()) {
+    return normalizedKey;
+  }
+  const threadId = parsedThread.threadId
+    ? String(delivery?.threadId ?? parsedThread.threadId).trim()
+    : undefined;
+  const candidate = normalizeStoreSessionKey(
+    `${baseSessionKey.slice(0, peerStart)}${peerId}${threadId ? `:thread:${threadId}` : ""}`,
+  );
+  return candidate !== normalizedKey &&
+    foldedSessionKeyAliasCandidates(candidate).includes(normalizedKey) &&
+    isConfirmedLowercasedLegacyAlias(entry, candidate)
+    ? candidate
+    : normalizedKey;
+}
+
+export function collectSessionEntryLookupKeys(_database: unknown, sessionKey: string): string[] {
+  const trimmedKey = sessionKey.trim();
+  return trimmedKey
+    ? [
+        ...new Set([
+          trimmedKey,
+          ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(trimmedKey)),
+        ]),
+      ]
+    : [];
+}
+
 type SessionEntryCandidate = {
   entry: SessionEntry;
   sessionKey: string;
 };
 
-export function resolveSessionEntryCandidates(params: {
+function resolveSessionEntryCandidates(params: {
   entries: readonly SessionEntryCandidate[];
   sessionKey: string;
 }): {
@@ -211,7 +277,7 @@ export function resolveSessionEntryCandidates(params: {
   };
 }
 
-export function resolveSessionStoreEntry(params: {
+export function resolveSessionStoreEntryCore(params: {
   store: Record<string, SessionEntry>;
   sessionKey: string;
 }): {

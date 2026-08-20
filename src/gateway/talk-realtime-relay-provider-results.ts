@@ -1,6 +1,11 @@
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
 import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
-import { broadcastToOwner, relaySessions, type RelaySession } from "./talk-realtime-relay-state.js";
+import {
+  broadcastToOwner,
+  relaySessions,
+  resolveRelayProviderToolCallId,
+  type RelaySession,
+} from "./talk-realtime-relay-state.js";
 
 export function suppressedToolResultOptions(
   session: RelaySession,
@@ -63,8 +68,13 @@ export function submitFinalProviderToolResult(params: {
   options?: RealtimeVoiceToolResultOptions;
   onAccepted?: () => void;
 }): void | Promise<void> {
-  if (params.session.completedProviderToolResults.has(params.callId)) {
-    if (relaySessions.get(params.session.id) === params.session) {
+  const epoch = params.session.toolResultEpoch;
+  const providerCallId = resolveRelayProviderToolCallId(params.session, params.callId);
+  if (params.session.toolCalls.isProviderCompleted(providerCallId)) {
+    if (
+      relaySessions.get(params.session.id) === params.session &&
+      params.session.toolResultEpoch === epoch
+    ) {
       params.onAccepted?.();
     }
     return;
@@ -74,30 +84,33 @@ export function submitFinalProviderToolResult(params: {
     return pending;
   }
   const submit = () =>
-    params.session.bridge.submitToolResult(params.callId, params.result, params.options);
+    params.session.bridge.submitToolResult(providerCallId, params.result, params.options);
   const working = params.session.pendingWorkingToolResults.get(params.callId);
-  const epoch = params.session.toolResultEpoch;
   const submitAfterWorking = async () => {
     if (relaySessions.get(params.session.id) !== params.session) {
       return false;
     }
     if (params.session.toolResultEpoch !== epoch) {
-      if (!params.session.cancelledAgentToolCalls.has(params.callId)) {
+      if (!params.session.toolCalls.hasCancelled(params.callId)) {
         return false;
       }
       // The browser already considers this final submitted while it waits behind
       // the provider's working-result acknowledgement. Finish the cancelled call
       // here so the provider is not left waiting for a terminal result.
       await params.session.bridge.submitToolResult(
-        params.callId,
+        providerCallId,
         buildRealtimeVoiceAgentCancelProviderResult(
           "OpenClaw cancelled this consult before completion. Do not restart it.",
         ),
         suppressedToolResultOptions(params.session),
       );
-      params.session.completedProviderToolResults.add(params.callId);
-      params.session.cancelledAgentToolCalls.delete(params.callId);
-      params.session.completedAgentToolCalls.add(params.callId);
+      if (
+        !params.session.toolCalls.markProviderCompleted([providerCallId]) ||
+        !params.session.toolCalls.markAgentCompleted([params.callId])
+      ) {
+        return false;
+      }
+      params.session.toolCalls.deleteCancelled(params.callId);
       return false;
     }
     await submit();
@@ -105,7 +118,12 @@ export function submitFinalProviderToolResult(params: {
   };
   const submission = working ? working.then(submitAfterWorking, submitAfterWorking) : submit();
   const accept = () => {
-    params.session.completedProviderToolResults.add(params.callId);
+    if (params.session.toolResultEpoch !== epoch) {
+      return;
+    }
+    if (!params.session.toolCalls.markProviderCompleted([providerCallId])) {
+      return;
+    }
     if (relaySessions.get(params.session.id) === params.session) {
       params.onAccepted?.();
     }

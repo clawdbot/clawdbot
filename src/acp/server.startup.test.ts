@@ -1,6 +1,7 @@
 /** Tests ACP server startup readiness, Gateway bootstrap, and shutdown wiring. */
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 
 type GatewayClientCallbacks = {
   onEvent?: (evt: { event: string; payload?: unknown }) => void;
@@ -13,14 +14,11 @@ type GatewayClientAuth = {
   token?: string;
   password?: string;
 };
-type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
-  url: string;
-  urlSource: string;
-  auth: GatewayClientAuth;
-}>;
+type ResolveGatewayClientBootstrap = typeof resolveGatewayClientBootstrap;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
     caps?: string[];
+    tlsFingerprint?: string;
     url?: string;
   };
 type MockAcpStream = {
@@ -52,6 +50,11 @@ const mockState = vi.hoisted(() => ({
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
+    connectionDetails: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
     auth: {
       token: undefined,
       password: undefined,
@@ -71,6 +74,7 @@ vi.mock("node:stream", async (importOriginal) => {
         },
       }),
   );
+  vi.spyOn(actual.Writable, "toWeb").mockImplementation(() => new WritableStream());
   return actual;
 });
 
@@ -159,18 +163,19 @@ vi.mock("../gateway/call.js", () => ({
       return {
         url: url.trim(),
         urlSource: "cli --url",
+        message: `Gateway target: ${url.trim()}`,
       };
     }
     return {
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
     };
   },
 }));
 
 vi.mock("../gateway/client-bootstrap.js", () => ({
-  resolveGatewayClientBootstrap: (params: unknown) =>
-    mockState.resolveGatewayClientBootstrap(params),
+  resolveGatewayClientBootstrap: mockState.resolveGatewayClientBootstrap,
 }));
 
 vi.mock("../gateway/client.js", () => ({
@@ -380,6 +385,11 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: ws://127.0.0.1:18789",
+      },
       auth: {
         token: undefined,
         password: undefined,
@@ -425,6 +435,35 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "wss://127.0.0.1:18789",
+      urlSource: "local loopback",
+      connectionDetails: {
+        url: "wss://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: wss://127.0.0.1:18789",
+      },
+      tlsFingerprint: "sha256:local",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.gatewayOptions[0]?.tlsFingerprint).toBe("sha256:local");
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "default logging",
@@ -436,7 +475,7 @@ describe("serveAcpGateway startup", () => {
       opts: { verbose: true },
       expected: [
         "openclaw acp: gateway event chat failed\n",
-        "openclaw acp: gateway event chat error: Error: handler boom\n",
+        "openclaw acp: gateway event chat error: handler boom\n",
       ],
     },
   ])("contains rejected gateway event handling with $name", async ({ opts, expected }) => {
@@ -527,6 +566,11 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: ws://127.0.0.1:18789",
+      },
       auth: {
         token: undefined,
         password: "resolved-secret-password", // pragma: allowlist secret
@@ -576,6 +620,11 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:19999",
       urlSource: "cli --url",
+      connectionDetails: {
+        url: "ws://127.0.0.1:19999",
+        urlSource: "cli --url",
+        message: "Gateway target: ws://127.0.0.1:19999",
+      },
       auth: {
         token: undefined,
         password: undefined,

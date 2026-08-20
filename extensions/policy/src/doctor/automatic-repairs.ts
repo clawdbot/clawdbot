@@ -1,10 +1,12 @@
 // Policy automatic repairs apply only deterministic narrowing config changes.
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type {
   HealthFinding,
   HealthRepairContext,
   HealthRepairResult,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 
@@ -445,12 +447,4 @@ function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
   const next: ConfigRecord = {};
   parent[key] = next;
   return next;
-}
-
-function isRecord(value: unknown): value is ConfigRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function uniqueStrings(values: readonly string[]): readonly string[] {
-  return [...new Set(values)];
 }

@@ -387,9 +387,10 @@ describe("legacy APNs Doctor migration", () => {
 
   it("rolls back inserted rows when a later canonical row is invalid", async () => {
     const stateDir = useStateDir();
+    const privateMarker = "must-not-appear-in-doctor-output";
     const sourcePath = await writeLegacyState(stateDir, {
       "legacy-only": directRegistration({ nodeId: "legacy-only" }),
-      "corrupt-node": directRegistration({ nodeId: "corrupt-node" }),
+      [privateMarker]: directRegistration({ nodeId: privateMarker }),
     });
     openOpenClawStateDatabase()
       .db.prepare(
@@ -397,11 +398,12 @@ describe("legacy APNs Doctor migration", () => {
            node_id, transport, topic, environment, updated_at_ms
          ) VALUES (?, ?, ?, ?, ?)`,
       )
-      .run("corrupt-node", "unknown", "ai.openclaw.ios", "sandbox", 1);
+      .run(privateMarker, "unknown", "ai.openclaw.ios", "sandbox", 1);
 
     const result = await migrate(stateDir);
 
     expect(result.warnings[0]).toContain("invalid APNs registration row");
+    expect(result.warnings.join("\n")).not.toContain(privateMarker);
     await expect(loadApnsRegistration("legacy-only", stateDir)).resolves.toBeNull();
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);

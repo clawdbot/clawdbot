@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
@@ -65,6 +66,39 @@ export function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
+function normalizeProjectKeyList(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  for (const rawKey of value.split(";")) {
+    const trimmed = rawKey.trim();
+    if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
+      continue;
+    }
+    if (trimmed.startsWith("path:")) {
+      keys.add(trimmed);
+      continue;
+    }
+    const separator = trimmed.indexOf("/");
+    if (separator < 1) {
+      keys.add(trimmed);
+      continue;
+    }
+    // Preserve remote path case so case-sensitive hosts fail closed. Providers
+    // with case-insensitive slugs may miss boosts/digests across casing variants,
+    // but folding paths could cross-inject memory between distinct repositories.
+    keys.add(`${trimmed.slice(0, separator).toLowerCase()}${trimmed.slice(separator)}`);
+  }
+  return keys.size > 0 ? [...keys].join("; ") : undefined;
+}
+
+export function mergeProjectKeyLists(...values: unknown[]): string | undefined {
+  return normalizeProjectKeyList(
+    values.flatMap((value) => normalizeProjectKeyList(value)?.split(";") ?? []).join(";"),
+  );
+}
+
 export function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
@@ -118,7 +152,7 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   // The composite detector below still requires the full signal combination, so widening
   // the lead check to anywhere in the first 200 chars closes the leak without creating
   // false positives for ordinary durable notes that merely mention the word in prose.
-  const head = withoutPrefix.slice(0, 200);
+  const head = truncateUtf16Safe(withoutPrefix, 200);
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
@@ -309,6 +343,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
           ? entry.claimHash.trim()
           : undefined;
+      const projectKey = normalizeProjectKeyList(entry.projectKey);
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
       if (
         fullSnippet &&
@@ -393,6 +428,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
         conceptTags,
         ...(provenance ? { provenance } : {}),
         ...(claimHash ? { claimHash } : {}),
+        ...(projectKey ? { projectKey } : {}),
         ...(promotedAt ? { promotedAt } : {}),
       };
     }
@@ -406,14 +442,13 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
 }
 
 export function parseStoreTimestampMs(value: string | undefined): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
-function compareStoreTimestampDesc(left: string | undefined, right: string | undefined): number {
+export function compareStoreTimestampDesc(
+  left: string | undefined,
+  right: string | undefined,
+): number {
   const leftMs = parseStoreTimestampMs(left);
   const rightMs = parseStoreTimestampMs(right);
   if (leftMs === rightMs) {

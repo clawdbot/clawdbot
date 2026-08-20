@@ -1,6 +1,15 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Signal tests cover retry behavior for reply session initialization conflicts.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { startSignalIngressMonitor } from "../signal-ingress.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const [
@@ -322,6 +331,127 @@ describe("signal reply session init conflict retry", () => {
 
       expect(errorLogs.some((msg) => msg.includes("signal debounce flush failed"))).toBe(true);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves durable abandon accounting through backoff, threshold, and restart", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 0, 2);
+    vi.setSystemTime(now);
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-abandon-"));
+    const stateDir = await fs.realpath(created);
+    type Queue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
+    type Payload = Parameters<Queue["enqueue"]>[1];
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "signal",
+      accountId: "default",
+      stateDir,
+    });
+    const timestamp = 1_700_000_000_777;
+    const event = createSignalReceiveEvent({
+      timestamp,
+      dataMessage: { timestamp, message: "retry through durable ingress", attachments: [] },
+    });
+    const eventId = JSON.stringify(["number:+15550001111", timestamp]);
+    dispatchInboundMessageMock.mockRejectedValue(CONFLICT_ERROR);
+
+    const createIntegratedMonitor = async () => {
+      const tracked = createTrackedTaskHarness();
+      const handler = createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          cfg: { messages: { inbound: { debounceMs: 10 } } },
+          runTrackedTask: tracked.runTrackedTask,
+        }),
+      );
+      const monitor = await startSignalIngressMonitor({
+        accountId: "default",
+        queue,
+        dispatch: async (incoming, lifecycle) => await handler(incoming, lifecycle),
+        runtime: { error: vi.fn(), log: vi.fn() },
+      });
+      return { monitor, tracked };
+    };
+    const finishOuterAttempt = async (tracked: ReturnType<typeof createTrackedTaskHarness>) => {
+      await vi.advanceTimersByTimeAsync(10);
+      expect(tracked.tasks).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(7_000);
+      await Promise.all(tracked.tasks);
+    };
+    const pendingAttempt = async (attempts: number) => {
+      const pending = await queue.listPending({ limit: "all" });
+      expect(pending).toEqual([
+        expect.objectContaining({
+          id: eventId,
+          attempts,
+          lastAttemptAt: expect.any(Number),
+          lastError: "turn-abandoned",
+        }),
+      ]);
+      const record = pending[0];
+      const lastAttemptAt = record?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Signal retry timestamp for attempt ${attempts}`);
+      }
+      return { ...record, lastAttemptAt };
+    };
+
+    try {
+      const first = await createIntegratedMonitor();
+      await first.monitor.receive(event);
+      await finishOuterAttempt(first.tracked);
+      const firstAttempt = await pendingAttempt(1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      await first.monitor.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = await createIntegratedMonitor();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
+      expect(blocked.tracked.tasks).toHaveLength(0);
+      await blocked.monitor.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = await createIntegratedMonitor();
+      await finishOuterAttempt(second.tracked);
+      const secondAttempt = await pendingAttempt(2);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(8);
+      await second.monitor.stop();
+
+      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim(eventId, { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Signal seed claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: "turn-abandoned",
+          releasedAt: secondAttempt.lastAttemptAt,
+        });
+      }
+
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = await createIntegratedMonitor();
+      await finishOuterAttempt(threshold.tracked);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(12);
+      await threshold.monitor.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = await createIntegratedMonitor();
+      await finishOuterAttempt(beyond.tracked);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
+      await beyond.monitor.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = await createIntegratedMonitor();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(16);
+      expect(blockedRestart.tracked.tasks).toHaveLength(0);
+      await blockedRestart.monitor.stop();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
       vi.useRealTimers();
     }
   });

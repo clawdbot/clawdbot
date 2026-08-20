@@ -17,6 +17,27 @@ const BYTE_SIZE_STYLES = {
   "legacy-binary": { base: 1024, labels: ["B", "KB", "MB", "GB", "TB"] },
 } as const satisfies Record<ByteSizeStyle, { base: number; labels: readonly string[] }>;
 
+export type RelativeTimeUnit = "second" | "minute" | "hour" | "day";
+
+/** Buckets an absolute duration while preserving nested display rounding at unit boundaries. */
+export function bucketRelativeTimeMs(durationMs: number): {
+  value: number;
+  unit: RelativeTimeUnit;
+} {
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) {
+    return { value: seconds, unit: "second" };
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return { value: minutes, unit: "minute" };
+  }
+  const hours = Math.round(minutes / 60);
+  return hours < 48
+    ? { value: hours, unit: "hour" }
+    : { value: Math.round(hours / 24), unit: "day" };
+}
+
 /** Formats a byte count with caller-explicit scale, labels, precision, and unit cap. */
 export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): string {
   const { base, labels } = BYTE_SIZE_STYLES[options.style];

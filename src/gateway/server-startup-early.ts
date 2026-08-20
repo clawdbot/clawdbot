@@ -77,6 +77,9 @@ export async function startGatewayEarlyRuntime(params: {
   getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
   getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
   refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
+  restartRunningChannels: GatewayMaintenanceParams["restartRunningChannels"];
+  refreshPresence: GatewayMaintenanceParams["refreshPresence"];
+  resetEventLoopHealth: GatewayMaintenanceParams["resetEventLoopHealth"];
   logHealth: GatewayMaintenanceParams["logHealth"];
   dedupe: GatewayMaintenanceParams["dedupe"];
   chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
@@ -125,14 +128,13 @@ export async function startGatewayEarlyRuntime(params: {
   }
 
   const skillsChangeUnsub = params.minimalTestGateway
-    ? () => {}
+    ? async () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
-        const [{ registerSkillsChangeListener }, { refreshRemoteBinsForConnectedNodes }] =
-          await Promise.all([
-            import("../skills/runtime/refresh.js"),
-            loadRemoteSkillsRuntimeModule(),
-          ]);
-        return registerSkillsChangeListener((event) => {
+        const skillsRuntimePromise = import("../skills/runtime/refresh.js");
+        const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
+        const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
+        const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
+        const unregister = registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {
             // The snapshot invalidation runs after remote descriptors/bins change;
             // clients can now refetch authoritative skills.status without racing the probe.
@@ -161,6 +163,10 @@ export async function startGatewayEarlyRuntime(params: {
           }, params.skillsRefreshDelayMs);
           params.setSkillsRefreshTimer(nextTimer);
         });
+        return async () => {
+          unregister();
+          await closeSkillsWatchers();
+        };
       });
 
   const startMaintenance = async () => {
@@ -177,6 +183,9 @@ export async function startGatewayEarlyRuntime(params: {
         getPresenceVersion: params.getPresenceVersion,
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
+        restartRunningChannels: params.restartRunningChannels,
+        refreshPresence: params.refreshPresence,
+        resetEventLoopHealth: params.resetEventLoopHealth,
         logHealth: params.logHealth,
         dedupe: params.dedupe,
         chatAbortControllers: params.chatAbortControllers,

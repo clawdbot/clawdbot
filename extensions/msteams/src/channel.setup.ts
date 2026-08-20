@@ -7,7 +7,7 @@ import {
   type ResolvedMSTeamsAccount,
 } from "./channel-config.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
-import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
+import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -18,10 +18,11 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     aliases: [...msteamsMeta.aliases],
   },
   capabilities: {
-    chatTypes: ["direct", "channel", "thread"],
+    chatTypes: ["direct", "channel", "group", "thread"],
     polls: true,
     threads: true,
     media: true,
+    reactions: true,
   },
   reload: { configPrefixes: ["channels.msteams"] },
   configSchema: MSTeamsChannelConfigSchema,
@@ -35,6 +36,5 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }),
   },
   setupWizard: msteamsSetupWizard,
-  setup: msteamsSetupAdapter,
   setupContract: msteamsSetupContract,
 };
