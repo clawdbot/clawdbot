@@ -6,7 +6,6 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import type { MemoryFlushAppendBudget } from "../../memory-flush-append.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
@@ -16,7 +15,6 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
-  memoryFlushAppendBudget?: MemoryFlushAppendBudget;
   toolsAllow?: string[];
   conversationToolPolicy?: GroupToolPolicyConfig;
   trace?: DiagnosticTraceContext;
@@ -24,7 +22,6 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
-  memoryFlushAppendBudget?: MemoryFlushAppendBudget;
   runtimeToolAllowlist?: string[];
   conversationToolPolicy?: GroupToolPolicyConfig;
   trace?: DiagnosticTraceContext;
@@ -33,7 +30,6 @@ export function buildEmbeddedAttemptToolRunContext(params: {
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
-    memoryFlushAppendBudget: params.memoryFlushAppendBudget,
     ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
     ...(params.conversationToolPolicy
       ? { conversationToolPolicy: params.conversationToolPolicy }

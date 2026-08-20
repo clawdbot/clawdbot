@@ -3,6 +3,7 @@
  * Verifies plugin tools, tool policy, schema cleanup, sandbox fs tools, and
  * assembled tool allowlist behavior.
  */
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +33,7 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -48,6 +50,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
+import { initializeMemoryFlushAppendBudget } from "./embedded-agent-runner/run/memory-flush-budget.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -2479,36 +2482,50 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("shares the append budget across memory-flush fallback tool sets", async () => {
+  it("enforces one host-owned append budget across memory-flush fallback tool sets", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-budget-"));
     const memoryRelativePath = "memory/2026-03-24.md";
-    const memoryFlushAppendBudget = { acceptedChars: 0, acceptedLines: 0 };
+    const operationalRunInstance = createOperationalRunInstanceRef("memory-flush-run");
+    initializeMemoryFlushAppendBudget(operationalRunInstance);
     try {
-      const createAttemptWrite = () =>
-        requireToolExecute(
-          requireTool(
-            createOpenClawCodingTools({
-              workspaceDir,
-              trigger: "memory",
-              memoryFlushWritePath: memoryRelativePath,
-              memoryFlushAppendBudget,
-            }),
-            "write",
-          ),
-        );
+      const createAttemptWrite = (owner = operationalRunInstance) => {
+        const options = {
+          workspaceDir,
+          trigger: "memory",
+          memoryFlushWritePath: memoryRelativePath,
+          operationalRunInstance: owner,
+        };
+        Object.assign(options, {
+          memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
+        });
+        return requireToolExecute(requireTool(createOpenClawCodingTools(options), "write"));
+      };
 
       await createAttemptWrite()("tool-memory-flush-primary", {
         path: memoryRelativePath,
         content: "x".repeat(500),
       });
+      const acceptedBytes = await fs.readFile(path.join(workspaceDir, memoryRelativePath));
+      const acceptedHash = crypto.createHash("sha256").update(acceptedBytes).digest("hex");
+      expect(acceptedBytes.byteLength).toBe(500);
       await expect(
         createAttemptWrite()("tool-memory-flush-fallback", {
           path: memoryRelativePath,
           content: "y".repeat(301),
         }),
       ).rejects.toThrow(/across this memory-flush run.*801.*max 800/);
+      const rejectedBytes = await fs.readFile(path.join(workspaceDir, memoryRelativePath));
+      expect(rejectedBytes.byteLength).toBe(500);
+      expect(crypto.createHash("sha256").update(rejectedBytes).digest("hex")).toBe(acceptedHash);
+
+      const freshRun = createOperationalRunInstanceRef("memory-flush-run-fresh");
+      initializeMemoryFlushAppendBudget(freshRun);
+      await createAttemptWrite(freshRun)("tool-memory-flush-fresh", {
+        path: memoryRelativePath,
+        content: "z".repeat(301),
+      });
       await expect(fs.readFile(path.join(workspaceDir, memoryRelativePath), "utf8")).resolves.toBe(
-        "x".repeat(500),
+        `${"x".repeat(500)}\n${"z".repeat(301)}`,
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });

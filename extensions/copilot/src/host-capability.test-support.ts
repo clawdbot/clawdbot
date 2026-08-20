@@ -1,3 +1,4 @@
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 /** Minimal host authority for tests that do not exercise host policy or approvals. */
@@ -7,6 +8,7 @@ export function createCopilotTestHostCapabilities(): AgentHarnessAttemptParamsV2
     version: 1,
     assertActive: () => {},
     bindToolSurface: (tools) => tools,
+    createToolSurface: (options) => createOpenClawCodingTools(options),
     runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
     requestApproval: async () => undefined,
     waitForApproval: async () => undefined,

@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
-import { attachMemoryFlushAppendBudget } from "./run/memory-flush-budget.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const runEmbeddedAgentViaCliBackendIfEligible = vi.hoisted(() => vi.fn());
@@ -91,8 +90,7 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
   });
 
-  it("carries host-attached memory flush budgets through the public params clone", async () => {
-    const budget = { acceptedChars: 17, acceptedLines: 2 };
+  it("does not project caller-supplied memory flush budget state through the public clone", async () => {
     const paramsWithInjectedBudget = {
       ...laneRunParams(),
       trigger: "memory" as const,
@@ -101,13 +99,19 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
     Object.assign(paramsWithInjectedBudget, {
       memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
     });
+    const operationalRunInstance =
+      paramsWithInjectedBudget.admittedRunContext.operationalRunInstance;
     runEmbeddedAgentViaCliBackendIfEligible.mockResolvedValue(dispatchResult);
 
-    await runEmbeddedAgent(attachMemoryFlushAppendBudget(paramsWithInjectedBudget, budget));
+    await runEmbeddedAgent(paramsWithInjectedBudget);
 
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0]).toMatchObject({
-      memoryFlushAppendBudget: budget,
-    });
+    expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0]).not.toHaveProperty(
+      "memoryFlushAppendBudget",
+    );
+    expect(
+      runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0].admittedRunContext
+        ?.operationalRunInstance,
+    ).toBe(operationalRunInstance);
   });
 });

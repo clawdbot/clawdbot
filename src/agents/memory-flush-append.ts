@@ -2,10 +2,6 @@ export const DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS = 800;
 export const DAILY_MEMORY_FLUSH_MAX_APPEND_LINES = 3;
 export const DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES = 16 * 1024 * 1024;
 const DAILY_MEMORY_FLUSH_MAX_LINE_CHARS = 500;
-export type MemoryFlushAppendBudget = {
-  acceptedChars: number;
-  acceptedLines: number;
-};
 
 export type PreparedMemoryFlushAppend = {
   status: "accepted";

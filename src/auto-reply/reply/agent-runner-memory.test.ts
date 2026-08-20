@@ -4,9 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import { getAttachedMemoryFlushAppendBudget } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import { resolveMemoryFlushAppendEnforcement } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES } from "../../agents/memory-flush-append.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -231,6 +232,7 @@ type ModelFallbackParams = {
 };
 
 type EmbeddedAgentParams = {
+  preparedRunAdmission?: PreparedAgentRunAdmission;
   provider?: string;
   model?: string;
   thinkLevel?: string;
@@ -549,7 +551,7 @@ describe("runMemoryFlushIfNeeded", () => {
       followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
       sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
+      modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
       sessionStore: { main: sessionEntry },
@@ -837,7 +839,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(followupRun.run.thinkLevel).toBe("ultra");
   });
 
-  it("shares one append budget across the logical memory-flush fallback run", async () => {
+  it("shares one opaque append enforcement capability across the logical fallback run", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
@@ -860,21 +862,14 @@ describe("runMemoryFlushIfNeeded", () => {
         };
       },
     );
-    runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
-      const budget = getAttachedMemoryFlushAppendBudget(params);
-      if (!budget) {
-        throw new Error("expected memory-flush append budget");
-      }
-      budget.acceptedChars += params.provider === "openai" ? 500 : 301;
-      return { payloads: [], meta: {} };
-    });
+    runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
 
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun(),
       sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
       defaultModel: "openai/gpt-5.6-sol",
-      agentCfgContextTokens: 100_000,
+      modelContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
       sessionStore,
@@ -884,11 +879,15 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const primaryBudget = getAttachedMemoryFlushAppendBudget(requireEmbeddedAgentCall(0));
-    const fallbackBudget = getAttachedMemoryFlushAppendBudget(requireEmbeddedAgentCall(1));
-    expect(primaryBudget).toBeDefined();
-    expect(fallbackBudget).toBe(primaryBudget);
-    expect(fallbackBudget).toMatchObject({ acceptedChars: 801, acceptedLines: 0 });
+    const primary = requireEmbeddedAgentCall(0);
+    const fallback = requireEmbeddedAgentCall(1);
+    expect(primary.preparedRunAdmission).toBeDefined();
+    expect(fallback.preparedRunAdmission).toBe(primary.preparedRunAdmission);
+    const owner = primary.preparedRunAdmission!.operationalRunInstance;
+    expect(fallback.preparedRunAdmission!.operationalRunInstance).toBe(owner);
+    expect(resolveMemoryFlushAppendEnforcement(owner)).toBeTypeOf("function");
+    expect(primary).not.toHaveProperty("memoryFlushAppendBudget");
+    expect(fallback).not.toHaveProperty("memoryFlushAppendBudget");
   });
 
   it("preserves thinking for runtime-discovered Ollama memory-flush models", async () => {

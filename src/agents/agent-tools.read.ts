@@ -28,6 +28,7 @@ import {
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { clampNumber } from "../utils.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -37,14 +38,15 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  createMemoryFlushAppendEnforcement,
+  resolveMemoryFlushAppendEnforcement,
+} from "./embedded-agent-runner/run/memory-flush-budget.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import {
-  DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS,
-  DAILY_MEMORY_FLUSH_MAX_APPEND_LINES,
   DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
   memoryFlushAppendRejected,
   prepareDailyMemoryFlushAppend,
-  type MemoryFlushAppendBudget,
   type PreparedMemoryFlushAppend,
 } from "./memory-flush-append.js";
 import {
@@ -718,7 +720,7 @@ type MemoryFlushAppendOnlyWriteOptions = {
     root: string;
     bridge: SandboxFsBridge;
   };
-  budget?: MemoryFlushAppendBudget;
+  operationalRunInstance?: OperationalRunInstanceRef;
 };
 
 async function readOptionalUtf8File(params: {
@@ -852,7 +854,12 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   options: MemoryFlushAppendOnlyWriteOptions,
 ): AnyAgentTool {
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
-  const budget = options.budget ?? { acceptedChars: 0, acceptedLines: 0 };
+  const enforcement = options.operationalRunInstance
+    ? resolveMemoryFlushAppendEnforcement(options.operationalRunInstance)
+    : createMemoryFlushAppendEnforcement();
+  if (!enforcement) {
+    throw new Error("memory-flush append enforcement was not initialized for this admitted run");
+  }
   return {
     ...tool,
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
@@ -909,35 +916,26 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           signal,
         });
         signal?.throwIfAborted();
-        const cumulativeLines = budget.acceptedLines + preparedAppend.appendedLines;
-        if (cumulativeLines > DAILY_MEMORY_FLUSH_MAX_APPEND_LINES) {
-          throw memoryFlushAppendRejected(
-            `too many lines across this memory-flush run (${cumulativeLines}; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_LINES}). Write 1-3 short pointer lines only.`,
-          );
-        }
-        const cumulativeChars = budget.acceptedChars + preparedAppend.appendChars;
-        if (cumulativeChars > DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS) {
-          throw memoryFlushAppendRejected(
-            `content across this memory-flush run is too large (${cumulativeChars} chars; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS}). Write 1-3 short pointer lines only.`,
-          );
-        }
-
-        await appendMemoryFlushContent({
-          absolutePath: allowedAbsolutePath,
-          root: options.root,
-          relativePath: options.relativePath,
-          content: preparedAppend.content,
-          sandbox: options.sandbox,
-          signal,
+        return await enforcement({
+          appendChars: preparedAppend.appendChars,
+          appendedLines: preparedAppend.appendedLines,
+          commit: async () => {
+            await appendMemoryFlushContent({
+              absolutePath: allowedAbsolutePath,
+              root: options.root,
+              relativePath: options.relativePath,
+              content: preparedAppend.content,
+              sandbox: options.sandbox,
+              signal,
+            });
+            return {
+              content: [
+                { type: "text" as const, text: `Appended content to ${options.relativePath}.` },
+              ],
+              details: { changed: true },
+            };
+          },
         });
-        budget.acceptedLines = cumulativeLines;
-        budget.acceptedChars = cumulativeChars;
-        return {
-          content: [
-            { type: "text" as const, text: `Appended content to ${options.relativePath}.` },
-          ],
-          details: { changed: true },
-        };
       };
 
       const canonicalRoot = await fs.realpath(options.root);

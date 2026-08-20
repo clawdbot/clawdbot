@@ -13,13 +13,12 @@ import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
-import { attachMemoryFlushAppendBudget } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
+import { initializeMemoryFlushAppendBudget } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
+import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import {
   DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES,
   memoryFlushAppendRejected,
-  type MemoryFlushAppendBudget,
 } from "../../agents/memory-flush-append.js";
-import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -1431,7 +1430,7 @@ export async function runMemoryFlushIfNeeded(params: {
     selection,
     preparedRunAdmission,
   } = preparedAttempt;
-  const memoryFlushAppendBudget: MemoryFlushAppendBudget = { acceptedChars: 0, acceptedLines: 0 };
+  initializeMemoryFlushAppendBudget(preparedRunAdmission.operationalRunInstance);
   let memoryCompactionCompleted = false;
   let memoryFlushWroteTarget = false;
   let postCompactionSessionId: string | undefined;
@@ -1517,46 +1516,43 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
         });
-        const embeddedAgentParams = attachMemoryFlushAppendBudget(
-          {
-            preparedRunAdmission,
-            ...embeddedContext,
-            ...senderContext,
-            ...runBaseParams,
-            agentHarnessId: sessionRuntimeOverride,
-            agentHarnessRuntimeOverride: sessionRuntimeOverride,
-            sandboxSessionKey: params.runtimePolicySessionKey,
-            allowGatewaySubagentBinding: true,
-            silentExpected: true,
-            trigger: "memory",
-            memoryFlushWritePath,
-            prompt: activeMemoryFlushPlan.prompt,
-            transcriptPrompt: "",
-            extraSystemPrompt: flushSystemPrompt,
-            isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature:
-              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-            abortSignal,
-            replyOperation: params.replyOperation,
-            contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
-            onAgentEvent: (evt) => {
-              if (evt.stream === "tool" && evt.data.name === "write") {
-                if (evt.data.phase === "result" && evt.data.isError !== true) {
-                  memoryFlushWroteTarget = true;
-                }
+        const embeddedAgentParams: Parameters<typeof memoryDeps.runEmbeddedAgent>[0] = {
+          preparedRunAdmission,
+          ...embeddedContext,
+          ...senderContext,
+          ...runBaseParams,
+          agentHarnessId: sessionRuntimeOverride,
+          agentHarnessRuntimeOverride: sessionRuntimeOverride,
+          sandboxSessionKey: params.runtimePolicySessionKey,
+          allowGatewaySubagentBinding: true,
+          silentExpected: true,
+          trigger: "memory",
+          memoryFlushWritePath,
+          prompt: activeMemoryFlushPlan.prompt,
+          transcriptPrompt: "",
+          extraSystemPrompt: flushSystemPrompt,
+          isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+          bootstrapPromptWarningSignaturesSeen,
+          bootstrapPromptWarningSignature:
+            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+          abortSignal,
+          replyOperation: params.replyOperation,
+          contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
+          onAgentEvent: (evt) => {
+            if (evt.stream === "tool" && evt.data.name === "write") {
+              if (evt.data.phase === "result" && evt.data.isError !== true) {
+                memoryFlushWroteTarget = true;
               }
-              if (evt.stream === "compaction") {
-                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                if (phase === "end" && evt.data.completed === true) {
-                  memoryCompactionCompleted = true;
-                }
+            }
+            if (evt.stream === "compaction") {
+              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+              if (phase === "end" && evt.data.completed === true) {
+                memoryCompactionCompleted = true;
               }
-            },
+            }
           },
-          memoryFlushAppendBudget,
-        );
+        };
         const result = await memoryDeps.runEmbeddedAgent(embeddedAgentParams);
         visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
         if (result.meta?.agentMeta?.sessionId) {

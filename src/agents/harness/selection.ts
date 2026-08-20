@@ -754,9 +754,10 @@ function prepareHarnessFinalizationParams(
 > {
   const {
     hostCapabilities: _hostCapabilities,
+    memoryFlushAppendBudget: _memoryFlushAppendBudget,
     systemAgentTool: _systemAgentTool,
     ...withoutCapabilities
-  } = params;
+  } = params as typeof params & { memoryFlushAppendBudget?: unknown };
   if (builtIn) {
     return withoutCapabilities;
   }
@@ -783,9 +784,11 @@ function withoutPluginHarnessPrivateState(
     onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
     trajectoryRecorder: _trajectoryRecorder,
     __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
+    memoryFlushAppendBudget: _memoryFlushAppendBudget,
     ...pluginParams
   } = params as EmbeddedRunAttemptParams & {
     __openclawSourceReplyDeliveryRuntime?: unknown;
+    memoryFlushAppendBudget?: unknown;
   };
   return pluginParams;
 }

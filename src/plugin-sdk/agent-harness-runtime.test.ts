@@ -204,6 +204,19 @@ describe("agent harness runtime SDK facade", () => {
     >().toEqualTypeOf<false>();
   });
 
+  it("does not expose host-owned memory-flush state in public harness contracts", () => {
+    type HasBudget<T> = "memoryFlushAppendBudget" extends keyof T ? true : false;
+    type CreateToolSurfaceOptions = Parameters<
+      NonNullable<NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]>["createToolSurface"]>
+    >[0];
+
+    expectTypeOf<HasBudget<EmbeddedRunAttemptParams>>().toEqualTypeOf<false>();
+    expectTypeOf<HasBudget<EmbeddedRunAttemptParamsV2>>().toEqualTypeOf<false>();
+    expectTypeOf<HasBudget<AgentHarnessAttemptParams>>().toEqualTypeOf<false>();
+    expectTypeOf<HasBudget<AgentHarnessAttemptParamsV2>>().toEqualTypeOf<false>();
+    expectTypeOf<HasBudget<CreateToolSurfaceOptions>>().toEqualTypeOf<false>();
+  });
+
   it("exposes attached model request transport metadata helpers", () => {
     const model = attachModelProviderRequestTransport(
       { id: "gpt-test", provider: "custom-openai" },

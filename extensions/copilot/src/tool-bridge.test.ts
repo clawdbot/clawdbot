@@ -155,6 +155,45 @@ describe("createCopilotToolBridge", () => {
     expect(createOpenClawCodingTools).not.toHaveBeenCalled();
   });
 
+  it("constructs production tools through the host seam without forwarding mutable state", async () => {
+    const bindToolSurface = vi.fn((tools: AnyAgentTool[]) => tools);
+    const receivedOptions: unknown[] = [];
+    const createToolSurface = vi.fn((options: unknown) => {
+      receivedOptions.push(options);
+      return [makeTool({ name: "read" })];
+    });
+    const attemptParams = {
+      config: { tools: { codeMode: false as const } },
+      trigger: "memory" as const,
+      memoryFlushWritePath: "memory/2026-03-24.md",
+      hostCapabilities: {
+        ...testHostCapabilities,
+        bindToolSurface,
+        createToolSurface,
+      },
+    };
+    Object.assign(attemptParams, {
+      memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
+    });
+
+    const bridge = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams,
+      modelId: "gpt-test",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(createToolSurface).toHaveBeenCalledOnce();
+    expect(receivedOptions[0]).toMatchObject({
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-03-24.md",
+    });
+    expect(receivedOptions[0]).not.toHaveProperty("memoryFlushAppendBudget");
+    expect(bindToolSurface).not.toHaveBeenCalled();
+    expect(bridge.sourceTools.map((tool) => tool.name)).toEqual(["read"]);
+  });
+
   it("binds every tool surface and retained source/SDK tools fail after capability closure", async () => {
     let active = true;
     const execute = vi.fn(async () => ({ content: [], details: {} }));

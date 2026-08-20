@@ -35,7 +35,7 @@ function createAttemptParams(workspaceDir: string) {
     thinkLevel: "off" as const,
     trigger: "memory" as const,
     memoryFlushWritePath: MEMORY_RELATIVE_PATH,
-    memoryFlushAppendBudget: { acceptedChars: 0, acceptedLines: 0 },
+    memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
   };
 }
 
@@ -48,7 +48,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       const context = buildEmbeddedAttemptToolRunContext(attempt);
       expect(context.trigger).toBe("memory");
       expect(context.memoryFlushWritePath).toBe(MEMORY_RELATIVE_PATH);
-      expect(context.memoryFlushAppendBudget).toBe(attempt.memoryFlushAppendBudget);
+      expect(context).not.toHaveProperty("memoryFlushAppendBudget");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

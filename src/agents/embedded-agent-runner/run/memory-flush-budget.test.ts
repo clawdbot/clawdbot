@@ -1,52 +1,52 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import {
-  attachMemoryFlushAppendBudget,
-  copyAttachedMemoryFlushAppendBudget,
-  getAttachedMemoryFlushAppendBudget,
+  initializeMemoryFlushAppendBudget,
+  resolveMemoryFlushAppendEnforcement,
 } from "./memory-flush-budget.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
-function createParams(): RunEmbeddedAgentParams {
-  return {
-    sessionId: "session-memory-flush-budget",
-    workspaceDir: "/tmp/openclaw-memory-flush-budget",
-    prompt: "flush memory",
-    trigger: "memory",
-    memoryFlushWritePath: "memory/2026-03-24.md",
-  };
-}
+describe("memory flush append budget ownership", () => {
+  it("allocates exactly one opaque enforcement capability for one logical run", () => {
+    const owner = createOperationalRunInstanceRef("memory-flush-budget");
 
-describe("memory flush append budget attachment", () => {
-  it("ignores caller-supplied budget-looking object properties", () => {
-    const params = {
-      ...createParams(),
-      memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
-    };
+    initializeMemoryFlushAppendBudget(owner);
+    const initial = resolveMemoryFlushAppendEnforcement(owner);
+    initializeMemoryFlushAppendBudget(owner);
 
-    expect(getAttachedMemoryFlushAppendBudget(params)).toBeUndefined();
+    expect(initial).toBeTypeOf("function");
+    expect(resolveMemoryFlushAppendEnforcement(owner)).toBe(initial);
   });
 
-  it("returns only the host-attached budget for the same params object", () => {
-    const params = createParams();
-    const budget = { acceptedChars: 0, acceptedLines: 0 };
+  it("does not expose a mutable budget on public runner params", () => {
+    type HasPublicBudget = "memoryFlushAppendBudget" extends keyof RunEmbeddedAgentParams
+      ? true
+      : false;
 
-    attachMemoryFlushAppendBudget(params, budget);
-
-    expect(getAttachedMemoryFlushAppendBudget(params)).toBe(budget);
+    expectTypeOf<HasPublicBudget>().toEqualTypeOf<false>();
   });
 
-  it("copies the host-attached budget across the public runner params clone", () => {
-    const params = createParams();
-    const budget = { acceptedChars: 17, acceptedLines: 2 };
-    const clonedParams = { ...params };
-    attachMemoryFlushAppendBudget(params, budget);
-    Object.assign(clonedParams, {
-      memoryFlushAppendBudget: { acceptedChars: -10_000, acceptedLines: -10_000 },
-    });
+  it("isolates concurrent logical runs even when their textual run ids match", async () => {
+    const firstOwner = createOperationalRunInstanceRef("same-run-id");
+    const secondOwner = createOperationalRunInstanceRef("same-run-id");
+    initializeMemoryFlushAppendBudget(firstOwner);
+    initializeMemoryFlushAppendBudget(secondOwner);
+    const first = resolveMemoryFlushAppendEnforcement(firstOwner);
+    const second = resolveMemoryFlushAppendEnforcement(secondOwner);
+    if (!first || !second) {
+      throw new Error("expected initialized memory-flush enforcement capabilities");
+    }
 
-    copyAttachedMemoryFlushAppendBudget(params, clonedParams);
-
-    expect(clonedParams).not.toBe(params);
-    expect(getAttachedMemoryFlushAppendBudget(clonedParams)).toBe(budget);
+    expect(first).not.toBe(second);
+    await Promise.all([
+      first({ appendChars: 500, appendedLines: 1, commit: async () => "first" }),
+      second({ appendChars: 500, appendedLines: 1, commit: async () => "second" }),
+    ]);
+    await expect(
+      first({ appendChars: 301, appendedLines: 1, commit: async () => "unexpected" }),
+    ).rejects.toThrow(/801 chars; max 800/);
+    await expect(
+      second({ appendChars: 301, appendedLines: 1, commit: async () => "unexpected" }),
+    ).rejects.toThrow(/801 chars; max 800/);
   });
 });

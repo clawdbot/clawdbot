@@ -66,10 +66,6 @@ import type {
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
-import {
-  copyAttachedMemoryFlushAppendBudget,
-  getAttachedMemoryFlushAppendBudget,
-} from "./run/memory-flush-budget.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
@@ -83,7 +79,10 @@ const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
+  const {
+    memoryFlushAppendBudget: _callerSuppliedMemoryFlushAppendBudget,
+    ...internalParamsInput
+  } = paramsInput as RunEmbeddedAgentInternalParams & { memoryFlushAppendBudget?: unknown };
   const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
   const requestedModel = normalizeOptionalString(internalParamsInput.model);
   const needsConfiguredDefault =
@@ -94,11 +93,11 @@ export function runEmbeddedAgent(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
-  const internalParams = copyAttachedMemoryFlushAppendBudget(internalParamsInput, {
+  const internalParams = {
     ...internalParamsInput,
     config,
     lifecycleGeneration,
-  });
+  };
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal(internalParams),
   );
@@ -114,11 +113,6 @@ async function runEmbeddedAgentInternal(
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
     ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
-  const attachedMemoryFlushAppendBudget = getAttachedMemoryFlushAppendBudget(paramsInput);
-  const memoryFlushAppendBudget =
-    paramsBase.trigger === "memory"
-      ? (attachedMemoryFlushAppendBudget ?? { acceptedChars: 0, acceptedLines: 0 })
-      : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
@@ -143,7 +137,6 @@ async function runEmbeddedAgentInternal(
     sessionTarget: runSessionTarget,
     sessionFile: runSessionTarget.sessionKey,
     skillWorkshopProposalMutationBudget,
-    memoryFlushAppendBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
