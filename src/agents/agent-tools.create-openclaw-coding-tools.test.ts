@@ -2482,10 +2482,12 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("enforces one host-owned append budget across memory-flush fallback tool sets", async () => {
+  it("keeps line limits per payload while sharing one host-owned character budget", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-budget-"));
     const memoryRelativePath = "memory/2026-03-24.md";
     const operationalRunInstance = createOperationalRunInstanceRef("memory-flush-run");
+    const primaryPayload = `${"x".repeat(249)}\n${"x".repeat(250)}`;
+    const fallbackPayload = `${"y".repeat(150)}\n${"y".repeat(150)}`;
     initializeMemoryFlushAppendBudget(operationalRunInstance);
     try {
       const createAttemptWrite = (owner = operationalRunInstance) => {
@@ -2503,7 +2505,7 @@ describe("createOpenClawCodingTools", () => {
 
       await createAttemptWrite()("tool-memory-flush-primary", {
         path: memoryRelativePath,
-        content: "x".repeat(500),
+        content: primaryPayload,
       });
       const acceptedBytes = await fs.readFile(path.join(workspaceDir, memoryRelativePath));
       const acceptedHash = crypto.createHash("sha256").update(acceptedBytes).digest("hex");
@@ -2511,7 +2513,7 @@ describe("createOpenClawCodingTools", () => {
       await expect(
         createAttemptWrite()("tool-memory-flush-fallback", {
           path: memoryRelativePath,
-          content: "y".repeat(301),
+          content: fallbackPayload,
         }),
       ).rejects.toThrow(/across this memory-flush run.*801.*max 800/);
       const rejectedBytes = await fs.readFile(path.join(workspaceDir, memoryRelativePath));
@@ -2525,7 +2527,7 @@ describe("createOpenClawCodingTools", () => {
         content: "z".repeat(301),
       });
       await expect(fs.readFile(path.join(workspaceDir, memoryRelativePath), "utf8")).resolves.toBe(
-        `${"x".repeat(500)}\n${"z".repeat(301)}`,
+        `${primaryPayload}\n${"z".repeat(301)}`,
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });

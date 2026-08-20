@@ -918,7 +918,6 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         signal?.throwIfAborted();
         return await enforcement({
           appendChars: preparedAppend.appendChars,
-          appendedLines: preparedAppend.appendedLines,
           commit: async () => {
             await appendMemoryFlushContent({
               absolutePath: allowedAbsolutePath,

@@ -1,13 +1,11 @@
 import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
 import {
   DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS,
-  DAILY_MEMORY_FLUSH_MAX_APPEND_LINES,
   memoryFlushAppendRejected,
 } from "../../memory-flush-append.js";
 
 type MemoryFlushAppendCommit<T> = Readonly<{
   appendChars: number;
-  appendedLines: number;
   commit: () => Promise<T>;
 }>;
 
@@ -21,17 +19,10 @@ const memoryFlushAppendEnforcementByRun = new WeakMap<
 /** Creates one opaque, serialized append-budget capability. Mutable counters stay closure-owned. */
 export function createMemoryFlushAppendEnforcement(): MemoryFlushAppendEnforcement {
   let acceptedChars = 0;
-  let acceptedLines = 0;
   let tail: Promise<void> = Promise.resolve();
 
   return async <T>(request: MemoryFlushAppendCommit<T>): Promise<T> => {
     const operation = tail.then(async () => {
-      const cumulativeLines = acceptedLines + request.appendedLines;
-      if (cumulativeLines > DAILY_MEMORY_FLUSH_MAX_APPEND_LINES) {
-        throw memoryFlushAppendRejected(
-          `too many lines across this memory-flush run (${cumulativeLines}; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_LINES}). Write 1-3 short pointer lines only.`,
-        );
-      }
       const cumulativeChars = acceptedChars + request.appendChars;
       if (cumulativeChars > DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS) {
         throw memoryFlushAppendRejected(
@@ -40,7 +31,6 @@ export function createMemoryFlushAppendEnforcement(): MemoryFlushAppendEnforceme
       }
 
       const result = await request.commit();
-      acceptedLines = cumulativeLines;
       acceptedChars = cumulativeChars;
       return result;
     });

@@ -39,14 +39,14 @@ describe("memory flush append budget ownership", () => {
 
     expect(first).not.toBe(second);
     await Promise.all([
-      first({ appendChars: 500, appendedLines: 1, commit: async () => "first" }),
-      second({ appendChars: 500, appendedLines: 1, commit: async () => "second" }),
+      first({ appendChars: 500, commit: async () => "first" }),
+      second({ appendChars: 500, commit: async () => "second" }),
     ]);
-    await expect(
-      first({ appendChars: 301, appendedLines: 1, commit: async () => "unexpected" }),
-    ).rejects.toThrow(/801 chars; max 800/);
-    await expect(
-      second({ appendChars: 301, appendedLines: 1, commit: async () => "unexpected" }),
-    ).rejects.toThrow(/801 chars; max 800/);
+    await expect(first({ appendChars: 301, commit: async () => "unexpected" })).rejects.toThrow(
+      /801 chars; max 800/,
+    );
+    await expect(second({ appendChars: 301, commit: async () => "unexpected" })).rejects.toThrow(
+      /801 chars; max 800/,
+    );
   });
 });
