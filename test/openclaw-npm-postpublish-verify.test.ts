@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -1184,7 +1184,15 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       name: "accepts the oversized worker rsync receiver",
       relativePath: `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
     },
-  ])("$name", ({ expected, relativePath }) => {
+    {
+      expected: [
+        `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`,
+      ],
+      name: "rejects the worker deploy entrypoint above its dedicated parser bound",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+      sparseSize: 80 * 1024 * 1024 + 1,
+    },
+  ])("$name", ({ expected, relativePath, sparseSize }) => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1194,7 +1202,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       });
       const filePath = join(packageRoot, "dist", relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+      if (sparseSize) {
+        writeFileSync(filePath, "/*", "utf8");
+        truncateSync(filePath, sparseSize);
+      } else {
+        writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+      }
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
     } finally {

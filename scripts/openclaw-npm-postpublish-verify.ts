@@ -69,11 +69,11 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
+const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
-// These artifacts bundle their full runtime closure and have a dedicated layout/import guard.
-// Keep the generic parser bound on every other installed dist file.
+// The ~69 MB self-contained worker needs extra headroom, but synchronous read/parse stays bounded.
 const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
@@ -759,13 +759,12 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   for (const filePath of distFiles.files) {
     const fileStat = lstatSync(filePath);
     const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
-    if (
-      !fileStat.isFile() ||
-      (fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES &&
-        !SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath))
-    ) {
+    const maxBytes = SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)
+      ? MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES
+      : MAX_INSTALLED_ROOT_DIST_JS_BYTES;
+    if (!fileStat.isFile() || fileStat.size > maxBytes) {
       return [
-        `installed package root dist file '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+        `installed package root dist file '${relativePath}' is invalid or exceeds ${maxBytes} bytes.`,
       ];
     }
     const source = readFileSync(filePath, "utf8");
