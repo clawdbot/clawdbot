@@ -332,10 +332,7 @@ export async function sendPayload(
   }
 }
 
-export async function emitPreviewFinalizedHook(
-  turn: Turn,
-  result: LaneDeliveryResult,
-): Promise<void> {
+async function emitPreviewFinalizedHook(turn: Turn, result: LaneDeliveryResult): Promise<void> {
   if (
     turn.isSuperseded() ||
     (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial")
@@ -358,6 +355,27 @@ export async function emitPreviewFinalizedHook(
   if (transcriptMirror && result.delivery.content) {
     void transcriptMirror({ text: result.delivery.content }).catch((err: unknown) => {
       logVerbose(`telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`);
+    });
+  }
+}
+
+export async function handlePreviewFinalizedResult(
+  turn: Turn,
+  result: LaneDeliveryResult,
+): Promise<void> {
+  if (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial") {
+    return;
+  }
+  await emitPreviewFinalizedHook(turn, result);
+  if (result.kind === "preview-finalized-partial") {
+    // The preview is already visible, so this failure is terminal: preserve its
+    // receipt and prevent outer fallback delivery from duplicating the message.
+    markFinalDelivered(turn);
+    throw mergeTelegramPartialDeliveryError(result.error, {
+      receipt: result.delivery.receipt,
+      content: result.delivery.content,
+      messageIds: result.delivery.receipt.platformMessageIds,
+      visibleReplySent: true,
     });
   }
 }
@@ -416,7 +434,7 @@ async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
     durable: false,
   });
   turn.activeAnswerBlockDelivery = undefined;
-  await emitPreviewFinalizedHook(turn, result);
+  await handlePreviewFinalizedResult(turn, result);
 }
 
 async function deliverTelegramProgressModeFinalAnswer(
@@ -514,21 +532,11 @@ export async function deliverFinalAnswerText(
       markFinalDelivered(turn);
     }
   }
-  if (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial") {
-    await emitPreviewFinalizedHook(turn, result);
-  }
+  await handlePreviewFinalizedResult(turn, result);
   if (result.kind === "preview-finalized") {
     registerTelegramQuestionDeliveryForMessage(turn, answerPayload, {
       messageId: result.delivery.messageId,
       text: result.delivery.content,
-    });
-  }
-  if (result.kind === "preview-finalized-partial") {
-    throw mergeTelegramPartialDeliveryError(result.error, {
-      receipt: result.delivery.receipt,
-      content: result.delivery.content,
-      messageIds: result.delivery.receipt.platformMessageIds,
-      visibleReplySent: true,
     });
   }
   return result;
