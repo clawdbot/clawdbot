@@ -792,6 +792,7 @@ describe("short-term promotion", () => {
 
       for (const [index, day] of queryDays.entries()) {
         const nowMs = Date.parse(`${day}T10:00:00.000Z`);
+        await writeDailyMemoryNote(workspaceDir, day, ["Move backups to S3 Glacier."]);
         await recordShortTermRecalls({
           workspaceDir,
           query: `__dreaming_daily__:${day}`,
@@ -847,12 +848,8 @@ describe("short-term promotion", () => {
         }
       }
 
-      const ranked = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-      });
+      const nowMs = Date.parse("2026-04-03T10:01:00.000Z");
+      const ranked = await rankShortTermPromotionCandidates({ workspaceDir, nowMs });
 
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.key).toMatch(/^memory:claim:/u);
@@ -865,6 +862,17 @@ describe("short-term promotion", () => {
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
       expect(ranked[0] && isPromotionOriginBlocked(ranked[0])).toBe(false);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        nowMs,
+      });
+
+      expect(applied).toMatchObject({ applied: 1, appliedCandidates: [ranked[0]] });
+      await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).resolves.toContain(
+        "Move backups to S3 Glacier.",
+      );
     });
   });
 
