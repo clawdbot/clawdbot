@@ -266,6 +266,7 @@ export async function finishGatewayStartup(params: {
         deps,
         startChannels,
         recoveryRuntime: gatewayInstanceRuntime.recovery,
+        resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
         logHooks,
         logChannels,
         unlockStartupMethods: kernel.unlockStartupMethods,

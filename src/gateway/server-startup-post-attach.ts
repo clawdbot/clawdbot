@@ -34,7 +34,7 @@ import {
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
-import type { GatewayClient } from "./server-methods/shared-types.js";
+import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayResidentRegistry } from "./server-resident-registry.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
@@ -943,7 +943,9 @@ type GatewayPostAttachRuntimeDeps = {
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
-  loadSubagentRegistrySweep: () => Awaitable<() => void>;
+  loadSubagentRegistryActivation: () => Awaitable<
+    (resolveGatewayContext: GatewayContextResolver) => void
+  >;
 };
 
 const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
@@ -958,9 +960,8 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
   warmSystemCa: warmMacOSSystemCaOffMainThread,
-  loadSubagentRegistrySweep: async () =>
-    (await import("../agents/subagents/registry/subagent-registry.js"))
-      .scheduleSubagentRegistrySweep,
+  loadSubagentRegistryActivation: async () =>
+    (await import("../agents/subagents/registry/subagent-registry.js")).activateSubagentRegistry,
 };
 
 function createDeferredGatewayUpdateCheck(params: {
@@ -1116,6 +1117,7 @@ export async function startGatewayPostAttachRuntime(
     startChannels: () => Promise<void>;
     refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
+    resolveGatewayContext: GatewayContextResolver;
     logHooks: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -1435,17 +1437,6 @@ export async function startGatewayPostAttachRuntime(
           ]);
           let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
           try {
-            const scheduleSubagentRegistrySweep = await runtimeDeps.loadSubagentRegistrySweep();
-            if (params.isClosing?.() !== true) {
-              scheduleSubagentRegistrySweep();
-            }
-          } catch (err) {
-            params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
-          }
-          if (params.isClosing?.()) {
-            return await stopStartupSidecars(mainSessionRecoverySidecar);
-          }
-          try {
             await startupLog;
           } catch (error) {
             try {
@@ -1518,6 +1509,17 @@ export async function startGatewayPostAttachRuntime(
           ];
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
           params.onSidecarsReady?.();
+          try {
+            const activateSubagentRegistry = await runtimeDeps.loadSubagentRegistryActivation();
+            if (params.isClosing?.() !== true) {
+              activateSubagentRegistry(params.resolveGatewayContext);
+            }
+          } catch (err) {
+            params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+          }
+          if (params.isClosing?.()) {
+            return await stopStartupSidecars(mainSessionRecoverySidecar);
+          }
           params.startupTrace?.detail("sidecars.ready", [
             [
               "loadedPluginCount",

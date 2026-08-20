@@ -39,7 +39,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const logGatewayStartup = vi.fn();
-  const scheduleSubagentRegistrySweep = vi.fn();
+  const activateSubagentRegistry = vi.fn();
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
     marked: 0,
     skipped: 0,
@@ -102,7 +102,7 @@ const hoisted = vi.hoisted(() => {
     initializeGatewayUpdateStatus,
     scheduleGatewayUpdateCheck,
     logGatewayStartup,
-    scheduleSubagentRegistrySweep,
+    activateSubagentRegistry,
     markStartupOrphanedMainSessionsForRecovery,
     scheduleRestartAbortedMainSessionRecovery,
     scheduleRestartSentinelWake,
@@ -133,7 +133,7 @@ vi.mock("../agents/session-dirs.js", () => ({
 }));
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
-  scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
+  activateSubagentRegistry: hoisted.activateSubagentRegistry,
 }));
 
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
@@ -479,7 +479,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.initializeGatewayUpdateStatus.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();
     hoisted.logGatewayStartup.mockClear();
-    hoisted.scheduleSubagentRegistrySweep.mockClear();
+    hoisted.activateSubagentRegistry.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockResolvedValue({
       marked: 0,
@@ -569,6 +569,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const startupOrder: string[] = [];
     const methodsAtRecoveryRegistration: string[][] = [];
     const currentConfig = { agents: { list: [{ id: "main" }, { id: "work" }] } };
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
@@ -577,14 +578,20 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(params.getConfig()).toBe(currentConfig);
       },
     );
-    const onSidecarsReady = vi.fn();
+    const onSidecarsReady = vi.fn(() => startupOrder.push("ready"));
+    hoisted.activateSubagentRegistry.mockImplementationOnce(() => {
+      startupOrder.push("registry");
+    });
     const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
       getConfig: () => currentConfig,
       log,
-      unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
+      unlockStartupMethods: () => {
+        startupOrder.push("unlock");
+        createStartupMethodUnlocker(unavailableGatewayMethods)();
+      },
       onSidecarsReady,
     });
 
@@ -610,7 +617,8 @@ describe("startGatewayPostAttachRuntime", () => {
       waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
-    expect(hoisted.scheduleSubagentRegistrySweep).toHaveBeenCalledWith();
+    expect(hoisted.activateSubagentRegistry).toHaveBeenCalledWith(expect.any(Function));
+    expect(startupOrder).toEqual(["unlock", "ready", "registry"]);
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
   });
 
@@ -3052,7 +3060,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
-  it("keeps startup methods fenced when close begins during late recovery loading", async () => {
+  it("does not activate restored recovery when close begins during activation loading", async () => {
     let closeStarted = false;
     let releaseRecoveryLoad: (() => void) | undefined;
     const recoveryLoadReady = new Promise<void>((resolve) => {
@@ -3067,7 +3075,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const workerSidecar = { stop: vi.fn(async () => {}) };
     let ownedWorkerSidecar: typeof workerSidecar | undefined;
     const unlockStartupMethods = vi.fn();
-    const scheduleSubagentRegistrySweep = vi.fn();
+    const activateSubagentRegistry = vi.fn();
     const onPluginServices = vi.fn();
     const onGatewayLifetimeSidecars = vi.fn();
     const runtime = await startGatewayPostAttachRuntime(
@@ -3091,10 +3099,10 @@ describe("startGatewayPostAttachRuntime", () => {
             return { pluginServices, postReadySidecars: [postReadySidecar] };
           },
         ),
-        loadSubagentRegistrySweep: vi.fn(async () => {
+        loadSubagentRegistryActivation: vi.fn(async () => {
           markRecoveryLoadStarted?.();
           await recoveryLoadReady;
-          return scheduleSubagentRegistrySweep;
+          return activateSubagentRegistry;
         }),
       }),
     );
@@ -3104,8 +3112,8 @@ describe("startGatewayPostAttachRuntime", () => {
     releaseRecoveryLoad?.();
     await expect(runtime.startupSettled).resolves.toBeUndefined();
 
-    expect(scheduleSubagentRegistrySweep).not.toHaveBeenCalled();
-    expect(unlockStartupMethods).not.toHaveBeenCalled();
+    expect(activateSubagentRegistry).not.toHaveBeenCalled();
+    expect(unlockStartupMethods).toHaveBeenCalledOnce();
     expect(workerSidecar.stop).not.toHaveBeenCalled();
     expect(pluginServices.stop).toHaveBeenCalledOnce();
     expect(postReadySidecar.stop).toHaveBeenCalledOnce();
@@ -3457,7 +3465,7 @@ function createPostAttachRuntimeDeps(
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null, postReadySidecars: [] })),
     warmSystemCa: vi.fn(async () => {}),
-    loadSubagentRegistrySweep: vi.fn(async () => hoisted.scheduleSubagentRegistrySweep),
+    loadSubagentRegistryActivation: vi.fn(async () => hoisted.activateSubagentRegistry),
     ...overrides,
   };
 }
@@ -3496,6 +3504,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),
     },
+    resolveGatewayContext: vi.fn(() => ({ recoveryRuntime: {} }) as never),
     logHooks: {
       info: vi.fn(),
       warn: vi.fn(),
