@@ -1009,7 +1009,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
-      advisory: ${{ inputs.advisory || inputs.telegram_advisory }}
+      advisory: ${{ inputs.advisory || inputs.telegram_advisory || false }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
