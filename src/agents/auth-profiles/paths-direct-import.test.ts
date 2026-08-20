@@ -14,6 +14,7 @@ import {
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./path-resolve.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 
 describe("path-resolve helpers (direct-import coverage attribution)", () => {
   let stateDir = "";
@@ -97,5 +98,17 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const resolved = resolveAuthStatePathForDisplay(agentDir);
     expect(resolved).toBe(path.join(agentDir, "openclaw-agent.sqlite"));
+  });
+
+  it("relocates agent auth without relocating the agent database", () => {
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const runtimeAgentDir = `${stateDir}-runtime-agent`;
+    const runtimeStore = path.join(runtimeAgentDir, "openclaw-agent.sqlite");
+    withEnv({ OPENCLAW_AGENT_DIR: runtimeAgentDir }, () => {
+      expect(resolveAuthProfileDatabasePath(agentDir)).toBe(runtimeStore);
+      expect(resolveAuthStorePathForDisplay(agentDir)).toBe(runtimeStore);
+      expect(resolveAuthStatePathForDisplay(agentDir)).toBe(runtimeStore);
+    });
+    expect(path.join(agentDir, "openclaw-agent.sqlite")).not.toBe(runtimeStore);
   });
 });

@@ -113,10 +113,14 @@ function resolveAuthProfileDatabaseOptions(
     };
   }
   const dir = resolveUserPath(agentDir);
+  const configuredAuthDir = env.OPENCLAW_AGENT_DIR?.trim();
   return {
     kind: "agent",
     agentId: resolveRegisteredAgentIdForDir(dir) ?? inferAgentIdFromDir(dir),
-    path: path.join(dir, "openclaw-agent.sqlite"),
+    path: path.join(
+      configuredAuthDir ? resolveUserPath(configuredAuthDir, env) : dir,
+      "openclaw-agent.sqlite",
+    ),
     env,
   };
 }

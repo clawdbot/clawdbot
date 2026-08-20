@@ -50,6 +50,9 @@ function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership
 export function resolveSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
 ): SharedAuthStoreOwnership {
+  if (env.OPENCLAW_AGENT_DIR?.trim()) {
+    return { location: "legacy-main" };
+  }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
   const cached = sharedAuthStoreOwnershipByDatabasePath.get(databasePath);
   if (cached) {
@@ -86,17 +89,23 @@ export function resolveSharedAuthStorePath(env: NodeJS.ProcessEnv = process.env)
 
 /** Resolve the user-facing auth profile database path. */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
-  const pathname = agentDir
-    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
-    : resolveSharedAuthStorePath();
+  const configuredAgentDir = process.env.OPENCLAW_AGENT_DIR?.trim();
+  const pathname = configuredAgentDir
+    ? path.join(resolveUserPath(configuredAgentDir), "openclaw-agent.sqlite")
+    : agentDir
+      ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+      : resolveSharedAuthStorePath();
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
 /** Resolve the user-facing auth state database path. */
 export function resolveAuthStatePathForDisplay(agentDir?: string): string {
-  const pathname = agentDir
-    ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
-    : resolveSharedAuthStorePath();
+  const configuredAgentDir = process.env.OPENCLAW_AGENT_DIR?.trim();
+  const pathname = configuredAgentDir
+    ? path.join(resolveUserPath(configuredAgentDir), "openclaw-agent.sqlite")
+    : agentDir
+      ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+      : resolveSharedAuthStorePath();
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 
