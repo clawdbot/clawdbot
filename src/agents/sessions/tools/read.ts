@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
@@ -34,87 +33,15 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { getReadPathVariants, resolveReadPath } from "./path-utils.js";
-import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import {
-  ReadToolContinuationSchema,
-  type ReadToolContinuation,
-  type ReadToolDetails,
-} from "./tool-contracts.js";
+  createReadToolDetails,
+  readToolInputSchema,
+  readToolOutputSchema,
+} from "./read-tool-contract.js";
+import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
+import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
-
-const readSchema = Type.Object({
-  path: Type.String({ description: "File path; relative/absolute." }),
-  offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
-  limit: Type.Optional(Type.Number({ description: "Max lines." })),
-  cursor: Type.Optional(
-    Type.Integer({ minimum: 0, description: "Character position within the start line; 0-based." }),
-  ),
-});
-
-const ReadTruncationOutputSchema = Type.Object(
-  {
-    truncated: Type.Literal(true),
-    truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes")]),
-    totalLines: Type.Integer({ minimum: 0 }),
-    totalBytes: Type.Integer({ minimum: 0 }),
-    outputLines: Type.Integer({ minimum: 0 }),
-    outputBytes: Type.Integer({ minimum: 0 }),
-    lastLinePartial: Type.Boolean(),
-    firstLineExceedsLimit: Type.Boolean(),
-    maxLines: Type.Integer({ minimum: 1 }),
-    maxBytes: Type.Integer({ minimum: 1 }),
-  },
-  { additionalProperties: false },
-);
-
-const ReadToolOutputSchema = Type.Union([
-  Type.Object(
-    { kind: Type.Literal("text"), content: Type.String() },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("image"),
-      content: Type.String(),
-      mimeType: Type.String(),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("truncated"),
-      content: Type.String(),
-      truncation: ReadTruncationOutputSchema,
-      continuation: ReadToolContinuationSchema,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("not_found"),
-      status: Type.Literal("not_found"),
-      path: Type.String(),
-      optional: Type.Literal(true),
-    },
-    { additionalProperties: false },
-  ),
-]);
-
-function createReadDetails(
-  content: (TextContent | ImageContent)[],
-  truncated?: Extract<ReadToolDetails, { kind: "truncated" }>,
-): ReadToolDetails {
-  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
-  const image = content.find((part): part is ImageContent => part.type === "image");
-  if (image) {
-    return { kind: "image", content: text, mimeType: image.mimeType };
-  }
-  if (truncated) {
-    return { ...truncated, content: text };
-  }
-  return { kind: "text", content: text };
-}
 
 function normalizeReadError(error: unknown, filePath: string): Error {
   if (hasErrnoCode(error, "EISDIR")) {
@@ -542,7 +469,7 @@ export function createBoundedReadTextPage(params: {
 export function createReadToolDefinition(
   cwd: string,
   options?: ReadToolOptions,
-): ToolDefinition<typeof readSchema, ReadToolDetails> {
+): ToolDefinition<typeof readToolInputSchema, ReadToolDetails> {
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -552,8 +479,8 @@ export function createReadToolDefinition(
     description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files and its offset, limit, or cursor to continue."],
-    parameters: readSchema,
-    outputSchema: ReadToolOutputSchema,
+    parameters: readToolInputSchema,
+    outputSchema: readToolOutputSchema,
     async execute(
       toolCallId,
       {
@@ -561,7 +488,8 @@ export function createReadToolDefinition(
         offset,
         limit,
         cursor,
-      }: { path: string; offset?: number; limit?: number; cursor?: number },
+        optional,
+      }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
       onUpdate?,
       ctx?,
@@ -591,14 +519,40 @@ export function createReadToolDefinition(
 
         void (async () => {
           try {
-            const { absolutePath, note } = await resolveReadToolPath(ops, path, cwd);
-            if (aborted) {
+            let absolutePath: string;
+            let note: string | undefined;
+            let buffer: Buffer;
+            try {
+              ({ absolutePath, note } = await resolveReadToolPath(ops, path, cwd));
+              if (aborted) {
+                return;
+              }
+              buffer = await ops.readFile(absolutePath);
+            } catch (error) {
+              if (aborted) {
+                return;
+              }
+              if (
+                optional !== true ||
+                (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
+              ) {
+                throw error;
+              }
+              signal?.removeEventListener("abort", onAbort);
+              resolve({
+                content: [{ type: "text", text: `Optional file not found: ${path}.` }],
+                details: {
+                  kind: "not_found",
+                  status: "not_found",
+                  path,
+                  optional: true,
+                },
+              });
               return;
             }
-            const buffer = await ops.readFile(absolutePath);
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
-            let truncated: Parameters<typeof createReadDetails>[1];
+            let truncated: Parameters<typeof createReadToolDetails>[1];
             const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
             if (mimeType) {
               const base64 = buffer.toString("base64");
@@ -719,7 +673,7 @@ export function createReadToolDefinition(
               return;
             }
             signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadDetails(content, truncated) });
+            resolve({ content, details: createReadToolDetails(content, truncated) });
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
@@ -762,6 +716,6 @@ export function createReadToolDefinition(
 export function createReadTool(
   cwd: string,
   options?: ReadToolOptions,
-): AgentTool<typeof readSchema> {
+): AgentTool<typeof readToolInputSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

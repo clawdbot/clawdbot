@@ -397,18 +397,19 @@ describe("Gateway child fixture helpers", () => {
       }),
     ]);
     expect(catalog.models[0]).not.toHaveProperty("supports_reasoning_summaries");
-    expect(
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1",
-        codexModelCatalogPath: modelCatalogPath,
-      }),
-    ).toEqual(
+    const runtimeEnvPatch = buildQaForcedRuntimeEnvPatch({
+      forcedRuntime: "codex",
+      providerMode: "mock-openai",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      codexModelCatalogPath: modelCatalogPath,
+    });
+    expect(runtimeEnvPatch).toEqual(
       expect.objectContaining({
         OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
       }),
     );
+    expect(runtimeEnvPatch).not.toHaveProperty("OPENAI_API_KEY");
+    expect(runtimeEnvPatch).not.toHaveProperty("CODEX_API_KEY");
   });
 
   it("does not stage a Codex catalog for other runtimes or live providers", async () => {
