@@ -290,7 +290,9 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   );
 }
 
-/** Shared parameters for the bootstrap-file resolvers. */
+/** Shared parameters for the bootstrap-file resolvers. Kept internal so the
+ * public `resolveBootstrapFilesForRun` SDK signature stays callback-free while
+ * the timing-aware variant extends it with the substage-timing callback. */
 type BootstrapFileResolutionParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -312,18 +314,6 @@ type BootstrapFileResolutionTimingParams = BootstrapFileResolutionParams & {
   ) => void;
 };
 
-/**
- * Timing-aware variant used only by the embedded runner to record bootstrap
- * substage durations. Kept off the plugin SDK surface (not re-exported by
- * `src/plugin-sdk/agent-harness-runtime.ts`) so the public
- * `resolveBootstrapFilesForRun` signature stays callback-free.
- */
-export async function resolveBootstrapFilesForRunWithTiming(
-  params: BootstrapFileResolutionTimingParams,
-): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles(params, "registered");
-}
-
 // Diagnostics project declared files without executing registered hook handlers.
 type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
 
@@ -334,8 +324,21 @@ export async function resolveBootstrapFilesForPreparation(
   return resolveBootstrapFiles({ ...params, readOnlyState: true }, "none");
 }
 
+/** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
+): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFilesForRunWithTiming(params);
+}
+
+/**
+ * Timing-aware variant used only by the embedded runner to record bootstrap
+ * substage durations. Kept off the plugin SDK surface (not re-exported by
+ * `src/plugin-sdk/agent-harness-runtime.ts`) so the public
+ * `resolveBootstrapFilesForRun` signature stays callback-free.
+ */
+export async function resolveBootstrapFilesForRunWithTiming(
+  params: BootstrapFileResolutionTimingParams,
 ): Promise<WorkspaceBootstrapFile[]> {
   return resolveBootstrapFiles(params, "registered");
 }

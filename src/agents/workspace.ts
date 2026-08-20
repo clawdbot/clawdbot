@@ -8,6 +8,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -140,17 +141,9 @@ export function workspaceFilesShareSourceIdentity(left: object, right: object): 
   );
 }
 
-async function closeFdAsync(fd: number): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    syncFs.close(fd, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
+// Bounded per-fd close used by the guarded workspace read; suppress-error
+// handling stays at the call sites so a close fault never masks the read result.
+const closeFdAsync = promisify(syncFs.close);
 
 export async function readWorkspaceFileWithGuards(params: {
   filePath: string;

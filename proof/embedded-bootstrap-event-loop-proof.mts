@@ -30,7 +30,7 @@
  *
  * Honest limits:
  *   - The inter-handler yield only yields BETWEEN handlers. A single slow handler is
- *     NOT rescued by it (see the yieldBetweenHandlers loop in internal-hook-dispatch.ts:
+ *     NOT rescued by it (see the yieldBetweenHandlers loop in internal-hooks.ts:
  *     `await yieldImmediate()` runs only when index < allHandlers.length - 1). This
  *     harness proves the yield fires with >=2 handlers; it does not claim one slow
  *     handler stays responsive.
@@ -69,11 +69,11 @@ import { resolveExtraBootstrapPatternPaths } from "../src/agents/workspace-extra
 import { readWorkspaceFileWithGuards } from "../src/agents/workspace.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import bootstrapExtraFilesHook from "../src/hooks/bundled/bootstrap-extra-files/handler.js";
-import { triggerInternalHookWithScheduling } from "../src/hooks/internal-hook-dispatch.js";
 import type { InternalHookEvent } from "../src/hooks/internal-hook-types.js";
 import {
   createInternalHookEvent,
   registerInternalHook,
+  triggerInternalHookWithScheduling,
   unregisterInternalHook,
 } from "../src/hooks/internal-hooks.js";
 import { openRootFileFollowingParents } from "../src/infra/boundary-file-read.js";

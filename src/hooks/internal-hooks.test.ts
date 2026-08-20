@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { triggerInternalHookWithScheduling } from "./internal-hook-dispatch.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -14,6 +13,7 @@ import {
   registerInternalHook,
   setInternalHooksEnabled,
   triggerInternalHook,
+  triggerInternalHookWithScheduling,
   unregisterInternalHook,
   type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
@@ -224,29 +224,6 @@ describe("hooks", () => {
       expect(calls).toStrictEqual(["first", "second"]);
     });
 
-    it("reports handler timing with handler indexes", async () => {
-      vi.spyOn(performance, "now")
-        .mockReturnValueOnce(10)
-        .mockReturnValueOnce(25)
-        .mockReturnValueOnce(30)
-        .mockReturnValueOnce(45);
-      registerInternalHook("command:new", () => {});
-      registerInternalHook("command:new", () => {});
-      const timings: Array<{ index: number; durationMs: number }> = [];
-
-      await triggerInternalHookWithScheduling(
-        createInternalHookEvent("command", "new", "test-session"),
-        {
-          onHandlerTiming: (info) => timings.push(info),
-        },
-      );
-
-      expect(timings).toStrictEqual([
-        { index: 0, durationMs: 15 },
-        { index: 1, durationMs: 15 },
-      ]);
-    });
-
     it("logs a warning for slow handlers on the bootstrap diagnostic path", async () => {
       vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
       registerInternalHook("command:new", () => {});
@@ -266,20 +243,15 @@ describe("hooks", () => {
     it("does not warn for slow non-blocking handlers off the diagnostic path", async () => {
       // Awaited wall time outside the bootstrap dispatch usually reflects
       // non-blocking network/file work, so the slow-handler warning must stay
-      // scoped to yieldBetweenHandlers. Timing data still flows to callers.
+      // scoped to yieldBetweenHandlers.
       vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
       registerInternalHook("command:new", () => {});
-      const timings: Array<{ index: number; durationMs: number }> = [];
 
       await triggerInternalHookWithScheduling(
         createInternalHookEvent("command", "new", "test-session"),
-        {
-          onHandlerTiming: (info) => timings.push(info),
-        },
       );
 
       expect(loggerMocks.warn).not.toHaveBeenCalled();
-      expect(timings).toStrictEqual([{ index: 0, durationMs: 501 }]);
     });
   });
 
