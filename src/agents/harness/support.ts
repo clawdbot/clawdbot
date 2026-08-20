@@ -5,6 +5,7 @@ import {
   resolveMergedModelProviderModels,
   resolveModelProviderRouteOverridePresence,
 } from "../../config/model-provider-config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -86,6 +87,9 @@ export function buildAgentHarnessSupportContext(params: {
   providerOwnership?: HarnessProviderOwnership;
 }): AgentHarnessSupportContext {
   const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+  const authoredConfig = params.config
+    ? projectConfigOntoRuntimeSourceSnapshot(params.config)
+    : undefined;
   const modelId = params.modelId ? normalizeModelId(params.provider, params.modelId) : undefined;
   const modelConfig = modelId
     ? resolveMergedModelProviderModels({
@@ -119,7 +123,7 @@ export function buildAgentHarnessSupportContext(params: {
         requestTransportOverrides: resolveModelProviderRouteOverridePresence({
           provider: params.provider,
           modelId: params.modelId,
-          config: params.config,
+          authoredConfig,
           canonicalizeModelId: (configuredModelId) =>
             canonicalizeProviderModelId(params.provider, configuredModelId),
         }),

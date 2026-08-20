@@ -46,10 +46,10 @@ function hasNonEmptyRecord(value: unknown): boolean {
 export function resolveModelProviderRouteOverridePresence(params: {
   provider: string;
   modelId?: string;
-  config?: OpenClawConfig;
+  authoredConfig?: OpenClawConfig;
   canonicalizeModelId?: (modelId: string) => string;
 }): ProviderRouteOverridePresence {
-  const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.authoredConfig, params.provider);
   if (!providerConfig) {
     return "none";
   }
@@ -77,7 +77,9 @@ export function resolveModelProviderRouteOverridePresence(params: {
     normalizeModelId: canonicalize,
   }).get(modelId);
   return configuredModel &&
-    (hasNonEmptyRecord(configuredModel.headers) || hasNonEmptyRecord(configuredModel.params))
+    (hasNonEmptyRecord(configuredModel.headers) ||
+      hasNonEmptyRecord(configuredModel.params) ||
+      hasNonEmptyRecord(configuredModel.compat))
     ? "present"
     : "none";
 }
