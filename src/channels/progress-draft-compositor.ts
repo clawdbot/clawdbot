@@ -517,7 +517,6 @@ export function createChannelProgressDraftCompositor(params: {
       if (
         !params.active ||
         params.mode !== "progress" ||
-        !previewToolProgressEnabled ||
         progressSuppressed ||
         finalReplyStarted ||
         finalReplyDelivered
