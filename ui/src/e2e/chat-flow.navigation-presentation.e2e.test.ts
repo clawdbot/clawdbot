@@ -1,7 +1,10 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
+  captureUiProofEnabled,
   captureSessionAccessibilityProof,
   chatSessionListResponse,
   controlUiSessionPath,
@@ -13,6 +16,14 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const splitPaneEmphasisProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "split-pane-emphasis",
+);
+const splitPaneEmphasisProofStage = process.env.OPENCLAW_SPLIT_PANE_PROOF_STAGE?.trim() || "after";
+const enforceSplitPaneEmphasisContract = splitPaneEmphasisProofStage !== "before";
 
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
@@ -357,6 +368,226 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:session-b"));
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps split-pane emphasis quiet while preserving activation and interaction", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      assistantName: "Claw",
+      historyMessages: [
+        {
+          content: [{ type: "text", text: "Review the split-pane emphasis in both themes." }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+        {
+          content: [
+            {
+              type: "text",
+              text: "The active pane stays clear while the inactive pane remains readable.",
+            },
+          ],
+          model: "openai/gpt-5.5",
+          role: "assistant",
+          timestamp: Date.now() + 1,
+          usage: { input: 1_200, output: 84 },
+        },
+        {
+          content: [
+            { type: "text", text: "Resize the divider, then interact with the other pane." },
+          ],
+          role: "user",
+          timestamp: Date.now() + 2,
+        },
+        {
+          content: [
+            { type: "text", text: "Both panes keep their controls and readable transcript." },
+          ],
+          role: "assistant",
+          timestamp: Date.now() + 3,
+        },
+      ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page
+        .getByText("The active pane stays clear while the inactive pane remains readable.")
+        .waitFor();
+      await page.getByRole("button", { name: "Open split view" }).click();
+
+      const cells = page.locator(".chat-split-view__cell");
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+      const headers = page.locator(".chat-pane__header");
+      await expect.poll(() => cells.count()).toBe(2);
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect.poll(() => headers.count()).toBe(2);
+      await expect
+        .poll(() =>
+          panes
+            .last()
+            .getByText("The active pane stays clear while the inactive pane remains readable.")
+            .isVisible(),
+        )
+        .toBe(true);
+
+      const focusButton = headers.first().getByRole("button", { name: "Close pane" });
+      await focusButton.focus();
+      expect(await focusButton.evaluate((button) => document.activeElement === button)).toBe(true);
+      await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+      await expect.poll(() => cells.last().getAttribute("class")).not.toContain("--active");
+
+      const readCellStyles = () =>
+        cells.evaluateAll((nodes) =>
+          nodes.map((cell) => {
+            const style = getComputedStyle(cell);
+            return {
+              active: cell.classList.contains("chat-split-view__cell--active"),
+              boxShadow: style.boxShadow,
+              filter: style.filter,
+              opacity: Number.parseFloat(style.opacity),
+              transitionDuration: style.transitionDuration,
+            };
+          }),
+        );
+      const styleSnapshots = [] as Awaited<ReturnType<typeof readCellStyles>>[];
+
+      for (const theme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme: theme });
+        await page.evaluate((nextTheme) => {
+          const root = document.documentElement;
+          root.dataset.themeMode = nextTheme;
+          root.dataset.themeResolved = nextTheme;
+          root.classList.toggle("wa-light", nextTheme === "light");
+          root.classList.toggle("wa-dark", nextTheme === "dark");
+          root.style.colorScheme = nextTheme;
+        }, theme);
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
+
+        if (captureUiProofEnabled) {
+          await mkdir(splitPaneEmphasisProofDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              splitPaneEmphasisProofDir,
+              `${splitPaneEmphasisProofStage}-${theme}-context.png`,
+            ),
+          });
+          const splitViewBox = await page.locator(".chat-split-view").boundingBox();
+          if (!splitViewBox) {
+            throw new Error("Expected the split view to have a layout box for visual proof");
+          }
+          await page.screenshot({
+            animations: "disabled",
+            clip: splitViewBox,
+            path: path.join(
+              splitPaneEmphasisProofDir,
+              `${splitPaneEmphasisProofStage}-${theme}-closeup.png`,
+            ),
+          });
+        }
+        styleSnapshots.push(await readCellStyles());
+      }
+
+      if (enforceSplitPaneEmphasisContract) {
+        // The assertion is intentionally relational: the inactive pane is only
+        // attenuated enough to distinguish it, while the active pane has no
+        // selection border to compete with its content.
+        const initialStyles = styleSnapshots[0];
+        const activeStyles = initialStyles?.find((style) => style.active);
+        const inactiveStyles = initialStyles?.find((style) => !style.active);
+        expect(activeStyles).toBeDefined();
+        expect(inactiveStyles).toBeDefined();
+        if (!activeStyles || !inactiveStyles) {
+          throw new Error("Expected one active and one inactive split cell");
+        }
+        expect(activeStyles.boxShadow).toBe("none");
+        expect(inactiveStyles.boxShadow).toBe("none");
+        expect(activeStyles.opacity).toBeGreaterThan(inactiveStyles.opacity);
+        expect(inactiveStyles.opacity).toBeGreaterThan(0.9);
+        expect(activeStyles.filter).toBe("none");
+        expect(inactiveStyles.filter).toContain("saturate(");
+        expect(
+          styleSnapshots.every((styles) =>
+            styles.every(({ transitionDuration }) => transitionDuration === "0s"),
+          ),
+        ).toBe(true);
+      }
+
+      const paneState = await panes.evaluateAll((nodes) =>
+        nodes.map((pane) => ({
+          ariaHidden: pane.getAttribute("aria-hidden"),
+          inert: pane.hasAttribute("inert"),
+        })),
+      );
+      expect(paneState).toEqual([
+        { ariaHidden: "false", inert: false },
+        { ariaHidden: "false", inert: false },
+      ]);
+
+      const initialWidths = await cells.evaluateAll((nodes) =>
+        nodes.map((cell) => cell.getBoundingClientRect().width),
+      );
+      const divider = page.locator("resizable-divider").first();
+      const dividerBox = await divider.boundingBox();
+      if (!dividerBox) {
+        throw new Error("Expected the split divider to have a layout box");
+      }
+      const dividerY = dividerBox.y + dividerBox.height / 2;
+      const dividerX = dividerBox.x + dividerBox.width / 2;
+      await page.mouse.move(dividerX, dividerY);
+      await page.mouse.down();
+      await page.mouse.move(dividerX + 80, dividerY);
+      await page.mouse.up();
+      await expect
+        .poll(
+          async () =>
+            Math.abs(
+              (await cells.evaluateAll((nodes) => nodes[0]?.getBoundingClientRect().width ?? 0)) -
+                initialWidths[0],
+            ) > 20,
+        )
+        .toBe(true);
+
+      await page.setViewportSize({ height: 840, width: 1280 });
+      await expect.poll(() => cells.count()).toBe(2);
+      await expect.poll(() => headers.count()).toBe(2);
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await expect.poll(() => cells.count()).toBe(2);
+
+      await panes
+        .last()
+        .getByText("Both panes keep their controls and readable transcript.")
+        .click();
+      await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
+      await expect.poll(() => cells.first().getAttribute("class")).not.toContain("--active");
+      await expect
+        .poll(() =>
+          panes
+            .first()
+            .getByText("Both panes keep their controls and readable transcript.")
+            .isVisible(),
+        )
+        .toBe(true);
+
+      await panes
+        .first()
+        .getByText("Both panes keep their controls and readable transcript.")
+        .click();
+      await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+      await expect.poll(() => cells.last().getAttribute("class")).not.toContain("--active");
+      await expect.poll(() => focusButton.isVisible()).toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }
