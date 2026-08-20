@@ -397,6 +397,36 @@ plugins.
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
 | `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
 
+### Callback-scoped run context
+
+`before_tool_call` hook handlers and plugin tool `execute` callbacks receive a
+host-owned `runContext` in their context (`ctx.runContext`) whenever the active
+host run supplies a run identity (`ctx.runId`). This is a short-lived scratch
+surface for exactly one callback invocation and is separate from the per-run
+`api.runContext.*` store described above.
+
+| Method                                              | Contract                                                                                           |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `runContext.set(namespace, value)`                  | Writes a JSON-compatible value for the current `(runId, pluginId)` tuple                           |
+| `runContext.get(namespace)`                         | Reads a value written for the current `(runId, pluginId)` tuple                                    |
+| `runContext.compareAndConsume(namespace, expected)` | Atomically compares and consumes a value; a later attempt on the same namespace returns `CONSUMED` |
+
+Lifecycle and identity rules:
+
+- The capability is valid only while the owning callback is running. For async
+  callbacks, the window closes when the returned promise settles; background
+  work that outlives the callback receives `FORBIDDEN`.
+- After the run ends or errors out, access returns `CLOSED_RUN`.
+- Process restarts and lost runtime state fail closed; values are never
+  reconstructed.
+- `runId` and `pluginId` are host-owned. Plugin code cannot supply or override
+  them, and cross-run or cross-plugin lookups return `NOT_FOUND`.
+- `compareAndConsume` is synchronous and atomic under the current in-process run
+  store: a mismatch does not consume, and a successful consume is exactly once.
+  If the run-context store ever becomes asynchronous or cross-process, this
+  atomicity argument no longer holds and the operation must move to a
+  CAS/mutex/transaction primitive.
+
 `registerBoardWidgetContentKind(...)` is for plugins that own a declarative
 widget source format. The registration supplies a globally unique lowercase
 `kind`, a short label, one capability-scoped plugin surface plus its renderer

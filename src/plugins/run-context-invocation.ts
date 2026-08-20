@@ -2,7 +2,7 @@
  * Invocation-bound plugin run-context capability controller.
  *
  * The host constructs one capability per (runId, pluginId) for a single
- * invocation. The mutable active flag enforces the callback window: access is
+ * invocation. A reference-counted window enforces the callback window: access is
  * allowed only while the owning callback is running (for async callbacks, until
  * the returned promise settles), and is `FORBIDDEN` afterwards, including for
  * background work that outlives the callback.
@@ -36,10 +36,10 @@ export function createPluginRunContextInvocation(params: {
   pluginId: string;
 }): PluginRunContextInvocationController {
   const { runId, pluginId } = params;
-  const window = { active: false };
+  const window = { depth: 0 };
 
   function activeGate(): { status: "OK" } | { status: "FORBIDDEN" } | { status: "CLOSED_RUN" } {
-    if (!window.active) {
+    if (window.depth === 0) {
       return { status: "FORBIDDEN" };
     }
     if (isPluginRunClosed(runId)) {
@@ -81,21 +81,25 @@ export function createPluginRunContextInvocation(params: {
   return {
     ...invocation,
     withActive<T>(run: () => T): T {
-      window.active = true;
+      window.depth += 1;
       let result: T;
       try {
         result = run();
       } catch (error) {
-        window.active = false;
+        window.depth -= 1;
         throw error;
       }
       if (isPromiseLike(result)) {
-        void Promise.resolve(result).finally(() => {
-          window.active = false;
-        });
+        const cleanup = () => {
+          window.depth -= 1;
+        };
+        // Attach cleanup to both settlement paths without replacing the promise
+        // returned to the caller, so a rejecting callback never produces an
+        // additional unobserved rejection from the cleanup chain.
+        void Promise.resolve(result).then(cleanup, cleanup);
         return result;
       }
-      window.active = false;
+      window.depth -= 1;
       return result;
     },
   };

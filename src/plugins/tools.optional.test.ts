@@ -5,9 +5,11 @@ import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { clearPluginHostRuntimeState } from "./host-hook-runtime.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
+import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -172,6 +174,7 @@ function createToolRegistry(entries: MockRegistryToolEntry[]) {
       status: "loaded",
     })),
     tools: entries,
+    memoryCapabilities: [],
     diagnostics: [] as Array<{
       level: string;
       pluginId: string;
@@ -3350,6 +3353,206 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+  });
+});
+
+describe("invocation-bound plugin tool run context", () => {
+  beforeAll(async () => {
+    ({ resolvePluginTools } = await import("./tools.js"));
+    ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+      await import("./runtime.js"));
+    ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
+    ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
+    ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
+    loadContextMocks.resolve.mockImplementation((...args: unknown[]) => {
+      if (!loadContextMocks.actualResolve) {
+        throw new Error("load-context mock was not initialized");
+      }
+      return loadContextMocks.actualResolve(...(args as [never]));
+    });
+  });
+
+  beforeEach(() => {
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockImplementation(() =>
+      getActivePluginRegistry?.(),
+    );
+    applyPluginAutoEnableMock.mockReset();
+    applyPluginAutoEnableMock.mockImplementation(({ config }: { config: unknown }) => ({
+      config,
+      changes: [],
+    }));
+  });
+
+  afterEach(() => {
+    clearPluginHostRuntimeState();
+    resetPluginRuntimeStateForTest?.();
+    clearPluginMetadataLifecycleCaches?.();
+    resetPluginToolDescriptorCacheForTest?.();
+  });
+
+  function createRunContextToolEntry(params: {
+    pluginId: string;
+    toolName: string;
+    contexts: OpenClawPluginToolContext[];
+  }): MockRegistryToolEntry {
+    return {
+      pluginId: params.pluginId,
+      optional: false,
+      source: `/tmp/${params.pluginId}.js`,
+      names: [params.toolName],
+      factory: (rawCtx: unknown) => {
+        const ctx = rawCtx as OpenClawPluginToolContext;
+        params.contexts.push(ctx);
+        return {
+          name: params.toolName,
+          description: `${params.toolName} tool`,
+          parameters: { type: "object", properties: {} },
+          async execute() {
+            const runContext = ctx.runContext;
+            if (!runContext) {
+              return { content: [{ type: "text", text: "missing" }] };
+            }
+            runContext.set("lease", { token: "t1" });
+            const first = runContext.compareAndConsume("lease", { token: "t1" });
+            const second = runContext.compareAndConsume("lease", { token: "t1" });
+            return {
+              content: [{ type: "text", text: JSON.stringify({ first, second }) }],
+            };
+          },
+        };
+      },
+    };
+  }
+
+  function consumedLeasePayload(result: unknown): { first: unknown; second: unknown } {
+    const content = (result as { content?: readonly { text?: unknown }[] }).content;
+    const rawText = content?.[0]?.text;
+    const text = typeof rawText === "string" ? rawText : "";
+    return JSON.parse(text) as { first: unknown; second: unknown };
+  }
+
+  it("injects an invocation-bound run context into ordinary plugin tools", async () => {
+    const contexts: OpenClawPluginToolContext[] = [];
+    setRegistry([createRunContextToolEntry({ pluginId: "multi", toolName: "ctx_tool", contexts })]);
+    const context = { ...createContext(), runId: "run-ordinary" };
+
+    const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.runContext).toBeDefined();
+    const result = await expectDefined(tool, "ordinary run context tool").execute(
+      "call",
+      {},
+      undefined,
+    );
+    expect(consumedLeasePayload(result)).toEqual({
+      first: { status: "OK", value: { token: "t1" } },
+      second: { status: "CONSUMED" },
+    });
+    expect(contexts[0]?.runContext?.get("lease")).toEqual({ status: "FORBIDDEN" });
+  });
+
+  it("injects the same capability into cached descriptor plugin tools", async () => {
+    const contexts: OpenClawPluginToolContext[] = [];
+    setRegistry([
+      createRunContextToolEntry({
+        pluginId: "cache-rc",
+        toolName: "cached_rc_tool",
+        contexts,
+      }),
+    ]);
+    const context = { ...createContext(), runId: "run-cached" };
+
+    const fresh = resolvePluginTools(createResolveToolsParams({ context }));
+    const cached = resolvePluginTools(createResolveToolsParams({ context }));
+
+    expect(cached[0]).not.toBe(fresh[0]);
+    expect(contexts).toHaveLength(1);
+    const result = await expectDefined(cached[0], "cached run context tool").execute(
+      "call",
+      {},
+      undefined,
+    );
+    expect(contexts).toHaveLength(2);
+    expect(consumedLeasePayload(result)).toEqual({
+      first: { status: "OK", value: { token: "t1" } },
+      second: { status: "CONSUMED" },
+    });
+    expect(contexts[1]?.runContext).toBeDefined();
+    expect(contexts[1]?.runContext?.get("lease")).toEqual({ status: "FORBIDDEN" });
+  });
+
+  it("leaves the plugin tool context untouched when no host run id exists", async () => {
+    const contexts: OpenClawPluginToolContext[] = [];
+    setRegistry([
+      createRunContextToolEntry({ pluginId: "multi", toolName: "no_run_tool", contexts }),
+    ]);
+
+    const [tool] = resolvePluginTools(createResolveToolsParams());
+
+    expect(contexts[0]?.runContext).toBeUndefined();
+    await expect(tool?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "missing" }],
+    });
+  });
+
+  it("applies the same lifecycle contract to ordinary and cached tools", async () => {
+    const contexts: OpenClawPluginToolContext[] = [];
+    setRegistry([
+      createRunContextToolEntry({ pluginId: "same-rc", toolName: "same_rc_tool", contexts }),
+    ]);
+    const context = { ...createContext(), runId: "run-same" };
+
+    const fresh = resolvePluginTools(createResolveToolsParams({ context }));
+    const cached = resolvePluginTools(createResolveToolsParams({ context }));
+    const freshResult = await expectDefined(fresh[0], "fresh tool").execute("call", {}, undefined);
+    const cachedResult = await expectDefined(cached[0], "cached tool").execute(
+      "call",
+      {},
+      undefined,
+    );
+
+    expect(consumedLeasePayload(cachedResult)).toEqual(consumedLeasePayload(freshResult));
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0]?.runContext?.get("lease")).toEqual({ status: "FORBIDDEN" });
+    expect(contexts[1]?.runContext?.get("lease")).toEqual({ status: "FORBIDDEN" });
+  });
+
+  it("delivers the capability through the plugin-only construction plan", async () => {
+    const contexts: OpenClawPluginToolContext[] = [];
+    setRegistry([
+      createRunContextToolEntry({ pluginId: "plan-rc", toolName: "plan_rc_tool", contexts }),
+    ]);
+    const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
+
+    const tools = createOpenClawCodingTools({
+      config: createContext().config,
+      workspaceDir: "/tmp",
+      includeCoreTools: false,
+      runId: "run-plugin-only-proof",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+    });
+
+    expect(tools.map((candidate) => candidate.name)).toEqual(["plan_rc_tool"]);
+    const result = await expectDefined(tools[0], "plugin-only run context tool").execute(
+      "call",
+      {},
+      undefined,
+    );
+
+    expect(consumedLeasePayload(result)).toEqual({
+      first: { status: "OK", value: { token: "t1" } },
+      second: { status: "CONSUMED" },
+    });
+    expect(contexts.at(-1)?.runContext).toBeDefined();
+    expect(contexts.at(-1)?.runContext?.get("lease")).toEqual({ status: "FORBIDDEN" });
   });
 });
 

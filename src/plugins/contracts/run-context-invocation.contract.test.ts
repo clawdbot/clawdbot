@@ -169,5 +169,57 @@ describe("invocation-bound plugin run-context capability", () => {
       const result = invocation.withActive(() => invocation.compareAndConsume(NS, { token: "t1" }));
       expect(result).toEqual({ status: "CLOSED_RUN" });
     });
+
+    it("keeps the window open for the lifetime of a resolving async callback", async () => {
+      const invocation = createPluginRunContextInvocation({ runId: RUN_A, pluginId: PLUGIN_X });
+
+      const observed = await invocation.withActive(async () => {
+        invocation.set(NS, { token: "t1" });
+        return invocation.get(NS);
+      });
+
+      expect(observed).toEqual({ status: "OK", value: { token: "t1" } });
+      expect(invocation.get(NS)).toEqual({ status: "FORBIDDEN" });
+    });
+
+    it("closes the window after a rejecting async callback without an extra unhandled rejection", async () => {
+      const invocation = createPluginRunContextInvocation({ runId: RUN_A, pluginId: PLUGIN_X });
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown) => {
+        unhandled.push(reason);
+      };
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        const error = new Error("callback failed");
+        const run = invocation.withActive(() => Promise.reject(error));
+        await expect(run).rejects.toBe(error);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        expect(unhandled).toEqual([]);
+        expect(invocation.get(NS)).toEqual({ status: "FORBIDDEN" });
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+
+    it("keeps the window open until every overlapping callback settles", async () => {
+      const invocation = createPluginRunContextInvocation({ runId: RUN_A, pluginId: PLUGIN_X });
+      let releaseLongCallback!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseLongCallback = resolve;
+      });
+      const longRunning = invocation.withActive(async () => {
+        invocation.set(NS, { token: "t1" });
+        await gate;
+        return invocation.get(NS);
+      });
+      const shortRunning = invocation.withActive(async () => invocation.get(NS));
+
+      await expect(shortRunning).resolves.toEqual({ status: "OK", value: { token: "t1" } });
+      releaseLongCallback();
+      await expect(longRunning).resolves.toEqual({ status: "OK", value: { token: "t1" } });
+      expect(invocation.get(NS)).toEqual({ status: "FORBIDDEN" });
+    });
   });
 });

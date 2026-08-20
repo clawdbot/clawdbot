@@ -33,7 +33,10 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import { createPluginRunContextInvocation } from "./run-context-invocation.js";
+import {
+  createPluginRunContextInvocation,
+  type PluginRunContextInvocationController,
+} from "./run-context-invocation.js";
 import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
@@ -246,14 +249,72 @@ function wrapPluginToolFactoryResult(
   return isAgentTool(result) ? wrapPluginToolCallbacks(entry, pluginRegistry, result) : result;
 }
 
+function wrapPluginToolInvocationWindow(
+  tool: AnyAgentTool,
+  invocation: PluginRunContextInvocationController,
+): AnyAgentTool {
+  const execute = tool.execute;
+  const windowedExecute = (
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+    onUpdate?: unknown,
+  ) =>
+    invocation.withActive(
+      () =>
+        // SAFETY: the invoked function is the target tool's own execute, so the runtime promise matches the erased AnyAgentTool execute contract this wrapper declares.
+        Reflect.apply(execute, tool, [toolCallId, params, signal, onUpdate]) as ReturnType<
+          AnyAgentTool["execute"]
+        >,
+    );
+  const wrapped = new Proxy<AnyAgentTool>(tool, {
+    get(target, prop) {
+      if (prop === "execute") {
+        return windowedExecute;
+      }
+      return Reflect.get(target, prop, target);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      if (prop === "execute") {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: windowedExecute,
+          writable: true,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+  });
+  copyPluginToolMeta(tool, wrapped);
+  return wrapped;
+}
+
+function wrapPluginToolInvocationResult(
+  result: PluginToolFactoryResult,
+  invocation: PluginRunContextInvocationController,
+): PluginToolFactoryResult {
+  if (Array.isArray(result)) {
+    return result.map((tool) =>
+      isAgentTool(tool) ? wrapPluginToolInvocationWindow(tool, invocation) : tool,
+    );
+  }
+  return isAgentTool(result) ? wrapPluginToolInvocationWindow(result, invocation) : result;
+}
+
 function resolvePluginToolFactory(
   entry: PluginToolRegistration,
   pluginRegistry: PluginRegistry | undefined,
   ctx: OpenClawPluginToolContext,
 ) {
-  return runWithPluginToolScope(entry, pluginRegistry, () =>
-    wrapPluginToolFactoryResult(entry, pluginRegistry, entry.factory(ctx)),
-  );
+  const invocation = ctx.runId
+    ? createPluginRunContextInvocation({ runId: ctx.runId, pluginId: entry.pluginId })
+    : undefined;
+  const factoryCtx = invocation ? { ...ctx, runContext: invocation } : ctx;
+  return runWithPluginToolScope(entry, pluginRegistry, () => {
+    const resolved = wrapPluginToolFactoryResult(entry, pluginRegistry, entry.factory(factoryCtx));
+    return invocation ? wrapPluginToolInvocationResult(resolved, invocation) : resolved;
+  });
 }
 
 function blocksHostRestrictedConversationReadTool(params: {
@@ -844,12 +905,6 @@ function createCachedDescriptorPluginTool(params: {
       ? { resultContentSource: params.descriptor.resultContentSource }
       : {}),
     async execute(toolCallId, executeParams, signal, onUpdate) {
-      const runId = params.ctx.runId;
-      const runContext =
-        runId && pluginId ? createPluginRunContextInvocation({ runId, pluginId }) : undefined;
-      const toolContext: OpenClawPluginToolContext = runContext
-        ? { ...params.ctx, runContext }
-        : params.ctx;
       const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
         activate: false,
         toolDiscovery: true,
@@ -897,7 +952,7 @@ function createCachedDescriptorPluginTool(params: {
         ) {
           return undefined;
         }
-        const resolved = resolvePluginToolFactory(candidate, registry, toolContext);
+        const resolved = resolvePluginToolFactory(candidate, registry, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
           const malformedReason = describeMalformedPluginTool(toolRaw);
@@ -919,8 +974,7 @@ function createCachedDescriptorPluginTool(params: {
           continue;
         }
         if (matchedTool) {
-          const invoke = () => matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
-          return runContext ? runContext.withActive(invoke) : invoke();
+          return matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
         }
       }
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
