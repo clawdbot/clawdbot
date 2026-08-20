@@ -70,7 +70,6 @@ export async function completeReplyAgentRun(input: {
   const {
     activeIsNewSession,
     activeSessionStore,
-    blockReplyPipeline,
     cfg,
     execution,
     followupRun,
