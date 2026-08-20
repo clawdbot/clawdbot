@@ -836,9 +836,55 @@ describe("stripMinimaxToolCallXml", () => {
     expect(stripMinimaxToolCallXml(inline)).toBe(inline);
     expect(stripMinimaxToolCallXml(fenced)).toBe(fenced);
   });
+
+  it("normalizes encoded Minimax transport boundaries outside code regions", () => {
+    const input = [
+      "Before",
+      "]<]minimax[>[<tool_call>",
+      ']<]minimax[>[<invoke name="memory_get">]<]minimax[>[',
+      "[<path>/workspace/MEMORY.md]<]minimax[>[</path>]<]minimax[>[<from>121]",
+      "<]minimax[>[</from>]<]minimax[>[</invoke>",
+      "]<]minimax[>[</tool_call>",
+      "After",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(input)).toBe(
+      [
+        "Before",
+        "<tool_call>",
+        '<invoke name="memory_get">',
+        "[<path>/workspace/MEMORY.md</path><from>121]",
+        "</from></invoke>",
+        "</tool_call>",
+        "After",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("sanitizeAssistantVisibleText", () => {
+  it("strips tool-call XML interleaved with encoded Minimax transport boundaries", () => {
+    const input = [
+      "Before",
+      "]<]minimax[>[<tool_call>",
+      ']<]minimax[>[<invoke name="exec">]<]minimax[>[<command>pwd]<]minimax[>[</command>',
+      "]<]minimax[>[</invoke>]<]minimax[>[</tool_call>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves encoded Minimax transport examples inside code regions", () => {
+    const encoded =
+      ']<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">x]<]minimax[>[</invoke>]<]minimax[>[</tool_call>';
+    const inline = `Use \`${encoded}\`.`;
+    const fenced = ["```text", encoded, "```"].join("\n");
+
+    expect(sanitizeAssistantVisibleText(inline)).toBe(inline);
+    expect(sanitizeAssistantVisibleText(fenced)).toBe(fenced);
+  });
+
   it("does not preserve reasoning inside unequal backtick runs", () => {
     expect(sanitizeAssistantVisibleText("before ```<think>private</think>`` after")).toBe(
       "before ````` after",

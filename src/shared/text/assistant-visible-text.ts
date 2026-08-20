@@ -635,23 +635,41 @@ export function stripToolCallXmlTags(
  * proper structured tool calls.
  */
 export function stripMinimaxToolCallXml(text: string): string {
-  if (!text || !/minimax:tool_call/i.test(text)) {
+  const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/;
+  if (!text || (!/minimax:tool_call/i.test(text) && !encodedTransportBoundaryRe.test(text))) {
     return text;
   }
 
-  const codeRegions = findCodeRegions(text);
+  const sourceCodeRegions = findCodeRegions(text);
+  let normalized = "";
+  let boundaryCursor = 0;
+  for (const match of text.matchAll(/\]?<\]minimax\[>\[/g)) {
+    const start = match.index ?? 0;
+    if (isInsideCode(start, sourceCodeRegions)) {
+      continue;
+    }
+    normalized += text.slice(boundaryCursor, start);
+    boundaryCursor = start + match[0].length;
+  }
+  normalized += text.slice(boundaryCursor);
+
+  if (!/minimax:tool_call/i.test(normalized)) {
+    return normalized;
+  }
+
+  const codeRegions = findCodeRegions(normalized);
   const minimaxToolXmlRe = /<invoke\b[^>]*>[\s\S]*?<\/invoke>|<\/?minimax:tool_call>/gi;
   let result = "";
   let cursor = 0;
-  for (const match of text.matchAll(minimaxToolXmlRe)) {
+  for (const match of normalized.matchAll(minimaxToolXmlRe)) {
     const start = match.index ?? 0;
     if (isInsideCode(start, codeRegions)) {
       continue;
     }
-    result += text.slice(cursor, start);
+    result += normalized.slice(cursor, start);
     cursor = start + match[0].length;
   }
-  result += text.slice(cursor);
+  result += normalized.slice(cursor);
   return result;
 }
 
