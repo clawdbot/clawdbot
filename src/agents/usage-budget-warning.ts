@@ -17,6 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { isRecord } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 const WARNING_SCOPE = "usage-budget-warning-v1";
@@ -152,14 +153,7 @@ function claimWarningThreshold(params: {
           .limit(1),
       ).rows[0]?.value_json;
       const parsed = current === null || current === undefined ? undefined : JSON.parse(current);
-      const state =
-        parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? (parsed as {
-              dayKey?: unknown;
-              intervalMicroUsd?: unknown;
-              thresholdMultiple?: unknown;
-            })
-          : undefined;
+      const state = isRecord(parsed) ? parsed : undefined;
       const previous =
         state?.dayKey === params.dayKey && state.intervalMicroUsd === params.intervalMicroUsd
           ? Number(state.thresholdMultiple)
