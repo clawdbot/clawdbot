@@ -397,6 +397,9 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
 
 vi.mock("../config/runtime-snapshot.js", () => ({
   getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+  // No source snapshot: runtime-source projection no-ops and resolvers read the
+  // provided config directly, matching this suite's pre-projection world.
+  getRuntimeConfigSourceSnapshot: () => null,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
 }));
