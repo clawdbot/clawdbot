@@ -187,7 +187,7 @@ export function inspectMainRestartRecoveryRolloverEligibility(
 // forever, failing every later admission with "changed while starting work"
 // (#118873). A live admitted recovery run always holds
 // restartRecoveryDeliveryRunId, so that gate keeps active work authoritative.
-function mainRestartRecoveryAggregateIsTerminalOnly(entry: SessionEntry): boolean {
+export function isMainRestartRecoveryAggregateTerminalOnly(entry: SessionEntry): boolean {
   const state = entry.mainRestartRecovery;
   if (!state || state.tombstone || state.reservation || state.foregroundClaims) {
     return false;
@@ -213,7 +213,7 @@ function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: s
       isMainRestartRecoveryCandidate(entry, sessionKey) &&
       ((entry.restartRecoveryRuns !== undefined && entry.mainRestartRecovery === undefined) ||
         // Terminal-only aggregate: every run settled, nothing owns work (#118873).
-        mainRestartRecoveryAggregateIsTerminalOnly(entry))) ||
+        isMainRestartRecoveryAggregateTerminalOnly(entry))) ||
     // Sessions that are not running were permanently unadmittable while holding
     // recovery residue, returning "changed while starting work" forever
     // (production incident 2026-07-26). A row whose status is absent never
@@ -294,7 +294,7 @@ function inspectMainSessionRecoveryForAdmission(params: {
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
     params.entry.restartRecoveryRuns?.length &&
-    !mainRestartRecoveryAggregateIsTerminalOnly(params.entry)
+    !isMainRestartRecoveryAggregateTerminalOnly(params.entry)
   ) {
     // Standalone callers may use another process generation. An admitted
     // recovery fence remains authoritative until Gateway lifecycle settlement —
@@ -388,7 +388,7 @@ export function transitionMainSessionRecovery(
         // but release the stale slot so the next bounded attempt can proceed.
         updateRecoveryState(entry, state, { reservation: undefined });
       }
-      if (entry.abortedLastRun !== true && mainRestartRecoveryAggregateIsTerminalOnly(entry)) {
+      if (entry.abortedLastRun !== true && isMainRestartRecoveryAggregateTerminalOnly(entry)) {
         // The scan owns retiring dead residue: heal the row durably here so
         // later admissions — including standalone inspect-only callers — never
         // meet the stale aggregate (#118873).

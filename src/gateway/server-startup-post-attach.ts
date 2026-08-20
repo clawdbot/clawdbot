@@ -591,6 +591,7 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
   startupOutcomes?: GatewayStartupOutcomeRecorder;
+  mainSessionRecoveryStartupCheckedStorePaths?: Set<string>;
   waitForPostReadyWork?: () => Promise<void>;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
@@ -628,6 +629,8 @@ export async function startGatewaySidecars(params: {
     }
   });
 
+  const mainSessionRecoveryStartupCheckedStorePaths =
+    params.mainSessionRecoveryStartupCheckedStorePaths ?? new Set<string>();
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
@@ -641,7 +644,10 @@ export async function startGatewaySidecars(params: {
         loadMainSessionRestartRecoveryMarkingModule,
       );
       await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
-        markStartupOrphanedMainSessionsForRecovery({ cfg: params.cfg }),
+        markStartupOrphanedMainSessionsForRecovery({
+          cfg: params.cfg,
+          startupCheckedStorePaths: mainSessionRecoveryStartupCheckedStorePaths,
+        }),
       );
     } catch (err) {
       params.log.warn(
@@ -1193,6 +1199,7 @@ export async function startGatewayPostAttachRuntime(
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
+  const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
   let controlUiAssetsSidecar: GatewayPostReadySidecarHandle | undefined;
   const controlUiAssetsResident = params.residentRegistry.register({
     name: "control-ui-assets",
@@ -1429,6 +1436,7 @@ export async function startGatewayPostAttachRuntime(
                     : {}),
                   broadcastPluginEvent: params.broadcastPluginEvent,
                   startupOutcomes,
+                  mainSessionRecoveryStartupCheckedStorePaths,
                   waitForPostReadyWork: params.waitForPostReadyWork,
                 }),
               );
@@ -1513,6 +1521,7 @@ export async function startGatewayPostAttachRuntime(
                 delayMs: 0,
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
+                startupCheckedStorePaths: mainSessionRecoveryStartupCheckedStorePaths,
                 waitForStart: params.waitForPostReadyWork,
                 gatewayRuntime: params.recoveryRuntime,
               });

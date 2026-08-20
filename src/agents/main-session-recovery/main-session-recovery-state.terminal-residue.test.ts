@@ -9,6 +9,7 @@ import type {
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 // Regression coverage for #118873: a terminal-only mainRestartRecovery
@@ -142,6 +143,58 @@ describe("main session recovery terminal-only residue", () => {
       const entry = loadSessionEntry({ readConsistency: "latest", sessionKey, storePath });
       expect(entry?.mainRestartRecovery).toBeUndefined();
       expect(entry?.restartRecoveryRuns).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("retires terminal residue before orphan marking without touching a current owner", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-terminal-marking-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const liveSessionKey = "agent:main:live";
+    const startupCheckedStorePaths = new Set<string>();
+    try {
+      await replaceSessionEntry({ sessionKey, storePath }, settledEntry());
+      await replaceSessionEntry(
+        { sessionKey: liveSessionKey, storePath },
+        settledEntry({
+          sessionId: "live-session",
+          restartRecoveryDeliveryRunId: "live-run",
+          restartRecoveryRuns: [{ runId: "live-run", lifecycleGeneration: "current-generation" }],
+          restartRecoveryTerminalRunIds: [],
+        }),
+      );
+
+      await expect(
+        markStartupOrphanedMainSessionsForRecovery({
+          activeSessionIds: ["live-session"],
+          activeSessionKeys: [],
+          cfg: { session: { store: storePath } },
+          stateDir: tempDir,
+          startupCheckedStorePaths,
+        }),
+      ).resolves.toEqual({ marked: 0, skipped: 1 });
+      await expect(
+        markStartupOrphanedMainSessionsForRecovery({
+          cfg: { session: { store: storePath } },
+          stateDir: tempDir,
+          startupCheckedStorePaths,
+        }),
+      ).resolves.toEqual({ marked: 0, skipped: 0 });
+
+      const terminal = loadSessionEntry({ readConsistency: "latest", sessionKey, storePath });
+      const live = loadSessionEntry({
+        readConsistency: "latest",
+        sessionKey: liveSessionKey,
+        storePath,
+      });
+      expect(terminal?.mainRestartRecovery).toBeUndefined();
+      expect(terminal?.restartRecoveryRuns).toBeUndefined();
+      expect(live).toMatchObject({
+        sessionId: "live-session",
+        restartRecoveryDeliveryRunId: "live-run",
+        restartRecoveryRuns: [{ runId: "live-run" }],
+      });
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
