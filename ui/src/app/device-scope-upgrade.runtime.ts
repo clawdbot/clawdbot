@@ -136,12 +136,14 @@ export class ScopeUpgradeController {
 
 type ScopeUpgradeBannerProps = {
   snapshot: ApplicationGatewaySnapshot;
+  compact: boolean;
 };
 
 class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ScopeUpgradeBannerProps;
   private controller?: ScopeUpgradeController;
   private expanded = !hasDismissedScopeUpgradeBanner();
+  private compactExpanded = false;
 
   protected override updated(): void {
     const snapshot = this.props?.snapshot;
@@ -177,7 +179,8 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     if (!this.expanded && state.phase === "guidance") {
       return nothing;
     }
-    if (!this.expanded && state.phase === "available") {
+    const compactAvailable = props.compact && !this.compactExpanded;
+    if ((!this.expanded || compactAvailable) && state.phase === "available") {
       return html`<div class="scope-upgrade-chip-row">
         <button
           class="scope-upgrade-chip"
@@ -186,11 +189,12 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
           aria-label=${t("connection.scopeUpgrade.showDetails")}
           @click=${() => {
             this.expanded = true;
+            this.compactExpanded = true;
             this.requestUpdate();
           }}
         >
           <span class="scope-upgrade-chip__dot" aria-hidden="true"></span>
-          ${t("connection.scopeUpgrade.status")}
+          <span class="scope-upgrade-chip__text">${t("connection.scopeUpgrade.status")}</span>
         </button>
       </div>`;
     }
@@ -247,6 +251,7 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
               @click=${() => {
                 dismissScopeUpgradeBanner();
                 this.expanded = false;
+                this.compactExpanded = false;
                 this.requestUpdate();
               }}
             >

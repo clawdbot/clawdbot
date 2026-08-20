@@ -17,6 +17,7 @@ export function navigationSurfaceIsHidden(params: {
 export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
   onboarding: boolean;
+  compact?: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
   heldUpdateCampaignId?: string | null;
@@ -45,6 +46,7 @@ export function renderFloatingUpdateCard(params: {
   return html`${showAttention
     ? html`<openclaw-sidebar-attention
         class="sidebar-attention--floating"
+        .compact=${params.compact ?? false}
         .onNavigate=${params.onNavigate}
         .onOpenApprovals=${params.onOpenApprovals}
       ></openclaw-sidebar-attention>`

@@ -59,6 +59,7 @@ async function mountMenu(
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
+    onOpenCommandPalette?: () => void;
     onSettingsChange?: (patch: Partial<UiSettings>) => void;
     onAction?: (action: HeaderMenuAction) => void;
   } = {},
@@ -86,6 +87,7 @@ async function mountMenu(
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
+      .onOpenCommandPalette=${options.onOpenCommandPalette ?? (() => {})}
       .onSettingsChange=${options.onSettingsChange ?? (() => {})}
       .onAction=${options.onAction ?? (() => {})}
     ></openclaw-chat-header-session-menu>`,
@@ -275,6 +277,7 @@ describe("chat header session menu", () => {
 
   it("drills into compact menu groups without rendering side flyouts", async () => {
     const showTasks = vi.fn();
+    const onOpenCommandPalette = vi.fn();
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
     const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
@@ -302,6 +305,7 @@ describe("chat header session menu", () => {
       ownerOptions: [ada, research],
       selfOwner: ada,
       currentOwnerId: research.id,
+      onOpenCommandPalette,
       onSettingsChange,
       onAction,
     });
@@ -310,6 +314,7 @@ describe("chat header session menu", () => {
       menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
     ).map(itemLabel);
     expect(rootLabels).toEqual([
+      "Open command palette",
       "Open in",
       "Panels",
       "Layout",
@@ -322,6 +327,9 @@ describe("chat header session menu", () => {
       "Delete…",
     ]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
+
+    select(menu, "open-command-palette");
+    expect(onOpenCommandPalette).toHaveBeenCalledOnce();
 
     select(menu, "compact:open-view");
     await menu.updateComplete;

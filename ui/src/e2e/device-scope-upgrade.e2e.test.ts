@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -78,6 +78,39 @@ async function createContext(): Promise<BrowserContext> {
   return context;
 }
 
+async function createProofContext(
+  viewport: { width: number; height: number },
+  label: string,
+): Promise<{ context: BrowserContext; page: Page; rawVideoDir: string | null }> {
+  const rawVideoDir = proofDir ? path.join(proofDir, "raw-video", label) : null;
+  if (rawVideoDir) {
+    await mkdir(rawVideoDir, { recursive: true });
+  }
+  const context = await browser.newContext({
+    locale: "en-US",
+    ...(rawVideoDir ? { recordVideo: { dir: rawVideoDir, size: viewport } } : {}),
+    serviceWorkers: "block",
+    viewport,
+  });
+  openContexts.add(context);
+  return { context, page: await context.newPage(), rawVideoDir };
+}
+
+async function closeProofContext(
+  proof: { context: BrowserContext; page: Page; rawVideoDir: string | null },
+  label: string,
+): Promise<void> {
+  const video = proof.page.video();
+  openContexts.delete(proof.context);
+  await proof.context.close();
+  if (proofDir && video) {
+    await copyFile(await video.path(), path.join(proofDir, `${label}.webm`));
+  }
+  if (proof.rawVideoDir) {
+    await rm(proof.rawVideoDir, { force: true, recursive: true });
+  }
+}
+
 async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
   // content-visibility, grid transitions, and lazy styles can defer layout beyond
   // a fixed rAF pair. Measure the owning geometry until two frames agree.
@@ -131,6 +164,58 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   afterEach(async () => {
     await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
     openContexts.clear();
+  });
+
+  it("uses one compact mobile header while leaving desktop chrome unchanged", async () => {
+    const mobile = await createProofContext({ width: 390, height: 844 }, "mobile");
+    try {
+      await installMockGateway(mobile.page, { operatorScopes: LIMITED_SCOPES });
+      await mobile.page.goto(`${server.baseUrl}chat`);
+      const header = mobile.page.locator(".chat-pane__header").first();
+      const status = mobile.page.getByRole("button", { name: "Show limited access details" });
+      await header.waitFor();
+      await status.waitFor();
+      expect(await mobile.page.locator(".chat-pane__palette-open").count()).toBe(0);
+      expect(await mobile.page.locator(".chat-side-panel-toggle").count()).toBe(0);
+      expect(await mobile.page.locator(".chat-header-session-menu__trigger").count()).toBe(1);
+      const [headerBox, statusBox] = await Promise.all([
+        header.boundingBox(),
+        status.boundingBox(),
+      ]);
+      expect(headerBox).not.toBeNull();
+      expect(statusBox).not.toBeNull();
+      if (headerBox && statusBox) {
+        expect(statusBox.y).toBeGreaterThanOrEqual(headerBox.y);
+        expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(headerBox.y + headerBox.height);
+      }
+      await captureProof(mobile.page, "mobile-compact-header.png");
+      await mobile.page.waitForTimeout(500);
+      await status.click();
+      await mobile.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await captureProof(mobile.page, "mobile-access-details.png");
+      await mobile.page.waitForTimeout(700);
+      await mobile.page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await status.waitFor();
+      await mobile.page.waitForTimeout(500);
+    } finally {
+      await closeProofContext(mobile, "mobile-compact-header");
+    }
+
+    const desktop = await createProofContext({ width: 1280, height: 900 }, "desktop");
+    try {
+      await installMockGateway(desktop.page, { operatorScopes: LIMITED_SCOPES });
+      await desktop.page.goto(`${server.baseUrl}chat`);
+      await desktop.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await desktop.page.locator(".shell-chrome-controls__search").first().waitFor();
+      await desktop.page.locator(".chat-side-panel-toggle").first().waitFor();
+      await captureProof(desktop.page, "desktop-unchanged.png");
+      await desktop.page.waitForTimeout(500);
+      await desktop.page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await desktop.page.getByRole("button", { name: "Show limited access details" }).waitFor();
+      await desktop.page.waitForTimeout(500);
+    } finally {
+      await closeProofContext(desktop, "desktop-unchanged");
+    }
   });
 
   it("requests admin explicitly, shows pending repair guidance, and reconnects approved", async () => {

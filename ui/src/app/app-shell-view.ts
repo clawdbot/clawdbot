@@ -65,6 +65,7 @@ const SCOPE_UPGRADE_BANNER_ELEMENT = {
 function renderScopeUpgradeBanner(
   host: ShellViewHost,
   snapshot: ApplicationContext["gateway"]["snapshot"],
+  compact: boolean,
 ) {
   const state = readScopeUpgradeAvailability(snapshot);
   if (
@@ -78,6 +79,7 @@ function renderScopeUpgradeBanner(
     return html`<openclaw-device-scope-upgrade-banner
       .props=${{
         snapshot,
+        compact,
       }}
     ></openclaw-device-scope-upgrade-banner>`;
   }
@@ -604,10 +606,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
+        ${renderScopeUpgradeBanner(host, gatewaySnapshot, mergedChatChrome)}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
+          compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,

@@ -31,6 +31,7 @@ import {
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
 import "./tooltip.ts";
+import "./web-awesome.ts";
 
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
@@ -55,6 +56,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onSummaryChange?: (summary: SidebarAttentionSummary) => void;
+  @property({ attribute: false }) compact = false;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
@@ -328,6 +330,51 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const items = this.currentItems();
     if (items.length === 0) {
       return nothing;
+    }
+    if (this.compact) {
+      const primary = items.find((item) => item.severity === "error") ?? items[0]!;
+      const labels = items.map((item) => item.label).join("\n");
+      return html`
+        <div
+          class="sidebar-attention sidebar-attention--compact sidebar-attention__item sidebar-attention__item--${primary.severity}"
+          role="status"
+        >
+          <wa-dropdown
+            placement="bottom-end"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const item = items[Number(event.detail.item.value)];
+              if (item) {
+                void this.open(item);
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              type="button"
+              class="sidebar-attention__open"
+              aria-label=${labels}
+              title=${labels}
+            >
+              <span class="sidebar-attention__icon" aria-hidden="true">${icons[primary.icon]}</span>
+              ${items.length > 1
+                ? html`<span class="sidebar-attention__count" aria-hidden="true"
+                    >${items.length}</span
+                  >`
+                : nothing}
+            </button>
+            ${items.map(
+              (item, index) => html`
+                <wa-dropdown-item value=${String(index)}>
+                  <span slot="icon" class="sidebar-attention__icon" aria-hidden="true"
+                    >${icons[item.icon]}</span
+                  >
+                  ${item.label}
+                </wa-dropdown-item>
+              `,
+            )}
+          </wa-dropdown>
+        </div>
+      `;
     }
     return html`
       <div class="sidebar-attention" role="status">
