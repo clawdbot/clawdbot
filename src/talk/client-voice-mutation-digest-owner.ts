@@ -1,5 +1,6 @@
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -47,9 +48,16 @@ export async function deliverClientVoiceMutationDigest(
   if (!text) {
     return;
   }
+  // The durable voice record retains the client-visible key; delivery follows the same
+  // canonical agent session that owned the consult and transcript.
+  const agentSessionKey = resolveSessionStoreKey({
+    cfg: config,
+    sessionKey: record.sessionKey,
+    storeAgentId: record.agentId,
+  });
   const entry = loadSessionEntryReadOnly({
     agentId: record.agentId,
-    sessionKey: record.sessionKey,
+    sessionKey: agentSessionKey,
   });
   const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
   if (!target.channel || target.channel === "webchat" || !target.to) {
@@ -69,8 +77,8 @@ export async function deliverClientVoiceMutationDigest(
     session: buildOutboundSessionContext({
       cfg: config,
       agentId: record.agentId,
-      sessionKey: record.sessionKey,
-      policySessionKey: record.sessionKey,
+      sessionKey: agentSessionKey,
+      policySessionKey: agentSessionKey,
     }),
   });
   if (send.status === "failed" || send.status === "partial_failed") {

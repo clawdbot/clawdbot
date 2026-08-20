@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   createTalkTranscriptionRelaySession: vi.fn(),
   sendTalkTranscriptionRelayAudio: vi.fn(),
   stopTalkTranscriptionRelaySession: vi.fn(),
+  abortChatRunById: vi.fn(() => ({ aborted: true })),
   chatSend: vi.fn(),
   controlRealtimeVoiceAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
@@ -190,6 +191,14 @@ vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: mocks.chatSend,
   handleChatSendWithRuntimeTools: mocks.chatSend,
 }));
+
+vi.mock("../chat-abort.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-abort.js")>();
+  return {
+    ...actual,
+    abortChatRunById: mocks.abortChatRunById,
+  };
+});
 
 vi.mock("../sessions-resolve.js", () => ({
   resolveSessionKeyFromResolveParams: mocks.resolveSessionKeyFromResolveParams,
@@ -2016,7 +2025,7 @@ describe("talk.session unified handlers", () => {
     );
     expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
       agentId: "research",
-      sessionKey: "incident-42",
+      sessionKey: "agent:research:incident-42",
     });
     expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
   });
@@ -2601,8 +2610,15 @@ describe("talk.client.toolCall handler", () => {
     });
   });
 
-  it("starts agent consult through gateway policy instead of exposing chat.send to browser clients", async () => {
+  it("preserves the canonical Talk owner when a bare-key consult enters chat.send", async () => {
     const respond = vi.fn();
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: { agentId: "main" },
+    };
 
     await callTalkHandler("talk.client.toolCall", {
       params: {
@@ -2615,7 +2631,7 @@ describe("talk.client.toolCall handler", () => {
       respond,
       client: { connId: "conn-1", connect: { scopes: ["operator.talk"] } },
       context: {
-        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        getRuntimeConfig: () => config,
       },
     });
 
@@ -2624,7 +2640,23 @@ describe("talk.client.toolCall handler", () => {
       params?: Record<string, unknown>;
     };
     expectRecordFields(chatInput.req, { method: "chat.send" });
-    expectRecordFields(chatInput.params, { sessionKey: "main" });
+    expectRecordFields(chatInput.params, {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      voiceSessionId: "voice-test",
+    });
+    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        runId: "run-voice-1",
+      }),
+    );
     expect(chatInput.params?.message).toContain("What is in this repo?");
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     expect(mockCallArg(mocks.chatSend, 0, 1)).toEqual([
@@ -2637,6 +2669,137 @@ describe("talk.client.toolCall handler", () => {
     ]);
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+  });
+
+  it("aborts the canonical chat run when voice registration fails after acknowledgement", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: { agentId: "main" },
+    };
+    const context = { getRuntimeConfig: () => config };
+    const respond = vi.fn();
+    mocks.registerClientVoiceConsultRun.mockImplementationOnce(() => {
+      throw new Error("voice registration failed");
+    });
+
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        callId: "call-registration-failure",
+        name: "openclaw_agent_consult",
+        args: { question: "Check the active run" },
+      },
+      respond,
+      context,
+    });
+
+    expect(mocks.abortChatRunById).toHaveBeenCalledWith(context, {
+      runId: "run-voice-1",
+      sessionKey: "agent:main:main",
+      stopReason: "voice session binding failed",
+    });
+    expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: voice registration failed",
+    });
+  });
+
+  it("keeps a raw voice key while global-scoped agent work uses the global key", async () => {
+    const config: OpenClawConfig = {
+      session: { scope: "global" },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: { agentId: "main" },
+    };
+    const context = {
+      getRuntimeConfig: () => config,
+      chatAbortControllers: new Map([
+        [
+          "run-voice-1",
+          {
+            controller: new AbortController(),
+            sessionId: "session-global",
+            sessionKey: "global",
+            startedAtMs: 1,
+            expiresAtMs: Date.now() + 60_000,
+            ownerConnId: "conn-global",
+            kind: "chat-send",
+          },
+        ],
+      ]),
+    };
+    const consultRespond = vi.fn();
+
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        callId: "call-global",
+        name: "openclaw_agent_consult",
+        args: { question: "Inspect the global session" },
+      },
+      respond: consultRespond,
+      client: { connId: "conn-global", connect: { scopes: ["operator.talk"] } },
+      context,
+    });
+
+    const chatInput = mockCallArg(mocks.chatSend) as { params?: Record<string, unknown> };
+    expectRecordFields(chatInput.params, { sessionKey: "global", agentId: "main" });
+    expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      origin: "client",
+    });
+    expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      voiceSessionId: "voice-test",
+    });
+    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        runId: "run-voice-1",
+      }),
+    );
+    expectRespondOk(consultRespond, { runId: "run-voice-1" });
+
+    mocks.controlRealtimeVoiceAgentRun.mockResolvedValueOnce({
+      ok: true,
+      mode: "steer",
+      sessionKey: "global",
+      sessionId: "session-global",
+      active: true,
+      queued: true,
+      message: "Steered the active OpenClaw run.",
+      speak: false,
+      show: true,
+      suppress: true,
+    });
+    const steerRespond = vi.fn();
+    await callTalkHandler("talk.client.steer", {
+      params: {
+        sessionKey: "main",
+        text: "use the global plan",
+        mode: "steer",
+      },
+      respond: steerRespond,
+      client: { connId: "conn-global" },
+      context,
+    });
+
+    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
+      sessionKey: "global",
+      text: "use the global plan",
+      mode: "steer",
+    });
+    expectRespondOk(steerRespond, { ok: true, mode: "steer", sessionKey: "global" });
   });
 
   it("returns the tool-call acknowledgement while the agent run continues", async () => {
@@ -2723,7 +2886,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-1",
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "run-voice-1",
       callId: "call-1",
     });
@@ -2795,8 +2958,12 @@ describe("talk.client.toolCall handler", () => {
 });
 
 describe("talk.client.steer handler", () => {
-  const createSteerContext = (ownerConnId = "conn-1") =>
+  const createSteerContext = (
+    ownerConnId = "conn-1",
+    config = { agents: { entries: { main: { default: true } } } } as OpenClawConfig,
+  ) =>
     ({
+      getRuntimeConfig: () => config,
       chatAbortControllers: new Map([
         [
           "run-voice-1",
@@ -2840,6 +3007,38 @@ describe("talk.client.steer handler", () => {
       },
       respond,
       context: createSteerContext(),
+    });
+
+    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      text: "use the safer plan",
+      mode: "steer",
+    });
+    expectRespondOk(respond, {
+      ok: true,
+      mode: "steer",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("canonicalizes a bare Talk session before steering its owned run", async () => {
+    const respond = vi.fn();
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: { agentId: "main" },
+    };
+
+    await callTalkHandler("talk.client.steer", {
+      params: {
+        sessionKey: "main",
+        text: "use the safer plan",
+        mode: "steer",
+      },
+      respond,
+      context: createSteerContext("conn-1", config),
     });
 
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
@@ -3025,7 +3224,7 @@ describe("talk.client.create handler", () => {
         cfg: expect.any(Object),
         agentRuntime: mocks.agentRuntime,
         agentId: "main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         args: { question: "Check the repository" },
         transcript: [
           { role: "user", text: `2:${"🙂".repeat(799)}` },
@@ -3042,13 +3241,13 @@ describe("talk.client.create handler", () => {
     expect(createInput).not.toHaveProperty("transport");
     expect(mocks.ensureClientVoiceAgentSessionEntry).toHaveBeenCalledWith({
       agentId: "main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(mocks.readSessionPreviewItemsFromTranscript).toHaveBeenCalledWith(
       {
         agentId: "main",
         sessionId: "session-main",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       },
       16,
       800,
@@ -3246,7 +3445,14 @@ describe("talk.client.create handler", () => {
     const release = createDeferred();
     const chatAbortControllers = new Map();
     const config = {
-      talk: { realtime: { provider: "openai", model: "gpt-live-1" } },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: {
+        agentId: "main",
+        realtime: { provider: "openai", model: "gpt-live-1" },
+      },
     } as OpenClawConfig;
     const context = {
       chatAbortControllers,
@@ -3321,7 +3527,7 @@ describe("talk.client.create handler", () => {
     });
     expect(chatAbortControllers.get("talk-realtime-consult:gpt-live")).toMatchObject({
       sessionId: "session-main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       agentId: "main",
       ownerConnId: "conn-1",
       controlUiVisible: false,
@@ -3331,7 +3537,7 @@ describe("talk.client.create handler", () => {
     mocks.controlRealtimeVoiceAgentRun.mockResolvedValueOnce({
       ok: true,
       mode: "steer",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       active: true,
       queued: true,
       target: "current",
@@ -3347,7 +3553,7 @@ describe("talk.client.create handler", () => {
       context,
     });
     expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       text: "Use the safer plan",
       mode: "steer",
     });

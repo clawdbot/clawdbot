@@ -232,7 +232,8 @@ export function createTalkClientAgentConsultRunner(params: {
   config: OpenClawConfig;
   context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
   agentId: string;
-  sessionKey: string;
+  voiceSessionKey: string;
+  agentSessionKey: string;
   ownerConnId?: string;
   authority?: TalkAgentConsultAuthority;
   getVoiceSessionId: () => string | undefined;
@@ -267,7 +268,7 @@ export function createTalkClientAgentConsultRunner(params: {
       agentRuntime,
       logger: params.context.logGateway,
       agentId: params.agentId,
-      sessionKey: params.sessionKey,
+      sessionKey: params.agentSessionKey,
       messageProvider: "webchat",
       lane: "talk",
       runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
@@ -286,7 +287,7 @@ export function createTalkClientAgentConsultRunner(params: {
         } else {
           registerClientVoiceConsultRun({
             agentId: params.agentId,
-            sessionKey: params.sessionKey,
+            sessionKey: params.voiceSessionKey,
             voiceSessionId,
             runId,
             config: params.config,
@@ -302,7 +303,7 @@ export function createTalkClientAgentConsultRunner(params: {
           chatAbortControllers: params.context.chatAbortControllers,
           runId,
           sessionId,
-          sessionKey: params.sessionKey,
+          sessionKey: params.agentSessionKey,
           agentId: params.agentId,
           timeoutMs,
           ownerConnId: params.ownerConnId,
@@ -323,7 +324,8 @@ export function createTalkClientAgentConsultRunner(params: {
 export function createTalkClientGatewayControlOwner(params: {
   voiceSessionId: string;
   providerId?: string;
-  sessionKey: string;
+  voiceSessionKey: string;
+  agentSessionKey: string;
   connId: string;
   context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway">;
   runAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
@@ -386,7 +388,7 @@ export function createTalkClientGatewayControlOwner(params: {
   const applyControl = async (args: unknown) => {
     const parsed = parseRealtimeVoiceAgentControlToolArgs(args);
     const result = await (params.controlAgentRun ?? controlRealtimeVoiceAgentRun)({
-      sessionKey: params.sessionKey,
+      sessionKey: params.agentSessionKey,
       text: parsed.text,
       mode: parsed.mode,
     });
@@ -501,7 +503,7 @@ export function createTalkClientGatewayControlOwner(params: {
 
   const owner: GatewayControlOwner = {
     connId: params.connId,
-    sessionKey: params.sessionKey,
+    sessionKey: params.voiceSessionKey,
     control: {
       bindBridge: (nextBridge) => {
         bridge = nextBridge;

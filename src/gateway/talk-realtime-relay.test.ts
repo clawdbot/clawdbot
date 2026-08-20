@@ -26,6 +26,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
+import { bindRelaySessionKey } from "./talk-realtime-relay-voice.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
@@ -86,6 +87,14 @@ function ensureActiveRelayTurnId(relaySessionId: string): string {
     relay.harness.talk.startTurn({ turnId: "turn-1" });
   }
   return relay.harness.talk.activeTurnId ?? "turn-1";
+}
+
+function pinRelaySessionKey(relaySessionId: string, sessionKey = "main"): void {
+  const session = relaySessions.get(relaySessionId);
+  if (!session) {
+    throw new Error("expected active relay session");
+  }
+  bindRelaySessionKey(session, sessionKey);
 }
 
 describe("talk realtime gateway relay", () => {
@@ -699,19 +708,21 @@ describe("talk realtime gateway relay", () => {
       registerTalkRealtimeRelayAgentRun({
         relaySessionId: session.relaySessionId,
         connId: "conn-consult",
-        sessionKey: "agent:main:main",
+        agentSessionKey: "agent:main:main",
         runId: "run-before-transcript",
       });
-      registerTalkRealtimeRelayAgentRun({
-        relaySessionId: session.relaySessionId,
-        connId: "conn-consult",
-        sessionKey: "agent:main:other",
-        runId: "run-other-session",
-      });
+      expect(() =>
+        registerTalkRealtimeRelayAgentRun({
+          relaySessionId: session.relaySessionId,
+          connId: "conn-consult",
+          agentSessionKey: "agent:main:other",
+          runId: "run-other-session",
+        }),
+      ).toThrow("does not match its pinned session target");
 
       expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
         status: "open",
-        consultRunIds: ["run-before-transcript", "run-other-session"],
+        consultRunIds: ["run-before-transcript"],
       });
       stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
@@ -981,7 +992,10 @@ describe("talk realtime gateway relay", () => {
     const broadcastToConnIds = vi.fn();
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
-    const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const removeChatRun = vi.fn(() => ({
+      sessionKey: "agent:main:main",
+      clientRunId: "run-1",
+    }));
     const chatRunState = createChatRunState();
     Object.assign(chatRunState.getOrCreate("run-1"), {
       buffer: "partial answer",
@@ -1010,7 +1024,7 @@ describe("talk realtime gateway relay", () => {
           {
             controller: abortController,
             sessionId: "run-1",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             startedAtMs: 1,
             expiresAtMs: Date.now() + 60_000,
           },
@@ -1029,12 +1043,13 @@ describe("talk realtime gateway relay", () => {
       tools: [],
     });
     ensureActiveRelayTurnId(session.relaySessionId);
+    pinRelaySessionKey(session.relaySessionId);
 
     if (options.register !== false) {
       registerTalkRealtimeRelayAgentRun({
         relaySessionId: session.relaySessionId,
         connId: "conn-1",
-        sessionKey: "main",
+        agentSessionKey: "agent:main:main",
         runId: "run-1",
         callId: "call-1",
       });
@@ -1139,7 +1154,7 @@ describe("talk realtime gateway relay", () => {
       registerTalkRealtimeRelayAgentRun({
         relaySessionId: fixture.session.relaySessionId,
         connId: "conn-1",
-        sessionKey: "main",
+        agentSessionKey: "agent:main:main",
         runId: "run-1",
         callId: "call-1",
       }),
@@ -1179,7 +1194,7 @@ describe("talk realtime gateway relay", () => {
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: fixture.session.relaySessionId,
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "run-1",
       callId: forcedConsult.id,
     });
@@ -1313,14 +1328,14 @@ describe("talk realtime gateway relay", () => {
     expect(mockCallArg(mock)).toBe("chat");
     expectRecordFields(mockCallArg(mock, 0, 1), {
       runId: "run-1",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       state: "aborted",
       stopReason,
     });
   }
 
   function expectNodeAbortPayload(mock: ReturnType<typeof vi.fn>) {
-    expect(mockCallArg(mock)).toBe("main");
+    expect(mockCallArg(mock)).toBe("agent:main:main");
     expect(mockCallArg(mock, 0, 1)).toBe("chat");
     expectRecordFields(mockCallArg(mock, 0, 2), { runId: "run-1", state: "aborted" });
   }
@@ -2935,7 +2950,7 @@ describe("talk realtime gateway relay", () => {
     });
 
     expect(abortController.signal.aborted).toBe(true);
-    expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "main");
+    expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expectChatAbortPayload(broadcast, "barge-in");
     expectNodeAbortPayload(nodeSendToSession);
@@ -3947,6 +3962,47 @@ describe("talk realtime gateway relay", () => {
     });
   });
 
+  it("keeps a raw relay key while global scope controls the canonical agent session", async () => {
+    const config: OpenClawConfig = {
+      session: { scope: "global" },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: { agentId: "main" },
+    };
+    const session = createTalkRealtimeRelaySession({
+      cfg: config,
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-global",
+      provider: createIdleRelayProvider(),
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "main",
+    });
+
+    expect(relaySessions.get(session.relaySessionId)).toMatchObject({
+      sessionKey: "main",
+      agentSessionKey: "global",
+      agentId: "main",
+    });
+    await expect(
+      steerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-global",
+        sessionKey: "main",
+        text: "status",
+        mode: "status",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      mode: "status",
+      sessionKey: "global",
+      active: false,
+    });
+  });
+
   it.each([
     {
       supportsSuppression: undefined,
@@ -3966,7 +4022,7 @@ describe("talk realtime gateway relay", () => {
           isCompacting: () => false,
           abort: abortEmbeddedRun,
         },
-        "main",
+        "agent:main:main",
       );
       const bridge = makeRelayTransport({
         supportsToolResultSuppression: supportsSuppression,
@@ -4036,7 +4092,7 @@ describe("talk realtime gateway relay", () => {
         isCompacting: () => false,
         abort: vi.fn(),
       },
-      "main",
+      "agent:main:main",
     );
     const submitToolResult = vi
       .fn<RealtimeVoiceBridge["submitToolResult"]>()
@@ -4051,7 +4107,7 @@ describe("talk realtime gateway relay", () => {
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "run-1",
       callId: "call-2",
     });
@@ -4104,7 +4160,7 @@ describe("talk realtime gateway relay", () => {
         isCompacting: () => false,
         abort: vi.fn(),
       },
-      "main",
+      "agent:main:main",
     );
     const accepted = createDeferred();
     const submitToolResult = vi.fn(() => accepted.promise);
@@ -4148,7 +4204,7 @@ describe("talk realtime gateway relay", () => {
         isCompacting: () => false,
         abort: abortEmbeddedRun,
       },
-      "main",
+      "agent:main:main",
     );
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -4191,10 +4247,11 @@ describe("talk realtime gateway relay", () => {
       (payload) => payload.type === "toolCall" && payload.forced === true,
     );
     const callId = String(forcedToolCall.callId);
+    pinRelaySessionKey(session.relaySessionId);
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "run-1",
       callId,
     });
@@ -4376,7 +4433,7 @@ describe("talk realtime gateway relay", () => {
         isCompacting: () => false,
         abort: vi.fn(),
       },
-      "main",
+      "agent:main:main",
     );
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -4425,6 +4482,7 @@ describe("talk realtime gateway relay", () => {
       (payload) => payload.type === "toolCall" && payload.forced === true,
     );
     const callId = String(forcedToolCall.callId);
+    pinRelaySessionKey(session.relaySessionId);
     bridgeRequest?.onToolCall?.({
       itemId: "native-item",
       callId: "native-call",
@@ -4434,7 +4492,7 @@ describe("talk realtime gateway relay", () => {
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "run-1",
       callId,
     });
@@ -4494,10 +4552,11 @@ describe("talk realtime gateway relay", () => {
       instructions: "brief",
       tools: [],
     });
+    pinRelaySessionKey(session.relaySessionId);
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "stale-run",
       callId: "call-1",
     });
@@ -4573,7 +4632,10 @@ describe("talk realtime gateway relay", () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const broadcast = vi.fn();
     const nodeSendToSession = vi.fn();
-    const removeChatRun = vi.fn(() => ({ sessionKey: "main", clientRunId: "run-1" }));
+    const removeChatRun = vi.fn(() => ({
+      sessionKey: "agent:main:main",
+      clientRunId: "run-1",
+    }));
     const chatRunState = createChatRunState();
     Object.assign(chatRunState.getOrCreate("run-1"), {
       buffer: "partial answer",
@@ -4611,7 +4673,7 @@ describe("talk realtime gateway relay", () => {
           {
             controller: abortController,
             sessionId: "run-1",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             startedAtMs: 1,
             expiresAtMs: Date.now() + 60_000,
           },
@@ -4629,11 +4691,12 @@ describe("talk realtime gateway relay", () => {
       instructions: "brief",
       tools: [],
     });
+    pinRelaySessionKey(session.relaySessionId);
 
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
-      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       runId: "run-1",
     });
     bridgeRequest?.onClose?.("error");

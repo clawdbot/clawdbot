@@ -8,6 +8,7 @@ import {
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import {
   onTrustedInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
@@ -454,12 +455,21 @@ function appendVoiceTranscript(params: {
       ) {
         throw new Error("voice transcript persistence has too many unresolved entries");
       }
+      // Voice ownership keeps the client-visible key, while transcript storage follows the
+      // configured canonical agent-session key (including global and custom-main aliases).
+      const agentSessionKey = normalized.config
+        ? resolveSessionStoreKey({
+            cfg: normalized.config,
+            sessionKey: normalized.sessionKey,
+            storeAgentId: normalized.agentId,
+          })
+        : normalized.sessionKey;
       const sessionEntry = loadSessionEntryReadOnly({
         agentId: normalized.agentId,
-        sessionKey: normalized.sessionKey,
+        sessionKey: agentSessionKey,
       });
       if (!sessionEntry?.sessionId) {
-        throw new Error(`agent session not found (${normalized.sessionKey})`);
+        throw new Error(`agent session not found (${agentSessionKey})`);
       }
       const observedAt = Date.now();
       const timestamp = normalized.timestamp ?? observedAt;
@@ -484,7 +494,7 @@ function appendVoiceTranscript(params: {
         {
           agentId: normalized.agentId,
           sessionId: sessionEntry.sessionId,
-          sessionKey: normalized.sessionKey,
+          sessionKey: agentSessionKey,
         },
         {
           ...(normalized.config ? { config: normalized.config } : {}),

@@ -366,18 +366,22 @@ export function submitTalkRealtimeRelayToolResult(params: {
 export function registerTalkRealtimeRelayAgentRun(params: {
   relaySessionId: string;
   connId: string;
-  sessionKey: string;
+  agentSessionKey: string;
   runId: string;
   callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (!session.agentSessionKey || session.agentSessionKey !== params.agentSessionKey) {
+    throw new Error("Realtime relay agent run does not match its pinned session target");
+  }
+  const agentSessionKey = session.agentSessionKey;
   const callId = params.callId?.trim();
   if (callId && session.toolCalls.isAgentCompleted(callId)) {
     // Provider cancellation can win while chat.send is still acknowledging. Abort
     // the late run before it can escape the relay's call-ownership tombstone.
     abortChatRunById(session.context, {
       runId: params.runId,
-      sessionKey: params.sessionKey,
+      sessionKey: agentSessionKey,
       stopReason: "realtime provider cancelled tool call",
     });
     throw new Error("Realtime provider cancelled the tool call before run registration");
@@ -385,10 +389,7 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   if (callId && !session.toolCalls.tryAdmit([callId])) {
     throw new Error("Realtime relay tool-call session limit exceeded");
   }
-  if (!session.sessionKey) {
-    bindRelaySessionKey(session, params.sessionKey);
-  }
-  session.activeAgentRuns.set(params.runId, params.sessionKey);
+  session.activeAgentRuns.set(params.runId, agentSessionKey);
   if (callId) {
     session.activeAgentToolCalls.set(callId, params.runId);
   }
@@ -480,7 +481,8 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
 }): Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const sessionKey = session.sessionKey;
-  if (!sessionKey) {
+  const agentSessionKey = session.agentSessionKey;
+  if (!sessionKey || !agentSessionKey) {
     throw new Error("Realtime relay steering requires a session key");
   }
   const requestedSessionKey = params.sessionKey?.trim();
@@ -488,7 +490,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
     throw new Error("Realtime relay steering session key does not match the relay session");
   }
   const result = await controlRealtimeVoiceAgentRun({
-    sessionKey,
+    sessionKey: agentSessionKey,
     text: params.text,
     mode: params.mode,
     recentEvents: session.harness.talk.recentEvents,

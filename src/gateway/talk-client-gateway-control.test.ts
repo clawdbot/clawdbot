@@ -39,7 +39,8 @@ describe("Talk client Gateway control owner", () => {
       const owner = createTalkClientGatewayControlOwner({
         voiceSessionId: `voice-${status}`,
         providerId: "openai",
-        sessionKey: "agent:main:main",
+        voiceSessionKey: "main",
+        agentSessionKey: "agent:main:main",
         connId: "conn-gateway",
         context: controlContext(warn, (event) => talkEvents.push(event)),
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
@@ -106,7 +107,8 @@ describe("Talk client Gateway control owner", () => {
     } satisfies RealtimeVoiceBridge;
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-gateway",
-      sessionKey: "agent:main:main",
+      voiceSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       connId: "conn-gateway",
       context: controlContext(),
       runAgentConsult,
@@ -139,7 +141,7 @@ describe("Talk client Gateway control owner", () => {
 
     const closeParams = {
       voiceSessionId: "voice-gateway",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
       connId: "conn-gateway",
     };
     await expect(
@@ -164,7 +166,8 @@ describe("Talk client Gateway control owner", () => {
     const runAgentConsult = vi.fn(async () => ({ text: "unexpected" }));
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-control",
-      sessionKey: "agent:main:main",
+      voiceSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       connId: "conn-control",
       context: controlContext(),
       runAgentConsult,
@@ -192,7 +195,7 @@ describe("Talk client Gateway control owner", () => {
   });
 
   it("handles spoken status, steering, and cancellation while a consult is active", async () => {
-    const controlAgentRun = vi.fn(async ({ text }: { text: string }) => ({
+    const controlAgentRun = vi.fn(async ({ text }: { sessionKey: string; text: string }) => ({
       ok: true,
       mode:
         text === "cancel"
@@ -237,7 +240,8 @@ describe("Talk client Gateway control owner", () => {
     } satisfies RealtimeVoiceBridge;
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-spoken-control",
-      sessionKey: "agent:main:main",
+      voiceSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       connId: "conn-spoken-control",
       context: controlContext(),
       runAgentConsult,
@@ -270,6 +274,11 @@ describe("Talk client Gateway control owner", () => {
       "use the release branch instead",
       "cancel",
     ]);
+    expect(controlAgentRun.mock.calls.map(([input]) => input.sessionKey)).toEqual([
+      "agent:main:main",
+      "agent:main:main",
+      "agent:main:main",
+    ]);
     expect(bridge.sendUserMessage).toHaveBeenCalledTimes(3);
     await vi.waitFor(() =>
       expect(bridge.submitToolResult).toHaveBeenCalledWith(
@@ -285,7 +294,8 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-disconnect",
-      sessionKey: "agent:main:main",
+      voiceSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       connId: "conn-disconnect",
       context: controlContext(),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
@@ -305,7 +315,8 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-close-error",
-      sessionKey: "agent:main:main",
+      voiceSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       connId: "conn-close-error",
       context: controlContext(),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
@@ -334,7 +345,8 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const common = {
       voiceSessionId: "voice-replacement",
-      sessionKey: "agent:main:main",
+      voiceSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       connId: "conn-replacement",
       context: controlContext(),
       runAgentConsult,

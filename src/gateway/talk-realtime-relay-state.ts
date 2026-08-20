@@ -187,6 +187,7 @@ export type RelaySession = {
   harness: RealtimeVoiceSessionHarness;
   outputOwnership: TalkRealtimeRelayOutputOwnership;
   sessionKey?: string;
+  agentSessionKey?: string;
   agentId?: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;

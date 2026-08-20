@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../talk/voice-transcript.js";
 import type { RelaySession } from "./talk-realtime-relay-state.js";
 import {
+  bindRelaySessionKey,
   closeRelayVoiceSession,
   enqueueRelayVoiceTranscript,
 } from "./talk-realtime-relay-voice.js";
@@ -31,7 +32,8 @@ function createRelaySession(): {
   });
   const session = {
     id: "relay-voice-bounded",
-    sessionKey: "agent:main:main",
+    sessionKey: "main",
+    agentSessionKey: "agent:main:main",
     agentId: "main",
     provider: "openai",
     context: {
@@ -52,6 +54,28 @@ describe("realtime relay voice transcript persistence", () => {
     voiceSessionMocks.appendRelayVoiceTranscript.mockReset();
     voiceSessionMocks.closeRelayVoiceSessionRecord.mockReset().mockResolvedValue(undefined);
     voiceSessionMocks.createOrResumeClientVoiceSession.mockReset();
+  });
+
+  it("pins a canonical agent target while preserving the raw voice key", () => {
+    const { session } = createRelaySession();
+    session.sessionKey = undefined;
+    session.agentSessionKey = undefined;
+    session.agentId = undefined;
+    session.voiceConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, device: {} },
+      },
+      talk: { agentId: "main" },
+    };
+
+    bindRelaySessionKey(session, "main");
+
+    expect(session).toMatchObject({
+      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+    });
   });
 
   it("bounds stalled finals, drains the accepted prefix, and closes once", async () => {
@@ -83,6 +107,12 @@ describe("realtime relay voice transcript persistence", () => {
     }
 
     expect(accepted).toBe(41);
+    expect(voiceSessionMocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    );
     expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledOnce();
     expect(failSession).toHaveBeenCalledOnce();
     const close = session.voiceSessionClose;
@@ -134,6 +164,7 @@ describe("realtime relay voice transcript persistence", () => {
   it("normalizes the bounded pre-bind transcript buffer", () => {
     const { session } = createRelaySession();
     session.sessionKey = undefined;
+    session.agentSessionKey = undefined;
     session.agentId = undefined;
 
     for (let index = 0; index < 100; index += 1) {

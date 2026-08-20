@@ -23,6 +23,7 @@ import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-sess
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { resolveTalkAgentConsultAuthority } from "../talk-client-gateway-control.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../talk-handoff.js";
@@ -289,12 +290,17 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requireSessionKeyForProfile: true,
           warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
         });
-        const sessionKey =
+        const voiceSessionKey =
           realtimeContext.requestedSessionKey ??
           buildAgentMainSessionKey({ agentId: realtimeContext.agentId });
+        const agentSessionKey = resolveSessionStoreKey({
+          cfg: runtimeConfig,
+          sessionKey: voiceSessionKey,
+          storeAgentId: realtimeContext.agentId,
+        });
         await ensureClientVoiceAgentSessionEntry({
           agentId: realtimeContext.agentId,
-          sessionKey,
+          sessionKey: agentSessionKey,
         });
         const session = createTalkRealtimeRelaySession({
           context,
@@ -306,7 +312,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           instructions: buildRealtimeInstructions(realtimeContext.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
           model: launchOptions.model,
-          sessionKey,
+          sessionKey: voiceSessionKey,
           voice: launchOptions.voice,
           language: normalizeOptionalLowercaseString(params.language),
           forceAgentConsultOnFinalTranscript: relayLaunch.forceAgentConsultOnFinalTranscript,

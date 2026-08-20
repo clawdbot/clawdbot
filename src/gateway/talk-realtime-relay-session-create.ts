@@ -3,7 +3,6 @@ import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/n
 import { formatErrorMessage } from "../infra/errors.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
-import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceCloseReason,
@@ -54,7 +53,10 @@ import {
   MAX_RELAY_TOOL_CALL_IDENTITY_BYTES,
   RelayToolCallLedger,
 } from "./talk-realtime-relay-tool-call-ledger.js";
-import { enqueueRelayVoiceTranscript } from "./talk-realtime-relay-voice.js";
+import {
+  enqueueRelayVoiceTranscript,
+  resolveRelaySessionTarget,
+} from "./talk-realtime-relay-voice.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 
 // The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
@@ -126,21 +128,17 @@ export function createTalkRealtimeRelaySession(
       }
     },
   );
-  const relaySessionKey = params.sessionKey?.trim();
-  const relayAgentId = relaySessionKey
-    ? resolveTalkSessionAgentId(params.cfg ?? params.context.getRuntimeConfig(), relaySessionKey)
+  const relayConfig = params.cfg ?? params.context.getRuntimeConfig();
+  const relaySessionTarget = params.sessionKey
+    ? resolveRelaySessionTarget(relayConfig, params.sessionKey)
     : undefined;
-  const consultRunner = relaySessionKey
+  const consultRunner = relaySessionTarget
     ? createTalkClientAgentConsultRunner({
-        config: params.cfg ?? params.context.getRuntimeConfig(),
+        config: relayConfig,
         context: params.context,
-        agentId:
-          relayAgentId ??
-          resolveTalkSessionAgentId(
-            params.cfg ?? params.context.getRuntimeConfig(),
-            relaySessionKey,
-          ),
-        sessionKey: relaySessionKey,
+        agentId: relaySessionTarget.agentId,
+        voiceSessionKey: relaySessionTarget.voiceSessionKey,
+        agentSessionKey: relaySessionTarget.agentSessionKey,
         ownerConnId: params.connId,
         authority: params.consultAuthority,
         getVoiceSessionId: () => relaySessionId,
@@ -151,7 +149,7 @@ export function createTalkRealtimeRelaySession(
           registerTalkRealtimeRelayAgentRun({
             relaySessionId,
             connId: params.connId,
-            sessionKey: relaySessionKey,
+            agentSessionKey: relaySessionTarget.agentSessionKey,
             runId,
           }),
       })
@@ -200,7 +198,7 @@ export function createTalkRealtimeRelaySession(
   const bridge = harness.createBridge({
     provider: relayProvider,
     cfg: params.cfg,
-    agentId: relayAgentId,
+    agentId: relaySessionTarget?.agentId,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
@@ -571,7 +569,7 @@ export function createTalkRealtimeRelaySession(
     }
     throw new Error(`Realtime provider closed during session creation: ${earlyTerminal.reason}`);
   }
-  const initialSessionKey = params.sessionKey?.trim() || undefined;
+  const initialSessionKey = relaySessionTarget?.voiceSessionKey;
   const failSession = (message: string) => {
     const active = relaySessions.get(relaySessionId);
     if (!active || sessionFailureRequested) {
@@ -599,12 +597,10 @@ export function createTalkRealtimeRelaySession(
     harness,
     outputOwnership,
     sessionKey: initialSessionKey,
-    ...(initialSessionKey
+    ...(relaySessionTarget
       ? {
-          agentId: resolveTalkSessionAgentId(
-            params.cfg ?? params.context.getRuntimeConfig(),
-            initialSessionKey,
-          ),
+          agentSessionKey: relaySessionTarget.agentSessionKey,
+          agentId: relaySessionTarget.agentId,
         }
       : {}),
     expiresAtMs,

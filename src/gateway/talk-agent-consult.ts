@@ -65,7 +65,8 @@ export async function startTalkRealtimeAgentConsult(params: {
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   requestId: string;
-  sessionKey: string;
+  agentSessionKey: string;
+  agentId: string;
   callId: string;
   args: unknown;
   relaySessionId?: string;
@@ -98,7 +99,8 @@ export async function startTalkRealtimeAgentConsult(params: {
       isWebchatConnect: params.isWebchatConnect,
       context: params.context,
       params: {
-        sessionKey: params.sessionKey,
+        sessionKey: params.agentSessionKey,
+        agentId: params.agentId,
         message,
         idempotencyKey,
         ...(normalizedTalk?.consultThinkingLevel
@@ -121,7 +123,7 @@ export async function startTalkRealtimeAgentConsult(params: {
               registerTalkRealtimeRelayAgentRun({
                 relaySessionId: params.relaySessionId,
                 connId: params.connId,
-                sessionKey: params.sessionKey,
+                agentSessionKey: params.agentSessionKey,
                 runId,
                 callId: params.callId,
               });
@@ -131,7 +133,7 @@ export async function startTalkRealtimeAgentConsult(params: {
           } catch (registrationError) {
             abortChatRunById(params.context, {
               runId,
-              sessionKey: params.sessionKey,
+              sessionKey: params.agentSessionKey,
               stopReason: "voice session binding failed",
             });
             resolve({
