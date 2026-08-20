@@ -280,7 +280,9 @@ describe("executeFollowupTurn recovery and drain", () => {
         params.pendingToolTasks.delete(failedTask);
       });
       const slowTask = slowBarrier
-        .then(() => order.push("slow-finished"))
+        .then(() => {
+          order.push("slow-finished");
+        })
         .finally(() => {
           params.pendingToolTasks.delete(slowTask);
         });
