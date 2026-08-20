@@ -737,18 +737,23 @@ jobs:
           set -euo pipefail
           runtime_parent="$(</etc/openclaw-mantis-sut-runtime-root)"
           agent_output="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
-          agent_manifest="$agent_output/mantis-evidence.json"
-          test -f "$agent_manifest"
           trusted_output="$RUNNER_TEMP/mantis-trusted-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           quarantine="$RUNNER_TEMP/mantis-agent-output-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo test ! -e "$trusted_output"
           sudo test ! -L "$trusted_output"
           sudo test ! -e "$quarantine"
           sudo test ! -L "$quarantine"
+          # Claim the stopped agent's output before reading it. Validation must not
+          # depend on agent-selected file modes or leave the tree agent-reachable.
+          sudo mv -T "$agent_output" "$quarantine"
+          agent_manifest="$quarantine/mantis-evidence.json"
+          sudo test -f "$agent_manifest"
+          sudo test ! -L "$agent_manifest"
+          test "$(sudo stat -c %h "$agent_manifest")" = 1
           sudo install -d -m 0755 -o root -g root "$trusted_output"
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
-          jq -e '
+          sudo jq -e '
             select((.summary | type) == "string" and (.summary | length) <= 4000) |
             select((.comparison.baseline.expected | type) == "string" and (.comparison.baseline.expected | length) <= 1000) |
             select((.comparison.candidate.expected | type) == "string" and (.comparison.candidate.expected | length) <= 1000) |
@@ -762,8 +767,8 @@ jobs:
               candidateFixed: .comparison.candidate.fixed
             }
           ' "$agent_manifest" > "$judgment"
-          baseline_status="$(jq -r '.comparison.baseline.status' "$agent_manifest")"
-          candidate_status="$(jq -r '.comparison.candidate.status' "$agent_manifest")"
+          baseline_status="$(sudo jq -r '.comparison.baseline.status' "$agent_manifest")"
+          candidate_status="$(sudo jq -r '.comparison.candidate.status' "$agent_manifest")"
           [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" ]]
           [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" ]]
           copy_verified_artifacts() {
@@ -780,14 +785,14 @@ jobs:
             done < <(sudo jq -r '.artifacts | to_entries[] | [.key, .value.file, (.value.bytes | tostring), .value.sha256] | @tsv' "$facts_file")
           }
           for lane in baseline candidate; do
-            lane_status="$(jq -r --arg lane "$lane" '.comparison[$lane].status' "$agent_manifest")"
+            lane_status="$(sudo jq -r --arg lane "$lane" '.comparison[$lane].status' "$agent_manifest")"
             [[ "$lane_status" != "skipped" ]]
             if [[ "$lane" == "baseline" ]]; then
               expected_sha="$BASELINE_SHA"
             else
               expected_sha="$CANDIDATE_SHA"
             fi
-            jq -e --arg lane "$lane" --arg sha "$expected_sha" \
+            sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
               '.comparison[$lane].sha == $sha' "$agent_manifest" >/dev/null
             verdict="$SESSION_ROOT/$lane.json"
             sudo test -f "$verdict"
@@ -887,7 +892,6 @@ jobs:
             echo "Public Mantis evidence contains the SUT credential." >&2
             exit 1
           fi
-          sudo mv -T "$agent_output" "$quarantine"
           sudo mv -T "$trusted_output" "$agent_output"
 
       - name: Preserve trusted-evidence failure diagnostics

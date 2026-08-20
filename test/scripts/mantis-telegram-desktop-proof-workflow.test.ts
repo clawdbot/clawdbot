@@ -258,6 +258,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('sudo install -d -m 0755 -o root -g root "$trusted_output"');
     expect(gate).toContain('sudo mv -T "$agent_output" "$quarantine"');
     expect(gate).toContain('sudo mv -T "$trusted_output" "$agent_output"');
+    expect(gate).toContain('agent_manifest="$quarantine/mantis-evidence.json"');
+    expect(gate).toContain('sudo test ! -L "$agent_manifest"');
+    expect(gate).toContain('test "$(sudo stat -c %h "$agent_manifest")" = 1');
+    expect(gate.indexOf('sudo mv -T "$agent_output" "$quarantine"')).toBeLessThan(
+      gate.indexOf("sudo jq -e '", gate.indexOf('agent_manifest="$quarantine')),
+    );
+    expect(gate).toContain(
+      'baseline_status="$(sudo jq -r \'.comparison.baseline.status\' "$agent_manifest")"',
+    );
     expect(gate).not.toMatch(/sudo (?:install|tee)[^\n]*\$MANTIS_OUTPUT_DIR/u);
     expect(gate).toContain('.comparison.baseline.status == "pass"');
     expect(gate).toContain('.comparison.candidate.status == "pass"');
