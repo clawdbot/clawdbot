@@ -64,7 +64,7 @@ jobs:
               requestSource = "issue_comment";
             } else {
               const pr = context.payload.pull_request;
-              if (pr.head.repo.full_name !== `${owner}/${repo}`) {
+              if (pr.head.repo?.full_name !== `${owner}/${repo}`) {
                 core.notice(
                   "ClawSweeper labels do not authorize secret-bearing fork execution; a maintainer can invoke Mantis from a PR comment.",
                 );
@@ -79,6 +79,10 @@ jobs:
               repo,
               pull_number: prNumber,
             });
+            if (!pr.head.repo) {
+              core.notice("PR source repository is unavailable.");
+              return;
+            }
             const inputs = {
               pr_number: String(prNumber),
               instructions,

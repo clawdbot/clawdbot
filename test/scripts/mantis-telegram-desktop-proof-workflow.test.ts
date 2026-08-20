@@ -331,6 +331,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(dispatchText).toContain('workflow_id: "mantis-telegram-desktop-proof.yml"');
     expect(dispatchText).toContain('inputs.allow_fork_candidate = "true"');
     expect(dispatchText).toContain("inputs.approved_head_sha = pr.head.sha");
+    expect(dispatchText).toContain("pr.head.repo?.full_name");
+    expect(dispatchText).toContain("if (!pr.head.repo)");
     expect(dispatchText).not.toContain("actions/checkout");
     expect(dispatchText).not.toContain("secrets.");
     expect(dispatch?.steps).toHaveLength(1);
