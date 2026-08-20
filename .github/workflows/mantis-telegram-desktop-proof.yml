@@ -1,6 +1,10 @@
 name: Mantis Telegram Desktop Proof
 
 on:
+  issue_comment:
+    types: [created]
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base workflow; candidate code remains container-isolated
+    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -49,6 +53,7 @@ jobs:
   resolve_request:
     name: Resolve Mantis request
     runs-on: ubuntu-24.04
+    environment: qa-live-shared
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
       baseline_revision: ${{ steps.resolve.outputs.baseline_revision }}
@@ -61,6 +66,23 @@ jobs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       request_source: ${{ steps.resolve.outputs.request_source }}
       should_run: ${{ steps.resolve.outputs.should_run }}
+      visibility_decision: ${{ steps.read_decision.outputs.decision }}
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request &&
+          (
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
+          )
+        ) ||
+        (
+          github.event_name == 'pull_request_target' &&
+          github.event.label.name == 'mantis: telegram-visible-proof'
+        )
+      }}
     steps:
       - name: Resolve refs and target PR
         id: resolve
@@ -73,13 +95,59 @@ jobs:
             }
 
             const inputs = context.payload.inputs ?? {};
-            const prNumber = inputs.pr_number;
+            const eventName = context.eventName;
+            let prNumber = inputs.pr_number;
+            let body = inputs.instructions || "";
+            let requestSource = "workflow_dispatch";
+
+            if (eventName === "issue_comment") {
+              const issue = context.payload.issue;
+              const commentBody = context.payload.comment?.body ?? "";
+              const normalized = commentBody.toLowerCase();
+              const mentionsMantis =
+                normalized.includes("@openclaw-mantis") ||
+                normalized.includes("/openclaw-mantis");
+              const requestsDesktopProof =
+                /\b(?:telegram desktop proof|desktop proof|native telegram|visible proof|telegram-visible-proof)\b/u.test(
+                  normalized,
+                );
+              if (!issue?.pull_request || !mentionsMantis || !requestsDesktopProof) {
+                setOutput("should_run", "false");
+                setOutput("request_source", "unsupported_issue_comment");
+                return;
+              }
+              const allowed = new Set(["admin", "maintain", "write"]);
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username: context.actor,
+              });
+              if (!allowed.has(data.permission)) {
+                core.notice(
+                  `Mantis requires write/maintain/admin access; ${context.actor} has ${data.permission}.`,
+                );
+                setOutput("should_run", "false");
+                setOutput("request_source", "unauthorized_issue_comment");
+                return;
+              }
+              prNumber = String(issue.number);
+              body = commentBody;
+              requestSource = "issue_comment";
+            } else if (eventName === "pull_request_target") {
+              if (context.payload.label?.name !== "mantis: telegram-visible-proof") {
+                setOutput("should_run", "false");
+                setOutput("request_source", "unsupported_label");
+                return;
+              }
+              prNumber = String(context.payload.pull_request?.number ?? "");
+              requestSource = "clawsweeper_label";
+            } else if (eventName !== "workflow_dispatch") {
+              core.setFailed(`Unsupported event: ${eventName}`);
+              return;
+            }
             if (!prNumber) {
               core.setFailed("Mantis Telegram desktop proof requires a pull request.");
               return;
             }
-
-            const body = inputs.instructions || "";
 
             const { owner, repo } = context.repo;
             const { data: pr } = await github.rest.pulls.get({
@@ -137,8 +205,18 @@ jobs:
               }
 
               if (pr.head.repo.full_name !== `${owner}/${repo}`) {
+                if (requestSource === "clawsweeper_label") {
+                  core.notice(
+                    "ClawSweeper labels do not authorize secret-bearing fork execution; a maintainer can invoke Mantis from a PR comment.",
+                  );
+                  setOutput("should_run", "false");
+                  setOutput("request_source", requestSource);
+                  return;
+                }
                 const allowFork =
-                  inputs.allow_fork_candidate === true || inputs.allow_fork_candidate === "true";
+                  requestSource === "issue_comment" ||
+                  inputs.allow_fork_candidate === true ||
+                  inputs.allow_fork_candidate === "true";
                 if (!allowFork) {
                   core.setFailed(
                     "Fork PR heads require explicit allow_fork_candidate approval for this secret-bearing run.",
@@ -146,8 +224,9 @@ jobs:
                   return;
                 }
                 if (
-                  !immutableSha.test(inputs.approved_head_sha || "") ||
-                  inputs.approved_head_sha !== candidateRevision
+                  requestSource !== "issue_comment" &&
+                  (!immutableSha.test(inputs.approved_head_sha || "") ||
+                    inputs.approved_head_sha !== candidateRevision)
                 ) {
                   core.setFailed(
                     `Fork approval must name the exact current PR head SHA (${candidateRevision}).`,
@@ -166,12 +245,85 @@ jobs:
             setOutput("instructions", body);
             setOutput("publish_artifact_name", publishArtifactName);
             setOutput("publish_run_id", inputs.publish_run_id || "");
-            setOutput("request_source", "workflow_dispatch");
+            setOutput("request_source", requestSource);
+            setOutput(
+              "requires_preflight",
+              requestSource === "clawsweeper_label" || publishArtifactName ? "false" : "true",
+            );
+
+      - name: Checkout preflight refs
+        id: checkout
+        if: ${{ steps.resolve.outputs.should_run == 'true' && steps.resolve.outputs.requires_preflight == 'true' }}
+        continue-on-error: true
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Fetch exact PR head
+        id: fetch
+        if: ${{ steps.checkout.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          CANDIDATE_SHA: ${{ steps.resolve.outputs.candidate_revision }}
+          MANTIS_PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${MANTIS_PR_NUMBER}/head:refs/remotes/origin/mantis-preflight"
+          test "$(git rev-parse refs/remotes/origin/mantis-preflight)" = "$CANDIDATE_SHA"
+
+      - name: Classify visible behavior
+        id: classify
+        if: ${{ steps.fetch.outcome == 'success' }}
+        continue-on-error: true
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        env:
+          BASELINE_SHA: ${{ steps.resolve.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ steps.resolve.outputs.candidate_revision }}
+          MANTIS_INSTRUCTIONS: ${{ steps.resolve.outputs.instructions }}
+          MANTIS_PR_CONTEXT: ${{ steps.resolve.outputs.pr_context }}
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/mantis-telegram-desktop-preflight.md
+          output-schema: |
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["decision"],
+              "properties": {
+                "decision": { "type": "string", "enum": ["run", "skip"] }
+              }
+            }
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: low
+          sandbox: read-only
+          codex-args: '["-c","service_tier=\"fast\""]'
+          safety-strategy: drop-sudo
+
+      - name: Read visibility decision
+        id: read_decision
+        if: ${{ always() }}
+        env:
+          CLASSIFIER_OUTCOME: ${{ steps.classify.outcome }}
+          CLASSIFIER_RESULT: ${{ steps.classify.outputs.final-message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          decision=run
+          if [[ "$CLASSIFIER_OUTCOME" == success ]] &&
+            jq -e '.decision == "run" or .decision == "skip"' <<<"$CLASSIFIER_RESULT" >/dev/null; then
+            decision="$(jq -r '.decision' <<<"$CLASSIFIER_RESULT")"
+          else
+            echo "::notice::Mantis visibility preflight was unavailable; continuing with proof."
+          fi
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
 
   run_telegram_desktop_proof:
     name: Run agentic native Telegram proof
     needs: resolve_request
-    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == '' && needs.resolve_request.outputs.visibility_decision != 'skip'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
     environment: qa-live-shared
@@ -672,7 +824,7 @@ jobs:
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
           safety-strategy: unprivileged-user
           codex-user: codex
-          allow-bot-users: github-actions[bot]
+          allow-bot-users: github-actions[bot],clawsweeper[bot]
 
       - name: Clean up abandoned Mantis sessions
         id: abandoned_cleanup
@@ -1109,6 +1261,53 @@ jobs:
         run: |
           echo "Mantis Telegram desktop proof failed: comparison=${COMPARISON_STATUS:-unset}." >&2
           exit 1
+
+  report_no_visible_change:
+    name: Report no visible Telegram change
+    needs: resolve_request
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.visibility_decision == 'skip'
+    runs-on: ubuntu-24.04
+    environment: qa-live-shared
+    permissions: {}
+    steps:
+      - name: Create Mantis GitHub App token
+        id: mantis_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Comment that no visible proof applies
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
+        with:
+          github-token: ${{ steps.mantis_app_token.outputs.token }}
+          script: |
+            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const body = `${marker}\nThere was nothing visible to test in this PR at all.`;
+            const { owner, repo } = context.repo;
+            const issueNumber = Number(process.env.TARGET_PR);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body });
+            }
 
   publish_existing_telegram_desktop_proof:
     name: Publish existing native Telegram proof
