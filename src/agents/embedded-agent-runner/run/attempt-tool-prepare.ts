@@ -3,6 +3,7 @@
  * It may assume workspace, model, and runtime policy inputs are resolved.
  */
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../../gateway/agent-runtime-session-handoff.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
   isCodeModeDiagnosticEnabled,
@@ -147,6 +148,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
+  const sessionsSendToolPolicy: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"] = {
+    version: 1,
+    allow: [],
+    deny: [],
+  };
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
@@ -204,6 +210,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
     inputProvenance: attempt.inputProvenance,
     trustedInternalHandoff: attempt.trustedInternalHandoff,
+    trustedSessionHandoff: attempt.trustedSessionHandoff,
     scheduledToolPolicy: attempt.scheduledToolPolicy,
     pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
   });
@@ -348,6 +355,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           forceHeartbeatTool: attempt.forceHeartbeatTool,
           runtimeToolAllowlist: effectiveToolsAllow,
           inheritedToolAllowlistRef: inheritedToolAllowlist,
+          sessionsSendToolPolicyRef: sessionsSendToolPolicy,
           cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
           cronCreatorToolAllowlistCaptureRef,
           authProfileStore: attempt.authProfileStore,
@@ -391,6 +399,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     effectiveToolsAllow,
     forceDirectMessageTool,
     inheritedToolAllowlist,
+    sessionsSendToolPolicy,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     replaySafetyOptions,

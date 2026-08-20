@@ -2,10 +2,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import {
+  normalizeToolPolicyName,
+  replaceWithEffectiveToolAllowlist,
+} from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import type { AgentRuntimeSessionHandoffContext } from "./agent-runtime-session-handoff.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   buildMcpToolSchema,
@@ -94,6 +98,11 @@ function resolveMcpLoopbackTools(
     grantToken: _grantToken,
     ...scopeParams
   } = params;
+  const sessionsSendToolPolicy: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"] = {
+    version: 1,
+    allow: [],
+    deny: [],
+  };
   const scoped = resolveGatewayScopedTools({
     ...scopeParams,
     agentDir: authProfileStoreAgentDir,
@@ -102,14 +111,23 @@ function resolveMcpLoopbackTools(
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
+    sessionsSendToolPolicy,
   });
+  const tools =
+    mode === "exact"
+      ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
+      : applyPolicyToolsAllow(scoped.tools, params.toolsAllow);
+  replaceWithEffectiveToolAllowlist(
+    sessionsSendToolPolicy.allow,
+    tools.flatMap((tool) => {
+      const name = readMcpLoopbackToolName(tool);
+      return name ? [{ name }] : [];
+    }),
+  );
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools:
-      mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, params.toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, params.toolsAllow),
+    tools,
   };
 }
 
@@ -208,6 +226,7 @@ export class McpLoopbackToolCache {
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
       JSON.stringify(params.skillWorkshop?.proposalRevision ?? null),
+      JSON.stringify(params.trustedSessionHandoff ?? null),
       JSON.stringify(params.scheduledToolPolicy ?? null),
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",

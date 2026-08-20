@@ -13,6 +13,7 @@ import {
 import { loadPublishedGatewayReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
@@ -54,6 +55,7 @@ import {
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import { resolveAgentRunToolAllowlist } from "./agent-run-tool-allowlist.js";
 import {
   finalizePreparedAgentRunUserTurn,
   releasePreparedAgentRunUserTurn,
@@ -264,6 +266,7 @@ export function startAgentRunExecution(params: {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
+      const sessionHandoffPolicy = prepared.trustedSessionHandoff?.inheritedToolPolicy;
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(
           {
@@ -320,7 +323,12 @@ export function startAgentRunExecution(params: {
               }),
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-              toolsAllow: params.restoredCronContinuation?.toolsAllow,
+              transcriptMessage: prepared.trustedSessionHandoff?.transcriptMessage,
+              toolsAllow: resolveAgentRunToolAllowlist({
+                restoredCronToolsAllow: params.restoredCronContinuation?.toolsAllow,
+                sessionHandoffToolsAllow: sessionHandoffPolicy?.allow,
+              }),
+              trustedSessionHandoff: prepared.trustedSessionHandoff,
               runtimePluginToolGrant,
               trustedInternalHandoff: prepared.trustedInternalHandoff,
               toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
@@ -346,7 +354,10 @@ export function startAgentRunExecution(params: {
               sourceReplyDeliveryMode: params.restoredCronContinuation
                 ? params.restoredCronContinuation.cliSessionBindingFacts?.sourceReplyDeliveryMode
                 : params.request.sourceReplyDeliveryMode,
-              disableMessageTool: params.request.disableMessageTool,
+              disableMessageTool:
+                params.request.disableMessageTool === true ||
+                (sessionHandoffPolicy !== undefined &&
+                  !isToolAllowedByPolicyName("message", sessionHandoffPolicy)),
               swarmCollector: params.request.swarmCollector,
               swarmOutputSchema: params.request.swarmOutputSchema,
               forceRestartSafeTools: params.request.forceRestartSafeTools,

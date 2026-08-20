@@ -20,6 +20,7 @@ import {
   readAgentRuntimeExecutionLineage,
 } from "../../gateway/agent-runtime-execution-lineage.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeSessionHandoff } from "../../gateway/agent-runtime-session-handoff.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -37,6 +38,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { getGatewaySessionHandoffContext } from "./gateway-session-handoff-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
 
@@ -48,6 +50,11 @@ export type GatewayCallOptions = {
 };
 
 type GatewayOverrideTarget = "local" | "remote";
+
+type ResolvedAgentRuntimeIdentityToken = Readonly<{
+  token: string;
+  revokeSessionHandoff?: () => void;
+}>;
 
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
@@ -351,10 +358,11 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
 
 async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   method: string;
+  callParams: unknown;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
   required?: boolean;
-}): Promise<string | undefined> {
+}): Promise<ResolvedAgentRuntimeIdentityToken | undefined> {
   const optionalLocalIdentity = OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS.has(params.method);
   if (
     !params.required &&
@@ -380,7 +388,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
   if (identity.signedAgentRuntimeIdentityToken) {
-    return identity.signedAgentRuntimeIdentityToken;
+    return { token: identity.signedAgentRuntimeIdentityToken };
   }
   if (!identity.operationalRunInstance) {
     if (optionalLocalIdentity && !params.required) {
@@ -390,6 +398,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   }
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
+    const sessionHandoffContext = getGatewaySessionHandoffContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
     const activeAuthority = getActiveAgentRunDelegatedAuthority(identity.operationalRunInstance);
     const executionLineage = readAgentRuntimeExecutionLineage(sessionSpawnContext);
@@ -412,8 +421,36 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     if (executionLineage && !lineageHandoff) {
       throw new Error("execution lineage handoff could not bind the parent admission");
     }
+    const agentCall = params.method === "agent" ? asNullableRecord(params.callParams) : null;
+    const targetSessionKey = normalizeOptionalString(agentCall?.sessionKey);
+    const targetIdempotencyKey = normalizeOptionalString(agentCall?.idempotencyKey);
+    if (sessionHandoffContext && (!targetSessionKey || !targetIdempotencyKey)) {
+      lineageHandoff?.revoke();
+      throw new Error("session handoff requires an exact target session and idempotency key");
+    }
+    const sessionHandoff =
+      sessionHandoffContext && targetSessionKey && targetIdempotencyKey && activeAuthority
+        ? createAgentRuntimeSessionHandoff({
+            agentId: identity.agentId,
+            sessionKey: identity.sessionKey,
+            operationalRunInstance: identity.operationalRunInstance,
+            delegatedAuthority: activeAuthority,
+            context: sessionHandoffContext,
+            ...(identity.executionIdentityToken
+              ? { executionIdentity: identity.executionIdentityToken }
+              : {}),
+            target: {
+              sessionKey: targetSessionKey,
+              idempotencyKey: targetIdempotencyKey,
+            },
+          })
+        : undefined;
+    if (sessionHandoffContext && !sessionHandoff) {
+      lineageHandoff?.revoke();
+      throw new Error("session handoff could not bind the source admission");
+    }
     try {
-      return await mintAgentRuntimeIdentityToken({
+      const token = await mintAgentRuntimeIdentityToken({
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
@@ -422,9 +459,16 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
           : sessionSpawnContext
             ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
             : {}),
+        ...(sessionHandoff ? { sessionHandoffId: sessionHandoff.id } : {}),
+        ...(sessionHandoff ? { executionIdentityToken: undefined } : {}),
       });
+      return {
+        token,
+        ...(sessionHandoff ? { revokeSessionHandoff: sessionHandoff.revoke } : {}),
+      };
     } catch (error) {
       lineageHandoff?.revoke();
+      sessionHandoff?.revoke();
       throw error;
     }
   } catch (error) {
@@ -577,6 +621,8 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   params?: unknown,
   extra?: {
     expectFinal?: boolean;
+    onAccepted?: import("../../gateway/call.js").CallGatewayOptions["onAccepted"];
+    onSignalAbort?: import("../../gateway/call.js").CallGatewayOptions["onSignalAbort"];
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
@@ -592,12 +638,24 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  const agentRuntimeIdentityToken = await resolveAgentRuntimeIdentityTokenForGatewayTool({
+  const resolvedAgentRuntimeIdentity = await resolveAgentRuntimeIdentityTokenForGatewayTool({
     method,
+    callParams,
     opts,
     target: gateway.target,
     required: extra?.requireAgentRuntimeIdentity,
   });
+  const agentRuntimeIdentityToken = resolvedAgentRuntimeIdentity?.token;
+  const revokeSessionHandoff = resolvedAgentRuntimeIdentity?.revokeSessionHandoff;
+  const revokeSessionHandoffOnAbort = revokeSessionHandoff
+    ? () => revokeSessionHandoff()
+    : undefined;
+  if (extra?.signal && revokeSessionHandoffOnAbort) {
+    extra.signal.addEventListener("abort", revokeSessionHandoffOnAbort, { once: true });
+    if (extra.signal.aborted) {
+      revokeSessionHandoffOnAbort();
+    }
+  }
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,
     callParams,
@@ -611,6 +669,8 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     params: callParams,
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
+    onAccepted: extra?.onAccepted,
+    onSignalAbort: extra?.onSignalAbort,
     expectFinal: extra?.expectFinal,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
@@ -629,6 +689,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
         params: stripNodeInvokeTurnSource(callOptions.params),
       });
     }
+    revokeSessionHandoff?.();
     if (agentRuntimeIdentityToken && isStaleGatewayAgentRuntimeIdentityRejection(error)) {
       if (method === "node.invoke" && extra?.requireAgentRuntimeIdentity !== true) {
         return await callGateway<T>({
@@ -640,5 +701,9 @@ export async function callGatewayTool<T = Record<string, unknown>>(
       throw staleGatewayAgentRuntimeIdentityError(error);
     }
     throw error;
+  } finally {
+    if (extra?.signal && revokeSessionHandoffOnAbort) {
+      extra.signal.removeEventListener("abort", revokeSessionHandoffOnAbort);
+    }
   }
 }

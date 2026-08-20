@@ -14,6 +14,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { AgentRuntimeSessionHandoffContext } from "../gateway/agent-runtime-session-handoff.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
@@ -96,6 +97,7 @@ import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
   normalizeToolPolicyName,
+  normalizeToolPolicyNames,
   replaceWithEffectiveToolAllowlist,
 } from "./tool-policy.js";
 import {
@@ -305,6 +307,8 @@ type OpenClawCodingToolsOptions = {
   inheritRuntimeToolAllowlist?: boolean;
   /** Mutable spawn capability snapshot refreshed after late-bound runtime tools are authorized. */
   inheritedToolAllowlistRef?: string[];
+  /** Mutable sessions_send capability snapshot refreshed after final tool authorization. */
+  sessionsSendToolPolicyRef?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** Mutable proof that the cron cap reached the final executable surface. */
@@ -375,6 +379,8 @@ type OpenClawCodingToolsOptions = {
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; never derived from model-facing input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  /** Consumed one-shot sessions_send authority carried outside public params. */
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -437,6 +443,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
+      trustedSessionHandoff: options?.trustedSessionHandoff,
       scheduledToolPolicy: options?.scheduledToolPolicy,
       pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });
@@ -673,6 +680,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
+  const sessionsSendToolPolicy = options?.sessionsSendToolPolicyRef ?? {
+    version: 1 as const,
+    allow: [],
+    deny: [],
+  };
+  sessionsSendToolPolicy.deny.splice(
+    0,
+    sessionsSendToolPolicy.deny.length,
+    ...inheritedToolDenylist,
+  );
   const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
@@ -855,6 +872,30 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             oneShotCliRun: options?.oneShotCliRun,
             inheritedToolAllowlist,
             inheritedToolDenylist,
+            sessionsSendHandoff: {
+              inheritedToolPolicy: sessionsSendToolPolicy,
+              // Chained sends retain the original authenticated requester. Replacing it with
+              // an internal target's ingress identity would widen sender policy on the next hop.
+              requester: options?.trustedSessionHandoff
+                ? { ...options.trustedSessionHandoff.requester }
+                : {
+                    ...(capabilityProfile.conversation.messageProvider
+                      ? { messageProvider: capabilityProfile.conversation.messageProvider }
+                      : {}),
+                    ...(capabilityProfile.sender.id
+                      ? { senderId: capabilityProfile.sender.id }
+                      : {}),
+                    ...(capabilityProfile.sender.name
+                      ? { senderName: capabilityProfile.sender.name }
+                      : {}),
+                    ...(capabilityProfile.sender.username
+                      ? { senderUsername: capabilityProfile.sender.username }
+                      : {}),
+                    ...(capabilityProfile.sender.e164
+                      ? { senderE164: capabilityProfile.sender.e164 }
+                      : {}),
+                  },
+            },
             onYield: options?.onYield,
             claimYieldCompletion: options?.claimYieldCompletion,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
@@ -915,10 +956,20 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
+  const sessionHandoffToolAllowlist = options?.trustedSessionHandoff
+    ? normalizeToolPolicyNames(options.trustedSessionHandoff.inheritedToolPolicy.allow)
+    : undefined;
+  // Handoff allow entries are the sender's exact executable names. Filter before
+  // ordinary policy aliases can widen them (for example, write -> apply_patch).
+  const toolsForSessionHandoff = sessionHandoffToolAllowlist
+    ? toolsForModelProvider.filter((tool) =>
+        sessionHandoffToolAllowlist.has(normalizeToolPolicyName(tool.name)),
+      )
+    : toolsForModelProvider;
   // Sender identity is primarily command/action auth, with one Gateway parity exception:
   // explicit non-owner callers never receive owner-only control-plane core tools.
   const subagentFiltered = applyToolPolicyPipeline({
-    tools: toolsForModelProvider,
+    tools: toolsForSessionHandoff,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: buildConversationToolPolicyPipelineSteps({
@@ -964,6 +1015,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // never filters the mandatory structured_output tool from this turn.
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
+  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, authorizedTools);
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
     getPluginToolMeta(tool),
   );

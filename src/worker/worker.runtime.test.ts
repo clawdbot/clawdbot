@@ -1450,8 +1450,8 @@ describe("worker runtime", () => {
   it.each([
     {
       mode: "read-only" as const,
-      omittedTools: ["write", "edit", "apply_patch"],
-      denial: /host=gateway security=deny/u,
+      omittedTools: ["write", "edit", "apply_patch", "exec", "process"],
+      denial: /Tool exec not found/u,
     },
     {
       mode: "guarded" as const,

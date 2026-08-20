@@ -1901,12 +1901,37 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(toolNameList(allowed)).toContain("apply_patch");
 
+    const sessionHandoffPolicy = {
+      version: 1 as const,
+      allow: [] as string[],
+      deny: [] as string[],
+    };
     const denied = createOpenClawCodingTools({
       config: allowModelsConfig,
       modelProvider: "openai",
       modelId: "gpt-5.4-mini",
+      sessionsSendToolPolicyRef: sessionHandoffPolicy,
     });
     expect(toolNameList(denied)).not.toContain("apply_patch");
+    expect(sessionHandoffPolicy.allow).toContain("write");
+    expect(sessionHandoffPolicy.allow).not.toContain("apply_patch");
+
+    const handoffTarget = createOpenClawCodingTools({
+      config: allowModelsConfig,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      runtimeToolAllowlist: sessionHandoffPolicy.allow,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: sessionHandoffPolicy,
+        requester: {},
+      },
+    });
+    expect(toolNameList(handoffTarget)).not.toContain("apply_patch");
 
     const oauthTools = createOpenClawCodingTools({
       config: testConfig,
@@ -1969,6 +1994,86 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("exec")).toBe(false);
     expect(names.has("tts")).toBe(false);
     expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
+  });
+
+  it("snapshots sender-scoped denies for sessions_send derived runs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["message"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      senderId: "speaker-1",
+    });
+    const policy = latestCreateOpenClawToolsOptions().sessionsSendHandoff?.inheritedToolPolicy;
+
+    expect(tools.map((tool) => tool.name)).not.toContain("message");
+    expect(policy?.deny).toContain("message");
+    expect(policy?.allow).toContain("sessions_send");
+    expect(policy?.allow).not.toContain("message");
+  });
+
+  it("preserves the original requester across chained sessions_send handoffs", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    createOpenClawCodingTools({
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      runtimeToolAllowlist: ["read", "exec", "sessions_send"],
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "exec", "sessions_send"],
+          deny: [],
+        },
+        requester: {
+          messageProvider: "whatsapp",
+          senderId: "guest",
+        },
+      },
+    });
+    const chainedHandoff = latestCreateOpenClawToolsOptions().sessionsSendHandoff;
+
+    expect(chainedHandoff?.requester).toEqual({
+      messageProvider: "whatsapp",
+      senderId: "guest",
+    });
+    if (!chainedHandoff) {
+      throw new Error("expected chained sessions_send handoff");
+    }
+
+    const targetTools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "id:guest": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "whatsapp",
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      runtimeToolAllowlist: chainedHandoff.inheritedToolPolicy.allow,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:intermediate",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: chainedHandoff,
+    });
+
+    expect(toolNameList(targetTools)).toContain("read");
+    expect(toolNameList(targetTools)).not.toContain("exec");
   });
 
   it("filters session tools for sub-agent sessions by default", () => {

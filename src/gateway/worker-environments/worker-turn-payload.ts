@@ -42,7 +42,6 @@ import {
   type AgentRuntimeIdentityTokenParams,
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
@@ -89,7 +88,7 @@ type PrepareWorkerAgentRuntimeIdentityParams = Omit<
 > & {
   runtimeInstanceId: string;
   turn: SessionPlacementTurnParams;
-  placements: WorkerSessionPlacementStore;
+  placements: Parameters<typeof bindWorkerTurnExecutionIdentity>[0];
 };
 
 export async function prepareWorkerAgentRuntimeIdentity(
@@ -103,17 +102,29 @@ export async function prepareWorkerAgentRuntimeIdentity(
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
-  // Worker session RPC carries no raw identity token. Bind provenance to the exact
-  // host claim before launch so child lineage cannot become bearer authority.
-  if (runtimeIdentity.executionIdentityToken) {
-    bindWorkerTurnExecutionIdentity(
-      params.placements,
-      params.turnClaim,
-      runtimeIdentity.executionIdentityToken,
-      admittedRunContext.operationalRunInstance,
-      { agentId: params.agentId, sessionKey: params.sessionKey },
-    );
-  }
+  // Worker session RPC carries no raw identity token. Bind its operational owner
+  // to the exact host claim even when diagnostic execution identity is disabled.
+  bindWorkerTurnExecutionIdentity(
+    params.placements,
+    params.turnClaim,
+    runtimeIdentity.executionIdentityToken,
+    admittedRunContext.operationalRunInstance,
+    {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionHandoffRequester: params.turn.trustedSessionHandoff
+        ? { ...params.turn.trustedSessionHandoff.requester }
+        : {
+            ...(params.turn.messageProvider
+              ? { messageProvider: params.turn.messageProvider }
+              : {}),
+            ...(params.turn.senderId ? { senderId: params.turn.senderId } : {}),
+            ...(params.turn.senderName ? { senderName: params.turn.senderName } : {}),
+            ...(params.turn.senderUsername ? { senderUsername: params.turn.senderUsername } : {}),
+            ...(params.turn.senderE164 ? { senderE164: params.turn.senderE164 } : {}),
+          },
+    },
+  );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,

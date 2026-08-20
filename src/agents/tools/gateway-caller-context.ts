@@ -4,9 +4,17 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
-import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
+import type {
+  WorkerTurnExecutionIdentity,
+  WorkerTurnExecutionIdentityCapability,
+} from "../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import type { AdmittedRunContext, OperationalRunInstanceRef } from "../admitted-run-context.js";
+import {
+  claimAdmittedRunContinuation,
+  closeAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+  type OperationalRunInstanceRef,
+} from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -14,7 +22,7 @@ import {
 } from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "./common.js";
 
-type GatewayToolCallerIdentity = {
+export type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
   operationalRunInstance?: OperationalRunInstanceRef;
@@ -93,6 +101,63 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** Transfers bounded follow-up work to a fresh authority before its parent can close. */
+export async function claimGatewayToolCallerContinuation(
+  identity: GatewayToolCallerIdentity,
+  runId: string,
+): Promise<Readonly<{ identity: GatewayToolCallerIdentity; release: () => void }> | undefined> {
+  const parent = identity.operationalRunInstance;
+  if (!parent) {
+    return undefined;
+  }
+  let continuation: AdmittedRunContext | undefined;
+  const claim = () => (continuation = claimAdmittedRunContinuation(parent, runId));
+  try {
+    if (identity.workerTurnExecutionIdentityCapability) {
+      continuation = await identity.workerTurnExecutionIdentityCapability.run((worker) => {
+        if (
+          worker.agentId !== identity.agentId ||
+          worker.sessionKey !== identity.sessionKey ||
+          worker.operationalRunInstance.instanceId !== parent.instanceId ||
+          worker.operationalRunInstance.runId !== parent.runId
+        ) {
+          throw new Error("worker continuation authority disagrees with the active tool caller");
+        }
+        return claim();
+      });
+    } else {
+      continuation = claim();
+    }
+  } catch (error) {
+    if (continuation) {
+      closeAdmittedRunDelegatedAuthority(continuation);
+    }
+    throw error;
+  }
+  if (!continuation) {
+    return undefined;
+  }
+  const claimedContinuation = continuation;
+  const continuationIdentity: GatewayToolCallerIdentity = Object.freeze({
+    agentId: identity.agentId,
+    sessionKey: identity.sessionKey,
+    operationalRunInstance: claimedContinuation.operationalRunInstance,
+    ...(identity.turnSourceChannel ? { turnSourceChannel: identity.turnSourceChannel } : {}),
+    ...(identity.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
+    ...(identity.turnSourceTo ? { turnSourceTo: identity.turnSourceTo } : {}),
+    ...(identity.turnSourceAccountId ? { turnSourceAccountId: identity.turnSourceAccountId } : {}),
+    ...(identity.turnSourceThreadId !== undefined
+      ? { turnSourceThreadId: identity.turnSourceThreadId }
+      : {}),
+  });
+  return Object.freeze({
+    identity: continuationIdentity,
+    release: () => {
+      closeAdmittedRunDelegatedAuthority(claimedContinuation);
+    },
+  });
+}
+
 export async function withGatewayToolCallerIdentity<T>(
   identity: GatewayToolCallerIdentity | undefined,
   run: () => Promise<T> | T,
@@ -161,6 +226,26 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
     },
     run,
+  );
+}
+
+/** Revalidate the bound worker owners around one trusted Gateway tool call. */
+export async function runWithWorkerTurnGatewayCaller<T>(
+  capability: WorkerTurnExecutionIdentityCapability,
+  run: (identity: WorkerTurnExecutionIdentity) => Promise<T>,
+): Promise<T> {
+  return await capability.run(async (identity) =>
+    withGatewayToolCallerIdentity(
+      {
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
+        operationalRunInstance: identity.operationalRunInstance,
+        executionIdentityToken: identity.executionIdentityToken,
+        workerTurnClaim: identity.turnClaim,
+        workerTurnExecutionIdentityCapability: capability,
+      },
+      () => run(identity),
+    ),
   );
 }
 

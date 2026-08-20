@@ -1,11 +1,64 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, vi } from "vitest";
-import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
+import { expect, vi, type Mock } from "vitest";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
+import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { setTestPluginRegistry, testState, writeSessionStore } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  setTestPluginRegistry,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
+
+async function emitDirectAnnounceReply(params: {
+  opts: unknown;
+  defaultSessionId: string;
+}): Promise<void> {
+  const command = params.opts as {
+    runId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  };
+  if (!command.sessionKey) {
+    throw new Error("expected direct announce session key");
+  }
+  const sessionId = command.sessionId ?? params.defaultSessionId;
+  const runId = command.runId ?? sessionId;
+  const startedAt = Date.now();
+  emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt } });
+  await persistSessionTranscriptTurn(
+    {
+      sessionId,
+      sessionKey: command.sessionKey,
+      ...(testState.sessionStorePath ? { storePath: testState.sessionStorePath } : {}),
+    },
+    {
+      cwd: "/tmp",
+      updateMode: "none",
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "direct announcement delivered" }],
+          },
+          now: Date.now(),
+        },
+      ],
+    },
+  );
+  emitAgentEvent({
+    runId,
+    stream: "lifecycle",
+    data: { phase: "end", startedAt, endedAt: Date.now() },
+  });
+}
 
 export async function runDirectSessionAnnounceScenario(params: {
   sessionKey: string;
@@ -54,21 +107,26 @@ export async function runDirectSessionAnnounceScenario(params: {
   );
 
   testState.sessionStorePath = path.join(dir, "sessions.json");
+  const agentCommand = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+  agentCommand.mockClear();
+  const operationalRunInstance = {
+    instanceId: `direct-announce-${Date.now()}`,
+    runId: `direct-announce-run-${Date.now()}`,
+  };
+  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   try {
+    const sessionId = `direct-announce-${expectedAccountId ?? "default"}-${sessionKey.includes(":dm:") ? "dm" : "direct"}`;
     await writeSessionStore({
       entries: {
         [sessionKey]: {
-          sessionId: `direct-announce-${expectedAccountId ?? "default"}-${sessionKey.includes(":dm:") ? "dm" : "direct"}`,
+          sessionId,
           updatedAt: Date.now(),
         },
       },
     });
-    agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "direct announcement delivered", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
-    });
+    agentCommand.mockImplementation(async (opts: unknown) =>
+      emitDirectAnnounceReply({ opts, defaultSessionId: sessionId }),
+    );
 
     await runSessionsSendA2AFlow({
       targetSessionKey: sessionKey,
@@ -77,7 +135,18 @@ export async function runDirectSessionAnnounceScenario(params: {
       announceTimeoutMs: 5_000,
       maxPingPongTurns: 0,
       roundOneReply: "agent completed",
+      authority: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance,
+      },
+      handoffContext: {
+        inheritedToolPolicy: { version: 1, allow: ["message"], deny: [] },
+        requester: { messageProvider: "feishu" },
+      },
     });
+
+    expect(agentCommand.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ sessionKey }));
 
     await vi.waitFor(
       () => {
@@ -91,7 +160,9 @@ export async function runDirectSessionAnnounceScenario(params: {
       { timeout: 5_000 },
     );
   } finally {
-    agentStepTesting.setDepsForTest();
+    releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    agentCommand.mockReset();
+    agentCommand.mockResolvedValue(undefined);
     testState.sessionStorePath = undefined;
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }

@@ -54,6 +54,39 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     });
   });
 
+  it("copies the exact CLI-native and loopback surface into the host grant", () => {
+    const grant = buildGrant({
+      cliToolAvailability: { native: ["Read", "Bash"], openClaw: ["message"] },
+    });
+
+    expect(grant.cliToolAvailability).toEqual({
+      native: ["Read", "Bash"],
+      openClaw: ["message"],
+    });
+  });
+
+  it("copies trusted session handoff denies into the host grant", () => {
+    const trustedSessionHandoff = {
+      inheritedToolPolicy: {
+        version: 1 as const,
+        allow: ["write"],
+        deny: ["apply_patch"],
+      },
+      requester: { senderId: "source-user" },
+    };
+    const grant = buildGrant({ trustedSessionHandoff });
+
+    expect(grant.trustedSessionHandoff).toEqual(trustedSessionHandoff);
+    expect(grant.trustedSessionHandoff).not.toBe(trustedSessionHandoff);
+    expect(grant.trustedSessionHandoff?.inheritedToolPolicy).not.toBe(
+      trustedSessionHandoff.inheritedToolPolicy,
+    );
+  });
+
+  it("does not invent an unrestricted CLI surface when availability is unknown", () => {
+    expect(buildGrant({ cliToolAvailability: undefined }).cliToolAvailability).toBeUndefined();
+  });
+
   it.each([
     { label: "the provider", overrides: { messageProvider: undefined } },
     { label: "the destination", overrides: { currentChannelId: undefined } },

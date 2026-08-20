@@ -7,7 +7,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+function makeToolPolicyMatcher(policy: SandboxToolPolicy, allowWriteAlias = true) {
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolPolicyName,
@@ -29,7 +29,7 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
     }
     // `apply_patch` is the concrete write tool, so a broad write allowlist entry
     // should cover it even though its tool name is more specific.
-    if (normalized === "apply_patch" && matchesAnyGlobPattern("write", allow)) {
+    if (allowWriteAlias && normalized === "apply_patch" && matchesAnyGlobPattern("write", allow)) {
       return true;
     }
     return false;
@@ -42,6 +42,14 @@ export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPoli
     return true;
   }
   return makeToolPolicyMatcher(policy)(name);
+}
+
+/** Match policy groups/globs while preserving the concrete tool name boundary. */
+export function isToolAllowedByPolicyNameWithoutAliases(
+  name: string,
+  policy?: SandboxToolPolicy,
+): boolean {
+  return !policy || makeToolPolicyMatcher(policy, false)(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */

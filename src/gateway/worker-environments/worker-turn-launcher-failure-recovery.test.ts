@@ -11,7 +11,6 @@ import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -471,16 +470,14 @@ describe("worker turn launcher failure recovery", () => {
   ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
     seedActivePlacement();
     const teardownStates: string[] = [];
-    const observedPlacements: WorkerSessionPlacementStore = {
-      ...placements,
-      startReconcile: (input) => {
-        teardownStates.push(`reconcile-before:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-        const reconciling = placements.startReconcile(input);
-        teardownStates.push(`reconcile-after:${reconciling.state}`);
-        expect(reconciling.turnClaim).toBeNull();
-        return reconciling;
-      },
-    };
+    const startReconcile = placements.startReconcile.bind(placements);
+    vi.spyOn(placements, "startReconcile").mockImplementation((input) => {
+      teardownStates.push(`reconcile-before:${placements.get(SESSION_ID)?.state ?? "missing"}`);
+      const reconciling = startReconcile(input);
+      teardownStates.push(`reconcile-after:${reconciling.state}`);
+      expect(reconciling.turnClaim).toBeNull();
+      return reconciling;
+    });
     const stopTunnel = vi.fn(async () => {
       const placement = placements.get(SESSION_ID);
       teardownStates.push(`stop:${placement?.state ?? "missing"}`);
@@ -528,7 +525,7 @@ describe("worker turn launcher failure recovery", () => {
     };
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
-      placements: observedPlacements,
+      placements,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
 

@@ -5,7 +5,10 @@
  */
 import crypto from "node:crypto";
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  addTimerTimeoutGraceMs,
+  finiteSecondsToTimerSafeMilliseconds,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -17,6 +20,7 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRuntimeSessionHandoffContext } from "../../gateway/agent-runtime-session-handoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -72,12 +76,17 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
 import {
+  claimGatewayToolCallerContinuation,
+  getGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
+import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
+import { callSessionHandoffAgent } from "./session-handoff-agent-call.js";
 import {
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
@@ -187,6 +196,8 @@ const SessionsSendOutputSchema = Type.Union([
 ]);
 
 type GatewayCaller = AgentToolGatewayRequestCaller;
+type AgentRunResponse = { runId?: string };
+type AgentRunCaller = (request: Parameters<GatewayCaller>[0]) => Promise<AgentRunResponse>;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
 const SESSIONS_SEND_MESSAGE_ALIASES = ["SendMessage", "content", "text"] as const;
 const NO_REPLY_MESSAGE = "No visible reply or pending announcement. Continue or retry if needed.";
@@ -369,6 +380,7 @@ function shouldFallbackCronRunScopedActiveDelivery(
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
+  callAgent: AgentRunCaller;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
@@ -376,6 +388,7 @@ async function startAgentRun(params: {
   allowActiveRunQueueDelivery?: boolean;
   allowActiveRunQueueFallback?: boolean;
   expectedSessionId?: string;
+  retainAbortThroughWait?: boolean;
 }): Promise<
   | {
       ok: true;
@@ -387,6 +400,12 @@ async function startAgentRun(params: {
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
+    const agentRequestOptions = params.retainAbortThroughWait
+      ? {
+          expectFinal: true,
+          timeoutMs: addTimerTimeoutGraceMs(params.deliveryTimeoutMs ?? 10_000, 2_000),
+        }
+      : { timeoutMs: 10_000 };
     const activeRunSessionId =
       params.allowActiveRunQueueDelivery && isRunScopedAgentSessionKey(params.sessionKey)
         ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
@@ -436,14 +455,14 @@ async function startAgentRun(params: {
         fallbackSessionKey &&
         shouldFallbackCronRunScopedActiveDelivery(queueOutcome)
       ) {
-        const response = await params.callGateway<{ runId: string }>({
+        const response = await params.callAgent({
           method: "agent",
           params: {
             ...params.sendParams,
             sessionKey: fallbackSessionKey,
             idempotencyKey: crypto.randomUUID(),
           },
-          timeoutMs: 10_000,
+          ...agentRequestOptions,
         });
         return {
           ok: true,
@@ -457,10 +476,10 @@ async function startAgentRun(params: {
         formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
       throw new Error(queueSummary);
     }
-    const response = await params.callGateway<{ runId: string }>({
+    const response = await params.callAgent({
       method: "agent",
       params: params.sendParams,
-      timeoutMs: 10_000,
+      ...agentRequestOptions,
     });
     return {
       ok: true,
@@ -488,6 +507,11 @@ export function createSessionsSendTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  handoffContext?: AgentRuntimeSessionHandoffContext;
+  callAgentWithHandoff?: (
+    request: Parameters<GatewayCaller>[0],
+    context: AgentRuntimeSessionHandoffContext,
+  ) => Promise<AgentRunResponse>;
   /** Backend-derived target incarnation; never sourced from model arguments. */
   expectedTargetSessionId?: string;
   /** Backend-owned downstream operation id; never sourced from model arguments. */
@@ -502,9 +526,44 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, executionSignal) => {
       const params = normalizeSessionsSendArguments(args);
+      const operationSignal =
+        executionSignal && opts?.signal && executionSignal !== opts.signal
+          ? AbortSignal.any([executionSignal, opts.signal])
+          : (executionSignal ?? opts?.signal);
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+      const authority = getGatewayToolCallerIdentity();
+      const handoffContext: AgentRuntimeSessionHandoffContext | undefined = opts?.handoffContext
+        ? {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: [...opts.handoffContext.inheritedToolPolicy.allow],
+              deny: [...opts.handoffContext.inheritedToolPolicy.deny],
+            },
+            requester: { ...opts.handoffContext.requester },
+          }
+        : undefined;
+      const agentCall: AgentRunCaller = handoffContext
+        ? async (request) => {
+            const signal =
+              request.signal && operationSignal && request.signal !== operationSignal
+                ? AbortSignal.any([request.signal, operationSignal])
+                : (request.signal ?? operationSignal);
+            const handoffRequest = signal ? { ...request, signal } : request;
+            if (opts?.callAgentWithHandoff) {
+              return await opts.callAgentWithHandoff(handoffRequest, handoffContext);
+            }
+            if (!authority) {
+              throw new Error("sessions_send policy handoff requires trusted caller identity");
+            }
+            return await callSessionHandoffAgent({
+              request: handoffRequest,
+              authority,
+              context: handoffContext,
+            });
+          }
+        : async (request) => await gatewayCall<AgentRunResponse>(request);
       const message = readToolStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
@@ -928,7 +987,7 @@ export function createSessionsSendTool(opts?: {
         cfg,
         agentId: targetAgentId,
         expectedSessionId,
-        ...(opts?.signal ? { signal: opts.signal } : {}),
+        ...(operationSignal ? { signal: operationSignal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
           if (visibleSession.missing) {
@@ -1087,7 +1146,7 @@ export function createSessionsSendTool(opts?: {
             ? ({ status: "skipped", mode: "announce" } as const)
             : ({ status: "pending", mode: "announce" } as const);
 
-          const startA2AFlow = (
+          const startA2AFlow = async (
             roundOneReply?: string,
             waitRunId?: string,
             flowTargetSessionKey = resolvedKey,
@@ -1101,30 +1160,49 @@ export function createSessionsSendTool(opts?: {
               flowTargetSessionKey === fallbackA2ASessionKey
                 ? fallbackBaselineReply
                 : baselineReply;
+            const continuation =
+              authority?.operationalRunInstance && handoffContext
+                ? await claimGatewayToolCallerContinuation(
+                    authority,
+                    `sessions-send-a2a:${crypto.randomUUID()}`,
+                  )
+                : undefined;
+            if (authority?.operationalRunInstance && handoffContext && !continuation) {
+              log.warn("sessions_send announce flow authority closed before continuation", {
+                runId: waitRunId ?? "unknown",
+              });
+              return;
+            }
             // This detached flow can outlive the tool request that launched it.
-            // Own a fresh root so parent release cannot retire later nested turns.
-            void runWithGatewayIndependentRootWorkContinuation(() =>
-              runWithoutOwnedSessionTranscriptWrites(() =>
-                runSessionsSendA2AFlow({
-                  callGateway: gatewayCall,
-                  targetSessionKey: flowTargetSessionKey,
-                  targetAgentId,
-                  displayKey: flowDisplayKey,
-                  message,
-                  announceTimeoutMs,
-                  // Cron runs are isolated jobs; target replies must not become new
-                  // requester turns, but the target-side announce still runs.
-                  maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-                  requesterSessionKey: replyRequesterSessionKey,
-                  requesterAgentId,
-                  requesterChannel,
-                  baseline: flowBaseline,
-                  roundOneReply,
-                  waitRunId,
-                  notifyRequesterOnWaitFailure,
-                }),
-              ),
-            ).catch((err: unknown) => {
+            // Own both Gateway work and delegated-run authority until every nested turn settles.
+            void runWithGatewayIndependentRootWorkContinuation(async () => {
+              try {
+                await runWithoutOwnedSessionTranscriptWrites(() =>
+                  runSessionsSendA2AFlow({
+                    callGateway: gatewayCall,
+                    targetSessionKey: flowTargetSessionKey,
+                    targetAgentId,
+                    displayKey: flowDisplayKey,
+                    message,
+                    announceTimeoutMs,
+                    // Cron runs are isolated jobs; target replies must not become new
+                    // requester turns, but the target-side announce still runs.
+                    maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                    requesterSessionKey: replyRequesterSessionKey,
+                    requesterAgentId,
+                    requesterChannel,
+                    baseline: flowBaseline,
+                    roundOneReply,
+                    waitRunId,
+                    notifyRequesterOnWaitFailure,
+                    authority: continuation?.identity ?? authority,
+                    handoffContext,
+                  }),
+                );
+              } finally {
+                continuation?.release();
+              }
+            }).catch((err: unknown) => {
               log.warn("sessions_send announce flow admission failed", {
                 runId: waitRunId ?? "unknown",
                 error: formatErrorMessage(err),
@@ -1135,6 +1213,7 @@ export function createSessionsSendTool(opts?: {
           if (timeoutSeconds === 0) {
             const start = await startAgentRun({
               callGateway: gatewayCall,
+              callAgent: agentCall,
               runId,
               sendParams,
               sessionKey: displayKey,
@@ -1158,7 +1237,7 @@ export function createSessionsSendTool(opts?: {
             runId = start.runId;
             const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
             if (!start.activeRunQueue) {
-              startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
+              await startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
             }
             return jsonResult({
               runId,
@@ -1171,10 +1250,12 @@ export function createSessionsSendTool(opts?: {
 
           const start = await startAgentRun({
             callGateway: gatewayCall,
+            callAgent: agentCall,
             runId,
             sendParams,
             sessionKey: displayKey,
             deliveryTimeoutMs: announceTimeoutMs,
+            retainAbortThroughWait: handoffContext !== undefined,
           });
           if (!start.ok) {
             return start.result;
@@ -1199,7 +1280,7 @@ export function createSessionsSendTool(opts?: {
 
           if (result.status === "timeout") {
             if (isPendingErrorAgentWaitTimeout(result)) {
-              startA2AFlow(undefined, runId);
+              await startA2AFlow(undefined, runId);
               return jsonResult({
                 runId,
                 status: "timeout",
@@ -1211,7 +1292,7 @@ export function createSessionsSendTool(opts?: {
               });
             }
             if (!isTerminalAgentWaitTimeout(result)) {
-              startA2AFlow(undefined, runId, resolvedKey, displayKey, true);
+              await startA2AFlow(undefined, runId, resolvedKey, displayKey, true);
               return jsonResult({
                 runId,
                 status: "accepted",
@@ -1244,7 +1325,7 @@ export function createSessionsSendTool(opts?: {
             ? { status: "ok" as const, delivery, reply }
             : { status: "no_reply" as const, message: NO_REPLY_MESSAGE };
           if (reply) {
-            startA2AFlow(reply);
+            await startA2AFlow(reply);
           }
           return jsonResult({ runId, sessionKey: displayKey, ...response, ...watchField });
         },

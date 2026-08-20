@@ -16,9 +16,16 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  getActiveAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const callGatewayMock = vi.fn();
 const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
@@ -1606,6 +1613,185 @@ describe("sessions_send gating", () => {
 
     expect(inheritedFence).toBeUndefined();
     expect(parentTranscriptWriteCalls).toBe(0);
+  });
+
+  it("carries the exact source tool surface through a fresh session handoff", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    const callAgentWithHandoff = vi.fn(async () => ({
+      runId: "run-policy-handoff",
+      acceptedAt: 123,
+    }));
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      handoffContext: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "whatsapp", senderId: "speaker-1" },
+      },
+      callAgentWithHandoff,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-policy-self-send", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("accepted");
+    expect(callAgentWithHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.not.objectContaining({ toolPolicy: expect.anything() }),
+      }),
+      {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "whatsapp", senderId: "speaker-1" },
+      },
+    );
+    expect(vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0].handoffContext).toEqual({
+      inheritedToolPolicy: {
+        version: 1,
+        allow: ["sessions_send", "read"],
+        deny: ["message"],
+      },
+      requester: { messageProvider: "whatsapp", senderId: "speaker-1" },
+    });
+  });
+
+  it("forwards cancellation into fresh session handoff admission", async () => {
+    const abortController = new AbortController();
+    const callAgentWithHandoff = vi.fn(async (request: { signal?: AbortSignal }) => {
+      request.signal?.throwIfAborted();
+      return { runId: "run-cancelled-handoff", acceptedAt: 123 };
+    });
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      handoffContext: {
+        inheritedToolPolicy: { version: 1, allow: ["sessions_send"], deny: [] },
+        requester: { messageProvider: MAIN_AGENT_CHANNEL },
+      },
+      callAgentWithHandoff,
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "chat.history") {
+        abortController.abort(new Error("worker operation cancelled"));
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute(
+      "call-policy-cancelled",
+      {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "ping",
+        timeoutSeconds: 0,
+      },
+      abortController.signal,
+    );
+
+    expect(requireDetails(result).status).toBe("error");
+    expect(callAgentWithHandoff).toHaveBeenCalledOnce();
+    expect(callAgentWithHandoff.mock.calls[0]?.[0].signal).toBe(abortController.signal);
+    expect(callAgentWithHandoff.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+  });
+
+  it("gives detached handoff turns authority that survives parent release", async () => {
+    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+    vi.mocked(runSessionsSendA2AFlow).mockClear();
+    let finishFlow = () => {};
+    const flowGate = new Promise<void>((resolve) => {
+      finishFlow = resolve;
+    });
+    vi.mocked(runSessionsSendA2AFlow).mockImplementationOnce(async () => await flowGate);
+    const parentRun = createOperationalRunInstanceRef("run-policy-parent");
+    const parentAuthority = claimAgentRunDelegatedAuthority(parentRun);
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      handoffContext: {
+        inheritedToolPolicy: { version: 1, allow: ["sessions_send", "read"], deny: [] },
+        requester: { messageProvider: MAIN_AGENT_CHANNEL },
+      },
+      callAgentWithHandoff: async () => ({ runId: "run-policy-target", acceptedAt: 123 }),
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      return request.method === "chat.history" ? { messages: [] } : {};
+    });
+
+    try {
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: MAIN_AGENT_SESSION_KEY,
+          operationalRunInstance: parentRun,
+        },
+        () =>
+          tool.execute("call-policy-detached", {
+            sessionKey: MAIN_AGENT_SESSION_KEY,
+            message: "ping",
+            timeoutSeconds: 0,
+          }),
+      );
+      expect(requireDetails(result).status).toBe("accepted");
+      await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
+      const flowAuthority = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0].authority;
+      expect(flowAuthority?.operationalRunInstance).toBeDefined();
+      expect(flowAuthority?.operationalRunInstance).not.toEqual(parentRun);
+
+      expect(releaseAgentRunDelegatedAuthority(parentAuthority)).toBe(true);
+      expect(
+        flowAuthority?.operationalRunInstance &&
+          getActiveAgentRunDelegatedAuthority(flowAuthority.operationalRunInstance),
+      ).toBeDefined();
+      finishFlow();
+      await vi.waitFor(() =>
+        expect(
+          flowAuthority?.operationalRunInstance &&
+            getActiveAgentRunDelegatedAuthority(flowAuthority.operationalRunInstance),
+        ).toBeUndefined(),
+      );
+    } finally {
+      finishFlow();
+      releaseAgentRunDelegatedAuthority(parentAuthority);
+    }
   });
 
   it("canonicalizes aliased requester keys for same-session A2A delivery", async () => {

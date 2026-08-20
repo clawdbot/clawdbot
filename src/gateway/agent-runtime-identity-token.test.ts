@@ -329,6 +329,136 @@ describe("agent runtime identity token", () => {
     expect(readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext)).toBeUndefined();
   });
 
+  it("redeems a private session handoff once at admission after reconnect", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const sessionHandoff = await import("./agent-runtime-session-handoff.js");
+    const run = operationalRun("run-handoff");
+    const executionIdentity = createExecutionIdentityAdmissionToken("run-handoff", {
+      contextId: "private-handoff-context",
+      executionId: "private-handoff-execution",
+    });
+    const handoff = sessionHandoff.createAgentRuntimeSessionHandoff({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      delegatedAuthority: run.delegatedAuthority,
+      executionIdentity,
+      context: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["sessions_send", "read"],
+          deny: ["message"],
+        },
+        requester: { messageProvider: "discord", senderId: "speaker-1" },
+      },
+      target: {
+        sessionKey: "agent:helper:main",
+        idempotencyKey: "handoff-request-1",
+      },
+    });
+    expect(handoff).toBeDefined();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      sessionHandoffId: handoff?.id,
+    });
+
+    const [payload] = token.split(".");
+    const decodedPayload = Buffer.from(payload ?? "", "base64url").toString("utf8");
+    expect(decodedPayload).not.toContain("speaker-1");
+    expect(decodedPayload).not.toContain("sessions_send");
+    expect(decodedPayload).not.toContain("private-handoff-context");
+    expect(decodedPayload).not.toContain("private-handoff-execution");
+
+    const disconnectedIdentity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(identity).toMatchObject({
+      executionIdentity,
+      sessionHandoffContext: {
+        inheritedToolPolicy: { allow: ["sessions_send", "read"], deny: ["message"] },
+        requester: { messageProvider: "discord", senderId: "speaker-1" },
+      },
+    });
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:other",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toBeUndefined();
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toMatchObject({ inheritedToolPolicy: { allow: ["sessions_send", "read"] } });
+    expect(identity && sessionHandoff.validateConsumedAgentRuntimeSessionHandoff(identity)).toBe(
+      true,
+    );
+    handoff?.revoke();
+    expect(identity && sessionHandoff.validateConsumedAgentRuntimeSessionHandoff(identity)).toBe(
+      false,
+    );
+    expect(
+      disconnectedIdentity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(disconnectedIdentity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toBeUndefined();
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "handoff-request-1",
+        }),
+    ).toBeUndefined();
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toBeUndefined();
+  });
+
+  it("rejects a verified session handoff when admission occurs after its TTL", async () => {
+    useTempHome();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const runtimeToken = await importRuntimeTokenModule();
+    const sessionHandoff = await import("./agent-runtime-session-handoff.js");
+    const run = operationalRun("run-expired-handoff");
+    const handoff = sessionHandoff.createAgentRuntimeSessionHandoff({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      delegatedAuthority: run.delegatedAuthority,
+      context: {
+        inheritedToolPolicy: { version: 1, allow: ["read"], deny: [] },
+        requester: {},
+      },
+      target: {
+        sessionKey: "agent:helper:main",
+        idempotencyKey: "expired-handoff-request",
+      },
+    });
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      sessionHandoffId: handoff?.id,
+    });
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+
+    nowSpy.mockReturnValue(61_000);
+    expect(
+      identity &&
+        sessionHandoff.consumeAgentRuntimeSessionHandoff(identity, {
+          sessionKey: "agent:helper:main",
+          idempotencyKey: "expired-handoff-request",
+        }),
+    ).toBeUndefined();
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toBeUndefined();
+    nowSpy.mockRestore();
+  });
+
   it("round-trips a short-lived cron self-management capability", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

@@ -71,6 +71,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         cronCreatorToolAllowlist: [],
         effectiveToolsAllow: undefined,
         inheritedToolAllowlist,
+        sessionsSendToolPolicy: { version: 1, allow: [], deny: [] },
         localModelLeanPreserveToolNames: [],
         runtimeCapabilityProfile: undefined,
         toolsEnabled: true,

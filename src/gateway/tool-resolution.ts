@@ -20,6 +20,7 @@ import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "../agents/scheduled-tool-policy.js";
+import { resolveSessionHandoffTargetToolPolicies } from "../agents/session-handoff-tool-policy.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -57,6 +58,7 @@ import {
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import type { AgentRuntimeSessionHandoffContext } from "./agent-runtime-session-handoff.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -119,6 +121,8 @@ export function resolveGatewayScopedTools(params: {
   spawnedBy?: string;
   skillWorkshop?: SkillWorkshopRunOptions;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  trustedSessionHandoff?: AgentRuntimeSessionHandoffContext;
+  sessionsSendToolPolicy?: AgentRuntimeSessionHandoffContext["inheritedToolPolicy"];
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
@@ -188,6 +192,8 @@ export function resolveGatewayScopedTools(params: {
     nodeExecSurface &&
     params.senderIsOwner === true &&
     normalizeMessageChannel(params.messageProvider) === INTERNAL_MESSAGE_CHANNEL;
+  const trustedSessionHandoff = params.trustedSessionHandoff;
+  const sessionHandoffToolPolicy = trustedSessionHandoff?.inheritedToolPolicy;
   const requesterPolicies = resolveRequesterToolPolicies({
     config: params.cfg,
     sessionKey: runtimePolicySessionKey,
@@ -203,17 +209,35 @@ export function resolveGatewayScopedTools(params: {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
-    senderPolicyMode: params.scheduledToolPolicy
+    senderPolicyMode: trustedSessionHandoff
       ? "never"
-      : nodeExecSurface
-        ? isOwnerInternalSession
-          ? "never"
-          : "always"
-        : "when-sender-id",
+      : params.scheduledToolPolicy
+        ? "never"
+        : nodeExecSurface
+          ? isOwnerInternalSession
+            ? "never"
+            : "always"
+          : "when-sender-id",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
-  const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const handoffTargetPolicies = trustedSessionHandoff
+    ? resolveSessionHandoffTargetToolPolicies({
+        config: params.cfg,
+        sessionKey: runtimePolicySessionKey,
+        agentId: policyAgentId,
+        messageProvider: params.messageProvider,
+        accountId: params.accountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        requester: trustedSessionHandoff?.requester,
+      })
+    : undefined;
+  const groupPolicy = handoffTargetPolicies?.groupPolicy ?? requesterPolicies.groupPolicy;
+  const senderPolicy = handoffTargetPolicies?.senderPolicy ?? requesterPolicies.senderPolicy;
+  const { subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -259,6 +283,7 @@ export function resolveGatewayScopedTools(params: {
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+    sessionHandoffToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
@@ -268,6 +293,16 @@ export function resolveGatewayScopedTools(params: {
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const sessionsSendToolPolicy = params.sessionsSendToolPolicy ?? {
+    version: 1 as const,
+    allow: [],
+    deny: [],
+  };
+  sessionsSendToolPolicy.deny.splice(
+    0,
+    sessionsSendToolPolicy.deny.length,
+    ...inheritedToolDenylist,
+  );
   const shouldInheritEffectiveToolAllowlist = [
     profilePolicy,
     providerProfilePolicy,
@@ -280,6 +315,7 @@ export function resolveGatewayScopedTools(params: {
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+    sessionHandoffToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ].some(hasRestrictiveAllowPolicy);
 
@@ -340,6 +376,18 @@ export function resolveGatewayScopedTools(params: {
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    sessionsSendHandoff: {
+      inheritedToolPolicy: sessionsSendToolPolicy,
+      requester: trustedSessionHandoff
+        ? { ...trustedSessionHandoff.requester }
+        : {
+            ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+            ...(senderId ? { senderId } : {}),
+            ...(params.senderName ? { senderName: params.senderName } : {}),
+            ...(params.senderUsername ? { senderUsername: params.senderUsername } : {}),
+            ...(params.senderE164 ? { senderE164: params.senderE164 } : {}),
+          },
+    },
   });
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
@@ -518,6 +566,7 @@ export function resolveGatewayScopedTools(params: {
       { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
+      { policy: sessionHandoffToolPolicy, label: "session handoff tools" },
     ],
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.cfg,
@@ -545,6 +594,7 @@ export function resolveGatewayScopedTools(params: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
+  replaceWithEffectiveToolAllowlist(sessionsSendToolPolicy.allow, inheritableTools);
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
     getPluginToolMeta(tool),
   );

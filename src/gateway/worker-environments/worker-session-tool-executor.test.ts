@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
@@ -23,6 +24,15 @@ import {
 } from "./placement-store.js";
 import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 import { createWorkerSessionToolExecutor } from "./worker-session-tool-executor.js";
+import {
+  activateWorkerSession,
+  CHILD,
+  GRANDCHILD,
+  PARENT,
+  PARENT_EXECUTION_IDENTITY_TOKEN,
+  SOURCE,
+  TARGET,
+} from "./worker-session-tool-executor.test-support.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, SessionEntry>());
 const delivered = vi.hoisted(() => vi.fn());
@@ -33,6 +43,7 @@ const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
 const githubPublicationRequest = vi.hoisted(() => vi.fn());
+const spawnOptions = vi.hoisted(() => vi.fn());
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -67,20 +78,23 @@ vi.mock("../../agents/tools/sessions-spawn-tool.js", async () => {
     createSessionsSpawnTool: (options: {
       agentSessionKey: string;
       callGateway: (method: string, params: Record<string, unknown>) => Promise<unknown>;
-    }) => ({
-      execute: async (_toolCallId: string, args: { task: string }) => {
-        spawnCallerIdentity(getGatewayToolCallerIdentity());
-        spawnArgs(args);
-        const details = await options.callGateway("sessions.create", {
-          parentSessionKey: options.agentSessionKey,
-          task: args.task,
-        });
-        return {
-          content: [{ type: "text", text: "spawned" }],
-          details,
-        };
-      },
-    }),
+    }) => {
+      spawnOptions(options);
+      return {
+        execute: async (_toolCallId: string, args: { task: string }) => {
+          spawnCallerIdentity(getGatewayToolCallerIdentity());
+          spawnArgs(args);
+          const details = await options.callGateway("sessions.create", {
+            parentSessionKey: options.agentSessionKey,
+            task: args.task,
+          });
+          return {
+            content: [{ type: "text", text: "spawned" }],
+            details,
+          };
+        },
+      };
+    },
   };
 });
 
@@ -101,44 +115,6 @@ vi.mock("../../agents/tools/in-process-gateway.js", () => ({
   },
 }));
 
-const SOURCE = {
-  agentId: "main",
-  sessionId: "source-session",
-  sessionKey: "agent:main:dashboard:source",
-  environmentId: "source-environment",
-  ownerEpoch: 3,
-};
-const TARGET = {
-  agentId: "main",
-  sessionId: "target-session",
-  sessionKey: "agent:main:dashboard:target",
-  environmentId: "target-environment",
-  ownerEpoch: 4,
-};
-const PARENT = {
-  sessionId: "parent-session",
-  sessionKey: "agent:main:dashboard:parent",
-};
-const CHILD = {
-  agentId: "main",
-  sessionId: "spawned-child-session",
-  environmentId: "spawned-child-environment",
-  ownerEpoch: 5,
-};
-const GRANDCHILD = {
-  agentId: "main",
-  sessionId: "spawned-grandchild-session",
-  environmentId: "spawned-grandchild-environment",
-  ownerEpoch: 6,
-};
-const PARENT_EXECUTION_IDENTITY_TOKEN = {
-  tokenVersion: 1,
-  contextId: "parent-context",
-  executionId: "parent-execution",
-  runId: "source-run",
-  createdAt: 1,
-} satisfies ExecutionIdentityAdmissionToken;
-
 describe("worker session tool topology", () => {
   let root: string;
   let database: OpenClawStateDatabase;
@@ -154,8 +130,8 @@ describe("worker session tool topology", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
-    activate(SOURCE);
-    activate(TARGET);
+    activateWorkerSession(placements, SOURCE);
+    activateWorkerSession(placements, TARGET);
     sourceClaim = placements.claimTurn({
       sessionId: SOURCE.sessionId,
       agentId: SOURCE.agentId,
@@ -181,7 +157,11 @@ describe("worker session tool topology", () => {
       sourceClaim,
       PARENT_EXECUTION_IDENTITY_TOKEN,
       sourceOperationalRun,
-      { agentId: SOURCE.agentId, sessionKey: SOURCE.sessionKey },
+      {
+        agentId: SOURCE.agentId,
+        sessionKey: SOURCE.sessionKey,
+        sessionHandoffRequester: { messageProvider: "whatsapp", senderId: "guest" },
+      },
     );
     identity = {
       environmentId: SOURCE.environmentId,
@@ -209,6 +189,7 @@ describe("worker session tool topology", () => {
       status: "requested",
       message: "Publication was accepted.",
     });
+    spawnOptions.mockReset();
     scopedSessionAccess.mockClear();
     childSessionKey = undefined;
     spawnOrder = [];
@@ -226,7 +207,7 @@ describe("worker session tool topology", () => {
     dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
       spawnOrder.push("dispatch");
       expect(placements.get(CHILD.sessionId)).toBeUndefined();
-      activate({
+      activateWorkerSession(placements, {
         ...CHILD,
         sessionKey: request.sessionKey,
       });
@@ -353,47 +334,6 @@ describe("worker session tool topology", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function activate(session: {
-    agentId: string;
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId: string;
-    sessionKey: string;
-  }): void {
-    let placement = placements.startDispatch(session);
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: session.environmentId },
-    });
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = placements.transition({
-      sessionId: session.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `manifest-${session.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${session.sessionId}`,
-      },
-    });
-    placements.transition({
-      sessionId: session.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: session.ownerEpoch },
-    });
-  }
-
   function setEntry(
     sessionKey: string,
     sessionId: string,
@@ -481,6 +421,43 @@ describe("worker session tool topology", () => {
     expect(replay.resultJson).toBe(first.resultJson);
   });
 
+  it("rejects child spawn when the worker execution capability is missing", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.releaseTurn(sourceClaim);
+    sourceClaim = placements.claimTurn({
+      sessionId: SOURCE.sessionId,
+      agentId: SOURCE.agentId,
+      sessionKey: SOURCE.sessionKey,
+      claimId: "unbound-source-claim",
+      runId: "unbound-source-run",
+      owner: {
+        kind: "worker",
+        environmentId: SOURCE.environmentId,
+        ownerEpoch: SOURCE.ownerEpoch,
+      },
+    });
+    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_spawn"]);
+    identity = {
+      ...identity,
+      runId: sourceClaim.runId,
+      turnClaim: sourceClaim,
+    };
+
+    const result = await execute({
+      identity,
+      toolName: "sessions_spawn",
+      request: {
+        toolCallId: "spawn-without-execution-capability",
+        task: "must not start",
+      },
+    });
+
+    expect(result.resultJson).toContain("Worker sessions_spawn source authority changed");
+    expect(gatewayCreate).not.toHaveBeenCalled();
+    expect(dispatchChild).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
   it("carries the exact admitted parent identity into a worker-hosted child spawn", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
 
@@ -511,7 +488,10 @@ describe("worker session tool topology", () => {
         inheritedToolPolicy: {
           version: 1,
           allow: ["sessions_spawn", "sessions_send", "github_publish"],
-          deny: [],
+          deny: WORKER_TOOL_NAMES.filter(
+            (name) =>
+              name !== "sessions_spawn" && name !== "sessions_send" && name !== "github_publish",
+          ),
         },
       },
     });
@@ -526,6 +506,37 @@ describe("worker session tool topology", () => {
       PARENT_EXECUTION_IDENTITY_TOKEN.executionId,
     );
     expect(JSON.stringify(runtimeIdentity?.sessionSpawnContext)).not.toContain(SOURCE.sessionKey);
+  });
+
+  it("preserves excluded worker tool names across worker-hosted child spawn policy", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["read", "sessions_spawn"]);
+
+    await execute({
+      identity,
+      toolName: "sessions_spawn",
+      request: { toolCallId: "spawn-with-restricted-policy", task: "start the child" },
+    });
+
+    const policy = {
+      version: 1,
+      allow: ["read", "sessions_spawn"],
+      deny: WORKER_TOOL_NAMES.filter((name) => name !== "read" && name !== "sessions_spawn"),
+    };
+    expect(gatewayCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        creation: expect.objectContaining({ inheritedToolPolicy: policy }),
+      }),
+    );
+    expect(spawnOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inheritedToolAllowlist: policy.allow,
+        inheritedToolDenylist: policy.deny,
+      }),
+    );
+    expect(gatewayRuntimeIdentity.mock.calls[0]?.[1]).toMatchObject({
+      sessionSpawnContext: { inheritedToolPolicy: policy },
+    });
   });
 
   it("coalesces concurrent spawn retries into one cloud child", async () => {
@@ -593,7 +604,7 @@ describe("worker session tool topology", () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     dispatchChild.mockImplementationOnce(async (request: { sessionKey: string }) => {
       spawnOrder.push("dispatch");
-      activate({
+      activateWorkerSession(placements, {
         ...CHILD,
         sessionKey: request.sessionKey,
       });
@@ -717,7 +728,7 @@ describe("worker session tool topology", () => {
       },
     );
     dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
+      activateWorkerSession(placements, { ...GRANDCHILD, sessionKey: request.sessionKey });
       return placements.get(GRANDCHILD.sessionId);
     });
     gatewayRequest.mockImplementation(
@@ -766,6 +777,15 @@ describe("worker session tool topology", () => {
       },
     });
     placements.authorizeWorkerTurnTools(grandchildClaim, ["sessions_send"]);
+    const grandchildOperationalRun = createOperationalRunInstanceRef(grandchildClaim.runId);
+    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(grandchildOperationalRun));
+    bindWorkerTurnExecutionIdentity(
+      placements,
+      grandchildClaim,
+      undefined,
+      grandchildOperationalRun,
+      { agentId: GRANDCHILD.agentId, sessionKey: spawnedGrandchildKey! },
+    );
     await execute({
       identity: {
         ...identity,
@@ -855,7 +875,48 @@ describe("worker session tool topology", () => {
         args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
         options: expect.objectContaining({
           expectedTargetSessionId: TARGET.sessionId,
+          handoffContext: {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["sessions_spawn", "sessions_send", "github_publish"],
+              deny: WORKER_TOOL_NAMES.filter(
+                (name) =>
+                  name !== "sessions_spawn" &&
+                  name !== "sessions_send" &&
+                  name !== "github_publish",
+              ),
+            },
+            requester: { messageProvider: "whatsapp", senderId: "guest" },
+          },
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
+        }),
+      }),
+    );
+  });
+
+  it("preserves excluded worker tool names as session handoff denies", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    setEntry(TARGET.sessionKey, TARGET.sessionId, {
+      sessionKey: SOURCE.sessionKey,
+      sessionId: SOURCE.sessionId,
+    });
+    placements.authorizeWorkerTurnTools(sourceClaim, ["write", "sessions_send"]);
+
+    await expect(send("worker-source-deny")).resolves.toBeDefined();
+
+    expect(delivered).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          handoffContext: {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["write", "sessions_send"],
+              deny: WORKER_TOOL_NAMES.filter(
+                (name) => name !== "write" && name !== "sessions_send",
+              ),
+            },
+            requester: { messageProvider: "whatsapp", senderId: "guest" },
+          },
         }),
       }),
     );

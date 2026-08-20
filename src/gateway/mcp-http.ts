@@ -344,6 +344,8 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           toolsAllow: requestContext.toolsAllow,
+          cliToolAvailability: requestContext.cliToolAvailability,
+          trustedSessionHandoff: requestContext.trustedSessionHandoff,
           scheduledToolPolicy: requestContext.scheduledToolPolicy,
           senderIsOwner: requestContext.senderIsOwner,
           nodeExecAllowed: requestContext.nodeExecAllowed,

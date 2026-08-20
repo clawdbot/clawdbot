@@ -125,6 +125,50 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.skills.snapshot?.skills).toEqual([{ name: "ops" }]);
   });
 
+  it("intersects a session handoff with current target and requester policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          deny: ["write"],
+          toolsBySender: {
+            "channel:discord:source-user": { deny: ["exec"] },
+          },
+        },
+      },
+      sessionKey: "agent:main:discord:direct:target-user",
+      agentId: "main",
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      runtimeToolAllowlist: ["read", "write", "exec"],
+      inheritRuntimeToolAllowlist: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:discord:direct:source-user",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["read", "write", "exec"],
+          deny: [],
+        },
+        requester: {
+          messageProvider: "discord",
+          senderId: "source-user",
+        },
+      },
+    });
+
+    expect(profile.policy.requesterPolicySource).toBe("session-handoff");
+    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec"] });
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["read", "write", "exec", "message"],
+        warn: () => undefined,
+      }),
+    ).toEqual(["read"]);
+  });
+
   it("exempts owner WebChat from wildcard sender tool restrictions", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -500,5 +544,37 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
     for (const toolName of ["read", "write", "exec", "apply_patch"]) {
       expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
     }
+  });
+
+  it("preserves explicit session handoff denies across runtime allow aliases", () => {
+    const profile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["write"],
+      inheritRuntimeToolAllowlist: true,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:source",
+        sourceTool: "sessions_send",
+      },
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["write"],
+          deny: ["apply_patch"],
+        },
+        requester: {},
+      },
+    });
+
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["write", "apply_patch"],
+        warn: () => {},
+      }),
+    ).toEqual(["write"]);
+    expect(profile.policy.runtimeToolPolicyForInheritance).toEqual({
+      allow: ["write"],
+      deny: ["apply_patch"],
+    });
   });
 });

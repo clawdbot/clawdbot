@@ -15,7 +15,7 @@ import {
   type Mock,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
   loadSessionEntry,
@@ -23,8 +23,17 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
+import {
+  runSessionsSendAuthorityClosureScenario,
+  runSessionsSendCancellationScenario,
+  runSessionsSendPostAcceptanceCancellationScenario,
+} from "./server.sessions-send.authority-race.test-support.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
   agentCommandMock,
@@ -168,6 +177,125 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it(
+    "intersects a fresh target run with the exact source tool surface",
+    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+    async () => {
+      const configPath = process.env.OPENCLAW_CONFIG_PATH;
+      if (!configPath) {
+        throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+      }
+      const dir = tempDirs.make("openclaw-sessions-send-policy-");
+      const sourceSessionKey = "agent:main:main";
+      const targetSessionKey = "agent:main:policy-target";
+      const config: OpenClawConfig = {
+        tools: { sessions: { visibility: "all" } },
+      };
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          [sourceSessionKey]: { sessionId: "policy-source", updatedAt: Date.now() },
+          [targetSessionKey]: { sessionId: "policy-target", updatedAt: Date.now() },
+        },
+      });
+      const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+      spy.mockImplementation(async (opts: unknown) =>
+        emitLifecycleAssistantReply({
+          opts,
+          defaultSessionId: "policy-target",
+          resolveText: () => "policy preserved",
+        }),
+      );
+      spy.mockClear();
+      const operationalRunInstance = {
+        instanceId: `sessions-send-source-${Date.now()}`,
+        runId: `sessions-send-source-run-${Date.now()}`,
+      };
+      const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      try {
+        const tool = createOpenClawTools({
+          agentSessionKey: sourceSessionKey,
+          config,
+          sessionsSendHandoff: {
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["sessions_send", "session_status", "write"],
+              deny: ["message", "apply_patch"],
+            },
+            requester: { messageProvider: "discord", senderId: "speaker-1" },
+          },
+        }).find((candidate) => candidate.name === "sessions_send");
+        if (!tool) {
+          throw new Error("missing sessions_send tool");
+        }
+        const result = await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: sourceSessionKey, operationalRunInstance },
+          () =>
+            tool.execute("call-policy-handoff", {
+              sessionKey: targetSessionKey,
+              message: "preserve my tool cap",
+              timeoutSeconds: 5,
+            }),
+        );
+        expectSessionsSendDetails(result, {
+          reply: "policy preserved",
+          sessionKey: targetSessionKey,
+        });
+        const targetCall = spy.mock.calls
+          .map(
+            ([opts]) =>
+              opts as {
+                sessionKey?: string;
+                toolsAllow?: string[];
+                trustedSessionHandoff?: {
+                  inheritedToolPolicy: { allow: string[]; deny: string[] };
+                  requester: { senderId?: string };
+                };
+                disableMessageTool?: boolean;
+              },
+          )
+          .find((call) => call.sessionKey === targetSessionKey);
+        expect(targetCall).toMatchObject({
+          toolsAllow: ["sessions_send", "session_status", "write"],
+          trustedSessionHandoff: {
+            inheritedToolPolicy: {
+              allow: ["sessions_send", "session_status", "write"],
+              deny: ["message", "apply_patch"],
+            },
+            requester: { senderId: "speaker-1" },
+          },
+          disableMessageTool: true,
+        });
+      } finally {
+        releaseAgentRunDelegatedAuthority(delegatedAuthority);
+        testState.sessionStorePath = undefined;
+      }
+    },
+  );
+
+  it("rejects a handoff whose source authority closes during target admission", async () => {
+    await runSessionsSendAuthorityClosureScenario({
+      createOpenClawTools,
+      dir: tempDirs.make("openclaw-sessions-send-authority-race-"),
+    });
+  });
+
+  it("cancels a handoff before target transcript persistence or dispatch", async () => {
+    await runSessionsSendCancellationScenario({
+      createOpenClawTools,
+      dir: tempDirs.make("openclaw-sessions-send-cancellation-race-"),
+    });
+  });
+
+  it("aborts target provider work when cancellation follows acceptance", async () => {
+    await runSessionsSendPostAcceptanceCancellationScenario({
+      createOpenClawTools,
+      dir: tempDirs.make("openclaw-sessions-send-post-accept-cancellation-"),
+    });
+  });
+
   it("rejects a missing explicit key without creating or running a session", async () => {
     const dir = tempDirs.make("openclaw-sessions-send-missing-");
     const missingKey = "agent:main:missing";
@@ -354,21 +482,40 @@ describe("sessions_send gateway loopback", () => {
           },
         });
 
-        agentStepTesting.setDepsForTest({
-          agentCommandFromIngress: async () => ({
-            payloads: [{ text: "announce through channel", mediaUrl: null }],
-            meta: { durationMs: 1 },
+        const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+        spy.mockImplementation(async (opts: unknown) =>
+          emitLifecycleAssistantReply({
+            opts,
+            defaultSessionId: "sess-whatsapp-peer",
+            resolveText: () => "announce through channel",
           }),
-        });
-
-        await runSessionsSendA2AFlow({
-          targetSessionKey: "agent:main:whatsapp:direct:peer-1",
-          displayKey: "agent:main:whatsapp:direct:peer-1",
-          message: "ping",
-          announceTimeoutMs: 5_000,
-          maxPingPongTurns: 0,
-          roundOneReply: "target response",
-        });
+        );
+        const operationalRunInstance = {
+          instanceId: `sessions-send-announce-${Date.now()}`,
+          runId: `sessions-send-announce-run-${Date.now()}`,
+        };
+        const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+        try {
+          await runSessionsSendA2AFlow({
+            targetSessionKey: "agent:main:whatsapp:direct:peer-1",
+            displayKey: "agent:main:whatsapp:direct:peer-1",
+            message: "ping",
+            announceTimeoutMs: 5_000,
+            maxPingPongTurns: 0,
+            roundOneReply: "target response",
+            authority: {
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              operationalRunInstance,
+            },
+            handoffContext: {
+              inheritedToolPolicy: { version: 1, allow: ["message"], deny: [] },
+              requester: {},
+            },
+          });
+        } finally {
+          releaseAgentRunDelegatedAuthority(delegatedAuthority);
+        }
 
         await vi.waitFor(
           () =>
@@ -383,7 +530,6 @@ describe("sessions_send gateway loopback", () => {
           { timeout: 5_000 },
         );
       } finally {
-        agentStepTesting.setDepsForTest();
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
@@ -542,13 +688,6 @@ describe("sessions_send gateway loopback", () => {
           stream: "lifecycle",
           data: { phase: "end", startedAt, endedAt: Date.now() },
         });
-        agentStepTesting.setDepsForTest({
-          agentCommandFromIngress: async () => ({
-            payloads: [{ text: "SHOULD_NOT_SEND", mediaUrl: null }],
-            meta: { durationMs: 1 },
-          }),
-        });
-
         await runSessionsSendA2AFlow({
           targetSessionKey: sessionKey,
           displayKey: sessionKey,
@@ -560,7 +699,6 @@ describe("sessions_send gateway loopback", () => {
 
         expect(sendCalls).toEqual([]);
       } finally {
-        agentStepTesting.setDepsForTest();
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }

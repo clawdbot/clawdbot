@@ -3,10 +3,12 @@ import { projectConversationToolNames } from "../../agents/conversation-tool-pol
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { normalizeToolPolicyName, normalizeToolPolicyNames } from "../../agents/tool-policy.js";
 import { logWarn } from "../../logger.js";
 import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
+  resolveWorkerPermissionToolAuthority,
   type WorkerOptionalLocalToolName,
   type WorkerToolName,
   type WorkerToolAuthority,
@@ -66,6 +68,7 @@ function resolveWorkerCapabilityProfile(params: {
     runtimePluginToolGrant: turn.runtimePluginToolGrant,
     inputProvenance: turn.inputProvenance,
     trustedInternalHandoff: turn.trustedInternalHandoff,
+    trustedSessionHandoff: turn.trustedSessionHandoff,
     scheduledToolPolicy: turn.scheduledToolPolicy,
   });
 }
@@ -81,6 +84,11 @@ export function resolveWorkerToolAuthority(params: {
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
     return { allowedToolNames: [] };
   }
+  const handoffToolNames = turn.trustedSessionHandoff
+    ? normalizeToolPolicyNames(turn.trustedSessionHandoff.inheritedToolPolicy.allow)
+    : undefined;
+  // The handoff records exact sender tool names. Keep aliases in ordinary target
+  // policy from widening that closed surface after it crosses the worker boundary.
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     [
       ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
@@ -90,11 +98,16 @@ export function resolveWorkerToolAuthority(params: {
       ),
     ].map((name) => ({ name })),
     turn.toolsAllow,
-  );
+  ).filter((tool) => !handoffToolNames || handoffToolNames.has(normalizeToolPolicyName(tool.name)));
   const projected: WorkerToolName[] = projectConversationToolNames({
     capabilityProfile: resolveWorkerCapabilityProfile(params),
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
-  return { allowedToolNames: projected };
+  return {
+    allowedToolNames: resolveWorkerPermissionToolAuthority({
+      allowedToolNames: projected,
+      permissionMode: turn.permissionMode,
+    }).allowedToolNames,
+  };
 }

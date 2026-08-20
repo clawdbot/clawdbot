@@ -140,6 +140,29 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
   });
 
+  it("preserves session handoff denies after target policy resolution", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("write"),
+      hoisted.makeTool("apply_patch"),
+    ]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:target",
+      surface: "loopback",
+      trustedSessionHandoff: {
+        inheritedToolPolicy: {
+          version: 1,
+          allow: ["write"],
+          deny: ["apply_patch"],
+        },
+        requester: {},
+      },
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["write"]);
+  });
+
   it("passes immutable source-reply authority into message-tool construction", () => {
     resolveGatewayScopedTools({
       cfg: {} as OpenClawConfig,

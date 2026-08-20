@@ -260,7 +260,6 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
         senderIsOwner: options?.senderIsOwner,
         conversationReadOrigin: options?.conversationReadOrigin,
       });
-  const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
@@ -286,17 +285,13 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     resolvedConfig?.tools?.alsoAllow,
     options?.pluginToolAllowlist,
   );
-  const explicitFactoryDenylist = mergeFactoryPolicyList(
-    resolvedConfig?.tools?.deny,
-    options?.pluginToolDenylist,
-  );
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
     isToolExplicitlyAllowedByFactoryPolicy({
       toolName: "message",
       allowlist: explicitFactoryAllowlist,
-      denylist: explicitFactoryDenylist,
+      denylist: mergeFactoryPolicyList(resolvedConfig?.tools?.deny, options?.pluginToolDenylist),
     });
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -401,7 +396,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             presenterContext: widgetPresentation.context,
           }),
         ]),
-    ...collectPresentOpenClawTools([heartbeatTool]),
+    ...(options?.enableHeartbeatTool ? [createHeartbeatResponseTool()] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: resolvedConfig,
@@ -511,6 +506,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
+            handoffContext: options?.sessionsSendHandoff,
           }),
         ]),
     ...(!embedded || options?.allowGatewaySubagentBinding === true
@@ -589,7 +585,6 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
-
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 

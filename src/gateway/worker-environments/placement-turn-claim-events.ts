@@ -6,6 +6,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import type { AgentRuntimeSessionHandoffRequester } from "../agent-runtime-session-handoff.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
@@ -35,8 +36,9 @@ const workerTurnClaimClosedHandlers = resolveGlobalMap<
 export type WorkerTurnExecutionIdentity = Readonly<{
   agentId: string;
   delegatedAuthority: AgentRunDelegatedAuthority;
-  executionIdentityToken: ExecutionIdentityAdmissionToken;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
+  sessionHandoffRequester: AgentRuntimeSessionHandoffRequester;
   sessionKey: string;
   turnClaim: WorkerSessionTurnClaim;
 }>;
@@ -77,9 +79,13 @@ function claimKey(claim: WorkerSessionTurnClaim): string {
 export function bindWorkerTurnExecutionIdentity(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
-  token: ExecutionIdentityAdmissionToken,
+  token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
-  source: { agentId: string; sessionKey: string },
+  source: {
+    agentId: string;
+    sessionKey: string;
+    sessionHandoffRequester?: AgentRuntimeSessionHandoffRequester;
+  },
 ): void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
@@ -89,8 +95,9 @@ export function bindWorkerTurnExecutionIdentity(
   const identity = Object.freeze({
     agentId: source.agentId,
     delegatedAuthority,
-    executionIdentityToken: token,
+    ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
+    sessionHandoffRequester: Object.freeze({ ...source.sessionHandoffRequester }),
     sessionKey: source.sessionKey,
     turnClaim: claim,
   });

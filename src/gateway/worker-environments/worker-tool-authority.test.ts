@@ -85,6 +85,14 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority({}, true)).toContain("github_publish");
   });
 
+  it("records the post-permission surface used by a read-only worker", () => {
+    expect(authority({ permissionMode: "read-only" })).toEqual([
+      "read",
+      "sessions_spawn",
+      "sessions_send",
+    ]);
+  });
+
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {
     const config = {
       tools: {
@@ -125,6 +133,56 @@ describe("resolveWorkerToolAuthority", () => {
         toolsAllow: ["read", "write", "exec"],
       }),
     ).toEqual(["read"]);
+  });
+
+  it("intersects session handoffs with the target sender policy", () => {
+    expect(
+      authority({
+        sessionKey: "agent:main:whatsapp:group:team",
+        config: {
+          channels: {
+            whatsapp: {
+              groups: {
+                team: {
+                  tools: { allow: ["read", "write"] },
+                  toolsBySender: { "id:guest": { deny: ["write", "apply_patch"] } },
+                },
+              },
+            },
+          },
+        },
+        messageProvider: "whatsapp",
+        toolsAllow: ["read", "write"],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:whatsapp:direct:guest",
+          sourceTool: "sessions_send",
+        },
+        trustedSessionHandoff: {
+          inheritedToolPolicy: {
+            version: 1,
+            allow: ["read", "write"],
+            deny: [],
+          },
+          requester: {
+            messageProvider: "whatsapp",
+            senderId: "guest",
+          },
+        },
+      }),
+    ).toEqual(["read"]);
+  });
+
+  it("keeps session handoff names exact before target policy aliases", () => {
+    expect(
+      authority({
+        toolsAllow: ["write"],
+        trustedSessionHandoff: {
+          inheritedToolPolicy: { version: 1, allow: ["write"], deny: [] },
+          requester: {},
+        },
+      }),
+    ).toEqual(["write"]);
   });
 
   it("re-resolves current owner-group restrictions for every scheduled turn", () => {

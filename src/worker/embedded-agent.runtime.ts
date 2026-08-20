@@ -14,7 +14,6 @@ import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
-import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -40,7 +39,7 @@ import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
-  WORKER_TOOL_NAMES,
+  resolveWorkerPermissionToolAuthority,
   type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
@@ -148,17 +147,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
-  const allowedToolNameSet = new Set<string>(params.allowedToolNames);
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
-  const permissionToolPolicy = params.permissionMode
-    ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
-    : undefined;
-  const omittedToolNames = permissionToolPolicy?.readOnly
-    ? new Set<WorkerToolName>(["write", "edit", "apply_patch"])
-    : undefined;
-  const activeToolNames = WORKER_TOOL_NAMES.filter(
-    (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
-  );
+  const { allowedToolNames: activeToolNames, permissionToolPolicy } =
+    resolveWorkerPermissionToolAuthority(params);
+  const allowedToolNameSet = new Set<string>(activeToolNames);
   const headlessApprovalText = params.permissionMode
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
@@ -243,7 +235,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
-        if (omittedToolNames?.has(toolName)) {
+        if (!allowedToolNameSet.has(toolName)) {
           continue;
         }
         if (!discoveredToolNames.has(toolName)) {

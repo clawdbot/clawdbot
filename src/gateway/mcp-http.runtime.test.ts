@@ -105,6 +105,36 @@ describe("resolveMcpLoopbackScopedTools", () => {
     );
   });
 
+  it("keeps opaque CLI-native names out of fresh-session handoff authority", () => {
+    resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["message"]));
+
+    resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["message"],
+        cliToolAvailability: {
+          native: ["Read", "Bash", "Edit", "Agent", "vendor_magic"],
+          openClaw: ["message"],
+        },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["message"],
+      deny: [],
+    });
+  });
+
+  it("uses the concrete loopback catalog instead of a wildcard for unknown CLI surfaces", () => {
+    resolveMcpLoopbackScopedTools(scopeParams());
+
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0].sessionsSendToolPolicy).toEqual({
+      version: 1,
+      allow: ["memory_search", "memory_get", "message", "automations"],
+      deny: [],
+    });
+  });
+
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
 
@@ -230,6 +260,29 @@ describe("McpLoopbackToolCache", () => {
     cache.resolve(scopeParams({ cfg, runtimePolicyAgentId: "main" }));
 
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share cache rows across session handoff policies or requesters", () => {
+    const cache = new McpLoopbackToolCache();
+    const cfg = {} as OpenClawConfig;
+    const handoff = (senderId: string, deny = ["exec"]) => ({
+      trustedSessionHandoff: {
+        inheritedToolPolicy: { version: 1 as const, allow: ["write"], deny },
+        requester: { senderId },
+      },
+    });
+
+    cache.resolve(scopeParams({ cfg, ...handoff("a") }));
+    cache.resolve(scopeParams({ cfg, ...handoff("b") }));
+    cache.resolve(
+      scopeParams({
+        cfg,
+        ...handoff("a", ["apply_patch"]),
+      }),
+    );
+    cache.resolve(scopeParams({ cfg, ...handoff("a") }));
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
   });
 
   it("does not share loopback tools across prepared vision capabilities", () => {
