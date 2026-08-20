@@ -44,6 +44,7 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
+  isAnnounceAgentWaiterTimeoutError,
   isIncompleteAnnounceAgentResultError,
   isPermanentAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
@@ -396,6 +397,36 @@ export async function sendSubagentAnnounceDirectly(params: {
         if (textDelivery) {
           return textDelivery;
         }
+      }
+      if (isAnnounceAgentWaiterTimeoutError(err)) {
+        // Handed off, result unconfirmed — NOT a delivery failure.
+        //
+        // The dispatch above uses `expectFinal: true`, so this timeout means the
+        // requester had not finished its turn within the window. It says nothing
+        // about whether the announce arrived, and requester turn duration is
+        // unbounded by design, so no finite window makes that a sound success
+        // test. Treating it as failure re-fired the retry ladder against
+        // announces that had already landed (openclaw-2hlg: delivered ~1.7s
+        // after the child ended, "failed" logged 120s later, retry ladders of
+        // 12-13 attempts).
+        //
+        // Returning delivered here matches how this function already treats a
+        // still-pending run a few lines below: handed off with the outcome not
+        // yet known counts as delivered.
+        //
+        // Deliberately narrow so openclaw-ykga stays intact: only THIS error
+        // is reclassified. A dispatch that was rejected, or that failed for any
+        // other reason, still throws and still retries, so a child that truly
+        // died remains distinguishable from a parent that was merely slow.
+        defaultRuntime.log(
+          `[info] Subagent announce delivered-unconfirmed (requester still working after ${announceTimeoutMs}ms; not retrying): ${summarizeDeliveryError(
+            err,
+          )}`,
+        );
+        return {
+          delivered: true,
+          path: "direct",
+        };
       }
       // The requester-agent handoff is the delivery contract for background
       // completions. A failed handoff should retry/fail visibly instead

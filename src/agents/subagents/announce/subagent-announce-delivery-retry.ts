@@ -178,6 +178,32 @@ export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
+/**
+ * The announce dispatch stopped waiting for the requester's FINAL turn result.
+ *
+ * This is not a delivery failure. The announce is dispatched with
+ * `expectFinal: true` and this timeout, so "success" was being judged by
+ * whether the requester finished its whole turn inside the window — and
+ * requester turn duration is unbounded by design. Any parent that spends more
+ * than the timeout working after receiving an announce manufactures a failure
+ * for an announce it already has.
+ *
+ * Measured 2026-08-20 (openclaw-2hlg): child run ended 11:51:51, the announce
+ * run started inside the requester at 11:51:52.905 (~1.7s later, i.e. delivered),
+ * and this error was logged at 11:53:51.316 — exactly the 120s window. Earlier
+ * "give up (expiry) retries=12/13" ladders were re-firing on announces that had
+ * landed on the first attempt.
+ *
+ * Matches the message raised by the in-process dispatcher
+ * (server-in-process-dispatch.ts: `gateway request timeout for ${method}`) for
+ * the `agent` method specifically. Scoped to `agent` deliberately: a timeout on
+ * some other method is not evidence that this announce was handed off.
+ */
+export function isAnnounceAgentWaiterTimeoutError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  return /\bgateway request timeout for agent\b/i.test(message);
+}
+
 function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   if (isOutboundDeliveryError(error) && error.sentBeforeError) {
     return true;
