@@ -1035,4 +1035,91 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect((cfg.gateway?.auth?.token ?? "").length).toBeGreaterThan(8);
     });
   }, 60_000);
+
+  it("keeps the generated gateway token out of config under --secret-input-mode ref", async () => {
+    if (process.platform === "win32") {
+      // Matches the LAN case above: the Windows runner drops this flow's temp config write.
+      return;
+    }
+    await withStateDir("state-token-ref-", async (stateDir) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+
+      const port = getPseudoPort(41_000);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace: path.join(stateDir, "openclaw"),
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayPort: port,
+          secretInputMode: "ref",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig() as {
+        gateway?: { auth?: { mode?: string; token?: unknown } };
+      };
+      expect(cfg.gateway?.auth?.mode).toBe("token");
+      expect(cfg.gateway?.auth?.token).toEqual({
+        source: "store",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+
+      // A ref persisted without its value would leave the gateway unauthenticatable.
+      const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
+      const stored = readSecretStoreValue({
+        scope: { kind: "team" },
+        name: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      expect(stored.ok).toBe(true);
+      expect(stored.ok && stored.value.length).toBeGreaterThan(8);
+    });
+  }, 60_000);
+
+  it("references an ambient gateway token by env instead of copying it into the store", async () => {
+    if (process.platform === "win32") {
+      // Matches the LAN case above: the Windows runner drops this flow's temp config write.
+      return;
+    }
+    await withStateDir("state-token-ref-env-", async (stateDir) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace: path.join(stateDir, "openclaw"),
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayPort: getPseudoPort(42_000),
+          secretInputMode: "ref",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig() as { gateway?: { auth?: { token?: unknown } } };
+      expect(cfg.gateway?.auth?.token).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+
+      // A store copy would silently outlive a later rotation of the env var.
+      const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
+      expect(
+        readSecretStoreValue({ scope: { kind: "team" }, name: "OPENCLAW_GATEWAY_TOKEN" }).ok,
+      ).toBe(false);
+    });
+  }, 60_000);
 });

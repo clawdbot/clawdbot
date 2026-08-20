@@ -1,4 +1,7 @@
 // Setup gateway config tests cover gateway prompt choices and config output.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -80,6 +83,7 @@ describe("configureGatewayForSetup", () => {
     tailscaleChoice?: "off" | "serve";
     textQueue?: Array<string | undefined>;
     nextConfig?: Record<string, unknown>;
+    secretInputMode?: "plaintext" | "ref";
   }) {
     const authChoice = params?.authChoice ?? "token";
     const prompter = createPrompter({
@@ -93,10 +97,45 @@ describe("configureGatewayForSetup", () => {
       nextConfig: params?.nextConfig ?? {},
       localPort: 18789,
       quickstartGateway: createQuickstartGateway(authChoice),
+      ...(params?.secretInputMode ? { secretInputMode: params.secretInputMode } : {}),
       prompter,
       runtime,
     });
   }
+
+  it("provisions a store ref when reference mode has no token to point at", async () => {
+    const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wizard-gateway-ref-")));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+    try {
+      const result = await runGatewayConfig({ flow: "quickstart", secretInputMode: "ref" });
+
+      expect(result.nextConfig.gateway?.auth?.token).toEqual({
+        source: "store",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
+      const stored = readSecretStoreValue({
+        scope: { kind: "team" },
+        name: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      expect(stored.ok && stored.value).toBe(result.settings.gatewayToken);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousToken !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 
   it("generates a token when the prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
