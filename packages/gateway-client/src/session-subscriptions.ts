@@ -1,4 +1,7 @@
-import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
+import {
+  GatewayProtocolRequestTimeoutError,
+  type GatewayProtocolRequestOptions,
+} from "./protocol-request.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 export type GatewaySessionMessageRequestClient = {
@@ -319,14 +322,41 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     entry: SessionMessageSubscriptionEntry,
     includeApprovals: boolean,
   ): Promise<SessionMessageSubscriptionResponse> {
-    const result = await this.#client.request(
-      "sessions.messages.subscribe",
-      {
-        ...sessionSubscriptionParams(entry.key, entry.agentId),
-        ...(includeApprovals ? { includeApprovals: true } : {}),
-      },
-      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-    );
+    const params = sessionSubscriptionParams(entry.key, entry.agentId);
+    const result = await this.#client
+      .request(
+        "sessions.messages.subscribe",
+        includeApprovals ? { ...params, includeApprovals: true } : params,
+        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+      )
+      .catch(async (error: unknown) => {
+        if (
+          !(error instanceof GatewayProtocolRequestTimeoutError) ||
+          !error.requestSent ||
+          this.#retired
+        ) {
+          throw error;
+        }
+        try {
+          // A sent request can commit before its acknowledgment; preserve an existing
+          // plain lease while removing any unacknowledged approval authority.
+          await this.#client.request(
+            entry.handles.size > 0
+              ? "sessions.messages.subscribe"
+              : "sessions.messages.unsubscribe",
+            params,
+            { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+          );
+        } catch (recoveryError) {
+          if (!this.#retired) {
+            throw new AggregateError(
+              [error, recoveryError],
+              "session message subscription recovery failed",
+            );
+          }
+        }
+        throw error;
+      });
     const response = result && typeof result === "object" ? result : null;
     const responseKey = response && "key" in response ? response.key : undefined;
     return {

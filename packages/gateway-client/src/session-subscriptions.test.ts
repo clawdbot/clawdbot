@@ -273,7 +273,28 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
     expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
     await expect(recovered).resolves.toEqual({ key: "healthy", agentId: null });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.messages.unsubscribe",
+      { key: "stalled" },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
+  });
+
+  it("does not compensate an unsent subscription timeout", async () => {
+    const timeout = new GatewayProtocolRequestTimeoutError({
+      method: "sessions.messages.subscribe",
+      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+      requestSent: false,
+    });
+    const request = vi.fn(async () => {
+      throw timeout;
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+
+    await expect(coordinator.acquire("main")).rejects.toBe(timeout);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("retries a rejected final unsubscribe with the original live lease", async () => {
