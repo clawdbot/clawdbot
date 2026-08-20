@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
         type: string
+      capture_ui_proof:
+        description: Capture and upload sanitized Control UI screenshots from real-Gateway tests.
+        required: false
+        default: false
+        type: boolean
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -1746,6 +1751,9 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
+      - name: Build Control UI bundle for real-Gateway tests
+        run: pnpm ui:build
+
       - name: Test MCP app conformance with a real Gateway
         run: >-
           node scripts/run-vitest.mjs run
@@ -1754,11 +1762,23 @@ jobs:
           ui/src/e2e/mcp-app-conformance.e2e.test.ts
 
       - name: Test Control UI auth transports with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
+
+      - name: Upload sanitized Control UI real-Gateway proof
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-real-gateway-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/real-gateway
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Test Control UI Logs lifecycle with a real Gateway
         run: >-

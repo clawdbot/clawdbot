@@ -204,6 +204,21 @@ export async function prepareGatewayKernelState(params: {
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
+            getSessionChangeContext: () => pluginGatewayContext.current,
+            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
+              // Placement runtime starts before chat state exists; moves invoke this only after startup.
+              const text = connectionState.chatRunState.resolveBuffer(runId).text;
+              if (!text.trim()) {
+                return;
+              }
+              const { persistAbortedPartials } =
+                await import("./server-methods/chat-abort-runtime.js");
+              await persistAbortedPartials({
+                context: { logGateway: log },
+                sessionKey,
+                snapshots: [{ sessionId, agentId, runId, text, abortOrigin: "placement-abandon" }],
+              });
+            },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             warn: (message) => log.warn(message),
             ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),

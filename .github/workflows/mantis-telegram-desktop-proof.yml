@@ -185,6 +185,98 @@ jobs:
               requestSource === "clawsweeper_label" || publishArtifactName ? "false" : "true",
             );
 
+      - name: Create Mantis status token
+        id: mantis_status_token
+        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+
+      - name: Report Mantis run started
+        id: mantis_status_comment
+        if: ${{ steps.mantis_status_token.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TARGET_PR: ${{ steps.resolve.outputs.pr_number }}
+        with:
+          github-token: ${{ steps.mantis_status_token.outputs.token }}
+          script: |
+            const markerRoot = "<!-- mantis-telegram-desktop-proof:";
+            const runId = Number(process.env.GITHUB_RUN_ID);
+            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+            const marker = `${markerRoot}${runId}-${runAttempt} -->`;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const body = `${marker}\nMantis started this proof. [Follow the active job](${runUrl}).`;
+            const { owner, repo } = context.repo;
+            const issueNumber = Number(process.env.TARGET_PR);
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              body,
+            });
+            const statuses = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            const statusMarker = /<!-- mantis-telegram-desktop-proof:(\d+)-(\d+) -->/u;
+            const matching = statuses
+              .filter((comment) => comment.user?.login === "openclaw-mantis[bot]")
+              .flatMap((comment) => {
+                const match = comment.body?.match(statusMarker);
+                return match
+                  ? [{ comment, runAttempt: Number(match[2]), runId: Number(match[1]) }]
+                  : [];
+              })
+              .sort((left, right) => left.runId - right.runId || left.runAttempt - right.runAttempt);
+            const canonical = matching.at(-1);
+            for (const stale of matching.slice(0, -1)) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: stale.comment.id,
+              });
+            }
+            if (!canonical) {
+              core.setFailed("Mantis status comment was not visible after publication.");
+            }
+
+      - name: Report Mantis start failure with workflow token
+        id: mantis_status_fallback
+        if: >-
+          ${{
+            always() &&
+            steps.resolve.outputs.request_source == 'issue_comment' &&
+            (
+              steps.mantis_status_token.outcome != 'success' ||
+              steps.mantis_status_comment.outcome != 'success'
+            )
+          }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TARGET_PR: ${{ steps.resolve.outputs.pr_number }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: Number(process.env.TARGET_PR),
+              body: `${marker}\nMantis could not start this proof. [Open the failed job](${runUrl}).`,
+            });
+            core.setFailed("Mantis could not publish its durable status comment.");
+
       - name: Checkout preflight refs
         id: checkout
         if: ${{ steps.resolve.outputs.should_run == 'true' && steps.resolve.outputs.requires_preflight == 'true' }}
@@ -1161,6 +1253,7 @@ jobs:
           permission-pull-requests: read
 
       - name: Comment PR with inline QA evidence
+        id: publish_evidence
         if: ${{ always() && steps.trusted_evidence.outcome == 'success' && needs.resolve_request.outputs.pr_number != '' && steps.inspect.outputs.output_dir != '' }}
         env:
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
@@ -1189,10 +1282,48 @@ jobs:
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --marker "<!-- mantis-telegram-desktop-proof -->" \
+            --marker "<!-- mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} -->" \
+            --create-missing false \
             "${artifact_url_args[@]}" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
+
+      - name: Report failed Mantis proof
+        if: ${{ always() && needs.resolve_request.outputs.request_source == 'issue_comment' && steps.publish_evidence.outcome != 'success' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
+        with:
+          github-token: ${{ steps.mantis_app_token.outputs.token }}
+          script: |
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const body = `${marker}\nMantis could not complete this proof. [Open the failed job](${runUrl}).`;
+            const { owner, repo } = context.repo;
+            const issueNumber = Number(process.env.TARGET_PR);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            const existing = comments.findLast(
+              (comment) =>
+                comment.user?.login === "openclaw-mantis[bot]" &&
+                comment.body?.includes(marker),
+            );
+            if (!existing) {
+              core.info("A newer Mantis run owns the PR status; skipping stale failure output.");
+              return;
+            }
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            }
 
       - name: Fail when Mantis Telegram desktop proof failed
         if: ${{ always() && steps.inspect.outputs.output_dir != '' && steps.inspect.outputs.comparison_status != 'pass' }}
@@ -1227,7 +1358,7 @@ jobs:
         with:
           github-token: ${{ steps.mantis_app_token.outputs.token }}
           script: |
-            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const body = `${marker}\nThere was nothing visible to test in this PR at all.`;
             const { owner, repo } = context.repo;
             const issueNumber = Number(process.env.TARGET_PR);
@@ -1242,20 +1373,16 @@ jobs:
                 comment.user?.login === "openclaw-mantis[bot]" &&
                 comment.body?.includes(marker),
             );
-            if (existing) {
-              try {
-                await github.rest.issues.updateComment({
-                  owner,
-                  repo,
-                  comment_id: existing.id,
-                  body,
-                });
-                return;
-              } catch {
-                core.warning(`Could not update Mantis comment ${existing.id}; creating a new one.`);
-              }
+            if (!existing) {
+              core.info("A newer Mantis run owns the PR status; skipping stale no-change output.");
+              return;
             }
-            await github.rest.issues.createComment({ owner, repo, issue_number: issueNumber, body });
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: existing.id,
+              body,
+            });
 
   publish_existing_telegram_desktop_proof:
     name: Publish existing native Telegram proof

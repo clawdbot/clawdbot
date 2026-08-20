@@ -145,6 +145,13 @@ struct OnboardingViewSmokeTests {
             requiresCLIInstall: true)
 
         #expect(order.contains(2))
+        #expect(OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: order.contains(2),
+            visible: true,
+            statusKnown: true,
+            executableReady: false,
+            installed: false,
+            installing: false))
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
     }
@@ -185,7 +192,6 @@ struct OnboardingViewSmokeTests {
     @Test func `automatic CLI setup waits for the initial status probe`() {
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: false,
             executableReady: false,
@@ -193,7 +199,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: false,
@@ -201,7 +206,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: false,
             statusKnown: true,
             executableReady: false,
@@ -209,7 +213,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: true,

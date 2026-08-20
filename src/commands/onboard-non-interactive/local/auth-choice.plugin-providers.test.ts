@@ -287,6 +287,52 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
+  it("loads a media setup provider without treating it as a text model provider", async () => {
+    const runtime = createRuntime();
+    const provider = { id: "pixverse", pluginId: "pixverse", label: "PixVerse" };
+    const initialConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+    };
+    const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: {
+          ...config.agents?.defaults,
+          mediaModels: { video: { primary: "pixverse/pixverse-v5.6" } },
+        },
+      },
+    }));
+    resolvePreferredProviderForAuthChoice.mockResolvedValue("pixverse" as never);
+    resolvePluginProvidersCore.mockImplementation((...args: unknown[]) => {
+      const input = args[0] as { providerRefs?: string[] } | undefined;
+      return (input?.providerRefs?.includes("pixverse") ? [provider] : []) as never;
+    });
+    resolveProviderPluginChoice.mockImplementation((...args: unknown[]) => {
+      const input = args[0] as { providers?: unknown[] } | undefined;
+      return input?.providers?.includes(provider)
+        ? { provider, method: { runNonInteractive } }
+        : undefined;
+    });
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: initialConfig,
+      authChoice: "pixverse-api-key",
+      opts: { pixverseApiKey: "pixverse-test-key" } as never,
+      runtime: runtime as never,
+      baseConfig: initialConfig,
+      target,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(result?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6" });
+    expect(result?.agents?.defaults?.mediaModels?.video).toEqual({
+      primary: "pixverse/pixverse-v5.6",
+    });
+  });
+
   it("installs an official catalog provider before applying a cold auth choice", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
@@ -300,6 +346,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const provider = { id: "groq", pluginId: "groq", label: "Groq" };
     resolveProviderInstallCatalogEntry.mockReturnValue({
       pluginId: "groq",
+      providerId: "groq",
       label: "Groq",
       origin: "bundled",
       install: {
@@ -358,6 +405,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       }),
     );
     expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(2);
+    expect(mockArg(resolvePluginProvidersCore, 1).providerRefs).toEqual(["groq"]);
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       agents: {

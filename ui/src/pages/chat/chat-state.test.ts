@@ -254,11 +254,41 @@ describe("canonical session message recovery", () => {
   });
 
   it.each([
-    { name: "the persisted reply lands after the terminal event", persistedFirst: false },
-    { name: "the persisted reply lands before the terminal event", persistedFirst: true },
-  ])("renders one assistant reply when $name", async ({ persistedFirst }) => {
+    {
+      name: "the persisted reply lands after the terminal event",
+      persistedFirst: false,
+      producerOwned: false,
+      runActive: false,
+    },
+    {
+      name: "the persisted reply lands before the terminal event",
+      persistedFirst: true,
+      producerOwned: false,
+      runActive: false,
+    },
+    {
+      name: "the producer-owned persisted reply lands while its run is still active",
+      persistedFirst: true,
+      producerOwned: true,
+      runActive: true,
+    },
+    {
+      name: "the producer-owned persisted reply lands after its terminal event",
+      persistedFirst: false,
+      producerOwned: true,
+      runActive: false,
+    },
+    {
+      name: "the producer-owned persisted partial lands before its aborted terminal event",
+      persistedFirst: true,
+      producerOwned: true,
+      runActive: true,
+      aborted: true,
+    },
+  ])("renders one assistant reply when $name", async (scenario) => {
     const activeRunId = "active-run";
     const replyText = "Here is the answer.";
+    const persistedReplyIdentity = { id: "persisted-reply", seq: 2 };
     const prompt = {
       role: "user",
       content: [{ type: "text", text: "Original prompt" }],
@@ -267,7 +297,13 @@ describe("canonical session message recovery", () => {
     const persistedReply = {
       role: "assistant",
       content: [{ type: "text", text: replyText }],
-      __openclaw: { id: "persisted-reply", seq: 2 },
+      __openclaw: persistedReplyIdentity,
+      ...(scenario.aborted
+        ? {
+            idempotencyKey: `${activeRunId}:assistant`,
+            openclawAbort: { aborted: true, origin: "placement-abandon", runId: activeRunId },
+          }
+        : {}),
     };
     const { state } = createSessionEventState({
       chatMessages: [prompt],
@@ -298,7 +334,8 @@ describe("canonical session message recovery", () => {
       event: "session.message",
       payload: {
         sessionKey: state.sessionKey,
-        hasActiveRun: false,
+        ...(scenario.producerOwned ? { runId: activeRunId } : {}),
+        hasActiveRun: scenario.runActive,
         messageId: "persisted-reply",
         messageSeq: 2,
         message: persistedReply,
@@ -310,12 +347,12 @@ describe("canonical session message recovery", () => {
       payload: {
         sessionKey: state.sessionKey,
         runId: activeRunId,
-        state: "final",
+        state: scenario.aborted ? "aborted" : "final",
         message: { role: "assistant", content: [{ type: "text", text: replyText }] },
       },
     } satisfies Parameters<typeof handlePageGatewayEvent>[1];
 
-    for (const event of persistedFirst
+    for (const event of scenario.persistedFirst
       ? [persistedEvent, terminalEvent]
       : [terminalEvent, persistedEvent]) {
       handlePageGatewayEvent(state, event);
@@ -324,8 +361,17 @@ describe("canonical session message recovery", () => {
 
     // Rendering collapses consecutive identical messages behind a count badge,
     // so the transcript itself has to hold exactly one copy of the reply.
+    const canonicalReply = scenario.aborted
+      ? {
+          ...persistedReply,
+          __openclaw: {
+            ...persistedReplyIdentity,
+            idempotencyKey: `${activeRunId}:assistant`,
+          },
+        }
+      : persistedReply;
     expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
-      persistedReply,
+      canonicalReply,
     ]);
     expect(renderedTranscript(state)).toEqual([
       { role: "user", text: "Original prompt" },
@@ -333,7 +379,10 @@ describe("canonical session message recovery", () => {
     ]);
   });
 
-  it("never lets a delayed older assistant row displace a newer run's reply", () => {
+  it.each([
+    { name: "an unowned legacy", runId: undefined },
+    { name: "an exactly producer-owned", runId: "older-run" },
+  ])("never lets $name delayed older assistant row displace a newer run's reply", ({ runId }) => {
     const olderReply = {
       role: "assistant",
       content: [{ type: "text", text: "Answer from the older run." }],
@@ -368,6 +417,7 @@ describe("canonical session message recovery", () => {
       event: "session.message",
       payload: {
         sessionKey: state.sessionKey,
+        ...(runId ? { runId } : {}),
         hasActiveRun: false,
         messageId: "older-reply",
         messageSeq: 2,

@@ -13,9 +13,11 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { persistAbortedPartials } from "./chat-abort-runtime.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -256,6 +258,99 @@ afterEach(async () => {
 });
 
 describe("chat abort transcript persistence", () => {
+  it("publishes one run-owned transcript row for an abandoned placement partial", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-placement-abandon-",
+    );
+    const runId = "placement-abandon-run";
+    const updates: unknown[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+    const snapshot = {
+      runId,
+      sessionId,
+      agentId: "main",
+      text: "Gateway-synced remote partial",
+      abortOrigin: "placement-abandon" as const,
+    };
+
+    try {
+      await persistAbortedPartials({
+        context: { logGateway: { warn: vi.fn() } },
+        sessionKey: "main",
+        snapshots: [snapshot],
+      });
+      await persistAbortedPartials({
+        context: { logGateway: { warn: vi.fn() } },
+        sessionKey: "main",
+        snapshots: [snapshot],
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    const persisted = collectMessagesWithIdempotencyKey(
+      await readTranscriptLines(transcriptPath),
+      `${runId}:assistant`,
+    );
+    expect(persisted).toHaveLength(1);
+    expectPersistedAbortMessage(persisted[0], {
+      idempotencyKey: `${runId}:assistant`,
+      origin: "placement-abandon",
+      runId,
+    });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ runId, messageId: expect.any(String), messageSeq: 1 });
+  });
+
+  it.each([
+    { origin: "placement-abandon" as const, rejects: true },
+    { origin: "rpc" as const, rejects: false },
+  ])("keeps $origin append failure at its owning abort boundary", async ({ origin, rejects }) => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-abort-append-failure-");
+    sessionEntryState.storePath = "";
+    const warn = vi.fn();
+    const persistence = persistAbortedPartials({
+      context: { logGateway: { warn } },
+      sessionKey: "main",
+      snapshots: [
+        {
+          sessionId,
+          agentId: "main",
+          runId: "failed-abort-run",
+          text: "partial that cannot be persisted",
+          abortOrigin: origin,
+        },
+      ],
+    });
+
+    if (rejects) {
+      await expect(persistence).rejects.toThrow("transcript identity not resolved");
+    } else {
+      await expect(persistence).resolves.toBeUndefined();
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript identity not resolved"));
+  });
+
+  it("rejects an abandoned partial after its exact transcript session is replaced", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-abort-rebound-session-");
+
+    await expect(
+      persistAbortedPartials({
+        context: { logGateway: { warn: vi.fn() } },
+        sessionKey: "main",
+        snapshots: [
+          {
+            sessionId: `${sessionId}-stale`,
+            agentId: "main",
+            runId: "stale-placement-run",
+            text: "partial from the former session",
+            abortOrigin: "placement-abandon",
+          },
+        ],
+      }),
+    ).rejects.toThrow("transcript session changed");
+  });
+
   it("persists run-scoped abort partial with rpc metadata and idempotency", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture("openclaw-chat-abort-run-");
     const runId = "idem-abort-run-1";

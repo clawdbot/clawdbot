@@ -359,9 +359,9 @@ export async function recoverStuckDiagnosticSession(
         ? resetCommandLane(sessionLane)
         : 0;
 
-    const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
+    const clearStaleSession = !aborted && released === 0 && !activeSessionId;
 
-    if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
+    if (aborted || forceCleared || released > 0 || clearStaleSession) {
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
@@ -396,17 +396,21 @@ export async function recoverStuckDiagnosticSession(
               sessionKey: params.sessionKey,
               released,
               lane: sessionLane ?? undefined,
+              ...(clearStaleSession ? { reason: "no_active_work" as const } : {}),
             };
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;
     }
+    // An active run that neither aborted nor released still owns its work. Reporting
+    // recovery here would clear the session's diagnostic state out from under it.
     const outcome: StuckSessionRecoveryOutcome = {
-      status: "noop",
-      action: "none",
-      reason: "no_active_work",
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_embedded_run",
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      lane: sessionLane ?? undefined,
+      activeSessionId,
+      activeWorkKind: "embedded_run",
     };
     diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
     return outcome;

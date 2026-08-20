@@ -580,7 +580,7 @@ export const startSubagentAnnounceCleanupFlow = (
         retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration);
         return;
       }
-      recordAnnounceDeliveryResult(entry, delivery);
+      recordAnnounceDeliveryResult(entry, delivery, params.runs);
       if (delivery.delivered) {
         const deliveryState = ensureDeliveryState(entry);
         deliveryState.status = "delivered";

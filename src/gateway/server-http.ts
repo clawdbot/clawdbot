@@ -257,7 +257,7 @@ export function createGatewayHttpServer(opts: {
           req,
           res,
           requestPath,
-          getResolvedAuth(),
+          resolvedAuth,
           [],
           false,
           rateLimiter,

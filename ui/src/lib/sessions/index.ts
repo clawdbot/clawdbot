@@ -229,9 +229,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const reconcile = (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
-    options?: SessionReconcileOptions,
+    options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ): boolean => {
-    const result = decorateRows(reconcileSessionHistory(state.result, row, defaults, options));
+    const { sourceCanonicalListRevision, ...historyOptions } = options ?? {};
+    const preserveCanonicalRow =
+      sourceCanonicalListRevision !== undefined &&
+      canonicalListRevision > sourceCanonicalListRevision;
+    const result = decorateRows(
+      reconcileSessionHistory(state.result, row, defaults, historyOptions, preserveCanonicalRow),
+    );
     if (result === state.result) {
       return false;
     }

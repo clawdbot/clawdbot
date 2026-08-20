@@ -82,10 +82,9 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveProviderSetupFlowContributions({
-      ...params,
-      scope: "text-inference",
-    }).map((contribution) => contribution.option.value),
+    ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
+      (contribution) => contribution.option.value,
+    ),
   ];
 
   return uniqueStrings(values).join("|");

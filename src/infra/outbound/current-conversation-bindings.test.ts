@@ -215,16 +215,12 @@ describe("generic current-conversation bindings", () => {
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-bindings-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
     setMinimalCurrentConversationRegistry();
-    testing.resetCurrentConversationBindingsForTests({
-      deletePersistedFile: true,
-    });
+    testing.clearPersistedCurrentConversationBindingsForTests();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    testing.resetCurrentConversationBindingsForTests({
-      deletePersistedFile: true,
-    });
+    testing.clearPersistedCurrentConversationBindingsForTests();
     closeOpenClawStateDatabaseForTest();
     if (previousStateDir == null) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -303,7 +299,7 @@ describe("generic current-conversation bindings", () => {
     );
   });
 
-  it("reloads persisted bindings after the in-memory cache is cleared", async () => {
+  it("preserves persisted bindings after the state database reopens", async () => {
     const bound = await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
@@ -322,7 +318,7 @@ describe("generic current-conversation bindings", () => {
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
 
-    testing.resetCurrentConversationBindingsForTests();
+    closeOpenClawStateDatabaseForTest();
 
     const resolved = resolveGenericCurrentConversationBinding({
       channel: "workspace",
@@ -395,7 +391,6 @@ describe("generic current-conversation bindings", () => {
           opaque: { nested: true },
         });
 
-        testing.resetCurrentConversationBindingsForTests();
         closeOpenClawStateDatabaseForTest();
         expect(resolveWorkspaceConversation("user:inserted")?.targetSessionKey).toBe(
           "agent:codex:acp:inserted-target",
@@ -650,7 +645,6 @@ describe("generic current-conversation bindings", () => {
       bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
     });
 
-    testing.resetCurrentConversationBindingsForTests();
     expect(
       resolveGenericCurrentConversationBinding({
         channel: "forum",
@@ -754,8 +748,6 @@ describe("generic current-conversation bindings", () => {
       reason: "test cleanup",
     });
 
-    testing.resetCurrentConversationBindingsForTests();
-
     expect(
       resolveGenericCurrentConversationBinding({
         channel: "googlechat",
@@ -813,7 +805,7 @@ describe("generic current-conversation bindings", () => {
     ).toBeNull();
   });
 
-  it("persists touched activity across reloads", async () => {
+  it("persists touched activity after the state database reopens", async () => {
     const bound = await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
@@ -834,7 +826,7 @@ describe("generic current-conversation bindings", () => {
       1_234_567_890,
     );
 
-    testing.resetCurrentConversationBindingsForTests();
+    closeOpenClawStateDatabaseForTest();
 
     expectBindingMetadata(
       resolveGenericCurrentConversationBinding({
@@ -850,7 +842,7 @@ describe("generic current-conversation bindings", () => {
   });
 
   describe("SQLite write failures", () => {
-    it("keeps a replacement bind out of memory and disk", async () => {
+    it("keeps the committed binding when its replacement write fails", async () => {
       await bindWorkspaceConversation("user:U1", {
         targetSessionKey: "agent:codex:acp:session-a",
       });
@@ -866,14 +858,13 @@ describe("generic current-conversation bindings", () => {
       expect(resolveWorkspaceConversation("user:U1")?.targetSessionKey).toBe(
         "agent:codex:acp:session-a",
       );
-      testing.resetCurrentConversationBindingsForTests();
       closeOpenClawStateDatabaseForTest();
       expect(resolveWorkspaceConversation("user:U1")?.targetSessionKey).toBe(
         "agent:codex:acp:session-a",
       );
     });
 
-    it("keeps a failed touch out of memory and disk", async () => {
+    it("keeps committed activity unchanged when a touch write fails", async () => {
       const bound = expectSessionBinding(
         await bindWorkspaceConversation("user:U1", { metadata: { label: "workspace-dm" } }),
       );
@@ -885,10 +876,6 @@ describe("generic current-conversation bindings", () => {
         ),
       ).rejects.toThrow();
 
-      expect(resolveWorkspaceConversation("user:U1")?.metadata?.lastActivityAt).toBe(
-        originalActivity,
-      );
-      testing.resetCurrentConversationBindingsForTests();
       expect(resolveWorkspaceConversation("user:U1")?.metadata?.lastActivityAt).toBe(
         originalActivity,
       );
@@ -907,8 +894,6 @@ describe("generic current-conversation bindings", () => {
       ).rejects.toThrow();
 
       expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
-      testing.resetCurrentConversationBindingsForTests();
-      expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
     });
 
     it("keeps every matching binding when unbind by session fails", async () => {
@@ -926,8 +911,6 @@ describe("generic current-conversation bindings", () => {
       ).rejects.toThrow();
 
       expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
-      testing.resetCurrentConversationBindingsForTests();
-      expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
     });
 
     it("keeps an expired binding when prune-on-resolve fails", async () => {
@@ -941,8 +924,6 @@ describe("generic current-conversation bindings", () => {
       ).rejects.toThrow();
 
       vi.setSystemTime(new Date(1_000_500));
-      expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
-      testing.resetCurrentConversationBindingsForTests();
       expect(resolveWorkspaceConversation("user:U1")).not.toBeNull();
     });
 
@@ -961,8 +942,6 @@ describe("generic current-conversation bindings", () => {
       ).rejects.toThrow();
 
       vi.setSystemTime(new Date(1_000_500));
-      expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
-      testing.resetCurrentConversationBindingsForTests();
       expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
     });
 
@@ -985,13 +964,10 @@ describe("generic current-conversation bindings", () => {
 
       vi.setSystemTime(new Date(1_000_500));
       expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
-      testing.resetCurrentConversationBindingsForTests();
-      expect(listGenericCurrentConversationBindingsBySession(targetSessionKey)).toHaveLength(2);
     });
 
     it("reads an unexpired binding without requiring a SQLite cleanup write", async () => {
       await bindWorkspaceConversation("user:U1");
-      testing.resetCurrentConversationBindingsForTests();
 
       await expect(
         withReadOnlyStateDatabase(() => resolveWorkspaceConversation("user:U1")),

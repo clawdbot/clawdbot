@@ -30,7 +30,7 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
-const MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS = [
+const MANTIS_MANUAL_ONLY_WORKFLOWS = [
   ".github/workflows/mantis-web-ui-chat-proof.yml",
   ".github/workflows/mantis-discord-status-reactions.yml",
   ".github/workflows/mantis-discord-thread-attachment.yml",
@@ -4945,29 +4945,13 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
   });
 
-  it.each(MANTIS_ISSUE_COMMENT_REACTION_WORKFLOWS)(
-    "routes Mantis reaction ownership through shared workflows in %s",
+  it.each(MANTIS_MANUAL_ONLY_WORKFLOWS)(
+    "keeps legacy Mantis scenarios on manual dispatch in %s",
     (workflowPath) => {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
-      const resolveJob = workflow.jobs.resolve_request;
-      const cleanupJob = workflow.jobs.clear_issue_comment_reaction;
-      const expectedSecrets = {
-        MANTIS_GITHUB_APP_ID: "${{ secrets.MANTIS_GITHUB_APP_ID }}",
-        MANTIS_GITHUB_APP_PRIVATE_KEY: "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
-      };
 
-      expect(resolveJob.uses, workflowPath).toBe("./.github/workflows/mantis-resolve-request.yml");
-      expect(resolveJob.secrets, workflowPath).toEqual(expectedSecrets);
-      expect(cleanupJob.uses, workflowPath).toBe("./.github/workflows/mantis-clear-reaction.yml");
-      expect(cleanupJob.if, workflowPath).toContain(
-        "needs.resolve_request.outputs.reaction_id != ''",
-      );
-      expect(cleanupJob.permissions, workflowPath).toEqual({});
-      expect(cleanupJob.with, workflowPath).toMatchObject({
-        "comment-id": "${{ format('{0}', github.event.comment.id) }}",
-        "reaction-id": "${{ needs.resolve_request.outputs.reaction_id }}",
-      });
-      expect(cleanupJob.secrets, workflowPath).toEqual(expectedSecrets);
+      expect(workflow.on.workflow_dispatch, workflowPath).toBeDefined();
+      expect(workflow.on.issue_comment, workflowPath).toBeUndefined();
     },
   );
 

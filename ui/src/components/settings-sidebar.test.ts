@@ -535,6 +535,47 @@ describe("settings sidebar search", () => {
     expect(onNavigate).toHaveBeenCalledWith("about");
   });
 
+  it("keeps pending approvals actionable from the settings sidebar", () => {
+    const onNavigate = vi.fn();
+    const onOpenApprovals = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "1.0.0",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate,
+        onOpenApprovals,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const attention = container.querySelector<
+      HTMLElement & {
+        onNavigate?: (routeId: string) => void;
+        onOpenApprovals?: () => void;
+      }
+    >("openclaw-sidebar-attention");
+    expect(attention).not.toBeNull();
+    expect(attention?.nextElementSibling?.tagName).toBe("OPENCLAW-SIDEBAR-UPDATE-CARD");
+
+    attention?.onOpenApprovals?.();
+    expect(onOpenApprovals).toHaveBeenCalledOnce();
+    attention?.onNavigate?.("approvals");
+    expect(onNavigate).toHaveBeenCalledWith("approvals");
+  });
+
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
     const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>

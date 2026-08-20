@@ -7,7 +7,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
-import { testing as currentConversationBindingTesting } from "../../../../infra/outbound/current-conversation-bindings.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
@@ -20,6 +19,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
 import { getChannelPlugin } from "../../registry.js";
@@ -83,6 +83,7 @@ function expectResolvedSessionBinding(params: {
   conversationId: string;
   parentConversationId?: string;
   targetSessionKey: string;
+  metadata?: Record<string, unknown>;
 }) {
   expect(
     getSessionBindingService().resolveByConversation({
@@ -93,6 +94,7 @@ function expectResolvedSessionBinding(params: {
     }),
   )?.toMatchObject({
     targetSessionKey: params.targetSessionKey,
+    ...(params.metadata ? { metadata: params.metadata } : {}),
   });
 }
 
@@ -309,12 +311,13 @@ type SessionBindingContractFixture = {
   expectedBindingId?: string;
   targetKind: SessionBindingRecord["targetKind"];
   label: string;
+  metadata?: Record<string, unknown>;
   placements: SessionBindingCapabilities["placements"];
   preload: () => Promise<unknown>;
   beforeEach: () => Promise<void>;
   ensureManager: () => Promise<void>;
   stopManager?: () => Promise<void>;
-  resetProcessMemory?: () => Promise<void>;
+  restartBindingManager?: () => Promise<void>;
 };
 
 function createSessionBindingContractEntry(
@@ -352,20 +355,24 @@ function createSessionBindingContractEntry(
         targetKind: fixture.targetKind,
         conversation,
         placement: "current",
-        metadata: { agentId: fixture.id, label: fixture.label },
+        metadata: { agentId: fixture.id, label: fixture.label, ...fixture.metadata },
       });
       if (fixture.expectedBindingId) {
         expect(binding.bindingId).toBe(fixture.expectedBindingId);
+      }
+      if (fixture.metadata) {
+        expect(binding.metadata).toMatchObject(fixture.metadata);
       }
       expectResolvedSessionBinding({
         ...conversation,
         targetSessionKey: fixture.targetSessionKey,
       });
-      if (fixture.resetProcessMemory) {
-        await fixture.resetProcessMemory();
+      if (fixture.restartBindingManager) {
+        await fixture.restartBindingManager();
         expectResolvedSessionBinding({
           ...conversation,
           targetSessionKey: fixture.targetSessionKey,
+          metadata: fixture.metadata,
         });
       }
       return binding;
@@ -430,14 +437,15 @@ const sessionBindingContractEntries = {
     expectedBindingId: "default:+15555550124",
     targetKind: "session",
     label: "imessage-main",
+    metadata: { opaque: { ownerEpoch: 7, capabilities: ["approve", "resume"] } },
     placements: ["current"],
     preload: getIMessageContractApi,
     beforeEach: prepareIMessageSessionBindingContract,
     ensureManager: ensureIMessageSessionBindingManager,
     stopManager: stopIMessageSessionBindingManager,
-    resetProcessMemory: async () => {
+    restartBindingManager: async () => {
       await stopIMessageSessionBindingManager();
-      currentConversationBindingTesting.resetCurrentConversationBindingsForTests();
+      closeOpenClawStateDatabaseForTest();
       await ensureIMessageSessionBindingManager();
     },
   }),

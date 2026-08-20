@@ -686,6 +686,48 @@ describe("task-registry", () => {
     });
   });
 
+  it("fills terminal lastEventAt from endedAt when a finalize omits the progress timestamp", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:terminal-timestamp",
+        runId: "run-terminal-timestamp",
+        task: "Finalize without a progress timestamp",
+        lastEventAt: 1_000,
+      });
+      finalizeSubagentTask(requireTaskByRunId("run-terminal-timestamp"), {
+        status: "succeeded",
+        endedAt: 2_000,
+      });
+      expectRecordFields(requireTaskByRunId("run-terminal-timestamp"), {
+        status: "succeeded",
+        endedAt: 2_000,
+        lastEventAt: 2_000,
+      });
+    });
+  });
+
+  it("keeps a newer terminal progress timestamp when endedAt trails it", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:monotonic-timestamp",
+        runId: "run-monotonic-timestamp",
+        task: "Preserve the newest activity timestamp",
+        lastEventAt: 3_000,
+      });
+      finalizeSubagentTask(requireTaskByRunId("run-monotonic-timestamp"), {
+        status: "failed",
+        endedAt: 2_000,
+      });
+      expectRecordFields(requireTaskByRunId("run-monotonic-timestamp"), {
+        status: "failed",
+        endedAt: 2_000,
+        lastEventAt: 3_000,
+      });
+    });
+  });
+
   it.each([
     {
       name: "persists an ACP producer timestamp across lifecycle projection and SQLite reload",

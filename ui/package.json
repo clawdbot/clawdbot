@@ -33,6 +33,7 @@
     "@openclaw/session-url-contract": "workspace:*",
     "@openclaw/uirouter": "0.1.1",
     "@openclaw/workboard-contract": "workspace:*",
+    "@panzoom/panzoom": "4.6.2",
     "@tanstack/lit-virtual": "3.13.36",
     "@tanstack/virtual-core": "3.17.7",
     "dompurify": "3.4.13",

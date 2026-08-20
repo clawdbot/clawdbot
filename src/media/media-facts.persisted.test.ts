@@ -76,6 +76,21 @@ describe("canonical persisted media", () => {
     );
   });
 
+  it("normalizes serialized sparse nulls without losing attachment positions", () => {
+    const media = readPersistedMediaFacts({
+      __openclaw: { media: [null, canonicalFact] },
+    });
+
+    expect(media).toHaveLength(2);
+    expect(media?.[0]).toMatchObject({
+      path: undefined,
+      contentType: undefined,
+      kind: undefined,
+      transcribed: false,
+    });
+    expect(media?.[1]).toMatchObject({ ...canonicalFact, kind: "image" });
+  });
+
   it("copies transcription and workspace metadata while preserving adjacent metadata", () => {
     const result = canonicalizePersistedUserMessageMedia({
       MediaPaths: ["/media/a.ogg", "/media/b.png"],

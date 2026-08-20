@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import * as device from "./device-provider.js";
 import {
   createPlacementFailureActions,
-  isUnavailableEnvironment,
   type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
@@ -14,12 +13,13 @@ import {
   createWorkerPlacementDispatchStartup,
   type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
-import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import {
   createWorkerPlacementMoveService,
   type WorkerPlacementMoveBarrier,
 } from "./placement-move-service.js";
+import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import { placementTurnOwner } from "./placement-record.js";
 import {
   completeMovedWorkspaceTeardown,
@@ -89,6 +89,7 @@ export type WorkerPlacementReclaimBarriers = {
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
+  runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runRecoveryBarrier: WorkerPlacementRecoveryBarrier;
   runActivationBarrier: WorkerActivationBarrier;
@@ -98,6 +99,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     target: WorkerPlacementMoveRequest["target"],
   ) => Promise<WorkerPlacementMoveDestination | undefined>;
   onActivated?: (request: WorkerPlacementDispatchRequest) => void;
+  onRecoveredMoveTransition?: (placement: WorkerDispatchPlacement) => void;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
@@ -609,41 +611,25 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     }
   };
 
+  const abandonment = createWorkerPlacementMoveAbandonment(options);
+
   const moveService = createWorkerPlacementMoveService({
     placements,
     environments,
     runMoveBarrier: options.runMoveBarrier,
     dispatch,
     reclaimSource: reclaimOnce,
+    validateAbandonSource: abandonment.validateAbandonSource,
+    abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
+    onRecoveredTransition: (placement) =>
+      reportTransition(options.onRecoveredMoveTransition, placement),
   });
   recoverPlacementMoves = moveService.recoverAll;
 
   return {
     dispatch,
-    forceDestroyEnvironment: (environmentId: string, onCleanupError?: (error: unknown) => void) =>
-      options.workspaceOperations.run(environmentId, async () => {
-        await forceAbandonWorkerEnvironment({
-          placements,
-          environmentId,
-          resolveWorkspacePath: options.resolveWorkspacePath,
-          onCleanupError,
-        });
-        try {
-          return await environments.destroy(environmentId);
-        } catch (error) {
-          const current = environments.get(environmentId);
-          if (!current || !isUnavailableEnvironment(current)) {
-            throw error;
-          }
-          try {
-            onCleanupError?.(error);
-          } catch {
-            // Reporting cannot overturn the durable placement/environment fences.
-          }
-          return current;
-        }
-      }),
+    forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
     move: moveService.move,
     reclaim,
     reconcile: recovery.reconcile,

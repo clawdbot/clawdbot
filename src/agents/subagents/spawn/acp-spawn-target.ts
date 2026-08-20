@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
-import { listAgentEntries } from "../../agent-scope-config.js";
+import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
 import { listAgentIds } from "../../agent-scope.js";
 
 type ResolvedAcpAgentTarget = {
@@ -41,9 +41,7 @@ export function resolveTargetAcpAgentId(params: {
   }
   const requested = normalizedRequest?.value;
   if (requested) {
-    const configuredAgent = listAgentEntries(params.cfg).find(
-      (agent) => normalizeOptionalAgentId(agent.id) === requested,
-    );
+    const configuredAgent = resolveAgentEntry(params.cfg, requested);
     if (configuredAgent?.runtime?.type === "acp") {
       return resolveAcpAgentTarget({
         cfg: params.cfg,
@@ -70,9 +68,7 @@ export function resolveTargetAcpAgentId(params: {
 
   const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (configuredDefault) {
-    const configuredAgent = listAgentEntries(params.cfg).find(
-      (agent) => normalizeOptionalAgentId(agent.id) === configuredDefault,
-    );
+    const configuredAgent = resolveAgentEntry(params.cfg, configuredDefault);
     return resolveAcpAgentTarget({
       cfg: params.cfg,
       agentId: configuredDefault,

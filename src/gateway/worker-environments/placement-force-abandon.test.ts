@@ -82,7 +82,7 @@ describe("forced worker environment abandonment", () => {
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
@@ -117,7 +117,7 @@ describe("forced worker environment abandonment", () => {
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });

@@ -95,7 +95,7 @@ async function createDeferredTaskRefresh(initialTasks: TaskSummary[]) {
       if (method !== "tasks.list" || !deferRefresh) {
         return Promise.resolve({ tasks: currentTasks });
       }
-      return params?.status ? active.promise : recent.promise;
+      return params?.status?.includes("completed") ? recent.promise : active.promise;
     },
   );
   const source = createGateway({ request } as unknown as GatewayBrowserClient);
@@ -164,12 +164,12 @@ afterEach(() => {
 });
 
 describe("TasksPage concurrent refresh events", () => {
-  it("keeps the later recent page's equally current running progress", async () => {
+  it("keeps the later recent snapshot when a task transitions to terminal", async () => {
     const initial = createTask("task-progress", "running", {
       toolUseCount: 2,
       progressSummary: "Preparing the concurrent task report",
     });
-    const recent = createTask("task-progress", "running", {
+    const recent = createTask("task-progress", "completed", {
       toolUseCount: 2,
       progressSummary: "Finishing the concurrent task report",
     });
@@ -178,7 +178,9 @@ describe("TasksPage concurrent refresh events", () => {
 
     const refreshCalls = refresh.request.mock.calls.slice(-2);
     expect(refreshCalls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
-    expect(refreshCalls[1]?.[1]).not.toHaveProperty("status");
+    expect(refreshCalls[1]?.[1]).toMatchObject({
+      status: ["completed", "failed", "timed_out", "cancelled"],
+    });
     refresh.active.resolve({ tasks: [initial] });
     refresh.recent.resolve({ tasks: [recent] });
     await pending;
@@ -335,10 +337,10 @@ describe("TasksPage active pagination", () => {
         },
       ) => {
         expect(method).toBe("tasks.list");
-        if (!params?.status) {
+        if (params?.status?.includes("completed")) {
           return Promise.resolve({ tasks: [createTask("task-recent", "completed")] });
         }
-        if (params.cursor === "active-page-2") {
+        if (params?.cursor === "active-page-2") {
           return Promise.resolve({
             tasks: [sharedPageTwo, createTask("task-page-2")],
           });
@@ -367,15 +369,26 @@ describe("TasksPage active pagination", () => {
       { signal: expect.any(AbortSignal) },
     );
     expect(
-      request.mock.calls.filter(([, params]) => !(params as { status?: unknown })?.status),
+      request.mock.calls.filter(([, params]) =>
+        (params as { status?: readonly string[] } | undefined)?.status?.includes("completed"),
+      ),
     ).toHaveLength(1);
+    expect(request).toHaveBeenCalledWith(
+      "tasks.list",
+      expect.objectContaining({
+        agentId: "writer",
+        limit: 200,
+        status: ["completed", "failed", "timed_out", "cancelled"],
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
     expect(page.tasks.filter((task) => task.id === "task-shared")).toEqual([sharedPageTwo]);
   });
 
   it("fails visibly when an active page repeats its cursor", async () => {
     let activeCalls = 0;
     const request = vi.fn((_method: string, params?: { status?: readonly string[] }) => {
-      if (!params?.status) {
+      if (!params?.status || params.status.length !== 2) {
         return Promise.resolve({ tasks: [] });
       }
       activeCalls += 1;
@@ -400,7 +413,7 @@ describe("TasksPage active pagination", () => {
     const finalPage = deferred<{ tasks: TaskSummary[] }>();
     const request = vi.fn(
       (_method: string, params?: { cursor?: string; status?: readonly string[] }) => {
-        if (!params?.status) {
+        if (!params?.status || params.status.includes("completed")) {
           return Promise.resolve({ tasks: [] });
         }
         if (params.cursor === "active-page-2") {
@@ -528,7 +541,11 @@ describe("TasksPage cancellation lifecycle", () => {
     );
     expect(request).toHaveBeenCalledWith(
       "tasks.list",
-      expect.objectContaining({ agentId: "writer", limit: 200 }),
+      expect.objectContaining({
+        agentId: "writer",
+        limit: 200,
+        status: ["completed", "failed", "timed_out", "cancelled"],
+      }),
       { signal: expect.any(AbortSignal) },
     );
   });

@@ -5,8 +5,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
@@ -1804,15 +1806,40 @@ describe("handleChatGatewayEvent", () => {
     {
       name: "keeps stream segments visible when an error ends after a tool event",
       create(): TerminalErrorFixture {
+        const partial = "Visible text before tool.";
         return {
           previous: [createTextChatMessage("user", "Ping", undefined, 1)],
           stream: null,
-          segments: [{ text: "Visible text before tool.", ts: 100 }],
+          segments: [{ text: partial, ts: 100, toolCallId: "call-before-error" }],
           error: "gateway disconnected",
           expected: [
             ["user", "Ping"],
-            ["assistant", "Visible text before tool."],
+            ["assistant", partial],
           ],
+          verify: (state) => {
+            const streamState = state as ChatState & {
+              chatStreamSegments: NonNullable<TerminalErrorFixture["segments"]>;
+            };
+            expect(streamState.chatStreamSegments).toEqual([]);
+            const rendered = buildChatItems({
+              paneId: "terminal-error-stream-owner",
+              sessionKey: state.sessionKey,
+              runId: state.chatRunId,
+              messages: state.chatMessages,
+              toolMessages: [],
+              streamSegments: streamState.chatStreamSegments,
+              stream: state.chatStream,
+              streamStartedAt: state.chatStreamStartedAt,
+              showToolCalls: true,
+            }).flatMap((item) =>
+              item.kind === "group"
+                ? item.messages.map(({ message }) => extractText(message))
+                : item.kind === "stream"
+                  ? [item.text.trim()]
+                  : [],
+            );
+            expect(rendered.filter((text) => text === partial)).toHaveLength(1);
+          },
         };
       },
     },
@@ -2755,6 +2782,30 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", content: [{ type: "text", text: "shared" }] },
     ]);
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
+  });
+
+  it("returns the original shared request revision to a later pane consumer", async () => {
+    const startup = createDeferred<HistoryResult>();
+    const request = vi.fn(() => startup.promise);
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 7 },
+    });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 8 },
+    });
+
+    const firstLoad = loadChatHistory(firstState, { startup: true });
+    const secondLoad = loadChatHistory(secondState, { startup: true });
+
+    expect(request).toHaveBeenCalledOnce();
+    startup.resolve(createAssistantHistory("shared revision"));
+    const [firstResult, secondResult] = await Promise.all([firstLoad, secondLoad]);
+
+    expect(firstResult).toMatchObject({ sourceCanonicalListRevision: 7 });
+    expect(secondResult).toMatchObject({ sourceCanonicalListRevision: 7 });
   });
 
   it("keeps startup requests separate for different pane sessions", async () => {
