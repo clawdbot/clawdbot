@@ -18,6 +18,7 @@ import {
   registerClaudeSessionDiscovery,
 } from "./session-catalog-registration.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
+import { MAX_CATALOG_JSON_FILE_BYTES } from "./session-catalog-scan.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
@@ -2638,6 +2639,39 @@ describe("Claude session catalog", () => {
       }),
     );
     expect(metadataReads()).toEqual(expect.arrayContaining([indexPath, desktopPath]));
+  });
+
+  it("does not buffer oversized catalog JSON files", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const indexPath = path.join(projectDir, "sessions-index.json");
+    const desktopPath = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code-sessions",
+      "account",
+      "workspace",
+      "local_oversized.json",
+    );
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      indexPath,
+      JSON.stringify({ version: 1, entries: [], padding: "x".repeat(MAX_CATALOG_JSON_FILE_BYTES) }),
+    );
+    await writeDesktopMetadata(home, "oversized", {
+      cliSessionId: "oversized-desktop-session",
+      title: "x".repeat(MAX_CATALOG_JSON_FILE_BYTES),
+    });
+    expect((await fs.stat(indexPath)).size).toBeGreaterThan(MAX_CATALOG_JSON_FILE_BYTES);
+    expect((await fs.stat(desktopPath)).size).toBeGreaterThan(MAX_CATALOG_JSON_FILE_BYTES);
+
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    expect(readFileSpy.mock.calls.map(([filePath]) => filePath)).not.toEqual(
+      expect.arrayContaining([indexPath, desktopPath]),
+    );
   });
 
   it("retries transient index reads without waiting for the file metadata to change", async () => {

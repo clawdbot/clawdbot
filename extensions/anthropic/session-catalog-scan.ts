@@ -12,6 +12,7 @@ export const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
 const CLAUDE_METADATA_WINDOW_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
+export const MAX_CATALOG_JSON_FILE_BYTES = 16 * 1024 * 1024;
 export const CLAUDE_CATALOG_IO_CONCURRENCY = 32;
 
 export async function readClaudeCatalogMetadata(
@@ -220,6 +221,10 @@ export async function readJsonFile(
     ));
   if (!stat) {
     catalogJsonCache.delete(filePath);
+    return undefined;
+  }
+  if (stat.size > MAX_CATALOG_JSON_FILE_BYTES) {
+    options.onIoFailure?.();
     return undefined;
   }
   const cached = catalogJsonCache.get(filePath);
