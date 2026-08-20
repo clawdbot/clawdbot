@@ -47,6 +47,11 @@ export function isConfigFormDecimalNumberString(value: string): boolean {
   return trimmed !== "" && CONFIG_FORM_DECIMAL_NUMBER_RE.test(trimmed);
 }
 
+export function isConfigFormUnsafeIntegerString(value: string): boolean {
+  const trimmed = value.trim();
+  return /^-?\d+$/u.test(trimmed) && !Number.isSafeInteger(Number(trimmed));
+}
+
 export function coerceConfigFormNumberString(
   value: string,
   integer: boolean,

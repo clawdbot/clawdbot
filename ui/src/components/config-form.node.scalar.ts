@@ -3,7 +3,6 @@ import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalizatio
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
-import { formatUnknownText } from "../lib/format.ts";
 import {
   isSupportedConfigValueValid,
   normalizeNumericValue,
@@ -11,6 +10,7 @@ import {
 } from "./config-form.constraints.ts";
 import {
   configEnumOptionLabel,
+  formatConfigValueText,
   getSensitiveRenderState,
   isSecretRefObject,
   jsonValue,
@@ -23,8 +23,8 @@ import {
 } from "./config-form.node.shared.ts";
 import {
   coerceConfigFormNumberString,
-  formatConfigFormNumber,
   isConfigFormDecimalNumberString,
+  isConfigFormUnsafeIntegerString,
 } from "./config-form.numeric.ts";
 import {
   beginScalarEdit,
@@ -59,10 +59,6 @@ function setControlValidity(target: HTMLInputElement, message: string): boolean 
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
   return !message;
-}
-
-function formatScalarInputValue(value: unknown): string {
-  return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
 function syncScalarInputIdentity(
@@ -163,11 +159,7 @@ function coerceTextInputValue(
       return numberCandidate;
     }
     if (isConfigFormDecimalNumberString(value)) {
-      return stringCandidateValid &&
-        /^-?\d+$/u.test(trimmed) &&
-        !Number.isSafeInteger(Number(trimmed))
-        ? value
-        : undefined;
+      return stringCandidateValid && isConfigFormUnsafeIntegerString(trimmed) ? value : undefined;
     }
   }
   if (currentBranch === "string" && stringCandidateValid) {
@@ -300,7 +292,7 @@ export function renderTextInput(
       : redactedPlaceholder()
     : (hint?.placeholder ??
       (schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatScalarInputValue(schema.default) })
+        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
         : ""));
   const displayValue = effectiveRedacted
     ? ""
@@ -318,7 +310,7 @@ export function renderTextInput(
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
   const controlPathKey = configFieldId(path, "scalar-identity");
-  const renderedValue = formatScalarInputValue(displayValue);
+  const renderedValue = formatConfigValueText(displayValue);
   const presentationIdentity = [
     effectiveRedacted ? "redacted" : "visible",
     effectiveInputType,
@@ -524,7 +516,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
   const controlPathKey = configFieldId(path, "scalar-identity");
-  const renderedValue = formatScalarInputValue(displayValue);
+  const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(
       target,
@@ -582,7 +574,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
       placeholder=${schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatScalarInputValue(schema.default) })
+        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
         : nothing}
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
@@ -616,7 +608,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           return;
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
-        target.value = formatConfigFormNumber(normalized);
+        target.value = formatConfigValueText(normalized);
         if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
           commitScalarValue(target, normalized);
         }
@@ -706,7 +698,7 @@ export function renderSelect(
         ?disabled=${params.isRequired && schema.default === undefined}
       >
         ${schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
           : t("configForm.select")}
       </option>
       ${canSelectNull
