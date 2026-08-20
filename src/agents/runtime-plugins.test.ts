@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  getCurrentPluginMetadataSnapshot: vi.fn(),
   getActivePluginRegistry: vi.fn(),
   getActivePluginRegistryWorkspaceDir: vi.fn(),
   getActivePluginRuntimeSubagentMode: vi.fn(),
@@ -31,6 +32,10 @@ vi.mock("../plugins/widget-presenters.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/loader.js", () => ({
@@ -76,6 +81,7 @@ describe("agent runtime plugin registries", () => {
         ...createMetadataSnapshot(params.workspaceDir),
         pluginIds: undefined,
       }));
+    hoisted.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
     hoisted.getActivePluginRegistry.mockReset().mockReturnValue(undefined);
     hoisted.getActivePluginRegistryWorkspaceDir.mockReset().mockReturnValue(undefined);
     hoisted.getActivePluginRuntimeSubagentMode.mockReset().mockReturnValue("default");
@@ -143,6 +149,7 @@ describe("agent runtime plugin registries", () => {
     };
     hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
+    hoisted.getCurrentPluginMetadataSnapshot.mockImplementation(() => metadataSnapshot);
     hoisted.loadPluginRegistryHandle.mockReturnValue(selectedRegistry);
     hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ basePluginIds }) => ({
       config,
@@ -167,9 +174,59 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["gateway-owned", "selected-provider"],
-        preferBuiltPluginArtifacts: true,
       }),
     );
+  });
+
+  it("refuses Gateway registry reuse for a non-current metadata generation", () => {
+    const config = {} as never;
+    const gatewayPlugin = {
+      id: "gateway-owned",
+      origin: "bundled",
+      rootDir: "/dist/extensions/gateway-owned",
+      source: "/dist/extensions/gateway-owned/index.js",
+      status: "loaded",
+    };
+    const activeRegistry = { plugins: [gatewayPlugin] };
+    const metadataSnapshot = {
+      ...createMetadataSnapshot("/tmp/default-workspace", undefined),
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "gateway-owned",
+            origin: "bundled",
+            rootDir: "/extensions/gateway-owned",
+            source: "/extensions/gateway-owned/index.ts",
+          },
+        ],
+      },
+    };
+    hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
+    // A different (older/leaked) generation is current: identity must fail closed.
+    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot("/tmp/default-workspace", undefined),
+    );
+    hoisted.loadPluginRegistryHandle.mockReturnValue({ plugins: [] });
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ basePluginIds }) => ({
+      config,
+      pluginIds: basePluginIds,
+    }));
+
+    const loadInboundRegistry = createPreparedInboundRegistryLoader();
+    const inbound = loadInboundRegistry(
+      {
+        agentDir: "/tmp/agent",
+        allowGatewaySubagentBinding: true,
+        config,
+        workspaceDir: "/tmp/default-workspace",
+      },
+      metadataSnapshot as never,
+    );
+
+    expect(inbound).not.toBe(activeRegistry);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalled();
   });
 
   it("keeps direct no-current loads on the requested workspace", () => {
@@ -206,7 +263,6 @@ describe("agent runtime plugin registries", () => {
       discovery: metadataSnapshot.discovery,
       installRecords: {},
       manifestRegistry: metadataSnapshot.manifestRegistry,
-      preferBuiltPluginArtifacts: true,
       workspaceDir: "/tmp/workspace",
       runtimeOptions: { allowGatewaySubagentBinding: true },
     });
@@ -332,7 +388,6 @@ describe("agent runtime plugin registries", () => {
       installRecords: {},
       manifestRegistry: snapshot.manifestRegistry,
       onlyPluginIds: ["codex", "memory-core"],
-      preferBuiltPluginArtifacts: true,
       runtimeOptions: undefined,
       workspaceDir: snapshot.workspaceDir,
     });

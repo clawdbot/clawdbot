@@ -1,6 +1,6 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -74,10 +74,15 @@ function resolveColdMetadataSnapshot(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
 ): PluginMetadataSnapshot {
-  const resolvedMetadataSnapshot = loadPluginMetadataSnapshot({
+  // Resolve (slot-probing) instead of load: in the gateway the published current
+  // generation satisfies this read, which keeps snapshot identity stable for the
+  // generation-bound registry reuse in the inbound loader.
+  const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.workspaceDir
+      ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
+      : {}),
     ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
       ? {
           pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
