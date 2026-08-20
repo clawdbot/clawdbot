@@ -1,13 +1,16 @@
-================ PR #89040 bootstrap-extra-files WARN operator-visibility proof ================
-head:            6461c4b6240e2bf6c90cff41337377d29e0efe83 (exact current HEAD)
+================ PR #89040 bootstrap default-visibility proof (extra-files warn + slow-bootstrap summary) ================
+head:            7c4a96ccba4efa1ce8dc4d28076a81aa5726de6a (exact current HEAD)
 node:            v26.5.0
 os/arch:         Darwin 24.3.0 arm64
 workspace:       <workspace> (temp, redacted)
-driven fn:       bootstrapExtraFilesHook (REAL default export) -> loadExtraBootstrapFilesWithDiagnostics
-logger:          REAL createSubsystemLogger('bootstrap-extra-files') (NOT mocked)
+logger:          REAL createSubsystemLogger (NOT mocked)
 console level:   info  (resolved default; NOT forced to debug)
 level gate:      warn=min4 >= console-floor info=min3 -> VISIBLE;  debug=min2 < info=min3 -> HIDDEN
+
+############################## PART A — extra-files resolution warn ##############################
+driven fn:       bootstrapExtraFilesHook (REAL default export) -> loadExtraBootstrapFilesWithDiagnostics
 fault inject:    node:fs/promises glob -> throw EACCES (same as handler.test.ts:167)
+also exercises:  workspace-extra-bootstrap-walker.ts non-ENOENT propagation -> loader io diagnostic
 
 -- CASE 1: injected io fault, DEFAULT compact style, DEFAULT info level --
    (what a fully-default operator terminal prints)
@@ -16,7 +19,7 @@ fault inject:    node:fs/promises glob -> throw EACCES (same as handler.test.ts:
 
 -- CASE 2: same injected io fault, JSON console style, DEFAULT info level --
    (structured operator line: message + failed count + reasons + paths + hint)
-   WARN VISIBLE >>> {"failed":1,"reasons":{"io":1,"security":0},"paths":["<workspace>/packages/*/AGENTS.md"],"hint":"check hook bootstrap paths, workspace containment, and file permissions","time":"2026-08-14T18:13:07.018+08:00","level":"warn","subsystem":"bootstrap-extra-files","message":"bootstrap extra-file resolution failed for 1 configured pattern(s)"}
+   WARN VISIBLE >>> {"failed":1,"reasons":{"io":1,"security":0},"paths":["<workspace>/packages/*/AGENTS.md"],"hint":"check hook bootstrap paths, workspace containment, and file permissions","time":"2026-08-20T08:27:23.643+08:00","level":"warn","subsystem":"bootstrap-extra-files","message":"bootstrap extra-file resolution failed for 1 configured pattern(s)"}
    parsed fields -> level=warn failed=1 reasons={io:1,security:0} paths=[<workspace>/packages/*/AGENTS.md] hint="check hook bootstrap paths, workspace containment, and file permissions"
 
 -- CASE 3: benign missing optional path, JSON style, DEFAULT info level --
@@ -26,18 +29,50 @@ fault inject:    node:fs/promises glob -> throw EACCES (same as handler.test.ts:
 
 -- CASE 4: CONTRAST ONLY (console level raised to debug, NOT the default) --
    (proves the benign diagnostic exists and is debug-only; hidden at info)
-   DEBUG (only visible at debug) >>> {"skipped":1,"reasons":{"missing":1},"time":"2026-08-14T18:13:07.020+08:00","level":"debug","subsystem":"bootstrap-extra-files","message":"skipped extra bootstrap candidates"}
+   DEBUG (only visible at debug) >>> {"skipped":1,"reasons":{"missing":1},"time":"2026-08-20T08:27:23.645+08:00","level":"debug","subsystem":"bootstrap-extra-files","message":"skipped extra bootstrap candidates"}
    warn lines even at debug level:  0 (expect 0 — never over-warns)
 
-PRE-FIX CONTRAST NOTE:
-   Before this fix the handler emitted these io/security faults at log.debug, so at
-   the default info console level (Case 1/2) the operator would have seen NOTHING —
-   a silent bootstrap-file drop. The visible warn lines above are the fix's effect.
+############################## PART B — slow bootstrap-context summary ##############################
+driven fn:       prepareEmbeddedAttemptBootstrap (REAL) -> resolveBootstrapFilesForRunWithTiming + buildBootstrapContextForFiles
+logger:          REAL createSubsystemLogger('agent/embedded') (NOT mocked)
+slow source:     REAL fs.glob over a large workspace; NO performance.now mock
+fixture:         36,300 dirs, 72,600 files, 600 nested AGENTS.md (build 3803ms)
+patterns:        **/AGENTS.md  **/__deep_scan_a__.md  **/__deep_scan_b__.md  **/__deep_scan_c__.md
+                 (1 real match pattern + broad globstar walks; a real multi-pattern operator config)
+threshold:       attempt-bootstrap-prepare.ts emits the substage breakdown at log.warn when totalMs > 2000
 
-fault warn visible at DEFAULT info level:      YES
-structured fields present (io/paths/hint):     YES
-faulted files kept OUT of bootstrap set:       YES
-benign skip stays silent at info (no over-warn): YES
-benign diagnostic exists as debug-only:        YES
-VERDICT:                                       PASS
-==============================================================================================
+-- CASE 5: genuinely slow assembly (>2000ms), DEFAULT compact style, DEFAULT info level --
+   (the changed log.warn; totalMs below is the PRODUCTION number the code measured, not a harness timer)
+   WARN VISIBLE >>> [agent/embedded] [trace:embedded-run] bootstrap-context substages: runId=proof-slow sessionId=proof-slow totalMs=4289.5 substages=workspace-setup-state:0.5ms,workspace-file-load:1.6ms,hook-overrides:4284.9ms,bootstrap-routing:0.5ms,context-build:0.3ms
+   parsed -> sink=warn totalMs=4289.5 substages=workspace-setup-state:0.5ms,workspace-file-load:1.6ms,hook-overrides:4284.9ms,bootstrap-routing:0.5ms,context-build:0.3ms
+   wall-clock around the real call:   4291.0ms
+   other console lines during run:    1
+     [warn] [internal-hooks] Slow hook handler [agent:bootstrap] index=0 durationMs=4282.9
+
+-- CASE 6: FAST CONTROL — tiny workspace, single cheap pattern, DEFAULT info level --
+   (assembly stays under 2000ms -> NO substage warn -> proves the warn is gated on real slowness)
+   wall-clock around the real call:   2.4ms
+   bootstrap-context substage warns:  0 (expect 0)
+   total console lines captured:      0
+
+PRE-FIX CONTRAST NOTE:
+   Both diagnostics previously used log.debug, so at the default info console level an operator
+   saw NOTHING — a silently dropped bootstrap file (PART A) and a multi-second bootstrap-context
+   stall with no trace (PART B). The visible warn lines above are this PR's effect.
+
+-- PART A (extra-files resolution warn) --
+  fault warn visible at DEFAULT info level:        YES
+  structured fields present (io/paths/hint):       YES
+  faulted files kept OUT of bootstrap set:         YES
+  benign skip stays silent at info (no over-warn): YES
+  benign diagnostic exists as debug-only:          YES
+  PART A:                                          PASS
+-- PART B (slow bootstrap-context summary warn) --
+  real assembly exceeded 2000ms (production totalMs): YES (4289.5ms)
+  substage breakdown warn visible at DEFAULT info:    YES
+  breakdown names substages incl. hook-overrides:     YES
+  fast run (<2s) stays silent (gated on slowness):    YES
+  PART B:                                             PASS
+
+VERDICT:                                             PASS
+==================================================================================================
