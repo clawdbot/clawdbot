@@ -15,5 +15,12 @@ export const TAILSCALE_FUNNEL_PORTS: readonly number[] = [443, 8443, 10_000];
  * authority without it points at whatever else owns 443 on the host.
  */
 export function formatTailscaleAuthority(host: string, port?: number): string {
-  return port === undefined || port === TAILSCALE_DEFAULT_ROUTE_PORT ? host : `${host}:${port}`;
+  // The host resolver falls back to `TailscaleIPs`, which can yield an IPv6
+  // literal. Those must be bracketed in a URL authority: `fd7a::1:8443` parses
+  // as a longer address rather than host plus port, and a bare `fd7a::1` is not
+  // a valid authority either, so bracket regardless of the port.
+  const authorityHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return port === undefined || port === TAILSCALE_DEFAULT_ROUTE_PORT
+    ? authorityHost
+    : `${authorityHost}:${port}`;
 }
