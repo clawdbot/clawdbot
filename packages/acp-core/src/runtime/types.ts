@@ -210,6 +210,8 @@ export type AcpRuntimeTurnResult =
 
 export interface AcpRuntimeTurn {
   readonly requestId: string;
+  /** Resolves when the backend has submitted this prompt; older third-party runtimes may omit it. */
+  readonly promptStarted?: Promise<void>;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
   /** Requests backend cancellation while keeping result/error reporting adapter-owned. */

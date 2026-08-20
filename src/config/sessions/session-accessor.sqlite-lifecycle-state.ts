@@ -25,7 +25,7 @@ import {
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
-  readExactSessionEntryJsonForCanonicalRepair,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -54,7 +54,7 @@ export function shouldRemoveSessionEntry(
   }
   if (
     removal.expectedEntry !== undefined &&
-    JSON.stringify(entry) !== JSON.stringify(removal.expectedEntry)
+    !sqliteSessionEntriesEqual(entry, removal.expectedEntry)
   ) {
     return false;
   }
@@ -328,7 +328,7 @@ export async function projectSessionEntryLifecycleMutation(
     const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
     let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
     if (removal.expectedRawEntryJson !== undefined) {
-      const currentRawEntryJson = readExactSessionEntryJsonForCanonicalRepair(database, sessionKey);
+      const currentRawEntryJson = readExactSessionEntryJson(database, sessionKey);
       if (currentRawEntryJson !== removal.expectedRawEntryJson) {
         throw new Error(
           `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,

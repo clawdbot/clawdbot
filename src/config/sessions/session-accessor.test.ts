@@ -76,6 +76,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   appendTranscriptEventSync,
@@ -2498,6 +2499,35 @@ describe("session accessor seam", () => {
       message: expect.stringContaining("changed before replacement"),
     });
     expect(loadSessionEntry(scope)).toMatchObject({ model: "newer", updatedAt: 20 });
+  });
+
+  it("replaces a status-selected entry whose participants are projected only inside the transaction", async () => {
+    const scope = { sessionKey: "agent:main:participant-replacement", storePath };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "participant-replacement",
+      status: "running",
+      updatedAt: 10,
+    });
+    // No owner or createdActor, so this participant survives owner filtering and the
+    // transaction-side read hydrates fields the status-selected snapshot never sees.
+    recordSessionParticipant(scope, {
+      actor: { id: "8167215807", type: "human" },
+      source: "channel",
+    });
+
+    await applySessionEntryReplacements({
+      statuses: ["running"],
+      storePath,
+      update: (entries) => ({
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          entry: { ...entry, abortedLastRun: true },
+          sessionKey,
+        })),
+        result: undefined,
+      }),
+    });
+
+    expect(loadSessionEntry(scope)).toMatchObject({ abortedLastRun: true });
   });
 
   it("awaits lifecycle builders outside transactions while keeping their commit indivisible", async () => {

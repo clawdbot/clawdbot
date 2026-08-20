@@ -6394,6 +6394,9 @@ export const en: TranslationMap = {
       schedule: "Schedule",
       lastRun: "Last run",
       all: "All",
+      condition: "Condition",
+      conditional: "Conditional",
+      unconditional: "Unconditional",
       sort: "Sort",
       nextRun: "Next run",
       recentlyUpdated: "Recently updated",
@@ -6506,7 +6509,20 @@ export const en: TranslationMap = {
       toHelp: "Optional recipient override (chat id, phone, or user id).",
       advanced: "Advanced",
       advancedHelp:
-        "Optional overrides for delivery guarantees, schedule jitter, and model controls.",
+        "Optional condition checks, delivery guarantees, schedule jitter, and model controls.",
+      conditionTrigger: "Condition trigger",
+      conditionTriggerHelp:
+        "Run a quiet headless check before the task and call the model only when it matches.",
+      triggerConfigured: "Trigger configured",
+      triggerScript: "Trigger script",
+      triggerScriptHelp:
+        "Runs unattended with this automation's tool policy. Return json({ fire, message?, state? }); limits: 30 seconds, 5 tool calls, 16 KB state.",
+      triggerOnce: "Disable after first match",
+      triggerOnceHelp: "Disable this automation after the first successful fired task.",
+      triggerDisabled: "Condition triggers are disabled by cron.triggers.enabled.",
+      triggerDisabledConfigured:
+        "Condition triggers are disabled. Existing configuration is preserved until you clear it.",
+      clearTrigger: "Clear trigger",
       startEnabled: "Start enabled",
       deleteAfterRun: "Delete after run",
       deleteAfterRunHelp: "Best for one-shot reminders that should auto-clean up.",
@@ -6578,6 +6594,9 @@ export const en: TranslationMap = {
       everyAmountInvalid: "Interval must be greater than 0.",
       cronExprRequired: "Cron expression is required.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
+      triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
+      triggerScheduleUnsupported:
+        "Condition triggers require an interval, cron, or stream schedule.",
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be greater than 0 seconds.",

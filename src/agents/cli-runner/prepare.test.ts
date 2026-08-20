@@ -252,6 +252,37 @@ type CliContextBudgetTestCase = {
 describe("prepareCliRunContext", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
 
+  it.each(["high", "off"] as const)(
+    "passes %s thinking through the CLI backend execution seam",
+    async (thinkLevel) => {
+      const prepareExecution = vi.fn(async () => undefined);
+      setCliBackendForPrepareTest({ prepareExecution });
+
+      await fixture.prepare({ provider: "claude-cli", thinkLevel });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ thinkingLevel: thinkLevel }),
+      );
+    },
+  );
+
+  it("uses the prepared model context budget before discovery cache settlement", async () => {
+    const prepareExecution = vi.fn(async () => undefined);
+    setCliBackendForPrepareTest({ prepareExecution });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      modelContextWindow: 400_000,
+      modelContextTokens: 321_000,
+    });
+
+    expect(context.contextWindowInfo?.tokens).toBe(321_000);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokenBudget: 321_000 }),
+    );
+  });
+
   it.each<CliContextBudgetTestCase>([
     {
       name: "a Claude CLI user alias",
@@ -3077,6 +3108,7 @@ describe("prepareCliRunContext", () => {
     const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
     const activateMcpLoopbackClientGrantCapture = vi.fn(() => true);
     const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
+    const transferMcpLoopbackClientGrant = vi.fn(() => true);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
@@ -3097,6 +3129,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig,
       activateMcpLoopbackClientGrantCapture,
       deactivateMcpLoopbackClientGrantCapture,
+      transferMcpLoopbackClientGrant,
       mintMcpLoopbackClientGrant,
       revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
@@ -3234,18 +3267,27 @@ describe("prepareCliRunContext", () => {
         store: expect.objectContaining({ version: 1, profiles: {} }),
       },
     });
+    expect(context.preparedBackend.mcpClientGrantCapture?.transportToken).toBe("loopback-token");
+    context.preparedBackend.mcpClientGrantCapture?.adoptProcessToken("stable-loopback-token");
     context.preparedBackend.mcpClientGrantCapture?.activate("capture-test");
     context.preparedBackend.mcpClientGrantCapture?.deactivate("capture-test");
+    expect(transferMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith({
+      sourceToken: "loopback-token",
+      targetToken: "stable-loopback-token",
+      runtimeOwnerToken: "loopback-owner-token",
+    });
     expect(activateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-      token: "loopback-token",
+      token: "stable-loopback-token",
       runtimeOwnerToken: "loopback-owner-token",
       captureKey: "capture-test",
     });
     expect(deactivateMcpLoopbackClientGrantCapture).toHaveBeenCalledExactlyOnceWith({
-      token: "loopback-token",
+      token: "stable-loopback-token",
       runtimeOwnerToken: "loopback-owner-token",
       captureKey: "capture-test",
     });
+    context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
     expect(context.mcpDeliveryCapture).toBe(true);
     expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3290,7 +3332,8 @@ describe("prepareCliRunContext", () => {
     );
     expect(context.systemPrompt).not.toContain("current source is default target");
     await context.preparedBackend.cleanup?.();
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith("loopback-token");
   });
 
   it("enables gateway delivery capture for Claude-style JSONL bundle MCP", async () => {

@@ -29,6 +29,7 @@ import {
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -361,6 +362,7 @@ type IMessageInboundDispatchDecision = {
   sender: string;
   senderNormalized: string;
   route: ReturnType<typeof resolveAgentRoute>;
+  bindingResolution?: ConfiguredBindingRouteResult["bindingResolution"];
   bodyText: string;
   agentBodyText?: string;
   createdAt?: number;
@@ -540,7 +542,7 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromForAccess = isGroup
     ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
-  const route = resolveIMessageConversationRoute({
+  const { route, bindingResolution } = resolveIMessageConversationRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     isGroup,
@@ -879,6 +881,7 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     senderNormalized,
     route,
+    bindingResolution,
     bodyText,
     createdAt,
     replyContext: filteredReplyContext,

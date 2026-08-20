@@ -1288,7 +1288,7 @@ describe("cron controller", () => {
     ).toBe("last");
   });
 
-  it("includes model/thinking/stagger/bestEffort in cron.update patch", async () => {
+  it("includes trigger/model/thinking/stagger/bestEffort in cron.update patch", async () => {
     const { submit } = createCronSubmitHarness("job-2", {
       method: "cron.update",
       form: {
@@ -1297,6 +1297,9 @@ describe("cron controller", () => {
         cronExpr: "0 9 * * *",
         staggerAmount: "30",
         staggerUnit: "seconds",
+        triggerEnabled: true,
+        triggerScript: "json({ fire: true })",
+        triggerOnce: true,
         payloadKind: "agentTurn",
         payloadText: "run it",
         payloadModel: "opus",
@@ -1314,6 +1317,7 @@ describe("cron controller", () => {
     const patch = requestPatch(call);
     expectRecordFields(patch, {
       schedule: { kind: "cron", expr: "0 9 * * *", staggerMs: 30_000 },
+      trigger: { script: "json({ fire: true })", once: true },
       payload: {
         kind: "agentTurn",
         message: "run it",
@@ -1325,6 +1329,20 @@ describe("cron controller", () => {
       mode: "announce",
       bestEffort: true,
     });
+  });
+
+  it("clears an existing condition trigger from cron.update", async () => {
+    const job = createCronJob({
+      id: "job-clear-trigger",
+      name: "Conditional job",
+      trigger: { script: "json({ fire: true })", once: true },
+    });
+    const { state, submit } = createCronEditHarness(job);
+    state.cronForm.triggerEnabled = false;
+
+    const call = await submit();
+
+    expect(requestPatch(call).trigger).toBeNull();
   });
 
   it("sends lightContext=false in cron.update when clearing prior light-context setting", async () => {
@@ -1564,13 +1582,14 @@ describe("cron controller", () => {
     expect(requestPatch(call).failureAlert).toBe(false);
   });
 
-  it("maps cron stagger, model, thinking, and best effort into form", () => {
+  it("maps cron trigger, stagger, model, thinking, and best effort into form", () => {
     const state = createState();
     const job = createCronJob({
       id: "job-10",
       name: "Advanced job",
       deleteAfterRun: true,
       schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC", staggerMs: 60_000 },
+      trigger: { script: "json({ fire: true })", once: true },
       wakeMode: "now",
       payload: {
         kind: "agentTurn",
@@ -1587,6 +1606,9 @@ describe("cron controller", () => {
     expect(state.cronForm.scheduleExact).toBe(false);
     expect(state.cronForm.staggerAmount).toBe("1");
     expect(state.cronForm.staggerUnit).toBe("minutes");
+    expect(state.cronForm.triggerEnabled).toBe(true);
+    expect(state.cronForm.triggerScript).toBe("json({ fire: true })");
+    expect(state.cronForm.triggerOnce).toBe(true);
     expect(state.cronForm.payloadModel).toBe("opus");
     expect(state.cronForm.payloadThinking).toBe("high");
     expect(state.cronForm.deliveryBestEffort).toBe(true);
@@ -1627,12 +1649,15 @@ describe("cron controller", () => {
       payloadKind: "agentTurn",
       payloadText: "",
       timeoutSeconds: "-1",
+      triggerEnabled: true,
+      triggerScript: "",
       deliveryMode: "webhook",
       deliveryTo: "ftp://bad",
     });
     expect(errors.name).toBe("cron.errors.nameRequired");
     expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
+    expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
@@ -1892,6 +1917,7 @@ describe("cron controller", () => {
           includeDeliveryPreviews: false,
           scheduleKind: "cron",
           lastRunStatus: "error",
+          trigger: "conditional",
           sortBy: "updatedAtMs",
           sortDir: "desc",
         });
@@ -1920,6 +1946,7 @@ describe("cron controller", () => {
       cronJobsEnabledFilter: "enabled",
       cronJobsScheduleKindFilter: "cron",
       cronJobsLastStatusFilter: "error",
+      cronJobsTriggerFilter: "conditional",
       cronJobsSortBy: "updatedAtMs",
       cronJobsSortDir: "desc",
     });
@@ -2037,6 +2064,7 @@ describe("cron controller", () => {
         const listPayload = requireRecord(payload, "cron.list payload");
         expect(listPayload).not.toHaveProperty("scheduleKind");
         expect(listPayload).not.toHaveProperty("lastRunStatus");
+        expect(listPayload).not.toHaveProperty("trigger");
         return emptyCronListResponse();
       }
       return {};
@@ -2053,6 +2081,7 @@ describe("cron controller", () => {
       expect.not.objectContaining({
         scheduleKind: expect.anything(),
         lastRunStatus: expect.anything(),
+        trigger: expect.anything(),
       }),
     );
   });
@@ -2139,6 +2168,7 @@ describe("cron controller", () => {
     const pendingPayload = requireRecord(payloads[1], "latest pending cron.list payload");
     expect(pendingPayload).not.toHaveProperty("scheduleKind");
     expect(pendingPayload).not.toHaveProperty("lastRunStatus");
+    expect(pendingPayload).not.toHaveProperty("trigger");
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.cronJobsReloadPending).toBe(false);
     expect(state.cronJobsReloadPendingTableFilters).toBe(false);

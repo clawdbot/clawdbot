@@ -4254,9 +4254,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   gap: var(--sidebar-row-gap);
 }
 
+/* Basis 0 mirrors the two-line subtitle contract: the title absorbs all
+   shrink, so the icon endcap keeps its intrinsic width until it alone
+   exceeds the row. Basis auto let long titles crush the endcap to ~0. */
 .sidebar-recent-session--single-line .sidebar-recent-session__name {
   width: auto;
-  flex: 1 1 auto;
+  flex: 1 1 0;
 }
 
 .sidebar-recent-session--single-line > .sidebar-recent-session__aside {

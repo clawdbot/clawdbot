@@ -17,6 +17,7 @@ import type {
   CronStatus,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
+  CronJobsTriggerFilter,
   CronRunsStatusValue,
   CronJobsSortBy,
   CronSortDir,
@@ -71,6 +72,7 @@ type CronProps = {
   loading: boolean;
   /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
+  triggersEnabled: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   failingCount: number | null;
@@ -84,6 +86,7 @@ type CronProps = {
   jobsEnabledFilter: CronJobsEnabledFilter;
   jobsScheduleKindFilter: CronJobsScheduleKindFilter;
   jobsLastStatusFilter: CronJobsLastStatusFilter;
+  jobsTriggerFilter: CronJobsTriggerFilter;
   jobsSortBy: CronJobsSortBy;
   jobsSortDir: CronSortDir;
   error: string | null;
@@ -131,6 +134,7 @@ type CronProps = {
     cronJobsEnabledFilter?: CronJobsEnabledFilter;
     cronJobsScheduleKindFilter?: CronJobsScheduleKindFilter;
     cronJobsLastStatusFilter?: CronJobsLastStatusFilter;
+    cronJobsTriggerFilter?: CronJobsTriggerFilter;
     cronJobsSortBy?: CronJobsSortBy;
     cronJobsSortDir?: CronSortDir;
   }) => void | Promise<void>;
@@ -184,6 +188,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
   staggerAmount: "cron.form.staggerWindow",
+  triggerScript: "cron.form.triggerScript",
   payloadText: "cron.form.assistantTaskPrompt",
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",
@@ -447,6 +452,7 @@ function renderListView(props: CronProps) {
   const hasAdvancedJobsFilters =
     props.jobsScheduleKindFilter !== "all" ||
     props.jobsLastStatusFilter !== "all" ||
+    props.jobsTriggerFilter !== "all" ||
     props.jobsSortBy !== "nextRunAtMs" ||
     props.jobsSortDir !== "asc";
   const hasAnyJobsFilters =
@@ -659,6 +665,16 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
             { value: "unknown", label: t("cron.runs.runStatusUnknown") },
           ],
         })}
+        ${renderJobsFilter(props, "cronJobsTriggerFilter", {
+          label: t("cron.jobs.condition"),
+          value: props.jobsTriggerFilter,
+          testId: "cron-jobs-trigger-filter",
+          options: [
+            { value: "all", label: t("cron.jobs.all") },
+            { value: "conditional", label: t("cron.jobs.conditional") },
+            { value: "unconditional", label: t("cron.jobs.unconditional") },
+          ],
+        })}
         ${renderJobsFilter(props, "cronJobsSortBy", {
           label: t("cron.jobs.sort"),
           value: props.jobsSortBy,
@@ -763,6 +779,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
               >
             `
           : nothing}
+        ${job.trigger ? renderTriggerIndicator() : nothing}
         ${job.enabled ? nothing : renderDisabledNote(job)}
       </span>
       <span class="cron-table__cell">${formatCronSchedule(job)}</span>
@@ -802,6 +819,13 @@ function renderJobRow(job: CronJob, props: CronProps) {
       </span>
     </div>
   `;
+}
+
+function renderTriggerIndicator() {
+  const label = t("cron.form.triggerConfigured");
+  return html`<span class="cron-trigger-icon" role="img" aria-label=${label} title=${label}
+    >${icon("gitBranch")}</span
+  >`;
 }
 
 /** Auto-disabled is the escalated failure state, not an operator pause: the
@@ -1003,6 +1027,7 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
             ? renderEnabledSwitch(props, selectedJob)
             : nothing}
           <span class="cron-detail-sub">${subtitle}</span>
+          ${selectedJob?.trigger ? renderTriggerIndicator() : nothing}
         </div>
       </div>
       <div class="cron-detail-actions">
@@ -1570,9 +1595,15 @@ function renderAdvanced(
       <details class="cron-advanced">
         <summary class="settings-section__heading cron-advanced__summary">
           ${t("cron.form.advanced")}
+          ${props.form.triggerEnabled
+            ? html`<span class="cron-trigger-summary">
+                ${icon("gitBranch")} ${t("cron.form.triggerConfigured")}
+              </span>`
+            : nothing}
         </summary>
         <p class="settings-section__desc">${t("cron.form.advancedHelp")}</p>
         <div class="settings-group">
+          ${renderTriggerRows(props)}
           ${renderCronInputField(props, "description", {
             label: t("cron.form.description"),
             placeholder: t("cron.form.descriptionPlaceholder"),
@@ -1693,6 +1724,67 @@ function renderAdvanced(
         </div>
       </details>
     </section>
+  `;
+}
+
+function renderTriggerRows(props: CronProps) {
+  if (!props.triggersEnabled) {
+    return renderSettingsRow({
+      title: t("cron.form.conditionTrigger"),
+      description: props.form.triggerEnabled
+        ? t("cron.form.triggerDisabledConfigured")
+        : t("cron.form.triggerDisabled"),
+      control: props.form.triggerEnabled
+        ? html`<button
+            type="button"
+            class="btn btn--sm"
+            @click=${() => props.onFormChange({ triggerEnabled: false })}
+          >
+            ${t("cron.form.clearTrigger")}
+          </button>`
+        : nothing,
+    });
+  }
+  return html`
+    ${renderToggleRow(props, "triggerEnabled", {
+      label: t("cron.form.conditionTrigger"),
+      help: t("cron.form.conditionTriggerHelp"),
+    })}
+    ${props.form.triggerEnabled
+      ? html`
+          ${renderFieldRow({
+            label: t("cron.form.triggerScript"),
+            controlId: "cron-trigger-script",
+            required: true,
+            help: t("cron.form.triggerScriptHelp"),
+            error: props.fieldErrors.triggerScript,
+            errorId: errorIdForField("triggerScript"),
+            stacked: true,
+            wide: true,
+            control: html`<textarea
+              id="cron-trigger-script"
+              class="settings-input cron-trigger-script mono"
+              rows="8"
+              spellcheck="false"
+              aria-invalid=${props.fieldErrors.triggerScript ? "true" : "false"}
+              aria-describedby=${ifDefined(
+                props.fieldErrors.triggerScript ? errorIdForField("triggerScript") : undefined,
+              )}
+              .value=${props.form.triggerScript}
+              @input=${(event: Event) => {
+                const target = event.currentTarget;
+                if (target instanceof HTMLTextAreaElement) {
+                  props.onFormChange({ triggerScript: target.value });
+                }
+              }}
+            ></textarea>`,
+          })}
+          ${renderToggleRow(props, "triggerOnce", {
+            label: t("cron.form.triggerOnce"),
+            help: t("cron.form.triggerOnceHelp"),
+          })}
+        `
+      : nothing}
   `;
 }
 

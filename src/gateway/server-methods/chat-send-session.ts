@@ -99,6 +99,7 @@ function loadChatSendSessionContext(params: {
       legacyKey,
       sessionRoutingChanged,
       expectedLeafEntryId,
+      agentIdOverride,
       requestedAgentId,
     },
   };
@@ -117,7 +118,7 @@ export function prepareChatSendSession(params: {
   const loadedValue = loaded.value;
   const { request, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
-  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, requestedAgentId } = loadedValue;
+  const { cfg, sessionKey, entry, legacyKey, rawSessionKey, agentIdOverride } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }
@@ -129,7 +130,7 @@ export function prepareChatSendSession(params: {
   const selectedAgent = validateChatSelectedAgent({
     cfg,
     requestedSessionKey: rawSessionKey,
-    agentId: requestedAgentId,
+    explicitAgentId: agentIdOverride,
   });
   if (!selectedAgent.ok) {
     return { ok: false as const, error: selectedAgent.error };

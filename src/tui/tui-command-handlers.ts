@@ -680,11 +680,33 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         "reasoning failed",
       );
     },
-    usage: async (args) => {
+    usage: async (args, raw) => {
+      if (args.toLowerCase() === "cost") {
+        if (!opts.local) {
+          await sendMessage(raw);
+          return;
+        }
+        if (!client.runUsageCostCommand) {
+          addUnsupportedLocalCommand("usage cost");
+          return;
+        }
+        const selection = captureSessionSelection();
+        try {
+          const result = await client.runUsageCostCommand(selection);
+          if (isCurrentSessionSelection(selection)) {
+            chatLog.addSystem(result.text);
+          }
+        } catch (err) {
+          if (isCurrentSessionSelection(selection)) {
+            chatLog.addSystem(`usage cost failed: ${formatTuiErrorMessage(err)}`);
+          }
+        }
+        return;
+      }
       const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
       const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
       if (args && !normalized && !isReset) {
-        chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
+        chatLog.addSystem("usage: /usage <off|tokens|full|cost|reset>");
         return;
       }
       if (isReset) {

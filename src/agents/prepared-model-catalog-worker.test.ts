@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
@@ -55,6 +55,7 @@ describe("prepared model catalog worker input", () => {
         providerIds: ["configured"],
         configuredModelRefs: [],
         configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
         configuredGeneratedCatalogPluginIds: [],
         templateAuthStorage: {} as never,
       } satisfies PreparedModelRuntimeAgentFacts,

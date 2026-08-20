@@ -192,8 +192,16 @@ type Workflow = {
   };
 };
 
+const parsedWorkflows = new Map<string, Workflow>();
+
 function readWorkflow(path: string): Workflow {
-  return parse(readFileSync(path, "utf8")) as Workflow;
+  const cachedWorkflow = parsedWorkflows.get(path);
+  if (cachedWorkflow) {
+    return cachedWorkflow;
+  }
+  const workflow = parse(readFileSync(path, "utf8")) as Workflow;
+  parsedWorkflows.set(path, workflow);
+  return workflow;
 }
 
 function workflowPaths(): string[] {

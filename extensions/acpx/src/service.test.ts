@@ -721,6 +721,7 @@ describe("createAcpxRuntimeService", () => {
     const ctx = createServiceContext(workspaceDir);
     const startTurn = vi.fn((input: { requestId: string }) => ({
       requestId: input.requestId,
+      promptStarted: Promise.resolve(),
       events: (async function* () {
         yield {
           type: "text_delta" as const,
@@ -760,6 +761,7 @@ describe("createAcpxRuntimeService", () => {
         mode: string;
         requestId: string;
       }): {
+        promptStarted: Promise<void>;
         events: AsyncIterable<unknown>;
         result: Promise<unknown>;
       };
@@ -774,6 +776,7 @@ describe("createAcpxRuntimeService", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    await expect(turn.promptStarted).resolves.toBeUndefined();
     await expect(turn.result).resolves.toEqual({
       status: "completed",
       stopReason: "end_turn",

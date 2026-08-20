@@ -496,6 +496,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled?: "all" | "enabled" | "disabled";
       scheduleKind?: "all" | "at" | "every" | "cron";
       lastRunStatus?: "all" | "ok" | "error" | "skipped" | "unknown";
+      trigger?: "all" | "conditional" | "unconditional";
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
@@ -516,6 +517,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled: p.enabled,
       scheduleKind: p.scheduleKind,
       lastRunStatus: p.lastRunStatus,
+      trigger: p.trigger,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
       agentId: callerScope?.agentId ?? p.agentId,
