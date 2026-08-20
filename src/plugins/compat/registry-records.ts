@@ -12,7 +12,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
-    code: "memory-read-result-missing-sentinel",
+    code: "memory-read-result-statusless-success",
     status: "deprecated",
     owner: "sdk",
     introduced: "2026-04-28",
@@ -21,11 +21,11 @@ export const PLUGIN_COMPAT_RECORDS = [
     removalGate: "next-plugin-sdk-major",
     replacement: '`MemoryReadResult` with explicit `status: "ok" | "not_found"`',
     docsPath: "/plugins/sdk-migration#memory-read-missing-results",
-    surfaces: ['external memory manager `{ text: "", path }` missing-file results'],
+    surfaces: ["statusless external memory manager read results"],
     diagnostics: ["host memory-manager acquisition adapter"],
     tests: ["src/plugins/memory-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "External memory managers should return explicit ok/not-found statuses; the host temporarily normalizes pre-status registered inputs.",
+      "External memory managers must return explicit not-found status for absence; statusless results retain legacy successful-read semantics through the next Plugin SDK major.",
   },
   {
     code: "context-engine-legacy-host-param-default",

@@ -235,7 +235,7 @@ describe("memory runtime handles", () => {
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
-  it("normalizes legacy missing reads once while preserving manager lifecycle", async () => {
+  it("preserves statusless reads as successful while preserving manager lifecycle", async () => {
     const canonicalEmpty = {
       status: "ok",
       text: "",
@@ -262,14 +262,18 @@ describe("memory runtime handles", () => {
       }): Promise<LegacyMemoryReadResult | MemoryReadResult> {
         this.#readCalls += 1;
         switch (relPath) {
-          case "memory/legacy-empty.md":
+          case "memory/legacy-bare-empty.md":
+            return { text: "", path: relPath };
+          case "memory/legacy-ranged-empty.md":
             return { text: "", path: relPath, from: 1, lines: 0 };
+          case "memory/legacy-nonempty.md":
+            return { text: "legacy", path: relPath };
           case canonicalEmpty.path:
             return canonicalEmpty;
           case canonicalMissing.path:
             return canonicalMissing;
           default:
-            return { text: "", path: relPath };
+            throw new Error(`unexpected read path: ${relPath}`);
         }
       }
 
@@ -313,17 +317,28 @@ describe("memory runtime handles", () => {
     expect(Reflect.get(second.manager ?? {}, "readFile")).toBe(
       Reflect.get(first.manager ?? {}, "readFile"),
     );
-    await expect(first.manager?.readFile({ relPath: "memory/missing.md" })).resolves.toEqual({
-      status: "not_found",
-      text: "",
-      path: "memory/missing.md",
-    });
-    await expect(first.manager?.readFile({ relPath: "memory/legacy-empty.md" })).resolves.toEqual({
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-bare-empty.md" }),
+    ).resolves.toEqual({
       status: "ok",
       text: "",
-      path: "memory/legacy-empty.md",
+      path: "memory/legacy-bare-empty.md",
+    });
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-ranged-empty.md" }),
+    ).resolves.toEqual({
+      status: "ok",
+      text: "",
+      path: "memory/legacy-ranged-empty.md",
       from: 1,
       lines: 0,
+    });
+    await expect(
+      first.manager?.readFile({ relPath: "memory/legacy-nonempty.md" }),
+    ).resolves.toEqual({
+      status: "ok",
+      text: "legacy",
+      path: "memory/legacy-nonempty.md",
     });
     await expect(first.manager?.readFile({ relPath: canonicalEmpty.path })).resolves.toBe(
       canonicalEmpty,
@@ -333,7 +348,7 @@ describe("memory runtime handles", () => {
     );
     await first.manager?.close?.();
     expect(manager.isClosed()).toBe(true);
-    expect(manager.readCalls()).toBe(4);
+    expect(manager.readCalls()).toBe(5);
   });
 
   it("authorizes raw hits inside the selected plugin runtime scope", async () => {

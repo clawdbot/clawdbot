@@ -90,10 +90,12 @@ Memory managers now return `status: "ok"` for successful excerpts and
 and empty ranges distinct from missing files without relying on pagination
 metadata.
 
-At registration, the host normalizes pre-status results returned by older
-external memory managers, including the legacy `{ text: "", path }` missing
-sentinel. New producers should emit the explicit status; registered-input
-normalization remains available through the next Plugin SDK major.
+At registration, every statusless result from an older external memory manager
+preserves its legacy successful-read semantics and becomes `status: "ok"`,
+including empty results without range metadata. Only an explicit
+`status: "not_found"` reports absence. New producers must emit that status for
+missing files; registered-input normalization remains available through the
+next Plugin SDK major.
 
 ### Channel state migration declarations
 

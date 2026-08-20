@@ -42,13 +42,7 @@ function normalizeRegisteredMemoryReadResult(
   if (result.status === "ok" || result.status === "not_found") {
     return result;
   }
-  return result.text === "" &&
-    result.from === undefined &&
-    result.lines === undefined &&
-    result.truncated === undefined &&
-    result.nextFrom === undefined
-    ? { status: "not_found", text: "", path: result.path }
-    : { ...result, status: "ok" };
+  return { ...result, status: "ok" };
 }
 
 function normalizeRegisteredMemoryManager(
