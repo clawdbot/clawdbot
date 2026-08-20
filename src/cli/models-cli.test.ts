@@ -115,6 +115,16 @@ describe("models cli", () => {
     return program;
   }
 
+  // `defaultRuntime.error` routes through console.error (src/runtime.ts), not a
+  // direct process.stderr write.
+  function captureRuntimeErrors() {
+    const writes: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      writes.push(args.map((arg) => String(arg)).join(" "));
+    });
+    return writes;
+  }
+
   async function runModelsCommand(args: string[]) {
     await runRegisteredCli({
       register: (program: Command) => {
@@ -442,40 +452,40 @@ describe("models cli", () => {
       args: ["models", "--agent", "poe", "set-image", "openai/gpt-image-1"],
       command: modelsSetImageCommand,
     },
-    // `aliases` and `scan` only ever touch `agents.defaults`, so --agent was
-    // accepted and ignored here -- including an id that does not exist -- while
-    // every other --agent-aware models subcommand validated it (#126597).
-    {
-      label: "aliases list",
-      args: ["models", "--agent", "poe", "aliases", "list"],
-      command: noopAsync,
-    },
-    {
-      label: "aliases add",
-      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
-      command: noopAsync,
-    },
-    {
-      label: "aliases remove",
-      args: ["models", "--agent", "poe", "aliases", "remove", "zzz"],
-      command: noopAsync,
-    },
-    {
-      label: "scan",
-      args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"],
-      command: noopAsync,
-    },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
     await expect(runModelsCommand(args)).rejects.toThrow("does not support --agent");
 
     expect(command).not.toHaveBeenCalled();
   });
 
+  // `aliases` and `scan` only ever touch `agents.defaults`, so --agent was accepted
+  // and ignored here -- including an id that does not exist -- while every other
+  // --agent-aware models subcommand validated it (#126597). Unlike `set`, these run
+  // inside the CLI error wrapper, so the guard surfaces as a formatted operator
+  // error rather than an unhandled throw.
   it.each([
     { label: "aliases list", args: ["models", "--agent", "poe", "aliases", "list"] },
+    {
+      label: "aliases add",
+      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
+    },
+    { label: "aliases remove", args: ["models", "--agent", "poe", "aliases", "remove", "zzz"] },
     { label: "scan", args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"] },
-  ])("names the subcommand it rejected for models $label", async ({ label, args }) => {
-    await expect(runModelsCommand(args)).rejects.toThrow(`openclaw models ${label}`);
+  ])("reports parent --agent as an operator error for models $label", async ({ label, args }) => {
+    const errorWrites = captureRuntimeErrors();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+    // `defaultRuntime.exit` calls process.exit and then throws a sentinel so the
+    // path stays unreachable when process.exit is mocked (src/runtime.ts).
+    await expect(runModelsCommand(args)).rejects.toThrow("unreachable");
+
+    const stderr = errorWrites.join(" ");
+    expect(stderr).toContain("does not support --agent");
+    // The message has to name the subcommand it rejected, or a copy-paste that
+    // guards `scan` while reporting `set` reads as correct.
+    expect(stderr).toContain(`openclaw models ${label}`);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(noopAsync).not.toHaveBeenCalled();
   });
 
   it.each([
