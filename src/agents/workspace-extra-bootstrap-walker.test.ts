@@ -7,7 +7,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveExtraBootstrapPatternPaths } from "./workspace-extra-bootstrap-walker.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
@@ -746,6 +746,91 @@ describe("resolveExtraBootstrapPatternPaths matching-directory parity", () => {
       expect(walkerMatches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
       // The matching directory is present, proving it is not silently dropped.
       expect(walkerMatches).toContain("dir-agents/AGENTS.md");
+    }
+  });
+});
+
+describe("resolveExtraBootstrapPatternPaths matched-path realpath failures", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createWorkspaceDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-walker-realpath-")),
+    );
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a match that vanished (ENOENT delete-race) and still resolves the rest", async () => {
+    // F1 (matched-path branch): fs.glob can yield a match that is unlinked before
+    // the per-match fs.realpath runs — a benign delete-race surfacing as ENOENT.
+    // That match is skipped silently while a sibling match that still exists
+    // resolves normally, and the walker does not throw. The "vanished" entry names
+    // a path with no file on disk, so real fs.realpath throws ENOENT exactly as a
+    // delete-race would; only fs.glob is stubbed to yield the phantom entry.
+    const workspaceDir = await createWorkspaceDir("enoent-skip");
+    await fs.mkdir(path.join(workspaceDir, "present"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "present", "AGENTS.md"), "present", "utf-8");
+
+    const globSpy = vi.spyOn(fs, "glob").mockImplementation((() =>
+      (async function* () {
+        yield path.join("vanished", "AGENTS.md");
+        yield path.join("present", "AGENTS.md");
+      })()) as unknown as typeof fs.glob);
+
+    try {
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, "**/AGENTS.md")
+      ).toSorted();
+      expect(matches).toStrictEqual(["present/AGENTS.md"]);
+    } finally {
+      globSpy.mockRestore();
+    }
+  });
+
+  it("rethrows a non-ENOENT realpath failure on a matched path (EACCES)", async () => {
+    // F1 (matched-path branch): a non-ENOENT failure on a matched file (EACCES
+    // here) is a real fault, not a delete-race, so the walker rethrows instead of
+    // silently dropping the match. The loader turns that rethrow into an
+    // operator-visible `io` diagnostic — see workspace.load-extra-bootstrap-files.
+    const workspaceDir = await createWorkspaceDir("eacces-rethrow");
+    await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkg", "AGENTS.md"), "agents", "utf-8");
+
+    const globSpy = vi.spyOn(fs, "glob").mockImplementation((() =>
+      (async function* () {
+        yield path.join("pkg", "AGENTS.md");
+      })()) as unknown as typeof fs.glob);
+    const realpathError = Object.assign(new Error("simulated realpath EACCES"), { code: "EACCES" });
+    const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation((async (
+      target: Parameters<typeof fs.realpath>[0],
+    ) => {
+      // Only the matched file fails; the workspace-root realpath still succeeds so
+      // the failure is proven to originate at the matched path, not the root.
+      if (target.toString().includes("AGENTS.md")) {
+        throw realpathError;
+      }
+      return target.toString();
+    }) as unknown as typeof fs.realpath);
+
+    try {
+      await expect(resolveExtraBootstrapPatternPaths(workspaceDir, "**/AGENTS.md")).rejects.toBe(
+        realpathError,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+      globSpy.mockRestore();
     }
   });
 });

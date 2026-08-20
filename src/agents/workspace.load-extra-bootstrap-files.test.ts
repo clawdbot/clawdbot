@@ -87,6 +87,47 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     }
   });
 
+  it("surfaces an io diagnostic when a matched path fails realpath for a non-ENOENT reason", async () => {
+    // F1 (matched-path branch): fs.glob yields a match but its per-match
+    // fs.realpath fails with a non-ENOENT error (EACCES). That is a real fault on
+    // a matched bootstrap file, so the walker rethrows and the loader surfaces an
+    // operator-visible `io` diagnostic instead of swallowing it into an empty
+    // match set. Pre-fix the inner catch continued on every error, dropping the
+    // match silently with no diagnostic.
+    const workspaceDir = await createWorkspaceDir("realpath-io-failure");
+    await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkg", "AGENTS.md"), "agents", "utf-8");
+
+    const globSpy = vi.spyOn(fs, "glob").mockImplementation((() =>
+      (async function* () {
+        yield path.join("pkg", "AGENTS.md");
+      })()) as unknown as typeof fs.glob);
+    const realpathError = Object.assign(new Error("simulated realpath EACCES"), { code: "EACCES" });
+    const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation((async (
+      target: Parameters<typeof fs.realpath>[0],
+    ) => {
+      // Only the matched file fails; the walk-root/workspace realpath still
+      // succeeds so the io failure is proven to originate at the matched path.
+      if (target.toString().includes("AGENTS.md")) {
+        throw realpathError;
+      }
+      return target.toString();
+    }) as unknown as typeof fs.realpath);
+
+    try {
+      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+        "**/AGENTS.md",
+      ]);
+      expect(files).toHaveLength(0);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.reason).toBe("io");
+      expect(diagnostics[0]?.detail).toContain("simulated realpath EACCES");
+    } finally {
+      realpathSpy.mockRestore();
+      globSpy.mockRestore();
+    }
+  });
+
   it("resolves a missing workspace cwd to no matches without a diagnostic (ENOENT)", async () => {
     // F1 boundary: a missing cwd makes fs.glob throw ENOENT, which legitimately
     // means "no matches" rather than an error to surface — no files, no diagnostic.

@@ -91,8 +91,20 @@ export async function resolveExtraBootstrapPatternPaths(
       let realpath: string;
       try {
         realpath = await fs.realpath(absolute);
-      } catch {
-        continue;
+      } catch (error) {
+        // ENOENT here is a benign delete-race: the entry vanished between
+        // fs.glob yielding it and this realpath, so skip that one match. Any
+        // other failure (EACCES/ELOOP/…) is a real fault on a matched file and
+        // is rethrown so the outer catch reaches the loader, which surfaces a
+        // per-pattern `io` diagnostic instead of a silently empty match set.
+        // Tradeoff: one failing match degrades its whole pattern to that io
+        // diagnostic; per-match surfacing would need a wider return signature,
+        // deliberately out of scope.
+        // SAFETY: Node fs failures carry an ErrnoException-shaped `code`; the cast only reads that property.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          continue;
+        }
+        throw error;
       }
       if (isPathInside(workspaceRealpath, realpath)) {
         matches.add(normalizeWorkspacePatternPath(relativeMatch));
