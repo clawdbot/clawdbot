@@ -231,7 +231,7 @@ describe("worker environment service", () => {
     });
     const rejected = expect(starting).rejects.toMatchObject({
       code: "provider_failure",
-      message: expect.stringContaining("did not connect within 3 minutes"),
+      message: expect.stringContaining("check that the worker is online and reachable, then retry"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     await started;
     await vi.advanceTimersByTimeAsync(3 * 60_000);
@@ -669,7 +669,7 @@ describe("worker environment service", () => {
     });
     const rejected = expect(starting).rejects.toMatchObject({
       code: "provider_failure",
-      message: expect.stringContaining("did not connect within 3 minutes"),
+      message: expect.stringContaining("check that the worker is online and reachable, then retry"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     await started;
     await vi.advanceTimersByTimeAsync(3 * 60_000);
