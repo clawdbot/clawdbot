@@ -315,6 +315,30 @@ export async function runClaudeAppServerAttempt(
       messageProvider: params.messageProvider ?? undefined,
       trigger: params.trigger,
       channelId: hookChannelFields.channelId,
+      // Sender identity. Codex threads the same fields into its contexts
+      // (extensions/codex/src/app-server/run-attempt-tool-setup.ts:289-293,
+      // 316-317); this harness was omitting them entirely, so every plugin
+      // downstream of these hooks saw an anonymous turn.
+      //
+      // Measured cost of the omission: openclaw-provenance classified
+      // sender=unknown on 16996 of 16996 turns, its configured
+      // trustedSenderIds allowlist could never match (matching needs a
+      // senderId that never arrived), and every turn was therefore trusted
+      // via missingIdentityTrust rather than by verifying the sender —
+      // fail-open, on a security plugin, invisibly.
+      //
+      // buildAgentHookContextIdentityFields (src/plugins/hook-agent-context.ts:
+      // 135-138) already drops these for any trigger other than "user", so
+      // heartbeat/cron/memory turns stay anonymous by design; passing them
+      // here only restores identity on genuine user turns.
+      //
+      // senderName/senderUsername/senderE164/senderIsOwner are deliberately
+      // NOT passed: PluginHookAgentContext does not declare them. Consumers
+      // that need ownership derive it from senderId against their own
+      // configured owner list, which is what provenance's
+      // computeSenderIsOwner already does.
+      ...(params.senderId ? { senderId: params.senderId } : {}),
+      ...(params.chatId ? { chatId: params.chatId } : {}),
     };
     let developerInstructions = await buildClaudeDeveloperInstructions(params);
     let openclawPromptPrefix = "";
