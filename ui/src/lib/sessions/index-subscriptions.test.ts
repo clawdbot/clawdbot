@@ -1,7 +1,10 @@
 // @vitest-environment node
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createSessionCapability } from "./index.ts";
+
+const subscriptionRequestOptions = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
 
 function createGateway(client: GatewayBrowserClient) {
   return {
@@ -41,12 +44,18 @@ describe("createSessionCapability message subscriptions", () => {
       "temporary observer release failure",
     );
     await expect(sessions.unsubscribeMessages(subscription)).resolves.toBeUndefined();
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.messages.unsubscribe",
+      { key: "agent:main:main" },
+      subscriptionRequestOptions,
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "sessions.messages.unsubscribe",
+      { key: "agent:main:main" },
+      subscriptionRequestOptions,
+    );
     sessions.dispose();
   });
 
@@ -70,15 +79,19 @@ describe("createSessionCapability message subscriptions", () => {
       second.subscribeMessages("agent:main:main"),
     ]);
 
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-    });
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.messages.subscribe",
+      { key: "main" },
+      subscriptionRequestOptions,
+    );
     await first.unsubscribeMessages(firstLease);
     expect(request).toHaveBeenCalledOnce();
     await second.unsubscribeMessages(secondLease);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.messages.unsubscribe",
+      { key: "agent:main:main" },
+      subscriptionRequestOptions,
+    );
     first.dispose();
     second.dispose();
   });
@@ -110,10 +123,12 @@ describe("createSessionCapability message subscriptions", () => {
       includeApprovals: true,
       approvalReplay: replay,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      key: "main",
-      includeApprovals: true,
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.messages.subscribe",
+      { key: "main", includeApprovals: true },
+      subscriptionRequestOptions,
+    );
     await sessions.unsubscribeMessages(approval);
     await sessions.unsubscribeMessages(plain);
     expect(request).toHaveBeenCalledTimes(2);
@@ -142,14 +157,18 @@ describe("createSessionCapability message subscriptions", () => {
 
     expect(main).toEqual({ key: "global", agentId: "main" });
     expect(research).toEqual({ key: "global", agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
-      key: "global",
-      agentId: "main",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
-      key: "global",
-      agentId: "research",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "sessions.messages.subscribe",
+      { key: "global", agentId: "main" },
+      subscriptionRequestOptions,
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.messages.subscribe",
+      { key: "global", agentId: "research" },
+      subscriptionRequestOptions,
+    );
     await sessions.unsubscribeMessages(main);
     await sessions.unsubscribeMessages(research);
     sessions.dispose();
