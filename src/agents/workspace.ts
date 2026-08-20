@@ -143,7 +143,11 @@ export function workspaceFilesShareSourceIdentity(left: object, right: object): 
 
 // Bounded per-fd close used by the guarded workspace read; suppress-error
 // handling stays at the call sites so a close fault never masks the read result.
-const closeFdAsync = promisify(syncFs.close);
+// The indirection must stay dynamic (call syncFs.close at call time, not a bound
+// reference) so fs.close mocks/spies installed after import still apply.
+const closeFdAsync = promisify((fd: number, cb: (error: NodeJS.ErrnoException | null) => void) => {
+  syncFs.close(fd, cb);
+});
 
 export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
