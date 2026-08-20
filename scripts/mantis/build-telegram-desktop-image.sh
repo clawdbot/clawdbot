@@ -24,9 +24,5 @@ if [[ "$#" -gt 1 ]]; then
   exit 2
 fi
 
-build_command=(docker build)
-if [[ "${OPENCLAW_DOCKER_BUILD_USE_BUILDX:-0}" = "1" ]]; then
-  build_command=(docker buildx build --load)
-fi
-"${build_command[@]}" "${build_args[@]}" --tag "$image_tag" "$image_dir"
+docker build "${build_args[@]}" --tag "$image_tag" "$image_dir"
 printf '%s\n' "$image_tag"

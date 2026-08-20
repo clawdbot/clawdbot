@@ -9,11 +9,16 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  COMMAND_TIMEOUT_MS,
   createContainerizedSutSpawnSpec,
+  createOpenClawGatewaySpawnSpec,
+  runSutContainerAction,
+  waitForLog,
+  writeSutConfig,
+} from "../../scripts/e2e/telegram-mantis-sut.ts";
+import {
+  COMMAND_TIMEOUT_MS,
   createCrabboxWarmupArgs,
   createOpenClawCliSpawnSpec,
-  createOpenClawGatewaySpawnSpec,
   parseArgs,
   processTargetExists,
   readLogAfterOffset,
@@ -29,14 +34,11 @@ import {
   renderTailscaleSshProxy,
   restartSessionGateway,
   runCommand,
-  runSutContainerAction,
   selectCrabboxSshPort,
   signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
-  waitForLog,
   waitForLogAfterOffset,
-  writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 

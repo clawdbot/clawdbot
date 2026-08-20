@@ -367,15 +367,7 @@ jobs:
           crabbox_warmup_help="$(crabbox warmup --help 2>&1)"
           grep -q -- "-desktop" <<<"$crabbox_warmup_help"
 
-      # Observed 2026-08: rebuilding the unchanged desktop image cost 43s per run.
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
-        with:
-          max-cache-size-mb: 800000
-
       - name: Build local Telegram Desktop image
-        env:
-          OPENCLAW_DOCKER_BUILD_USE_BUILDX: "1"
         shell: bash
         run: |
           set -euo pipefail
@@ -640,6 +632,8 @@ jobs:
           sudo chmod 0700 "$proof_worktree_root"
 
       - name: Run Codex Mantis Telegram agent
+        # Pin audited 2026-08: runCodexExec rejects a missing codex-user, then
+        # launches the CLI as `sudo -u <codex-user> -- codex exec`.
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}

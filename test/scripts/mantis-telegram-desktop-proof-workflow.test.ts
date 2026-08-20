@@ -489,7 +489,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     const image = workflowStep("Build local Telegram Desktop image");
     expect(image.run).toContain("bash scripts/mantis/build-telegram-desktop-image.sh");
-    expect(image.env?.OPENCLAW_DOCKER_BUILD_USE_BUILDX).toBe("1");
 
     const credential = workflowStep("Install TDLib and restore Telegram QA user");
     expect(credential.run).toContain("http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz");
@@ -881,12 +880,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).not.toMatch(/run_network_probe "\$network_name"[ \t]+\S/u);
     expect(wrapper).toContain('[[ $# -eq 0 ]] || die "check expects no arguments"');
     expect(wrapper).toContain("[[ $# -eq 6 ]]");
-    const stopSession = laneScript.slice(laneScript.indexOf("async function stopActiveLane"));
-    expect(stopSession.indexOf("stopMantisSut(state.sut)")).toBeLessThan(
-      stopSession.indexOf("preserveMantisSutRuntimeArtifacts(state.sut"),
+    const teardown = laneScript.slice(
+      laneScript.indexOf("function teardownSut"),
+      laneScript.indexOf("async function recoverStartupResources"),
     );
-    expect(stopSession.indexOf("preserveMantisSutRuntimeArtifacts(state.sut")).toBeLessThan(
-      stopSession.indexOf("destroyMantisSut(state.sut)"),
+    expect(teardown.indexOf("stopMantisSut(sut)")).toBeLessThan(
+      teardown.indexOf("preserveMantisSutRuntimeArtifacts(sut"),
+    );
+    expect(teardown.indexOf("preserveMantisSutRuntimeArtifacts(sut")).toBeLessThan(
+      teardown.indexOf("destroyMantisSut(sut)"),
     );
     const startSession = laneScript.slice(laneScript.indexOf("async function startLane"));
     expect(startSession).not.toContain('"clear-chat"');

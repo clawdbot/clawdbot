@@ -24,12 +24,6 @@ type JsonObject = Record<string, unknown>;
 type MantisSutLane = "baseline" | "candidate";
 type SpawnedDaemon = { child: ReturnType<typeof spawn>; error?: Error };
 
-type FunnelBridge = {
-  proxyPath: string;
-  tunnelLog: string;
-  tunnelPid: number;
-};
-
 type MantisSutRuntime = {
   configPath: string;
   containerName: string;
@@ -42,14 +36,12 @@ type MantisSutRuntime = {
   gatewayLog: string;
   gatewayPid: number;
   mockLog: string;
-  mockPid: number;
   mockResponseControl: string;
   requestLog: string;
   stateDir: string;
   sutAttestation: { lane: MantisSutLane; sha: string };
   tempRoot: string;
   workspace: string;
-  funnelBridge?: FunnelBridge;
 };
 
 export type MantisSutRecovery = Pick<
@@ -620,7 +612,6 @@ export async function startMantisSut(params: {
       gatewayLog,
       gatewayPid,
       mockLog,
-      mockPid: gatewayPid,
       mockResponseControl,
       requestLog,
       sutAttestation,

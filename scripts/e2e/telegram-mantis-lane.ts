@@ -13,6 +13,7 @@ import { sleep } from "../lib/sleep.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 import {
   destroyMantisSut,
+  type MantisSutRecovery,
   preserveMantisSutRuntimeArtifacts,
   startMantisSut,
   stopMantisSut,
@@ -36,17 +37,6 @@ const credentialSchema = z.object({
   sutToken: z.string().min(1),
   testerUserId: z.union([z.string(), z.number()]).transform(String),
 });
-const sutRuntimeSchema = z
-  .object({
-    containerName: z.string(),
-    gatewayLog: z.string(),
-    mockLog: z.string(),
-    mockResponseControl: z.string(),
-    requestLog: z.string(),
-    tempRoot: z.string(),
-    sutAttestation: z.object({ lane: laneSchema, sha: z.string().regex(/^[0-9a-f]{40}$/u) }),
-  })
-  .passthrough();
 const sutRecoverySchema = z.object({
   containerName: z.string(),
   gatewayLog: z.string(),
@@ -55,6 +45,11 @@ const sutRecoverySchema = z.object({
   requestLog: z.string(),
   tempRoot: z.string(),
 });
+const sutRuntimeSchema = sutRecoverySchema
+  .extend({
+    sutAttestation: z.object({ lane: laneSchema, sha: z.string().regex(/^[0-9a-f]{40}$/u) }),
+  })
+  .passthrough();
 const startupSessionSchema = z.object({
   attempt: z.number().int().positive().max(3),
   lane: laneSchema,
@@ -504,6 +499,53 @@ function writeAttemptFacts(roots: Roots, lane: Lane, attempt: number, facts: unk
   writeJsonAtomic(path.join(roots.outputRoot, lane, filename), facts, 0o644);
 }
 
+function teardownSut(sut: MantisSutRecovery, outputDir: string): string[] {
+  const errors: string[] = [];
+  for (const action of [
+    () => stopMantisSut(sut),
+    () => preserveMantisSutRuntimeArtifacts(sut, outputDir),
+    () => destroyMantisSut(sut),
+  ]) {
+    try {
+      action();
+    } catch (error) {
+      errors.push(coerceErrorMessage(error));
+    }
+  }
+  return errors;
+}
+
+async function recoverStartupResources(
+  startup: StartupSession,
+  sut: MantisSutRecovery | undefined = startup.sut,
+): Promise<string[]> {
+  const errors: string[] = [];
+  if (startup.observerRequested) {
+    for (let attempt = 0; attempt < 50 && !fs.existsSync(startup.observerPidFile); attempt += 1) {
+      await sleep(100);
+    }
+    const observerError = await terminateObserverProcess(
+      startup.observerPidFile,
+      startup.observerSocket,
+    );
+    if (observerError) {
+      errors.push(observerError);
+    }
+  }
+  if (startup.recorderRequested) {
+    const recorderCommand = fs.existsSync(startup.recorderSession) ? "stop" : "recover";
+    await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
+      recorderCommand,
+      "--session",
+      recorderRelativePath(startup.recorderSession),
+    ]).catch((error: unknown) => errors.push(coerceErrorMessage(error)));
+  }
+  if (sut) {
+    errors.push(...teardownSut(sut, startup.privateDir));
+  }
+  return errors;
+}
+
 async function startLane(values: Map<string, string>, roots: Roots): Promise<void> {
   const lane = laneFrom(values);
   const repoRoot = path.resolve(required(values, "--repo-root"));
@@ -560,16 +602,13 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
   const ports =
     lane === "baseline" ? { gateway: 19_879, mock: 19_882 } : { gateway: 19_979, mock: 19_982 };
   let sut: Awaited<ReturnType<typeof startMantisSut>> | undefined;
-  let observerPid: number | undefined;
   try {
     // Observed 2026-08: TDLib 1.8.0 returned CHANNEL_INVALID when asked to clear
     // this QA supergroup locally. Keep shared history; narrow published evidence.
-    const bot = z
-      .object({ id: z.union([z.string(), z.number()]).transform(String) })
-      .parse(await telegramBotApi(credential.sutToken, "getMe"));
     startup.recorderRequested = true;
     saveStartup(roots.sessionRoot, startup);
-    const [sutResult, recorderResult] = await Promise.allSettled([
+    const [botResult, sutResult, recorderResult] = await Promise.allSettled([
+      telegramBotApi(credential.sutToken, "getMe"),
       startMantisSut({
         gatewayPort: ports.gateway,
         groupId: credential.groupId,
@@ -607,12 +646,18 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
     if (sutResult.status === "fulfilled") {
       sut = sutResult.value;
     }
+    if (botResult.status === "rejected") {
+      throw botResult.reason;
+    }
     if (sutResult.status === "rejected") {
       throw sutResult.reason;
     }
     if (recorderResult.status === "rejected") {
       throw recorderResult.reason;
     }
+    const bot = z
+      .object({ id: z.union([z.string(), z.number()]).transform(String) })
+      .parse(botResult.value);
     const logFd = fs.openSync(observerLog, "a", 0o600);
     let observer: ReturnType<typeof spawn>;
     startup.observerRequested = true;
@@ -643,7 +688,6 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
     if (!observer.pid) {
       throw new Error("Telegram observer started without a process id.");
     }
-    observerPid = observer.pid;
     observer.unref();
     await waitForObserver(observerSocket);
     const state: ActiveSession = {
@@ -680,34 +724,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       commands: commandNames.filter((command) => command !== "start"),
     });
   } catch (error) {
-    const cleanupErrors: string[] = [];
-    if (observerPid) {
-      const cleanupError = await terminateObserverProcess(observerPidFile, observerSocket);
-      if (cleanupError) {
-        cleanupErrors.push(cleanupError);
-      }
-    }
-    if (startup.recorderRequested) {
-      const recorderCommand = fs.existsSync(recorderSession) ? "stop" : "recover";
-      await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
-        recorderCommand,
-        "--session",
-        recorderRelativePath(recorderSession),
-      ]).catch((cleanupError: unknown) => cleanupErrors.push(coerceErrorMessage(cleanupError)));
-    }
-    const cleanupSut = sut ?? startup.sut;
-    if (cleanupSut) {
-      try {
-        stopMantisSut(cleanupSut);
-      } catch (cleanupError) {
-        cleanupErrors.push(coerceErrorMessage(cleanupError));
-      }
-      try {
-        destroyMantisSut(cleanupSut);
-      } catch (cleanupError) {
-        cleanupErrors.push(coerceErrorMessage(cleanupError));
-      }
-    }
+    const cleanupErrors = await recoverStartupResources(startup, sut ?? startup.sut);
     const facts = redact(
       {
         attempt,
@@ -736,41 +753,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
 }
 
 async function abortStartup(startup: StartupSession, roots: Roots): Promise<void> {
-  const errors: string[] = [];
-  if (startup.observerRequested) {
-    for (let attempt = 0; attempt < 50 && !fs.existsSync(startup.observerPidFile); attempt += 1) {
-      await sleep(100);
-    }
-    const observerError = await terminateObserverProcess(
-      startup.observerPidFile,
-      startup.observerSocket,
-    );
-    if (observerError) {
-      errors.push(observerError);
-    }
-  }
-  if (startup.recorderRequested) {
-    const recorderCommand = fs.existsSync(startup.recorderSession) ? "stop" : "recover";
-    await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
-      recorderCommand,
-      "--session",
-      recorderRelativePath(startup.recorderSession),
-    ]).catch((error: unknown) => errors.push(coerceErrorMessage(error)));
-  }
-  const sut = startup.sut;
-  if (sut) {
-    for (const action of [
-      () => stopMantisSut(sut),
-      () => preserveMantisSutRuntimeArtifacts(sut, startup.privateDir),
-      () => destroyMantisSut(sut),
-    ]) {
-      try {
-        action();
-      } catch (error) {
-        errors.push(coerceErrorMessage(error));
-      }
-    }
-  }
+  const errors = await recoverStartupResources(startup);
   if (errors.length) {
     throw new Error(`Mantis startup recovery completed with errors:\n${errors.join("\n")}`);
   }
@@ -926,7 +909,7 @@ function updateMockResponse(
 
 function readMockResponseControl(state: ActiveSession): z.infer<typeof mockResponseControlSchema> {
   const control = fs.lstatSync(state.sut.mockResponseControl);
-  if (!control.isFile() || control.isSymbolicLink() || control.nlink !== 1) {
+  if (!control.isFile() || control.nlink !== 1) {
     throw new Error("The private mock response control is no longer a regular file.");
   }
   return mockResponseControlSchema.parse(readJson(state.sut.mockResponseControl));
@@ -1113,17 +1096,7 @@ async function stopActiveLane(
     recorderRelativePath(state.recorderSession),
     ...(crop ? ["--crop", "telegram-window"] : []),
   ]);
-  for (const action of [
-    () => stopMantisSut(state.sut),
-    () => preserveMantisSutRuntimeArtifacts(state.sut, state.privateDir),
-    () => destroyMantisSut(state.sut),
-  ]) {
-    try {
-      action();
-    } catch (error) {
-      cleanupErrors.push(coerceErrorMessage(error));
-    }
-  }
+  cleanupErrors.push(...teardownSut(state.sut, state.privateDir));
   try {
     await recorderStop;
   } catch (error) {

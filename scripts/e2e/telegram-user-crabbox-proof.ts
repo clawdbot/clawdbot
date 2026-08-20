@@ -55,13 +55,6 @@ import {
 } from "./telegram-mantis-sut.ts";
 
 export { COMMAND_TIMEOUT_MS, runCommand, selectCrabboxSshPort };
-export {
-  createContainerizedSutSpawnSpec,
-  createOpenClawGatewaySpawnSpec,
-  runSutContainerAction,
-  waitForLog,
-  writeSutConfig,
-} from "./telegram-mantis-sut.ts";
 
 type GatewaySpawnSpec = {
   args: string[];
@@ -1124,21 +1117,23 @@ async function startLocalSutDaemon(params: {
     if (params.funnelBridge) {
       throw new Error("Container-isolated fork SUT does not support the MCP App Funnel fixture.");
     }
+    const sut = await startMantisSut({
+      gatewayPort: params.gatewayPort,
+      groupId: params.groupId,
+      humanDelayFixedMs: params.humanDelayFixedMs,
+      linkPreview: params.linkPreview,
+      mockPort: params.mockPort,
+      mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
+      mockResponseText: params.mockResponseText,
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      sutLane: params.sutLane,
+      sutToken: params.sutToken,
+      testerId: params.testerId,
+    });
     return {
-      ...(await startMantisSut({
-        gatewayPort: params.gatewayPort,
-        groupId: params.groupId,
-        humanDelayFixedMs: params.humanDelayFixedMs,
-        linkPreview: params.linkPreview,
-        mockPort: params.mockPort,
-        mockResponseChunkDelayMs: params.mockResponseChunkDelayMs,
-        mockResponseText: params.mockResponseText,
-        outputDir: params.outputDir,
-        repoRoot: params.repoRoot,
-        sutLane: params.sutLane,
-        sutToken: params.sutToken,
-        testerId: params.testerId,
-      })),
+      ...sut,
+      mockPid: sut.gatewayPid,
       funnelBridge: params.funnelBridge,
     };
   }
