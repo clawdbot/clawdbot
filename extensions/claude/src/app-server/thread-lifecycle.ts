@@ -20,19 +20,19 @@
  *     - approvalPolicy            (Tank #7 P2)
  *     - developerInstructions     (Tank #7 P2)
  *
- *   Rotation reasons (force thread/start; SDK transcript resets):
- *     - dynamicToolsFingerprint changed
- *       (the SDK's MCP server registration happens at thread/start and
- *       isn't refreshable on resume — see KNOWN LIMITATION below)
+ *   Catalog drift is now handled WITHOUT rotating where possible:
+ *     - dynamicToolsFingerprint changed -> tryRefreshToolsInPlace() calls the
+ *       bridge's thread/refresh_tools, which applies the new surface to the
+ *       running session via the SDK's Query.setMcpServers. Rotation is only
+ *       the fallback (no live attempt, or an older bridge without the RPC).
  *
- *   KNOWN LIMITATION (carry forward to upstream PR notes): a
- *   tool-catalog change mid-session resets conversation history.
- *   Mitigations to consider:
- *     (a) Implement thread/fork on the server side and use it here
- *         instead of thread/start; fork copies the SDK transcript.
- *     (b) Teach the server to refresh sdkOptions.mcpServers on resume
- *         (probably requires SDK support — the SDK's MCP registration
- *         isn't refreshable today).
+ *   HISTORY, because the old note here sent us down two wrong paths: it
+ *   said refreshing MCP registration "probably requires SDK support — the
+ *   SDK's MCP registration isn't refreshable today". That was true when
+ *   written and is now stale. @anthropic-ai/claude-agent-sdk 0.3.220 exposes
+ *   setMcpServers on the live Query (sdk.d.ts:2550), which is mitigation (b)
+ *   from that note and is what tryRefreshToolsInPlace uses. Mitigation (a),
+ *   thread/fork, is implemented and remains the fallback.
  *   In practice catalog churn is rare for stable plugin sets.
  */
 
@@ -91,9 +91,12 @@ export type ThreadLifecycleOutcome = {
    *           SDK session);
    * "started" if a fresh thread/start was issued (first turn for the
    *           session, or fork fell back to start because the parent
-   *           thread was gone server-side).
+   *           thread was gone server-side);
+   * "refreshed" if the catalog changed but was applied to the LIVE session
+   *           via setMcpServers, so no rotation happened at all — the
+   *           preferred outcome for catalog drift.
    */
-  outcome: "resumed" | "forked" | "started";
+  outcome: "resumed" | "forked" | "started" | "refreshed";
   /**
    * True when this turn ran on a forked thread whose binding was deliberately
    * NOT persisted, so the durable session still points at the parent thread.
@@ -170,6 +173,35 @@ async function startOrResumeClaudeThreadLocked(
       });
     }
   } else if (existing && rotationReason) {
+    // Prefer refreshing the live session over rotating it. Only a catalog
+    // change is refreshable this way, and only when a live attempt exists;
+    // anything else still needs the fork path below.
+    const refreshed = await tryRefreshToolsInPlace({
+      client,
+      threadId: existing.threadId,
+      bridge,
+      nativeDisallowedTools,
+      identity,
+    });
+    if (refreshed) {
+      // Record the new catalog against the SAME thread so the next turn sees
+      // no drift. Without this the fingerprint would still look stale and we
+      // would rotate on the very next turn, wasting the refresh.
+      await bindingStore.write(identity, {
+        threadId: existing.threadId,
+        cwd: effectiveWorkspace,
+        model: existing.model,
+        modelProvider: existing.modelProvider,
+        approvalPolicy: cfg.appServer.approvalPolicy,
+        approvalsReviewer: existing.approvalsReviewer,
+        sandbox: existing.sandbox,
+        developerInstructionsFingerprint,
+        dynamicToolsFingerprint,
+        dynamicToolsCount: bridge.specs.length,
+        createdAt: existing.createdAt,
+      });
+      return { threadId: existing.threadId, outcome: "refreshed", rotationReason };
+    }
     embeddedAgentLog.info(
       isTransientToolPolicyTurn(params)
         ? "claude-bridge: forking a TRANSIENT thread for a narrowed tool policy (durable binding retained)"
@@ -240,6 +272,74 @@ async function startOrResumeClaudeThreadLocked(
 }
 
 // ── decision: should we rotate? ─────────────────────────────────────────────
+
+/**
+ * Try to apply a changed tool catalog to the ALREADY-RUNNING session instead
+ * of rotating the thread, via the bridge's `thread/refresh_tools` (which calls
+ * the SDK's `Query.setMcpServers` on the live query).
+ *
+ * This is the cheap path and should be preferred whenever it works. Rotation
+ * costs a full transcript copy, a new SDK session id (so a cold prompt cache)
+ * and a respawned subprocess that strands anything the previous turn
+ * backgrounded — and catalog changes are frequently POLICY rather than
+ * configuration. The gateway's owner-only control-plane deny
+ * (src/gateway/tool-resolution.ts:243) removes 13 tools whenever
+ * senderIsOwner resolves false, which varies per turn, so the full price was
+ * being paid over and over for a security input flipping.
+ *
+ * Returns true only when the bridge confirms the swap. `{ refreshed: false }`
+ * means there is no live attempt (never started, swept, or discarded) — NOT
+ * that the tools are already current — so the caller must rotate. Any RPC
+ * error is treated the same way: fall back rather than proceed on the
+ * assumption that a policy change took effect when it may not have.
+ */
+async function tryRefreshToolsInPlace(args: {
+  client: ClaudeAppServerClient;
+  threadId: string;
+  bridge: ClaudeDynamicToolBridge;
+  nativeDisallowedTools: readonly string[];
+  identity: ClaudeBindingSessionIdentity;
+}): Promise<boolean> {
+  const { client, threadId, bridge, identity } = args;
+  try {
+    const raw = await client.request<unknown>(
+      "thread/refresh_tools",
+      {
+        threadId,
+        // Mirrors the sdk-type server registration turn-runner.ts builds; the
+        // bridge owns the instance, so it only needs the shape and the specs.
+        servers: { openclaw: { type: "sdk", name: "openclaw" } },
+        dynamicTools: bridge.specs,
+      },
+      AbortSignal.timeout(CLAUDE_THREAD_LIFECYCLE_RPC_TIMEOUT_MS),
+    );
+    const refreshed =
+      Boolean(raw) &&
+      typeof raw === "object" &&
+      (raw as { refreshed?: unknown }).refreshed === true;
+    if (refreshed) {
+      embeddedAgentLog.info(
+        "claude-bridge: refreshed dynamic tools on the live session (no rotation)",
+        {
+          sessionKey: identity.sessionKey,
+          sessionId: identity.sessionId,
+          threadId,
+          toolCount: bridge.specs.length,
+        },
+      );
+    }
+    return refreshed;
+  } catch (err) {
+    // An older bridge without the method, or any transport failure, lands
+    // here. Rotation is always still correct, just expensive.
+    embeddedAgentLog.debug("claude-bridge: thread/refresh_tools unavailable; will rotate", {
+      sessionKey: identity.sessionKey,
+      threadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
 
 /**
  * Whether this turn's tool catalog is a deliberate, temporary narrowing that

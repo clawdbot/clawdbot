@@ -47,6 +47,8 @@ function makeClient(opts: {
   threadStartResponse?: unknown;
   threadResumeError?: Error;
   threadForkResponse?: unknown;
+  refreshToolsResponse?: unknown;
+  refreshToolsError?: Error;
   threadForkError?: Error;
 }): ClaudeAppServerClient {
   const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -65,6 +67,13 @@ function makeClient(opts: {
         throw opts.threadResumeError;
       }
       return { thread: { id: "thr_resumed_001" } };
+    }
+    if (method === "thread/refresh_tools") {
+      if (opts.refreshToolsError) {
+        throw opts.refreshToolsError;
+      }
+      // Default: no live attempt, so callers must fall back to rotation.
+      return opts.refreshToolsResponse ?? { refreshed: false };
     }
     if (method === "thread/fork") {
       if (opts.threadForkError) {
@@ -721,5 +730,98 @@ describe("startOrResumeClaudeThread — transient narrowed tool policy", () => {
     expect(result.outcome).toBe("forked");
     expect(result.transient).toBeUndefined();
     expect((await transientStore.read(IDENTITY))?.threadId).toBe("thr_forked_001");
+  });
+});
+
+// ── refresh-in-place instead of rotating (openclaw-djc6) ────────────────────
+
+describe("startOrResumeClaudeThread — catalog drift refreshed in place", () => {
+  let store2: ClaudeAppServerBindingStore;
+
+  beforeEach(() => {
+    store2 = createClaudeTestBindingStore();
+  });
+
+  async function seed() {
+    await store2.write(IDENTITY, {
+      threadId: "thr_live",
+      cwd: "/tmp/ws",
+      model: "claude-sonnet-4-6",
+      approvalPolicy: BASE_CFG.appServer.approvalPolicy,
+      approvalsReviewer: "user",
+      sandbox: BASE_CFG.appServer.sandbox,
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
+      dynamicToolsCount: 78,
+    } as ClaudeAppServerBinding);
+  }
+
+  function args(client: ClaudeAppServerClient, fp: string) {
+    return {
+      client,
+      params: makeParams(),
+      cfg: BASE_CFG,
+      bridge: makeBridge(),
+      bindingStore: store2,
+      developerInstructions: "x",
+      developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
+      dynamicToolsFingerprint: fp,
+      effectiveWorkspace: "/tmp/ws",
+      nativeDisallowedTools: [],
+    };
+  }
+
+  it("refreshes the live session and does NOT fork", async () => {
+    await seed();
+    const client = makeClient({
+      refreshToolsResponse: { refreshed: true, added: ["openclaw"], removed: ["openclaw"] },
+    });
+    const result = await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    expect(result.outcome).toBe("refreshed");
+    expect(result.threadId).toBe("thr_live"); // same thread — no rotation
+    const methods = (client.request as unknown as { mock: { calls: [string][] } }).mock.calls.map(
+      ([m]) => m,
+    );
+    expect(methods).toContain("thread/refresh_tools");
+    expect(methods).not.toContain("thread/fork");
+  });
+
+  it("records the new fingerprint against the SAME thread so the next turn sees no drift", async () => {
+    // Without this the refresh is wasted: the binding would still look stale
+    // and the very next turn would rotate anyway.
+    await seed();
+    const client = makeClient({ refreshToolsResponse: { refreshed: true } });
+    await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    const binding = await store2.read(IDENTITY);
+    expect(binding?.threadId).toBe("thr_live");
+    expect(binding?.dynamicToolsFingerprint).toBe("fp-drifted");
+  });
+
+  it("falls back to forking when there is no live attempt to refresh", async () => {
+    await seed();
+    const client = makeClient({ refreshToolsResponse: { refreshed: false } });
+    const result = await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    expect(result.outcome).toBe("forked");
+    expect(result.threadId).toBe("thr_forked_001");
+  });
+
+  it("falls back to forking when the refresh RPC errors (e.g. older bridge)", async () => {
+    // Must NOT proceed as though the policy change applied — an unsupported or
+    // failed refresh has to rotate, or the model keeps the old tool surface.
+    await seed();
+    const client = makeClient({ refreshToolsError: new Error("Method not found") });
+    const result = await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    expect(result.outcome).toBe("forked");
+  });
+
+  it("does not attempt a refresh when there is no drift", async () => {
+    await seed();
+    const client = makeClient({});
+    const result = await startOrResumeClaudeThread(args(client, STABLE_DYNAMIC_TOOLS_FP));
+    expect(result.outcome).toBe("resumed");
+    const methods = (client.request as unknown as { mock: { calls: [string][] } }).mock.calls.map(
+      ([m]) => m,
+    );
+    expect(methods).not.toContain("thread/refresh_tools");
   });
 });
