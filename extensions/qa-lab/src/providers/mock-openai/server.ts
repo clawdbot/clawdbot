@@ -49,6 +49,7 @@ import {
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
+  QA_MEMORY_FLUSH_CUMULATIVE_FALLBACK_MARKER_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
@@ -204,6 +205,21 @@ const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
   /\bQA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
 const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
 const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
+const QA_MEMORY_FLUSH_CUMULATIVE_FALLBACK_PROMPT_RE = /Pre-compaction memory flush\./u;
+const QA_MEMORY_FLUSH_DAILY_PATH_RE = /\bmemory\/\d{4}-\d{2}-\d{2}\.md\b/u;
+const QA_MEMORY_FLUSH_PRIMARY_MODEL = "gpt-5.6-luna";
+const QA_MEMORY_FLUSH_FALLBACK_MODEL = "gpt-5.6-luna-alt";
+
+function isMemoryFlushCumulativeFallbackRequest(params: { allInputText: string; prompt: string }) {
+  return (
+    QA_MEMORY_FLUSH_CUMULATIVE_FALLBACK_MARKER_RE.test(params.allInputText) &&
+    QA_MEMORY_FLUSH_CUMULATIVE_FALLBACK_PROMPT_RE.test(params.prompt)
+  );
+}
+
+function isAcceptedMemoryFlushAppendResult(toolOutput: string) {
+  return /^Appended content to memory\/\d{4}-\d{2}-\d{2}\.md\.$/u.test(toolOutput.trim());
+}
 const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
 - Continue the compaction retry from durable context without replaying a completed mutation.
 
@@ -876,6 +892,27 @@ async function buildResponsesPayload(
           ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
           : resolveCompactionRecoverySummary(allInputText),
     );
+  }
+  if (isMemoryFlushCumulativeFallbackRequest({ allInputText, prompt })) {
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
+    }
+    const dailyPath = allInputText.match(QA_MEMORY_FLUSH_DAILY_PATH_RE)?.[0];
+    if (!dailyPath) {
+      throw new Error("memory-flush cumulative fallback fixture missing canonical daily path");
+    }
+    if (model === QA_MEMORY_FLUSH_PRIMARY_MODEL) {
+      return buildToolCallEventsWithArgs("write", {
+        path: dailyPath,
+        content: "P".repeat(500),
+      });
+    }
+    if (model === QA_MEMORY_FLUSH_FALLBACK_MODEL) {
+      return buildToolCallEventsWithArgs("write", {
+        path: dailyPath,
+        content: "F".repeat(301),
+      });
+    }
   }
   if (
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
@@ -2505,6 +2542,7 @@ export async function startQaMockOpenAiServer(params?: {
       anthropicThinkingErrorScenarioKeys: new Set<string>(),
       compactionOverflowInjected: false,
       compactionRetryActive: false,
+      memoryFlushPrimary503Served: false,
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
@@ -2576,6 +2614,7 @@ export async function startQaMockOpenAiServer(params?: {
       MockOpenAiRequestSnapshotInput,
       | "outcome"
       | "errorCode"
+      | "failureStatus"
       | "plannedToolCallId"
       | "plannedToolItemId"
       | "plannedToolName"
@@ -2669,9 +2708,34 @@ export async function startQaMockOpenAiServer(params?: {
         : undefined;
     const settledTerminalCaseName = settledTerminalRequester?.caseName;
     const settledChildSessionKey = settledTerminalRequester?.childSessionKey;
+    const shouldFailAcceptedMemoryFlushAppend =
+      model === QA_MEMORY_FLUSH_PRIMARY_MODEL &&
+      isMemoryFlushCumulativeFallbackRequest({ allInputText, prompt }) &&
+      isAcceptedMemoryFlushAppendResult(requestSnapshotBase.toolOutput);
+    const memoryFlushPrimaryFailure = shouldFailAcceptedMemoryFlushAppend
+      ? scenarioState.memoryFlushPrimary503Served
+        ? {
+            status: 400,
+            type: "server_error",
+            message: "Injected terminal server error",
+          }
+        : {
+            status: 503,
+            type: "server_error",
+            message: "Service Unavailable",
+          }
+      : undefined;
+    if (shouldFailAcceptedMemoryFlushAppend) {
+      // Codex retries 5xx responses internally. The first response records the requested
+      // 503, then a non-retryable response exposes the server error to OpenClaw's fallback.
+      scenarioState.memoryFlushPrimary503Served = true;
+    }
+    const shouldFailAfterTool =
+      QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input);
     const failure =
       injectedFailure ??
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
+      memoryFlushPrimaryFailure ??
+      (shouldFailAfterTool
         ? {
             status: 503,
             type: "server_error",
@@ -2685,6 +2749,7 @@ export async function startQaMockOpenAiServer(params?: {
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
         : {}),
+      ...(failure ? { failureStatus: failure.status } : {}),
       plannedToolCallId: plannedToolIdentity.callId,
       ...(request.route === "responses" && plannedToolIdentity.itemId
         ? { plannedToolItemId: plannedToolIdentity.itemId }

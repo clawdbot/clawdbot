@@ -445,7 +445,7 @@ describe("runEmbeddedAgentEntry", () => {
     ]);
   });
 
-  it("leaves maintenance fallback classification to thrown candidate errors", async () => {
+  it("does not result-fallback an incomplete ordinary maintenance turn", async () => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       expect(params.classifyResult).toBeUndefined();
       expect(params.mergeExhaustedResult).toBeUndefined();
@@ -469,9 +469,81 @@ describe("runEmbeddedAgentEntry", () => {
       },
       behavior: { kind: "maintenance" },
       sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model) => makeResult({ provider, model }),
+      runCandidate: async (provider, model) =>
+        makeResult({
+          provider,
+          model,
+          classification: "empty",
+          meta: {
+            replayInvalid: true,
+            error: {
+              kind: "incomplete_turn",
+              message: "Agent couldn't generate a response.",
+              fallbackSafe: false,
+            },
+          },
+        }),
     });
 
+    expect(result.provider).toBe("primary-provider");
+    expect(result.model).toBe("primary-model");
+    expect(result.result.payloads).toEqual([]);
+  });
+
+  it("classifies an incomplete guarded daily-memory result for model fallback", async () => {
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const primary = await params.run(params.provider, params.model);
+      expect(
+        params.classifyResult?.({
+          result: primary,
+          provider: params.provider,
+          model: params.model,
+          attempt: 1,
+          total: 2,
+        }),
+      ).toMatchObject({
+        reason: "format",
+        code: "incomplete_result",
+      });
+      const fallback = await params.run("fallback-provider", "fallback-model");
+      return {
+        outcome: "completed" as const,
+        result: fallback,
+        provider: "fallback-provider",
+        model: "fallback-model",
+        attempts: [],
+      };
+    });
+    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+    const result = await runEmbeddedAgentEntry({
+      selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
+      identity: { runId: "memory-flush", agentId: "main", sessionId: "session-1" },
+      harness: {
+        workspaceDir: "/tmp/workspace",
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: () => undefined,
+      },
+      behavior: { kind: "memory-flush-maintenance" },
+      sessionOverride: { kind: "preserve" },
+      runCandidate: async (provider, model) =>
+        provider === "primary-provider"
+          ? makeResult({
+              provider,
+              model,
+              classification: "empty",
+              meta: {
+                replayInvalid: true,
+                error: {
+                  kind: "incomplete_turn",
+                  message: "Agent couldn't generate a response.",
+                  fallbackSafe: false,
+                },
+              },
+            })
+          : makeResult({ provider, model }),
+    });
+
+    expect(result.provider).toBe("fallback-provider");
     expect(result.result.payloads).toEqual([{ text: "recovered" }]);
   });
 

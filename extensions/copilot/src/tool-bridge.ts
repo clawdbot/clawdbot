@@ -202,9 +202,7 @@ export async function createCopilotToolBridge(
     return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
   }
 
-  const createOpenClawCodingTools =
-    input.createOpenClawCodingTools ??
-    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
+  const injectedCreateOpenClawCodingTools = input.createOpenClawCodingTools;
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: input.abortSignal,
@@ -247,11 +245,19 @@ export async function createCopilotToolBridge(
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
   try {
-    const constructedTools = await createOpenClawCodingTools(toolOptions);
+    const constructedTools = injectedCreateOpenClawCodingTools
+      ? await injectedCreateOpenClawCodingTools(toolOptions)
+      : hostCapabilities.createToolSurface?.(toolOptions, bindingOptions);
     if (!Array.isArray(constructedTools)) {
-      throw new Error("createOpenClawCodingTools must return an array of tools");
+      throw new Error(
+        injectedCreateOpenClawCodingTools
+          ? "createOpenClawCodingTools must return an array of tools"
+          : "Copilot attempt tools require the host createToolSurface capability.",
+      );
     }
-    const boundTools = hostCapabilities.bindToolSurface(constructedTools, bindingOptions);
+    const boundTools = injectedCreateOpenClawCodingTools
+      ? hostCapabilities.bindToolSurface(constructedTools, bindingOptions)
+      : constructedTools;
     sourceTools = boundTools;
     for (const tool of boundTools) {
       boundSourceTools.add(tool);

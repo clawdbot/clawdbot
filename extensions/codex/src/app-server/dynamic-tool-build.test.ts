@@ -1021,7 +1021,7 @@ describe("Codex app-server dynamic tool build", () => {
 
   it("limits Codex memory flush runs to managed read and write tools", async () => {
     const factoryOptions: unknown[] = [];
-    setOpenClawCodingToolsFactoryForTests((options) => {
+    const createToolSurface = vi.fn((options: unknown) => {
       factoryOptions.push(options);
       return [
         createRuntimeDynamicTool("read"),
@@ -1040,6 +1040,10 @@ describe("Codex app-server dynamic tool build", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.trigger = "memory";
     params.memoryFlushWritePath = "memory/2026-05-22.md";
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      createToolSurface,
+    });
     const sandbox = { enabled: true, backendId: "docker" } as never;
     let persistentWebSearchAllowed = false;
     let webSearchAllowed = true;
@@ -1062,6 +1066,8 @@ describe("Codex app-server dynamic tool build", () => {
       trigger: "memory",
       memoryFlushWritePath: "memory/2026-05-22.md",
     });
+    expect(factoryOptions[0]).not.toHaveProperty("memoryFlushAppendBudget");
+    expect(createToolSurface).toHaveBeenCalledOnce();
     expect(tools.map((tool) => tool.name)).toEqual(["read", "write"]);
     expect(persistentWebSearchAllowed).toBe(true);
     expect(webSearchAllowed).toBe(false);

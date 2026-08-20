@@ -583,6 +583,7 @@ describe("runAgentHarnessAttempt", () => {
         expect(attempt.operation).toBe("settled-tool-finalization");
         expect(attempt).not.toHaveProperty("hostCapabilities");
         expect(attempt).not.toHaveProperty(internalKey);
+        expect(attempt).not.toHaveProperty("memoryFlushAppendBudget");
         return {
           assistant: createFinalAssistant(),
         };
@@ -598,6 +599,10 @@ describe("runAgentHarnessAttempt", () => {
     registerAgentHarness(harness, { ownerPluginId: "codex" });
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
     (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+    (params as unknown as Record<string, unknown>).memoryFlushAppendBudget = {
+      acceptedChars: -10_000,
+      acceptedLines: -10_000,
+    };
     const settledAttempt = createAttemptResult("settled");
 
     await expect(
@@ -685,16 +690,16 @@ describe("runAgentHarnessAttempt", () => {
     },
   );
 
-  it("strips the internal source delivery controller at the plugin harness handoff", async () => {
+  it("strips host-private state at the plugin harness handoff", async () => {
     const internalKey = "__openclawSourceReplyDeliveryRuntime";
-    let handedOffRuntime: unknown;
+    let handedOffAttempt: Record<string, unknown> | undefined;
     registerAgentHarness(
       {
         id: "codex",
         label: "Codex",
         supports: () => ({ supported: true, priority: 100 }),
         runAttempt: async (attemptParams) => {
-          handedOffRuntime = (attemptParams as unknown as Record<string, unknown>)[internalKey];
+          handedOffAttempt = attemptParams as unknown as Record<string, unknown>;
           return createAttemptResult("codex");
         },
       },
@@ -702,11 +707,16 @@ describe("runAgentHarnessAttempt", () => {
     );
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
     (params as unknown as Record<string, unknown>)[internalKey] = { currentMode: "automatic" };
+    (params as unknown as Record<string, unknown>).memoryFlushAppendBudget = {
+      acceptedChars: -10_000,
+      acceptedLines: -10_000,
+    };
 
     await runAgentHarnessAttempt(params);
 
     expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
-    expect(handedOffRuntime).toBeUndefined();
+    expect(handedOffAttempt).not.toHaveProperty(internalKey);
+    expect(handedOffAttempt).not.toHaveProperty("memoryFlushAppendBudget");
   });
 
   it("persists plugin trajectory events through the selected harness host capability", async () => {
@@ -1286,6 +1296,10 @@ describe("runAgentHarnessAttempt", () => {
     );
 
     const params = createAttemptParams();
+    (params as unknown as Record<string, unknown>).memoryFlushAppendBudget = {
+      acceptedChars: -10_000,
+      acceptedLines: -10_000,
+    };
     const result = await runAgentHarnessAttempt(params);
 
     const classifyCall = classify.mock.calls.at(0);
@@ -1300,6 +1314,7 @@ describe("runAgentHarnessAttempt", () => {
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
     expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
+    expect(classifyCall?.[1]).not.toHaveProperty("memoryFlushAppendBudget");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });

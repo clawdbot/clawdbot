@@ -166,6 +166,7 @@ export type MockOpenAiRequestSnapshot = {
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   outcome: MockOpenAiRequestOutcome;
   errorCode?: string;
+  failureStatus?: number;
   rawByteLength: number;
   plannedToolCallId?: string;
   plannedToolItemId?: string;
@@ -243,6 +244,8 @@ export const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
+export const QA_MEMORY_FLUSH_CUMULATIVE_FALLBACK_MARKER_RE =
+  /\bMEMORY-FLUSH-CUMULATIVE-FALLBACK-QA\b/u;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
@@ -368,6 +371,7 @@ export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
   compactionOverflowInjected: boolean;
   compactionRetryActive: boolean;
+  memoryFlushPrimary503Served: boolean;
   subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;

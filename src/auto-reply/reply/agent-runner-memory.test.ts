@@ -4,9 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
+import { resolveMemoryFlushAppendEnforcement } from "../../agents/embedded-agent-runner/run/memory-flush-budget.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES } from "../../agents/memory-flush-append.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -29,7 +32,10 @@ import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
   runPreflightCompactionIfNeeded as runPreflightCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
-import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
+import {
+  memoryFlushTargetTestApi,
+  setAgentRunnerMemoryTestDeps,
+} from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
   createTestTemplateContext,
@@ -47,6 +53,7 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const ensureMemoryFlushTargetFileMock = vi.fn();
+const readMemoryFlushTargetFileMock = vi.fn();
 const registerAgentRunContextMock = vi.fn();
 const clearAgentRunContextMock = vi.fn();
 const TEST_MAX_FLUSH_FAILURES = 3;
@@ -225,6 +232,7 @@ type ModelFallbackParams = {
 };
 
 type EmbeddedAgentParams = {
+  preparedRunAdmission?: PreparedAgentRunAdmission;
   provider?: string;
   model?: string;
   thinkLevel?: string;
@@ -305,6 +313,45 @@ function requireCompactEmbeddedAgentSessionCall(index = 0) {
 }
 
 describe("runMemoryFlushIfNeeded", () => {
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlink target before the production memory-flush pre-read",
+    async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-alias-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-outside-"));
+      await fs.mkdir(path.join(workspaceDir, "memory"));
+      const outsidePath = path.join(outsideDir, "outside.md");
+      await fs.writeFile(outsidePath, "outside secret");
+      await fs.symlink(outsidePath, path.join(workspaceDir, "memory", "2026-08-09.md"));
+
+      await expect(
+        memoryFlushTargetTestApi.ensure({
+          workspaceDir,
+          relativePath: "memory/2026-08-09.md",
+        }),
+      ).rejects.toThrow();
+      await expect(
+        memoryFlushTargetTestApi.read({
+          workspaceDir,
+          relativePath: "memory/2026-08-09.md",
+        }),
+      ).rejects.toThrow();
+      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside secret");
+    },
+  );
+
+  it("rejects an oversized daily file before the production memory-flush pre-read", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-oversized-"));
+    const relativePath = "memory/2026-08-09.md";
+    const targetPath = path.join(workspaceDir, relativePath);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "");
+    await fs.truncate(targetPath, DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES + 1);
+
+    await expect(memoryFlushTargetTestApi.read({ workspaceDir, relativePath })).rejects.toThrow(
+      `Memory flush append rejected: existing daily memory file exceeds ${DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES} bytes`,
+    );
+  });
+
   let rootDir = "";
 
   async function runProjectedCompaction(completed: boolean, followupRun = createTestFollowupRun()) {
@@ -426,6 +473,16 @@ describe("runMemoryFlushIfNeeded", () => {
     runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
     ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
+    readMemoryFlushTargetFileMock.mockReset().mockImplementation(async (params) => {
+      try {
+        return await fs.readFile(path.join(params.workspaceDir, params.relativePath), "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return "";
+        }
+        throw error;
+      }
+    });
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     registerAgentRunContextMock.mockReset();
     clearAgentRunContextMock.mockReset();
@@ -453,6 +510,7 @@ describe("runMemoryFlushIfNeeded", () => {
       runEmbeddedAgentEntry: runEmbeddedAgentEntryMock as never,
       runEmbeddedAgent: runEmbeddedAgentMock as never,
       ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
+      readMemoryFlushTargetFile: readMemoryFlushTargetFileMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
       clearAgentRunContext: clearAgentRunContextMock as never,
@@ -470,6 +528,43 @@ describe("runMemoryFlushIfNeeded", () => {
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
+  it("rejects an oversized pre-flush target before starting the maintenance agent", async () => {
+    const relativePath = "memory/2023-11-14.md";
+    const targetPath = path.join(rootDir, relativePath);
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "");
+    await fs.truncate(targetPath, DAILY_MEMORY_FLUSH_MAX_EXISTING_FILE_BYTES + 1);
+    setAgentRunnerMemoryTestDeps({
+      readMemoryFlushTargetFile: memoryFlushTargetTestApi.read,
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 1,
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
     const followupRun = createTestFollowupRun({
       authProfileId: "anthropic:work",
@@ -481,9 +576,16 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(runEmbeddedAgentEntryMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: { kind: "memory-flush-maintenance" } }),
+    );
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(requireModelFallbackCall().userLockedAuthProfileId).toBe("anthropic:work");
     const flushCall = requireEmbeddedAgentCall();
+    expect(flushCall.preparedRunAdmission).toBeDefined();
+    expect(
+      resolveMemoryFlushAppendEnforcement(flushCall.preparedRunAdmission!.operationalRunInstance),
+    ).toBeTypeOf("function");
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
     expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
@@ -525,6 +627,20 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.sessionId).toBe("session-rotated");
     expect(persisted.compactionCount).toBe(2);
     expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
+  });
+
+  it("keeps non-daily plugin memory flushes out of guarded result fallback", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      ...createMemoryFlushPlan(),
+      systemPrompt: "Write memory to memory/sidecar.md.",
+      relativePath: "memory/sidecar.md",
+    }));
+
+    await runProjectedCompaction(true);
+
+    expect(runEmbeddedAgentEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ behavior: { kind: "maintenance" } }),
+    );
   });
 
   it("does not rotate or increment for an incomplete projected compaction end", async () => {
@@ -742,6 +858,57 @@ describe("runMemoryFlushIfNeeded", () => {
       "high",
     ]);
     expect(followupRun.run.thinkLevel).toBe("ultra");
+  });
+
+  it("shares one opaque append enforcement capability across the logical fallback run", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("openai", "gpt-5.6-sol");
+        return {
+          result: await params.run("demo", "basic"),
+          provider: "demo",
+          model: "basic",
+          attempts: [],
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+      defaultModel: "openai/gpt-5.6-sol",
+      modelContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const primary = requireEmbeddedAgentCall(0);
+    const fallback = requireEmbeddedAgentCall(1);
+    expect(primary.preparedRunAdmission).toBeDefined();
+    expect(fallback.preparedRunAdmission).toBe(primary.preparedRunAdmission);
+    const owner = primary.preparedRunAdmission!.operationalRunInstance;
+    expect(fallback.preparedRunAdmission!.operationalRunInstance).toBe(owner);
+    expect(resolveMemoryFlushAppendEnforcement(owner)).toBeTypeOf("function");
+    expect(primary).not.toHaveProperty("memoryFlushAppendBudget");
+    expect(fallback).not.toHaveProperty("memoryFlushAppendBudget");
   });
 
   it("preserves thinking for runtime-discovered Ollama memory-flush models", async () => {

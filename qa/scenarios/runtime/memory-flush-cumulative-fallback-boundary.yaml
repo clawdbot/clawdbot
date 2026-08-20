@@ -1,0 +1,253 @@
+title: Memory-flush cumulative fallback boundary
+
+scenario:
+  id: memory-flush-cumulative-fallback-boundary
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.recovery-fallbacks
+    secondary:
+      - session-memory.compaction
+      - openai.codex-harness
+  plugins:
+    - codex
+  objective: Prove one host-owned daily-memory append budget remains cumulative across a Codex provider failure and model fallback.
+  successCriteria:
+    - A real ephemeral Gateway and Codex app-server harness execute one forced pre-admission memory flush.
+    - The primary model appends 500 characters through the real daily-memory write tool before its linked continuation receives HTTP 503 and a terminal native retry response.
+    - The fallback model's 301-character append is rejected at 801/800 without changing the accepted file.
+    - The emitted evidence identifies the harness transition, decisions, byte length, and hash without payloads or sensitive identifiers.
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        compaction:
+          memoryFlush:
+            enabled: true
+            forceFlushTranscriptBytes: 1
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/help/testing.md
+    - docs/plugins/sdk-agent-harness.md
+    - docs/reference/session-management-compaction.md
+  codeRefs:
+    - src/auto-reply/reply/agent-runner-memory.ts
+    - src/agents/agent-tools.read.ts
+    - src/agents/embedded-agent-runner/run-entry.ts
+    - src/agents/embedded-agent-runner/run/memory-flush-budget.ts
+    - src/agents/model-fallback-runner.ts
+    - extensions/codex/src/app-server/dynamic-tool-build.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    runtime: codex
+    providerMode: mock-openai
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 180000
+    suiteIsolation: isolated
+    isolationReason: The scenario owns one daily-memory target and deliberately injects a post-tool provider failure.
+    summary: Force one Codex memory flush to append 500 characters, fail after the tool, and reject a 301-character fallback append at the shared 800-character boundary.
+    config:
+      requiredProviderMode: mock-openai
+      harnessRuntime: codex
+      marker: MEMORY-FLUSH-CUMULATIVE-FALLBACK-QA
+      flushPromptSnippet: Pre-compaction memory flush.
+      conversationPrefix: memory-flush-cumulative-fallback
+      senderId: qa-memory-flush-operator
+      seedPrompt: "MEMORY-FLUSH-CUMULATIVE-FALLBACK-QA retain this context for the next turn."
+      proofPrompt: "Trigger the memory-flush cumulative fallback QA proof, then reply with one short sentence."
+      primaryAppendChars: 500
+      fallbackAppendChars: 301
+      maxAppendChars: 800
+      acceptedSha256: 8a13e0af5bf20bb94d66d5d26445d4dac4c18725457fe30b8a85155dd5c057fa
+      rejectionText: "Memory flush append rejected: content across this memory-flush run is too large (801 chars; max 800). Write 1-3 short pointer lines only."
+
+flow:
+  steps:
+    - name: preserves one cumulative append budget across Codex model fallback
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && env.runtimeId === config.harnessRuntime"
+            message:
+              expr: "`expected ${config.requiredProviderMode}/${config.harnessRuntime}, got ${env.providerMode}/${env.runtimeId}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "`${config.conversationPrefix}-${randomUUID().slice(0, 8)}`"
+        - set: sessionKey
+          value:
+            expr: "'agent:qa:main'"
+        - set: seedOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Memory Flush Operator
+            text:
+              ref: config.seedPrompt
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: seedOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: dailyFilesBefore
+          value:
+            expr: "(await fs.readdir(path.join(env.gateway.workspaceDir, 'memory')).catch(() => [])).filter((name) => /^\\d{4}-\\d{2}-\\d{2}\\.md$/u.test(name))"
+        - assert:
+            expr: dailyFilesBefore.length === 0
+            message:
+              expr: "`isolated workspace already had ${dailyFilesBefore.length} daily-memory file(s)`"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: proofOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Memory Flush Operator
+            text:
+              ref: config.proofPrompt
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: proofOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 120000)
+          saveAs: proofReply
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.marker) && String(request.prompt ?? '').includes(config.flushPromptSnippet))"
+        - set: expectedModels
+          value:
+            expr: "[splitModelRef(env.primaryModel)?.model, splitModelRef(env.alternateModel)?.model]"
+        - assert:
+            expr: "expectedModels.every((model) => typeof model === 'string' && model.length > 0) && expectedModels[0] !== expectedModels[1]"
+            message: expected distinct primary and fallback model ids
+        - set: requestFacts
+          value:
+            expr: "scenarioRequests.map((request) => ({ cursor: request.cursor, model: request.model, outcome: request.outcome, failureStatus: request.failureStatus ?? null, plannedTool: request.plannedToolName ?? null, plannedChars: typeof request.plannedToolArgs?.content === 'string' ? request.plannedToolArgs.content.length : 0, hasToolOutput: String(request.toolOutput ?? '').length > 0, structuredError: request.toolOutputStructuredError === true }))"
+        - set: writePlans
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'write' && !request.toolOutput)"
+        - set: primaryPlans
+          value:
+            expr: "writePlans.filter((request) => request.model === expectedModels[0])"
+        - set: fallbackPlans
+          value:
+            expr: "writePlans.filter((request) => request.model === expectedModels[1])"
+        - assert:
+            expr: "writePlans.length === 2 && primaryPlans.length === 1 && fallbackPlans.length === 1"
+            message:
+              expr: "`expected one primary and one fallback write plan; facts=${JSON.stringify(requestFacts)}`"
+        - set: primaryPlan
+          value:
+            expr: primaryPlans[0]
+        - set: fallbackPlan
+          value:
+            expr: fallbackPlans[0]
+        - set: dailyPath
+          value:
+            expr: "String(primaryPlan.plannedToolArgs?.path ?? '')"
+        - set: primaryContent
+          value:
+            expr: "String(primaryPlan.plannedToolArgs?.content ?? '')"
+        - set: fallbackContent
+          value:
+            expr: "String(fallbackPlan.plannedToolArgs?.content ?? '')"
+        - assert:
+            expr: "/^memory\\/\\d{4}-\\d{2}-\\d{2}\\.md$/u.test(dailyPath) && fallbackPlan.plannedToolArgs?.path === dailyPath"
+            message: write plans did not target one canonical relative daily-memory path
+        - assert:
+            expr: "primaryContent.length === config.primaryAppendChars && primaryContent === 'P'.repeat(config.primaryAppendChars) && primaryContent.split(/\\r\\n|\\n|\\r/u).filter((line) => line.trim().length > 0).length === 1"
+            message:
+              expr: "`primary append contract failed: chars=${primaryContent.length}`"
+        - assert:
+            expr: "fallbackContent.length === config.fallbackAppendChars && fallbackContent === 'F'.repeat(config.fallbackAppendChars) && fallbackContent.split(/\\r\\n|\\n|\\r/u).filter((line) => line.trim().length > 0).length === 1"
+            message:
+              expr: "`fallback append contract failed: chars=${fallbackContent.length}`"
+        - set: primaryAppendResult
+          value:
+            expr: "`Appended content to ${dailyPath}.`"
+        - set: primaryPostToolFailures
+          value:
+            expr: "scenarioRequests.filter((request) => request.model === expectedModels[0] && request.outcome === 'error' && request.toolOutputCallId === primaryPlan.plannedToolCallId && String(request.toolOutput ?? '').trim() === primaryAppendResult && request.plannedToolName === undefined)"
+        - set: primaryPostTool503s
+          value:
+            expr: "primaryPostToolFailures.filter((request) => request.failureStatus === 503)"
+        - set: primaryPostToolTerminalFailures
+          value:
+            expr: "primaryPostToolFailures.filter((request) => request.failureStatus === 400)"
+        - assert:
+            expr: "primaryPostTool503s.length === 1 && primaryPostToolTerminalFailures.length === 1 && primaryPostToolFailures.every((request) => request.toolOutputStructuredError !== true)"
+            message:
+              expr: "`missing linked primary post-tool HTTP failure; facts=${JSON.stringify(requestFacts)}`"
+        - set: fallbackContinuations
+          value:
+            expr: "scenarioRequests.filter((request) => request.model === expectedModels[1] && request.outcome === 'success' && request.toolOutputCallId === fallbackPlan.plannedToolCallId && String(request.toolOutput ?? '').includes(config.rejectionText) && request.plannedToolName === undefined)"
+        - assert:
+            expr: "fallbackContinuations.length === 1 && fallbackContinuations[0].toolOutputStructuredError !== true"
+            message:
+              expr: "`missing linked fallback rejection continuation; facts=${JSON.stringify(requestFacts)}`"
+        - assert:
+            expr: "primaryPlan.cursor < primaryPostTool503s[0].cursor && primaryPostTool503s[0].cursor < primaryPostToolTerminalFailures[0].cursor && primaryPostToolTerminalFailures[0].cursor < fallbackPlan.cursor && fallbackPlan.cursor < fallbackContinuations[0].cursor"
+            message: provider evidence did not show the ordered primary-to-fallback transition
+        - set: dailyAbsolutePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, dailyPath)"
+        - set: finalBytes
+          value:
+            expr: "await fs.readFile(dailyAbsolutePath)"
+        - set: finalText
+          value:
+            expr: "finalBytes.toString('utf8')"
+        - set: finalSha256
+          value:
+            expr: "(await qaImport('node:crypto')).createHash('sha256').update(finalBytes).digest('hex')"
+        - assert:
+            expr: "finalBytes.length === config.primaryAppendChars && finalText === primaryContent && finalSha256 === config.acceptedSha256 && !finalText.includes(fallbackContent)"
+            message:
+              expr: "`rejected fallback changed the file: bytes=${finalBytes.length} sha256=${finalSha256}`"
+        - call: readRawQaSessionStore
+          saveAs: store
+          args:
+            - ref: env
+        - set: sessionEntry
+          value:
+            expr: "store[sessionKey]"
+        - assert:
+            expr: "sessionEntry?.memoryFlush?.kind === 'failed' && sessionEntry?.memoryFlush?.failureCount === 1 && sessionEntry?.status === 'done' && sessionEntry?.abortedLastRun !== true"
+            message:
+              expr: "`memory flush rejection or parent session state was unexpected: flush=${String(sessionEntry?.memoryFlush?.kind ?? 'missing')} failures=${String(sessionEntry?.memoryFlush?.failureCount ?? 'missing')} status=${String(sessionEntry?.status ?? 'missing')} aborted=${String(sessionEntry?.abortedLastRun === true)}`"
+        - assert:
+            expr: "typeof proofReply.text === 'string' && proofReply.text.length > 0"
+            message: parent channel turn did not receive a visible reply
+        - set: trace
+          value:
+            expr: "({ version: 1, verdict: 'PASS', scenario: 'memory-flush-cumulative-fallback-boundary', logicalFlushes: 1, gateway: 'ephemeral-child', provider: env.providerMode, harnessPaths: { primary: 'codex-app-server', fallback: 'codex-app-server', enforcement: 'openclaw-host-daily-memory-write' }, transition: { fromModel: expectedModels[0], toModel: expectedModels[1], reason: 'post-tool-http-503-then-terminal-server-error', primaryHttp503Requests: primaryPostTool503s.length, terminalHttpStatus: primaryPostToolTerminalFailures[0].failureStatus }, accepted: { appendChars: config.primaryAppendChars, cumulativeChars: config.primaryAppendChars, maxChars: config.maxAppendChars, decision: 'accepted' }, rejected: { appendChars: config.fallbackAppendChars, projectedChars: config.primaryAppendChars + config.fallbackAppendChars, maxChars: config.maxAppendChars, decision: 'rejected', reason: 'cumulative-limit-exceeded', deterministicErrorMatched: true, fileChanged: false }, file: { path: dailyPath, lengthBytes: finalBytes.length, sha256: finalSha256 }, flushStatus: sessionEntry.memoryFlush.kind, payloadContents: 'redacted' })"
+      detailsExpr: "JSON.stringify(trace, null, 2)"
