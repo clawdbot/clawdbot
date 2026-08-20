@@ -64,6 +64,19 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("42.5", true)).toBe("42.5");
   });
 
+  it("compares integer spellings against the exact binary double", () => {
+    expect(coerceConfigFormNumberString("1000000000000000100", true)).toBe("1000000000000000100");
+    expect(coerceConfigFormNumberString("1000000000000000100", false)).toBe("1000000000000000100");
+    expect(coerceConfigFormNumberString("-1000000000000000100", false)).toBe(
+      "-1000000000000000100",
+    );
+    expect(coerceConfigFormNumberString("1000000000000000127", true)).toBe("1000000000000000127");
+    expect(coerceConfigFormNumberString("1000000000000000128", true)).toBe(
+      1_000_000_000_000_000_128,
+    );
+    expect(coerceConfigFormNumberString("9007199254740994", true)).toBe(9_007_199_254_740_994);
+  });
+
   it("rejects non-finite decimal rationals and schema multiples", () => {
     expect(numericInputConstraints({ type: "number", multipleOf: Number.NaN }).step).toBe("any");
     expect(

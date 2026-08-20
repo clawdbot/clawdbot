@@ -496,6 +496,70 @@ describe("config form scalar integrity", () => {
     );
   });
 
+  it("keeps an unset branch hint stable while an identifier is typed across rerenders", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const identifier = "1048113311314608148";
+    const schema = {
+      anyOf: [{ type: "string", pattern: "^[0-9]{19}$" }, { type: "number" }],
+    };
+    const patches: unknown[] = [];
+    let persisted: unknown;
+    let value: unknown = undefined;
+
+    const renderValue = () => {
+      render(
+        renderTextInput({
+          schema,
+          value,
+          path: ["allowFrom"],
+          hints: {},
+          unsupported: new Set(),
+          disabled: false,
+          inputType: "text",
+          onPatch: (_path, nextValue) => {
+            patches.push(nextValue);
+            persisted = nextValue;
+            value = nextValue;
+            // Model application immediately refreshes the rendered field.
+            renderValue();
+          },
+        }),
+        container,
+      );
+    };
+
+    try {
+      renderValue();
+      let input = expectElement(
+        container.querySelector<HTMLInputElement>("input[type='text']"),
+        "incremental string-number input",
+      );
+      input.focus();
+      for (const [index, digit] of Array.from(identifier).entries()) {
+        input.value += digit;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        // A background refresh can land even when the prefix is not yet a
+        // valid string branch; the focused edit must survive that repaint.
+        renderValue();
+        input = expectElement(
+          container.querySelector<HTMLInputElement>("input[type='text']"),
+          `incremental string-number input ${index + 1}`,
+        );
+      }
+
+      expect(patches.length).toBeGreaterThan(1);
+      expect(patches.slice(0, -1).every((candidate) => typeof candidate === "number")).toBe(true);
+      expect(patches.at(-1)).toBe(identifier);
+      expect(persisted).toBe(identifier);
+      expect(value).toBe(identifier);
+      expect(input.value).toBe(identifier);
+      input.blur();
+    } finally {
+      container.remove();
+    }
+  });
+
   it("does not commit a clear while a number input holds partial numeric text", () => {
     // Browsers report value === "" with validity.badInput while the user is
     // mid-keystroke ("0." on the way to "0.5"). Committing undefined here

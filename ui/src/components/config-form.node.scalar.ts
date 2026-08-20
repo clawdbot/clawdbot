@@ -33,6 +33,12 @@ import {
   schemaType,
 } from "./config-form.shared.ts";
 
+type ScalarValueBranch = "string" | "number" | "boolean";
+
+type ScalarEditHint = {
+  branch?: ScalarValueBranch;
+};
+
 const scalarInputState = new WeakMap<
   HTMLInputElement,
   {
@@ -42,6 +48,7 @@ const scalarInputState = new WeakMap<
     pathKey: string;
     presentationIdentity: string;
     renderedValue: string;
+    edit?: ScalarEditHint;
   }
 >();
 
@@ -65,6 +72,11 @@ function syncScalarInputIdentity(
     return;
   }
   const previous = scalarInputState.get(element);
+  const preserveEdit =
+    previous?.edit !== undefined &&
+    element.matches(":focus") &&
+    previous.pathKey === pathKey &&
+    previous.presentationIdentity === presentationIdentity;
   if (previous) {
     if (
       !Object.is(previous.sourceIdentity, sourceIdentity) ||
@@ -95,17 +107,62 @@ function syncScalarInputIdentity(
     pathKey,
     presentationIdentity,
     renderedValue,
+    edit: preserveEdit ? previous?.edit : undefined,
   });
+}
+
+function scalarValueBranch(value: unknown): ScalarValueBranch | undefined {
+  if (typeof value === "string") {
+    return "string";
+  }
+  if (typeof value === "number") {
+    return "number";
+  }
+  if (typeof value === "boolean") {
+    return "boolean";
+  }
+  return undefined;
+}
+
+function beginScalarEdit(
+  target: HTMLInputElement,
+  initialBranch: ScalarValueBranch | undefined,
+): ScalarEditHint {
+  const state = scalarInputState.get(target);
+  if (!state) {
+    return { branch: initialBranch };
+  }
+  if (state.edit === undefined) {
+    state.edit = { branch: initialBranch };
+  }
+  return state.edit;
+}
+
+function scalarEditHintForInput(
+  target: HTMLInputElement,
+  initialBranch: ScalarValueBranch | undefined,
+): ScalarEditHint {
+  const state = scalarInputState.get(target);
+  return state?.edit ?? { branch: initialBranch };
+}
+
+function finishScalarEdit(target: HTMLInputElement): void {
+  const state = scalarInputState.get(target);
+  if (state) {
+    state.edit = undefined;
+  }
 }
 
 function coerceTextInputValue(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
   currentValue?: unknown,
+  editHint?: ScalarEditHint,
 ): string | number | boolean | undefined {
   const trimmed = value.trim();
   const variants = schema.anyOf ?? schema.oneOf ?? [];
   const stringCandidateValid = isSupportedConfigValueValid(schema, value);
+  const currentBranch = editHint ? editHint.branch : scalarValueBranch(currentValue);
   const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
   if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
     let booleanBranchValid = false;
@@ -125,7 +182,7 @@ function coerceTextInputValue(
     }
     if (
       booleanBranchValid &&
-      (typeof currentValue !== "string" || explicitBooleanBranchValid || !stringCandidateValid)
+      (currentBranch !== "string" || explicitBooleanBranchValid || !stringCandidateValid)
     ) {
       return booleanCandidate;
     }
@@ -142,7 +199,7 @@ function coerceTextInputValue(
       break;
     }
   }
-  if (typeof currentValue === "number") {
+  if (currentBranch === "number") {
     if (numberCandidate !== undefined) {
       return numberCandidate;
     }
@@ -150,7 +207,7 @@ function coerceTextInputValue(
       return undefined;
     }
   }
-  if (typeof currentValue === "string" && stringCandidateValid) {
+  if (currentBranch === "string" && stringCandidateValid) {
     return value;
   }
   if (numberCandidate !== undefined) {
@@ -166,8 +223,12 @@ function stringConstraintMessage(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
   currentValue?: unknown,
+  editHint?: ScalarEditHint,
 ): string {
-  return isSupportedConfigValueValid(schema, coerceTextInputValue(value, schema, currentValue))
+  return isSupportedConfigValueValid(
+    schema,
+    coerceTextInputValue(value, schema, currentValue, editHint),
+  )
     ? ""
     : t("configForm.invalidString");
 }
@@ -177,9 +238,12 @@ function shouldClearOptionalEmpty(
   schema: ConfigNodeRenderParams["schema"],
   isRequired: boolean,
   currentValue?: unknown,
+  editHint?: ScalarEditHint,
 ): boolean {
   return (
-    value === "" && !isRequired && Boolean(stringConstraintMessage(value, schema, currentValue))
+    value === "" &&
+    !isRequired &&
+    Boolean(stringConstraintMessage(value, schema, currentValue, editHint))
   );
 }
 
@@ -281,6 +345,7 @@ export function renderTextInput(
       ? jsonValue(value)
       : (value ?? "");
   const effectiveValue = value !== undefined ? value : schema.default;
+  const initialBranch = scalarValueBranch(effectiveValue);
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
   const isPhonePresentation = hint?.presentation === "phone-number";
   const phonePresentation =
@@ -310,15 +375,17 @@ export function renderTextInput(
       return;
     }
     const raw = target.value;
+    const editHint = scalarEditHintForInput(target, initialBranch);
     const optionalEmpty = shouldClearOptionalEmpty(
       raw,
       schema,
       params.isRequired === true,
       effectiveValue,
+      editHint,
     );
     setControlValidity(
       target,
-      optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue),
+      optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue, editHint),
     );
   };
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
@@ -373,13 +440,22 @@ export function renderTextInput(
           );
           return;
         }
-        if (shouldClearOptionalEmpty(raw, schema, params.isRequired === true, effectiveValue)) {
+        const editHint = beginScalarEdit(target, initialBranch);
+        if (
+          shouldClearOptionalEmpty(
+            raw,
+            schema,
+            params.isRequired === true,
+            effectiveValue,
+            editHint,
+          )
+        ) {
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
         } else if (
-          setControlValidity(target, stringConstraintMessage(raw, schema, effectiveValue))
+          setControlValidity(target, stringConstraintMessage(raw, schema, effectiveValue, editHint))
         ) {
-          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue));
+          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
         }
       }}
       @change=${(event: Event) => {
@@ -387,31 +463,51 @@ export function renderTextInput(
           return;
         }
         const target = event.target as HTMLInputElement;
+        const editHint = beginScalarEdit(target, initialBranch);
         const raw = target.value;
-        const rawMessage = stringConstraintMessage(raw, schema, effectiveValue);
+        const rawMessage = stringConstraintMessage(raw, schema, effectiveValue, editHint);
         if (!rawMessage && !isPhonePresentation) {
           setControlValidity(target, "");
-          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue));
+          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
+          finishScalarEdit(target);
           return;
         }
         const normalized = raw.trim();
         if (
-          shouldClearOptionalEmpty(normalized, schema, params.isRequired === true, effectiveValue)
+          shouldClearOptionalEmpty(
+            normalized,
+            schema,
+            params.isRequired === true,
+            effectiveValue,
+            editHint,
+          )
         ) {
           target.value = normalized;
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
+          finishScalarEdit(target);
           return;
         }
-        const normalizedMessage = stringConstraintMessage(normalized, schema, effectiveValue);
+        const normalizedMessage = stringConstraintMessage(
+          normalized,
+          schema,
+          effectiveValue,
+          editHint,
+        );
         if (normalizedMessage) {
           setControlValidity(target, rawMessage);
+          finishScalarEdit(target);
           return;
         }
         target.value = normalized;
         setControlValidity(target, "");
-        commitScalarValue(target, coerceTextInputValue(normalized, schema, effectiveValue));
+        commitScalarValue(
+          target,
+          coerceTextInputValue(normalized, schema, effectiveValue, editHint),
+        );
+        finishScalarEdit(target);
       }}
+      @blur=${(event: Event) => finishScalarEdit(event.target as HTMLInputElement)}
     />
   `;
   const revealToggle = isStructuredSecretRef
