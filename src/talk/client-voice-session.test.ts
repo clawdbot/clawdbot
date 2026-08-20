@@ -648,7 +648,7 @@ describe("client voice session", () => {
     });
   });
 
-  it("ignores whitespace transcripts without consuming queue capacity", async () => {
+  it("ignores whitespace and rounds fractional transcripts", async () => {
     await seedSession("agent:main:main");
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -678,10 +678,14 @@ describe("client voice session", () => {
       entryId: "real",
       role: "user",
       text: "persist me",
+      timestamp: 1_770_000_000_000.5,
     });
     expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledOnce();
     expect(sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1].eventId).toBe(
       `voice:${voiceSessionId}:real`,
+    );
+    expect(sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1].now).toBe(
+      1_770_000_000_001,
     );
   });
 
