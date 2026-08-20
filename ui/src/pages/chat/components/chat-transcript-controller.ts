@@ -140,18 +140,22 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
-  private pendingDisclosureRow: HTMLElement | null = null;
-  private readonly captureDisclosureResize = (event: Event) => {
+  private pendingInteractionRow: HTMLElement | null = null;
+  private readonly captureInteractionResize = (event: Event) => {
     const target = event.target;
-    const disclosure =
-      target instanceof Element ? target.closest("button[aria-expanded], summary") : null;
-    const row = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
+    const geometryControl =
+      target instanceof Element
+        ? event.type === "wa-tab-show"
+          ? target.closest("wa-tab-group")
+          : target.closest("button[aria-expanded], button[aria-pressed], summary")
+        : null;
+    const row = geometryControl?.closest<HTMLElement>(".chat-virtual-row") ?? null;
     if (!row) {
       return;
     }
-    this.pendingDisclosureRow = row;
-    // Direct-DOM disclosures do not otherwise enter the Lit update cycle.
-    // Schedule the owner reconciliation after their click handler commits.
+    this.pendingInteractionRow = row;
+    // Direct-DOM controls do not otherwise enter the Lit update cycle.
+    // Schedule the owner reconciliation after their interaction handler commits.
     this.host.requestUpdate();
   };
   private measureConnectedRows(): void {
@@ -166,7 +170,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     }
   }
   private readonly handleGeometryCommit = (event: Event) => {
-    this.reconcileDisclosureResize(event.target);
+    this.reconcileInteractionResize(event.target);
     if (event instanceof CustomEvent && event.detail?.widthChanged === false) {
       return;
     }
@@ -346,7 +350,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
-    this.reconcileDisclosureResize();
+    this.reconcileInteractionResize();
     this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
   }
@@ -411,7 +415,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           <div
             class="chat-thread-inner chat-thread-inner--virtual"
             ${ref(this.scrollElementRef)}
-            @click=${this.captureDisclosureResize}
+            @click=${this.captureInteractionResize}
+            @wa-tab-show=${this.captureInteractionResize}
           >
             <div
               class="chat-virtual-sizer"
@@ -553,8 +558,8 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.focusedRowKey = this.rowKeyFromEvent(event, event.relatedTarget);
   }
 
-  private reconcileDisclosureResize(sidebarCommitTarget?: EventTarget | null): void {
-    const row = this.pendingDisclosureRow;
+  private reconcileInteractionResize(sidebarCommitTarget?: EventTarget | null): void {
+    const row = this.pendingInteractionRow;
     const sidebarRuntime = row?.closest(".sidebar-region__right-runtime");
     if (
       sidebarRuntime &&
@@ -562,7 +567,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     ) {
       return;
     }
-    this.pendingDisclosureRow = null;
+    this.pendingInteractionRow = null;
     if (!row?.isConnected || !this.scrollElement?.contains(row)) {
       return;
     }

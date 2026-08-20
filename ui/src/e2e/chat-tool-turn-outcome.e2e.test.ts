@@ -47,47 +47,60 @@ async function toggleDisclosureWithFrameTrace(
   page: import("playwright").Page,
   summary: import("playwright").Locator,
   actionSelector?: string,
+  actionKey?: string,
 ): Promise<DisclosureFrame[]> {
-  return await summary.evaluate((button, selector) => {
-    const row = button.closest<HTMLElement>(".chat-virtual-row");
-    const thread = button.closest<HTMLElement>(".chat-thread");
-    if (!row || !thread) {
-      throw new Error("Expected disclosure inside a virtual transcript row");
-    }
-    const frames: DisclosureFrame[] = [];
-    const sample = () => {
-      frames.push({
-        expanded: button.matches("summary")
-          ? button.closest("details")?.hasAttribute("open") === true
-          : button.getAttribute("aria-expanded") === "true",
-        mountedBodies: row.querySelectorAll(".chat-tool-msg-body, .chat-activity-group__body")
-          .length,
-        rowHeight: row.getBoundingClientRect().height,
-        rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
-        scrollHeight: thread.scrollHeight,
-        scrollTop: thread.scrollTop,
-      });
-    };
-    sample();
-    const action = selector ? row.querySelector<HTMLElement>(selector) : (button as HTMLElement);
-    if (!action) {
-      throw new Error(`Expected disclosure action ${selector}`);
-    }
-    action.click();
-    return new Promise<DisclosureFrame[]>((resolve) => {
-      let remaining = 8;
-      const next = () => {
-        sample();
-        remaining -= 1;
-        if (remaining === 0) {
-          resolve(frames);
-        } else {
-          requestAnimationFrame(next);
-        }
+  return await summary.evaluate(
+    (button, { key, selector }) => {
+      const row = button.closest<HTMLElement>(".chat-virtual-row");
+      const thread = button.closest<HTMLElement>(".chat-thread");
+      if (!row || !thread) {
+        throw new Error("Expected disclosure inside a virtual transcript row");
+      }
+      const frames: DisclosureFrame[] = [];
+      const sample = () => {
+        frames.push({
+          expanded: button.matches("summary")
+            ? button.closest("details")?.hasAttribute("open") === true
+            : button.getAttribute("aria-expanded") === "true" ||
+              button.getAttribute("aria-pressed") === "true" ||
+              button.getAttribute("aria-selected") === "true",
+          mountedBodies: row.querySelectorAll(".chat-tool-msg-body, .chat-activity-group__body")
+            .length,
+          rowHeight: row.getBoundingClientRect().height,
+          rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+          scrollHeight: thread.scrollHeight,
+          scrollTop: thread.scrollTop,
+        });
       };
-      requestAnimationFrame(next);
-    });
-  }, actionSelector);
+      sample();
+      const action = selector ? row.querySelector<HTMLElement>(selector) : (button as HTMLElement);
+      if (!action) {
+        throw new Error(`Expected disclosure action ${selector}`);
+      }
+      if (key) {
+        action.focus();
+        action.dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, cancelable: true, composed: true, key }),
+        );
+      } else {
+        action.click();
+      }
+      return new Promise<DisclosureFrame[]>((resolve) => {
+        let remaining = 8;
+        const next = () => {
+          sample();
+          remaining -= 1;
+          if (remaining === 0) {
+            resolve(frames);
+          } else {
+            requestAnimationFrame(next);
+          }
+        };
+        requestAnimationFrame(next);
+      });
+    },
+    { key: actionKey, selector: actionSelector },
+  );
 }
 
 function expectStableDisclosureFrames(frames: DisclosureFrame[], label = "disclosure") {
@@ -302,12 +315,19 @@ suite.define(() => {
       const rawPanel = modeGroup.getByRole("tabpanel", { name: "Raw" });
       expect(await diffTab.getAttribute("aria-selected")).toBe("true");
       expect(await rawPanel.isHidden()).toBe(true);
-      await rawTab.click();
+      const tabClickFrames = await toggleDisclosureWithFrameTrace(page, rawTab);
       expect(await rawTab.getAttribute("aria-selected")).toBe("true");
       expect(await diffPanel.isHidden()).toBe(true);
-      await rawTab.press("Home");
+      const tabKeyboardFrames = await toggleDisclosureWithFrameTrace(
+        page,
+        rawTab,
+        undefined,
+        "Home",
+      );
       expect(await diffTab.getAttribute("aria-selected")).toBe("true");
       expect(await rawPanel.isHidden()).toBe(true);
+      expectStableDisclosureFrames(tabClickFrames, `${name} tab click`);
+      expectStableDisclosureFrames(tabKeyboardFrames, `${name} tab keyboard`);
 
       if (artifactDir) {
         await page.locator(".chat-main").screenshot({
@@ -714,14 +734,19 @@ suite.define(() => {
           timestamp: 101,
         },
         {
+          role: "assistant",
+          content: `\`\`\`text\n${"A wide transcript code line that must wrap without moving its virtual row. ".repeat(24)}\n\`\`\``,
+          timestamp: 102,
+        },
+        {
           role: "user",
           content: "Keep both sibling disclosures above this final exchange.",
-          timestamp: 102,
+          timestamp: 103,
         },
         {
           role: "assistant",
           content: [{ type: "text", text: "Both sibling disclosures are ready." }],
-          timestamp: 103,
+          timestamp: 104,
         },
       ],
     });
@@ -738,11 +763,15 @@ suite.define(() => {
       .locator("summary");
     await userToggle.waitFor();
     await jsonSummary.waitFor();
+    const wrapToggle = page.locator(".code-block-wrap");
+    await wrapToggle.waitFor({ state: "visible" });
     const traces: Record<string, DisclosureFrame[]> = {};
     traces.userMessageExpand = await toggleDisclosureWithFrameTrace(page, userToggle);
     traces.userMessageCollapse = await toggleDisclosureWithFrameTrace(page, userToggle);
     traces.jsonExpand = await toggleDisclosureWithFrameTrace(page, jsonSummary);
     traces.jsonCollapse = await toggleDisclosureWithFrameTrace(page, jsonSummary);
+    traces.codeWrap = await toggleDisclosureWithFrameTrace(page, wrapToggle);
+    traces.codeUnwrap = await toggleDisclosureWithFrameTrace(page, wrapToggle);
     await context.close();
     for (const [label, frames] of Object.entries(traces)) {
       expectStableDisclosureFrames(frames, label);
