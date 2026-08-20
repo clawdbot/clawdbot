@@ -60,6 +60,7 @@ export class ChatPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data!: SessionChatRouteData;
   @property({ attribute: false }) navDrawerOpen = false;
   @state() private layout: ChatSplitLayout | undefined;
+  @state() private splitOnboardingDismissed = false;
   @state() private narrow = false;
   @state() private mergedChrome = false;
   @state() private dropIndicator: DropIndicator | null = null;
@@ -105,7 +106,9 @@ export class ChatPage extends OpenClawLightDomElement {
     this.snapshotStore.connect();
     observeChatCache(this.messageCache, this.snapshotStore);
     this.routeHref = window.location.href;
-    this.layout = loadSettings().chatSplitLayout;
+    const settings = loadSettings();
+    this.layout = settings.chatSplitLayout;
+    this.splitOnboardingDismissed = settings.chatSplitOnboardingDismissed === true;
     this.mediaQuery = window.matchMedia("(max-width: 1099px)");
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
@@ -401,6 +404,14 @@ export class ChatPage extends OpenClawLightDomElement {
     patchSettings({ chatSplitLayout: layout });
   }
 
+  private readonly dismissSplitOnboarding = () => {
+    if (this.splitOnboardingDismissed) {
+      return;
+    }
+    this.splitOnboardingDismissed = true;
+    patchSettings({ chatSplitOnboardingDismissed: true });
+  };
+
   private updateRoute(sessionKey: string, replace = false, face = this.data.face ?? "chat") {
     const data = this.data;
     if (
@@ -582,6 +593,10 @@ export class ChatPage extends OpenClawLightDomElement {
   ) {
     const activeLocation = findPane(layout, layout.activePaneId);
     const rightmostPane = this.narrow ? activeLocation?.pane : layout.columns.at(-1)?.panes.at(-1);
+    const onboardingPaneId =
+      splitMode && !this.splitOnboardingDismissed && layout.columns.length > 1
+        ? layout.columns[0]?.panes[0]?.id
+        : undefined;
     return html`
       <div class="chat-split-view ${this.narrow ? "chat-split-view--narrow" : ""}">
         ${repeat(
@@ -615,6 +630,7 @@ export class ChatPage extends OpenClawLightDomElement {
                     narrow: this.narrow,
                     navDrawerOpen: this.navDrawerOpen,
                     onboarding: this.closest(".shell--onboarding") !== null,
+                    onDismissSplitOnboarding: this.dismissSplitOnboarding,
                     onClosePane: splitMode ? this.handleClosePane : undefined,
                     onFaceChange: this.handlePaneFaceChange,
                     onFocusPane: this.handleFocusPane,
@@ -627,6 +643,8 @@ export class ChatPage extends OpenClawLightDomElement {
                     pane,
                     sessionKeys: retainedSessions.get(pane.id) ?? [],
                     showGatewayPicker: pane.id === rightmostPane?.id,
+                    splitOnboardingVisible:
+                      onboardingPaneId !== undefined && pane.id === onboardingPaneId,
                     splitMode,
                     weight: splitWeight(
                       column.paneWeights,

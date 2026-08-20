@@ -814,9 +814,10 @@ describe("loadSettings default gateway URL derivation", () => {
       activePaneId: "p2",
     };
 
-    saveSettings({ ...settings, chatSplitLayout });
+    saveSettings({ ...settings, chatSplitLayout, chatSplitOnboardingDismissed: true });
 
     expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
+    expect(loadSettings().chatSplitOnboardingDismissed).toBe(true);
   });
 
   it("preserves an opted-in bottom workspace dock", () => {

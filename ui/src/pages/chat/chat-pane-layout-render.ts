@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { t } from "../../i18n/index.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -84,14 +85,17 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       workspaceGit,
       sidebarLayout,
     );
+    const splitOnboarding = this.renderSplitOnboarding();
     const chat = renderChat({
       ...chatProps,
-      header: board.face === "dashboard" ? nothing : header,
+      header: board.face === "dashboard" ? nothing : html`${header}${splitOnboarding}`,
     });
     // Keep this root stable across board face changes so the guarded board runtime
     // remains connected while Chat is active.
     const primary = html`<div class="chat-pane-primary-column">
-      ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
+      ${board.face === "dashboard" ? header : nothing}
+      ${board.face === "dashboard" ? splitOnboarding : nothing}
+      ${this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
@@ -171,5 +175,21 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       state.imageLightbox,
       state.handleCloseImage,
     )}${this.renderResetConfirmation()}`;
+  }
+
+  private renderSplitOnboarding() {
+    if (!this.splitOnboardingVisible) {
+      return nothing;
+    }
+    return html`<div class="chat-split-onboarding">
+      <p class="chat-split-onboarding__copy">${t("chat.splitView.onboarding")}</p>
+      <button
+        class="btn btn--ghost chat-split-onboarding__dismiss"
+        type="button"
+        @click=${this.onDismissSplitOnboarding}
+      >
+        ${t("chat.splitView.dismissOnboarding")}
+      </button>
+    </div>`;
   }
 }

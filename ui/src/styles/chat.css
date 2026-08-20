@@ -6,4 +6,5 @@
 @import "./chat/question-card.css";
 @import "./chat/sidebar.css";
 @import "./chat/split-view.css";
+@import "./chat/split-onboarding.css";
 @import "./chat/board.css";

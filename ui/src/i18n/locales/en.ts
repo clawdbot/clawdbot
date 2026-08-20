@@ -5486,6 +5486,8 @@ export const en: TranslationMap = {
       closePane: "Close pane",
       dropSplit: "Split",
       dropOpenHere: "Open here",
+      onboarding: "Select another session to show it in this column.",
+      dismissOnboarding: "Don't show again",
     },
     sidebar: {
       updateMacAndGateway: "Update Mac app + Gateway",

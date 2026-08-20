@@ -203,6 +203,9 @@ export type UiSettings = {
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
+  // The split-view onboarding opt-out is browser-local and intentionally stays
+  // outside the synced config ui.prefs surface.
+  chatSplitOnboardingDismissed?: boolean;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
@@ -523,6 +526,9 @@ export function loadSettings(): UiSettings {
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
+      ...(parsed.chatSplitOnboardingDismissed === true
+        ? { chatSplitOnboardingDismissed: true }
+        : {}),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
@@ -669,6 +675,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
+    ...(next.chatSplitOnboardingDismissed === true ? { chatSplitOnboardingDismissed: true } : {}),
     // Right dock is the default; only the opt-in bottom dock persists.
     ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
     ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0

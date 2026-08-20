@@ -26,6 +26,7 @@ type ChatPagePaneRenderOptions = {
   narrow: boolean;
   navDrawerOpen: boolean;
   onboarding: boolean;
+  onDismissSplitOnboarding?: () => void;
   onClosePane?: (paneId: string) => void;
   onFaceChange: (paneId: string, sessionKey: string, face: BoardFace) => void;
   onFocusPane: (paneId: string) => void;
@@ -43,6 +44,7 @@ type ChatPagePaneRenderOptions = {
   pane: ChatSplitPane;
   sessionKeys: readonly string[];
   showGatewayPicker: boolean;
+  splitOnboardingVisible: boolean;
   splitMode: boolean;
   weight: number;
 };
@@ -111,6 +113,8 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .nativeGateways=${nativeGateways}
               .gatewaysSnapshot=${nativeGateways?.snapshot ?? null}
               .onboarding=${options.onboarding}
+              .splitOnboardingVisible=${options.splitOnboardingVisible && presented}
+              .onDismissSplitOnboarding=${options.onDismissSplitOnboarding}
               .onOpenSplitView=${options.onOpenSplitView}
               .onSplitDown=${options.onSplitDown}
               .onSplitRight=${options.onSplitRight}

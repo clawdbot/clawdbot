@@ -1,0 +1,43 @@
+.chat-split-onboarding {
+  box-sizing: border-box;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  width: min(420px, calc(100% - 24px));
+  margin: 12px auto 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--chat-surface);
+  box-shadow: var(--overlay-shadow);
+  color: var(--text);
+  text-align: center;
+}
+
+.chat-split-onboarding__copy {
+  max-width: 100%;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm, 12px);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.chat-split-onboarding__dismiss {
+  min-height: 40px;
+  max-width: 100%;
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.chat-split-onboarding__dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .chat-split-onboarding {
+    width: calc(100% - 16px);
+    padding-inline: 8px;
+  }
+}

@@ -183,6 +183,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) nativeGateways?: NativeGatewaysCapability | null;
   @property({ attribute: false }) gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   @property({ attribute: false }) onboarding = false;
+  @property({ attribute: false }) splitOnboardingVisible = false;
+  @property({ attribute: false }) onDismissSplitOnboarding?: () => void;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
