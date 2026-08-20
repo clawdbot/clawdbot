@@ -507,12 +507,14 @@ async function runSetupWizardOnce(
   }
   const preModelAuthConfig = nextConfig;
   let stagedModelAuth: SetupModelAuthCandidate | undefined;
-  if (!keepExistingModelConfig) {
+  const hasExplicitAuthSetup = opts.authChoice !== undefined && opts.authChoice !== "skip";
+  if (!keepExistingModelConfig || hasExplicitAuthSetup) {
     stagedModelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
+      preserveExistingModelSelection: keepExistingModelConfig,
     });
     nextConfig = stagedModelAuth.config;
   }
