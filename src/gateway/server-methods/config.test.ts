@@ -80,9 +80,11 @@ const {
     uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
     version: "test-schema",
   })),
-  buildRuntimeConfigSchemaForConfigMock: vi.fn(() => ({
+  buildRuntimeConfigSchemaForConfigMock: vi.fn((_config?: unknown) => ({
     schema: { type: "object" },
-    uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
+    uiHints: undefined as
+      | Record<string, { advanced?: boolean; sensitive?: boolean; tags?: string[] }>
+      | undefined,
     version: "test-schema",
   })),
 }));
@@ -273,6 +275,31 @@ describe("config.openFile", () => {
         "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
       );
     });
+  });
+});
+
+describe("write acknowledgement redaction", () => {
+  // A write that REMOVES a claimant drops that claimant's hints from the committed schema, but a
+  // value it declared sensitive can survive under a shared channel. Redacting under the committed
+  // schema alone would hand that retained secret back in the acknowledgement.
+  it("redacts a field whose only sensitive hint belonged to a claimant this write removed", async () => {
+    storedConfig = { ui: { prefs: { theme: "claw" } } };
+    // Key the schema off the config it is handed, not call order: the pre-write config still has
+    // the departing claimant (theme "claw") and is the only side marking the field sensitive; the
+    // committed config (theme "lobster") no longer has that claimant, so it reports no hints.
+    buildRuntimeConfigSchemaForConfigMock.mockImplementation((config: unknown) => {
+      const theme = (config as { ui?: { prefs?: { theme?: string } } } | undefined)?.ui?.prefs
+        ?.theme;
+      const uiHints: Record<string, { sensitive?: boolean }> =
+        theme === "claw" ? { "ui.prefs.theme": { sensitive: true } } : {};
+      return { schema: { type: "object" }, uiHints, version: "test-schema" };
+    });
+
+    const harness = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "lobster" } } } });
+
+    const lastCall = expectDefined(harness.respond.mock.calls.at(-1), "config.patch respond call");
+    const payload = lastCall[1] as { config: { ui: { prefs: { theme: string } } } };
+    expect(payload.config.ui.prefs.theme).toBe("__OPENCLAW_REDACTED__");
   });
 });
 

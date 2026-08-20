@@ -1,5 +1,9 @@
 // Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
+import {
+  hasSensitiveUrlHintTag,
+  SENSITIVE_URL_HINT_TAG,
+} from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -57,6 +61,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
+import type { ConfigUiHints } from "../../shared/config-ui-hints-types.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
@@ -682,11 +687,56 @@ function clearConfigSchemaResponseCache() {
   configSchemaResponseCache = null;
 }
 
+/**
+ * Union the redaction-relevant hints of the pre-write and committed schemas.
+ *
+ * Neither side alone is safe. The committed schema is required so a write that ACTIVATES a
+ * replacement redacts under the owner it selects. But the committed schema alone drops a claimant
+ * the write REMOVED, and a value that claimant declared sensitive can survive under a shared
+ * channel, so the acknowledgement would return it unredacted.
+ *
+ * Both attributes the redaction path consults travel here: `redactConfigObject` and the system
+ * agent gate on `sensitive === true || hasSensitiveUrlHintTag(hint)`, so carrying only the former
+ * would still leak a URL-embedded credential the removed owner alone tagged.
+ */
+function unionRedactionUiHints(
+  previous: ConfigUiHints | undefined,
+  committed: ConfigUiHints | undefined,
+): ConfigUiHints | undefined {
+  if (!previous) {
+    return committed;
+  }
+  if (!committed) {
+    return previous;
+  }
+  const merged: ConfigUiHints = { ...committed };
+  for (const [path, hint] of Object.entries(previous)) {
+    const sensitive = hint?.sensitive === true;
+    const urlSecret = hasSensitiveUrlHintTag(hint);
+    if (!sensitive && !urlSecret) {
+      continue;
+    }
+    const owned = merged[path];
+    const tags =
+      urlSecret && !hasSensitiveUrlHintTag(owned)
+        ? [...(owned?.tags ?? []), SENSITIVE_URL_HINT_TAG]
+        : owned?.tags;
+    merged[path] = {
+      ...owned,
+      ...(sensitive ? { sensitive: true } : {}),
+      ...(tags ? { tags } : {}),
+    };
+  }
+  return merged;
+}
+
 async function respondWithConfigRestartWrite(params: {
   requestParams: unknown;
   kind: ConfigRestartWriteKind;
   mode: ConfigRestartWriteMode;
   writeResult: ConfigWriteCommitResult;
+  /** Config as it stood before the write, so a claimant this write removed still redacts. */
+  previousConfig: OpenClawConfig;
   changedPaths: string[];
   actor: ReturnType<typeof resolveControlPlaneActor>;
   context: GatewayRequestContext;
@@ -697,7 +747,11 @@ async function respondWithConfigRestartWrite(params: {
   // Redact under the owner the committed config selects. Hints captured before the write describe
   // the previous owner, so a write that activates a replacement could return a field that owner
   // marks sensitive. Clearing the cache above is not enough: the caller already holds stale hints.
-  const uiHints = buildRuntimeConfigSchemaForConfig(params.writeResult.config).uiHints;
+  // Union with the pre-write hints so a claimant this write removed still redacts its own fields.
+  const uiHints = unionRedactionUiHints(
+    buildRuntimeConfigSchemaForConfig(params.previousConfig).uiHints,
+    buildRuntimeConfigSchemaForConfig(params.writeResult.config).uiHints,
+  );
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
     kind: params.kind,
@@ -966,7 +1020,10 @@ export const configHandlers: GatewayRequestHandlers = {
           : {}),
         config: redactConfigObject(
           writeResult.config,
-          buildRuntimeConfigSchemaForConfig(writeResult.config).uiHints,
+          unionRedactionUiHints(
+            parsed.schema.uiHints,
+            buildRuntimeConfigSchemaForConfig(writeResult.config).uiHints,
+          ),
         ),
         ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
       },
@@ -1176,6 +1233,7 @@ export const configHandlers: GatewayRequestHandlers = {
       kind: "config-patch",
       mode: "config.patch",
       writeResult,
+      previousConfig: snapshot.config,
       changedPaths,
       actor,
       context,
@@ -1242,6 +1300,7 @@ export const configHandlers: GatewayRequestHandlers = {
       kind: "config-apply",
       mode: "config.apply",
       writeResult,
+      previousConfig: snapshot.config,
       changedPaths,
       actor,
       context,
