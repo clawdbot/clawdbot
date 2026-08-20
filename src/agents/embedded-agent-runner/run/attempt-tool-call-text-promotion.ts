@@ -112,9 +112,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<unknown> })[
-    Symbol.asyncIterator
-  ] = async function* () {
+  const wrappedAsyncIterator = async function* () {
     const source = {
       [Symbol.asyncIterator]: originalAsyncIterator,
     } as AsyncIterable<unknown>;
@@ -125,6 +123,9 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       resolveProtectedRanges: findCodeRegions,
     });
   };
+  if (!Reflect.set(stream, Symbol.asyncIterator, wrappedAsyncIterator)) {
+    throw new TypeError("Cannot replace stream async iterator");
+  }
 
   return stream;
 }

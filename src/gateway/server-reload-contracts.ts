@@ -2,6 +2,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
@@ -68,9 +69,9 @@ export type GatewayGmailRestartAbortController = {
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  sourceConfig: OpenClawConfig;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
   runtimeEnv?: NodeJS.ProcessEnv;
-  sourceConfig?: OpenClawConfig;
 };
 
 export type GatewayRestartTransactionState = "pending" | "committed" | "rejected";
@@ -143,18 +144,21 @@ export type GatewayReloadHandlerParams = {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
+  getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
   getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
     changedPaths: readonly string[];
     beforeReplace: (
       channels: ReadonlySet<ChannelKind>,
       accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
     ) => Promise<void>;
-    commitRuntime: () => Promise<void>;
+    commitRuntime: (onCommit?: () => void) => Promise<void>;
+    onReplacementTeardownFailure: (error: unknown) => void;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
@@ -181,6 +185,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
   "assertRestartReady" | "createHealthMonitor" | "logReload"
 > & {
+  configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;

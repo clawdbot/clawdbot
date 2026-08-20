@@ -121,14 +121,31 @@ export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
+  onBeforePrompt?: () => Promise<void> | void;
+  onPromptStarted?: (params: { authoritative: boolean }) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
+  // Gateway admission can still close while runtime preparation is awaited.
+  if (params.onBeforePrompt) {
+    await params.onBeforePrompt();
+  }
   if (params.runtime.startTurn) {
-    // startTurn exposes result and event streams separately; coordinate both before reporting done.
+    // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
     const turn = params.runtime.startTurn(params.turn);
+    let promptReadinessOpen = true;
+    const readinessPromise = turn.promptStarted?.then(
+      async () => {
+        if (!promptReadinessOpen) {
+          return { kind: "prompt-start-closed" as const };
+        }
+        await params.onPromptStarted?.({ authoritative: true });
+        return { kind: "prompt-started" as const };
+      },
+      (error: unknown) => ({ kind: "prompt-start-error" as const, error }),
+    );
     const eventsPromise = consumeAcpTurnEvents({
       events: turn.events,
       eventGate: params.eventGate,
@@ -139,9 +156,30 @@ export async function consumeAcpTurnStream(params: {
       (error: unknown) => ({ kind: "event-error" as const, error }),
     );
     const resultPromise = turn.result.then(
-      (result) => ({ kind: "result" as const, result }),
-      (error: unknown) => ({ kind: "result-error" as const, error }),
+      (result) => {
+        promptReadinessOpen = false;
+        return { kind: "result" as const, result };
+      },
+      (error: unknown) => {
+        promptReadinessOpen = false;
+        return { kind: "result-error" as const, error };
+      },
     );
+
+    if (readinessPromise) {
+      const readiness = await Promise.race([readinessPromise, resultPromise]);
+      if (readiness.kind === "prompt-start-error") {
+        await turn.closeStream({ reason: "turn-prompt-start-error" }).catch(() => {});
+        // The canonical result settles only after backend persistence and client cleanup finish.
+        const terminalOutcome = await resultPromise;
+        if (terminalOutcome.kind === "result" && terminalOutcome.result.status === "completed") {
+          throw readiness.error;
+        }
+      }
+    } else {
+      // Third-party adapters predating readiness retain their existing output-based replay rules.
+      await params.onPromptStarted?.({ authoritative: false });
+    }
 
     let eventOutcome: AcpTurnStreamOutcome | null = null;
     let result: AcpRuntimeTurnResult | null = null;
@@ -198,8 +236,10 @@ export async function consumeAcpTurnStream(params: {
     };
   }
 
+  const events = params.runtime.runTurn(params.turn);
+  await params.onPromptStarted?.({ authoritative: false });
   return await consumeAcpTurnEvents({
-    events: params.runtime.runTurn(params.turn),
+    events,
     eventGate: params.eventGate,
     onEvent: params.onEvent,
     onOutputEvent: params.onOutputEvent,

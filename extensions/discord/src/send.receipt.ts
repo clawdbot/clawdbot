@@ -15,6 +15,11 @@ export type DiscordReceiptResultSource = {
   platformMessageIds?: readonly string[];
 };
 
+export function toDiscordOutboundDeliveryResult<T extends { channelId: string }>(result: T) {
+  const { channelId, ...delivery } = result;
+  return { ...delivery, target: { kind: "channel" as const, id: channelId } };
+}
+
 export function createDiscordSendReceiptFromResults(params: {
   results: readonly DiscordSendResult[];
   threadId?: string;

@@ -86,6 +86,11 @@ export type GatewayServiceReadOptions = {
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
 
+export type GatewayServiceLoadState =
+  | { status: "loaded" }
+  | { status: "not-loaded" }
+  | { status: "unknown"; detail: string };
+
 /** Parsed command and env metadata from an installed platform service. */
 export type GatewayServiceCommandConfig = {
   programArguments: string[];
@@ -97,7 +102,7 @@ export type GatewayServiceCommandConfig = {
 
 export type GatewayServiceState = {
   installed: boolean;
-  loaded: boolean;
+  loadState: GatewayServiceLoadState;
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;

@@ -11,6 +11,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   deleteLegacySessionEntryRows,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryStore,
   writeSessionEntry,
@@ -85,8 +86,21 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     const replacementAuthorityKeys = selectedStatuses
       ? new Set(entries.map(({ sessionKey }) => sessionKey))
       : selectedKeys;
+    // Compare persisted row bytes, never a hydrated entry. Participants and owner live in
+    // their own table/columns, and each selection reader projects a different subset of them,
+    // so an entry-object compare can differ from the transaction re-read with no write at all
+    // and wedge the row's repairs forever.
     const expectedEntryJson = new Map(
-      entries.map(({ sessionKey, entry }) => [sessionKey, JSON.stringify(entry)]),
+      entries.map(({ sessionKey }) => {
+        const rawEntryJson = readExactSessionEntryJson(database, sessionKey);
+        if (rawEntryJson === undefined) {
+          // The row vanished between hydrating the snapshot and reading its bytes. Fail closed:
+          // a selected key must hold bytes, or a later missing-vs-missing compare would pass and
+          // rewrite the stale entry into a concurrently deleted key.
+          throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
+        }
+        return [sessionKey, rawEntryJson];
+      }),
     );
     const operation = await params.update(entries);
     const replacements = normalize(operation.replacements);
@@ -152,12 +166,12 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       (transactionDb) => {
         const transactionEntries = new Map<string, SessionEntry>();
         for (const sessionKey of validationKeys) {
-          const transactionEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-          if (JSON.stringify(transactionEntry) !== expectedEntryJson.get(sessionKey)) {
+          const transactionRow = readExactSessionEntryRow(transactionDb, sessionKey);
+          if (transactionRow?.row.entry_json !== expectedEntryJson.get(sessionKey)) {
             throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
           }
-          if (transactionEntry) {
-            transactionEntries.set(sessionKey, transactionEntry);
+          if (transactionRow) {
+            transactionEntries.set(sessionKey, transactionRow.entry);
           }
         }
         for (const replacement of applicable) {

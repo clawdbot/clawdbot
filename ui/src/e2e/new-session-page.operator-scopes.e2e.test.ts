@@ -28,7 +28,21 @@ async function openDraft(
     featureMethods,
     operatorScopes,
     methodResponses: {
+      "environments.list": {
+        environments: [
+          {
+            id: "node:writer-runner",
+            type: "node",
+            label: "Writer runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 1, available: 1 },
+          },
+        ],
+        profiles: [{ id: "aws", providerId: "crabbox" }],
+      },
       "projects.list": { projects: [] },
+      "worktrees.branches": { branches: [], repositoryStatus: "git" },
       "sessions.create": { key: "agent:main:operator-scope-proof", runStarted: true },
     },
   });
@@ -76,11 +90,34 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isEnabled()).toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await expect.poll(() => incognito.isDisabled()).toBe(true);
+      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      await where.getByRole("button", { name: /Writer runner/u }).waitFor();
+      expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
+      expect(await where.locator('[data-value="connect-machine"]').count()).toBe(0);
+      await page.keyboard.press("Escape");
       await submit.click();
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "scope proof" },
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows paired devices, cloud profiles, and Connect to admins", async () => {
+    const { context, page } = await openDraft([
+      "operator.read",
+      "operator.write",
+      "operator.admin",
+    ]);
+    try {
+      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      await where.locator('[data-value="device:writer-runner"]').waitFor();
+      await where.locator('[data-value="cloud:aws"]').waitFor();
+      await where.locator('[data-value="connect-machine"]').waitFor();
     } finally {
       await context.close();
     }
@@ -173,7 +210,7 @@ suite.define(() => {
       });
       await page.getByRole("button", { name: "Parent folder" }).click();
       await page.getByRole("button", { name: "app", exact: true }).click();
-      expect(await page.locator('[data-value="recent::/private/repo"]').count()).toBe(0);
+      expect(await page.locator('[data-value="recent:/private/repo"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("work in the package");
       await page.getByRole("button", { name: "Start session" }).click();

@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { WizardStep } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiExternalText } from "../lib/format-error.ts";
 import { renderChannelPicker } from "./channel-picker.ts";
 import { handleCopyButton } from "./copy-button.ts";
 import { renderPicker } from "./select-picker.ts";
@@ -35,7 +36,9 @@ function stepClass(props: WizardStepControlsProps, name: string): string {
 
 function renderMessage(props: WizardStepControlsProps) {
   return props.step.message
-    ? html`<div class=${stepClass(props, "message")}>${props.step.message}</div>`
+    ? html`<div class=${stepClass(props, "message")}>
+        ${formatUiExternalText(props.step.message)}
+      </div>`
     : nothing;
 }
 
@@ -66,7 +69,9 @@ function renderDeviceCode(step: WizardStep) {
   const copyLabel = t("modelSetup.wizard.copy");
   return html`
     <div class="wizard-step__device-code">
-      ${deviceCode.message ? html`<div class="muted">${deviceCode.message}</div>` : nothing}
+      ${deviceCode.message
+        ? html`<div class="muted">${formatUiExternalText(deviceCode.message)}</div>`
+        : nothing}
       <code>${deviceCode.code}</code>
       <button
         type="button"
@@ -226,7 +231,7 @@ function renderTextStep(props: WizardStepControlsProps) {
     >
       ${step.message
         ? html`<div class=${stepClass(props, "message")}>
-            <label for=${props.inputId}>${step.message}</label>
+            <label for=${props.inputId}>${formatUiExternalText(step.message)}</label>
           </div>`
         : nothing}
       ${input} ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}

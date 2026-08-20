@@ -45,6 +45,7 @@ export type { SessionTranscriptReadScope };
 
 export type ReadRecentSessionMessagesResult = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   messages: unknown[];
   transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
@@ -192,6 +193,7 @@ async function readRecentSqliteMessageRecords(
   opts?: Partial<ReadRecentSessionMessagesOptions>,
 ): Promise<{
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   messages: unknown[];
   transcriptEvents: TranscriptEvent[];
   totalMessages: number;
@@ -202,6 +204,7 @@ async function readRecentSqliteMessageRecords(
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
+    ...(page.deltaCursor ? { deltaCursor: page.deltaCursor } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     totalMessages: page.totalMessages,
@@ -244,38 +247,6 @@ function sqliteRecordMessageWithSeq(record: {
 
 export function sqliteMessageEventWithSeq(entry: SessionTranscriptMessageEvent): unknown {
   return projectTranscriptEntryMessage(entry.event, entry.seq);
-}
-
-export function extractMessageRole(message: unknown): string | undefined {
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? ((message as { role?: unknown }).role as string | undefined)
-    : undefined;
-}
-
-export function extractSessionTranscriptText(message: unknown): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  const record = message as { content?: unknown; text?: unknown };
-  if (typeof record.content === "string") {
-    return record.content.trim() || null;
-  }
-  if (Array.isArray(record.content)) {
-    const text = record.content
-      .map((entry) =>
-        entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string"
-          ? (entry as { text: string }).text
-          : "",
-      )
-      .filter((part) => part.trim())
-      .join("\n")
-      .trim();
-    return text || null;
-  }
-  if (typeof record.text === "string") {
-    return record.text.trim() || null;
-  }
-  return null;
 }
 
 function readSqliteAggregateUsageSnapshot(
@@ -401,7 +372,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const { activeLeafEntryId, messages, transcriptEvents, totalMessages } =
+  const { activeLeafEntryId, deltaCursor, messages, transcriptEvents, totalMessages } =
     await readRecentSqliteMessageRecords(target, opts);
   if (totalMessages === 0 && messages.length === 0 && opts.allowResetArchiveFallback === true) {
     return await archivedTranscriptReader(target).readRecentWithStats({
@@ -411,6 +382,7 @@ export async function readRecentSessionMessagesWithStatsAsync(
   }
   return {
     ...(activeLeafEntryId !== undefined ? { activeLeafEntryId } : {}),
+    ...(deltaCursor ? { deltaCursor } : {}),
     messages,
     transcriptEvents,
     totalMessages,

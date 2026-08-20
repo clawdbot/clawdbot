@@ -126,6 +126,7 @@ export async function runSetupModelAuthStep(params: {
   runtime: RuntimeEnv;
   agentDir?: string;
   stateDir?: string;
+  preserveExistingModelSelection?: boolean;
 }): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime } = params;
   const env = params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined;
@@ -202,6 +203,7 @@ export async function runSetupModelAuthStep(params: {
         runtime,
         config: nextConfig,
         secretInputMode: opts.secretInputMode,
+        setAsPrimary: !params.preserveExistingModelSelection,
       });
       nextConfig = customResult.config;
       prompter.disableBackNavigation?.();
@@ -306,7 +308,10 @@ export async function runSetupModelAuthStep(params: {
       resolvePreferredProviderForAuthChoice,
     });
     const shouldPromptModelSelection =
-      authChoiceFromPrompt || authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided;
+      authChoiceFromPrompt ||
+      (authChoiceModelSelectionPolicy.promptWhenAuthChoiceProvided &&
+        (!params.preserveExistingModelSelection ||
+          !authChoiceModelSelectionPolicy.allowKeepCurrent));
     if (shouldPromptModelSelection) {
       const modelSelection = await promptDefaultModel({
         config: nextConfig,

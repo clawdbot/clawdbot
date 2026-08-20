@@ -91,6 +91,7 @@ describe("OpenClaw performance workflow", () => {
     const legacyKovaRef = "0f9e678e239b45db46d2bd930b7983203580df78";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
+    const targetCheckout = findStep("Checkout target metadata", "resolve_target");
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
     expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
@@ -110,7 +111,12 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.env?.KOVA_CONFIG_CONTRACT_INPUT).toBe(
       "${{ inputs.kova_config_contract }}",
     );
-    expect(resolveTarget.run).toContain("zod-schema.agent-defaults.ts?ref=${resolved_sha}");
+    expect(targetCheckout.with?.["sparse-checkout"]).toBe(
+      "src/config/zod-schema.agent-defaults.ts",
+    );
+    expect(resolveTarget.run).toContain(
+      'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
+    );
     expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
     expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
@@ -120,13 +126,14 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
     );
-    expect(resolveTarget.run).toContain('if schema_content="$({');
+    expect(resolveTarget.run).toContain('if [[ -f "$schema_path" ]]; then');
+    expect(resolveTarget.run).toContain('schema_content="$(cat "$schema_path")"');
     expect(resolveTarget.run).toContain('elif [[ -z "$kova_ref" ]]; then');
     expect(resolveTarget.run).toContain('schema_content=""');
     expect(resolveTarget.run).toContain("Supply kova_ref explicitly");
     expect(
       resolveTarget.run?.indexOf('if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then'),
-    ).toBeLessThan(resolveTarget.run?.indexOf('schema_content="$({') ?? -1);
+    ).toBeLessThan(resolveTarget.run?.indexOf('schema_path="${TARGET_CHECKOUT_DIR}') ?? -1);
     expect(resolveTarget.run).toContain(
       'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
     );
@@ -232,9 +239,9 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.29");
+    expect(workflow).toContain("OCM_VERSION: v0.2.32");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: d966098d6ba2bc10891be3c76e162a37b07f28c4f51da75d2eb509886eb7e1cf",
+      "OCM_LINUX_X64_SHA256: 5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070",
     );
     expect(installRun).toContain(
       '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
@@ -248,6 +255,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("resolves each target once before benchmark and publication fan out", () => {
     const workflow = readWorkflow();
+    const targetCheckout = findStep("Checkout target metadata", "resolve_target");
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
     const checkout = findStep("Checkout OpenClaw");
     const record = findStep("Record tested revision");
@@ -256,13 +264,19 @@ describe("OpenClaw performance workflow", () => {
 
     expect(workflow.jobs?.kova?.needs).toBe("resolve_target");
     expect(workflow.jobs?.source_performance?.needs).toBe("resolve_target");
+    expect(targetCheckout.uses).toBe("actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10");
+    expect(targetCheckout.with?.ref).toBe("${{ inputs.target_ref || github.sha }}");
+    expect(targetCheckout.with?.path).toBe(".artifacts/performance-target");
+    expect(targetCheckout.with?.["sparse-checkout-cone-mode"]).toBe(false);
+    expect(targetCheckout.with?.["persist-credentials"]).toBe(false);
     expect(resolveTarget.id).toBe("resolve");
-    expect(resolveTarget.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(resolveTarget.env?.GH_TOKEN).toBeUndefined();
     expect(resolveTarget.env?.TARGET_REF_INPUT).toBe("${{ inputs.target_ref }}");
-    expect(resolveTarget.run).toContain("encodeURIComponent");
-    expect(resolveTarget.run).toContain(
-      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}"',
+    expect(resolveTarget.env?.TARGET_CHECKOUT_DIR).toBe(
+      "${{ github.workspace }}/.artifacts/performance-target",
     );
+    expect(resolveTarget.run).toContain('git -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD');
+    expect(resolveTarget.run).not.toContain("gh api");
     expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
     expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
     expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
@@ -390,8 +404,8 @@ describe("OpenClaw performance workflow", () => {
 
     expect(run).toContain('"$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"');
     expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
-    expect(run).toContain("--case gatewayHealthJsonConnected \\");
-    expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
+    expect(run).toContain("--case gatewayHealthJsonWarmState \\");
+    expect(run).toContain("--case gatewayHealthJsonFreshState \\");
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
@@ -1076,22 +1090,19 @@ esac
     expect(publish.run).not.toContain("report_jsons");
   });
 
-  it("installs local workspace packages beside the OCM root tarball", () => {
-    const workflow = readWorkflow();
-    const configure = findStep("Configure OCM local workspace dependencies");
+  it("lets OCM discover its native workspace dependency adapter", () => {
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const steps = readWorkflow().jobs?.kova?.steps ?? [];
+    const installIndex = steps.findIndex((step) => step.name === "Install OCM and Kova");
 
-    expect(workflow.jobs?.kova?.env).not.toHaveProperty("OPENCLAW_OCM_RUNTIME_BUILD_PROFILE");
-    expect(configure.run).toContain(
-      'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mts"',
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(steps.map((step) => step.name)).not.toContain(
+      "Configure OCM local workspace dependencies",
     );
-    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_adapter");
-    expect(configure.run).toContain("OPENCLAW_OCM_NPM_WRAPPER=$npm_wrapper");
-    expect(configure.run).toContain(
-      'if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then',
-    );
-    expect(configure.run).toContain(
-      "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS=$workspace_dependency_dirs",
-    );
+    expect(workflowText).not.toContain("OCM_INTERNAL_NPM_BIN");
+    expect(workflowText).not.toContain("OPENCLAW_OCM_NPM_WRAPPER");
+    expect(workflowText).not.toContain("OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS");
+    expect(steps[installIndex + 1]?.name).toBe("Kova version and plan sanity");
   });
 
   it("fails selected live Kova lanes when live auth is missing", () => {

@@ -12,7 +12,7 @@ export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
     attention.kind === "question"
       ? icons.hand
       : attention.kind === "approval"
-        ? icons.key
+        ? icons.shieldQuestion
         : attention.kind === "agent"
           ? resolveSessionAttentionIcon(attention.icon)
           : icons.alertTriangle;
@@ -62,6 +62,16 @@ export function renderSessionRunSpinner(showTitle = true) {
 
 export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
   if (session.hasActiveRun) {
+    if (session.status === "queued") {
+      const label = t("sessionsView.statusQueued");
+      return html`<span
+        class="sidebar-child-session__status sidebar-child-session__status--queued"
+        role="img"
+        aria-label=${label}
+        title=${showTitle ? label : nothing}
+        >${icons.hourglass}</span
+      >`;
+    }
     return renderSessionRunSpinner(showTitle);
   }
   if (!session.isChild) {

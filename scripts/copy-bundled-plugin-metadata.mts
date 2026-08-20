@@ -290,7 +290,15 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       : undefined;
     const packageJson = isRecord(parsedPackageJson) ? parsedPackageJson : undefined;
     const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
-    if (!shouldCopyBundledPluginMetadata(dirent.name, env, buildablePluginDirs)) {
+    const hasExternalLocalDist =
+      isRecord(packageJson?.openclaw) &&
+      isRecord(packageJson.openclaw.build) &&
+      packageJson.openclaw.build.bundledDist === false &&
+      fs.existsSync(distPluginDir);
+    if (
+      !hasExternalLocalDist &&
+      !shouldCopyBundledPluginMetadata(dirent.name, env, buildablePluginDirs)
+    ) {
       removePathIfExists(distPluginDir);
       continue;
     }

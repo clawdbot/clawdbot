@@ -3,11 +3,13 @@
  * lookup store. That made `sessions.list` quadratic in entries even after
  * connection reuse removed the per-row SQLite opens.
  */
+import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -76,7 +78,7 @@ test("sessions.list does not materialize the lookup store once per row", async (
   expect(large).toBeLessThan(small * 12);
 });
 
-test("sessions.list discovers store targets at most once per agent", async () => {
+test("sessions.list reuses prepared store targets for sharing", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
     entries: Object.fromEntries(
@@ -90,9 +92,37 @@ test("sessions.list discovers store targets at most once per agent", async () =>
   try {
     const result = await directSessionReq("sessions.list", LIST_PARAMS);
     expect(result.ok).toBe(true);
-    expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(1);
+    expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(0);
   } finally {
     discoverySpy.mockRestore();
+  }
+});
+
+test("startup prewarm reuses requested durable targets when no incognito store is open", async () => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+  }
+  const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
+  const storePath = storeTemplate.replace("{agentId}", "main");
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-main") },
+    storePath,
+  });
+  const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
+  try {
+    expect(
+      sessionsConfig.canPrewarmCombinedSessionStoresForGateway(
+        {
+          agents: { list: [{ id: "main", default: true }] },
+          session: { store: storeTemplate },
+        },
+        { agentIds: ["main"], maxRows: 10 },
+      ),
+    ).toBe(true);
+    expect(matcher).toHaveBeenCalledTimes(1);
+  } finally {
+    matcher.mockRestore();
   }
 });
 

@@ -105,8 +105,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.accountId).toBe("default");
     expect(routeArgs.chatId).toBe(-100200300);
     expect(routeArgs.isGroup).toBe(true);
-    expect(routeArgs.resolvedThreadId).toBe(77);
-    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.threadSpec).toEqual({ id: 77, scope: "forum" });
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
     expect(ctx?.turn.record.updateLastRoute).toBeUndefined();
@@ -175,8 +174,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.accountId).toBe("work");
     expect(routeArgs.chatId).toBe(-100200300);
     expect(routeArgs.isGroup).toBe(true);
-    expect(routeArgs.resolvedThreadId).toBe(77);
-    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.threadSpec).toEqual({ id: 77, scope: "forum" });
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
@@ -207,8 +205,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.accountId).toBe("default");
     expect(routeArgs.chatId).toBe(1234);
     expect(routeArgs.isGroup).toBe(false);
-    expect(routeArgs.resolvedThreadId).toBeUndefined();
-    expect(routeArgs.replyThreadId).toBeUndefined();
+    expect(routeArgs.threadSpec).toEqual({ scope: "dm" });
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
   });
@@ -237,8 +234,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     const routeArgs = expectRouteArgs();
     expect(routeArgs.chatId).toBe(1234);
     expect(routeArgs.isGroup).toBe(false);
-    expect(routeArgs.resolvedThreadId).toBeUndefined();
-    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.threadSpec).toEqual({ id: 77, scope: "dm" });
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
   });
 });

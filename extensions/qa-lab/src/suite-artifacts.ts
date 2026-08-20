@@ -48,7 +48,14 @@ export async function publishQaSuiteArtifactFiles(params: {
   }
 }
 
+export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
+  for (const fileName of ["qa-suite-summary.json", QA_EVIDENCE_FILENAME, "qa-suite-report.md"]) {
+    await fs.rm(path.join(outputDir, fileName), { force: true });
+  }
+}
+
 export type QaSuiteSummaryJsonParams = {
+  status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
   finishedAt: Date;
@@ -108,6 +115,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.evidence ? { evidence: params.evidence } : {}),
     run: {
+      status: params.status ?? "completed",
       startedAt: params.startedAt.toISOString(),
       finishedAt: params.finishedAt.toISOString(),
       providerMode: params.providerMode,
@@ -131,6 +139,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
 }
 
 export async function writeQaSuiteArtifacts(params: {
+  status?: QaSuiteSummaryJson["run"]["status"];
   repoRoot?: string;
   outputDir: string;
   startedAt: Date;
@@ -195,6 +204,7 @@ export async function writeQaSuiteArtifacts(params: {
       : crablineChannelDriverSelection;
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
+    inProgress: params.status === "running",
     startedAt: params.startedAt,
     finishedAt: params.finishedAt,
     checks: [],
@@ -286,7 +296,10 @@ export async function writeQaSuiteArtifacts(params: {
       "utf8",
     );
   }
-  const writeEvidenceFile = params.writeEvidenceFile ?? true;
+  const writeEvidenceFile = params.status !== "running" && (params.writeEvidenceFile ?? true);
+  if (!writeEvidenceFile) {
+    await fs.rm(evidencePath, { force: true });
+  }
   await publishQaSuiteArtifactFiles({
     outputDir: params.outputDir,
     files: [

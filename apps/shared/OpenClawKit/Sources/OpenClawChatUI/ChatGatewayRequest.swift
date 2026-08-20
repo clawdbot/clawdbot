@@ -77,8 +77,13 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "agents.list", timeoutMs: timeoutMs)
     }
 
-    public static func modelsList() -> OpenClawChatGatewayRequest {
-        OpenClawChatGatewayRequest(method: "models.list", timeoutMs: self.defaultTimeoutMs)
+    public static func modelsList(agentID: String?) -> OpenClawChatGatewayRequest {
+        var params: [String: AnyCodable] = [:]
+        self.add(agentID, to: &params, key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "models.list",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
     }
 
     public static func artifactDownload(
@@ -529,6 +534,13 @@ public enum OpenClawChatGatewayRequests {
             method: "chat.history",
             params: params,
             timeoutMs: timeoutMs.map(Double.init) ?? self.defaultTimeoutMs)
+    }
+
+    public static func progressCardGet(sessionKey: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "progressCard.get",
+            params: ["sessionKey": AnyCodable(sessionKey)],
+            timeoutMs: self.defaultTimeoutMs)
     }
 
     public static func commandsList(

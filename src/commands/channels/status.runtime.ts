@@ -223,14 +223,18 @@ export async function renderChannelsStatusFallback(params: {
   runtime: RuntimeEnv;
   safeError: string;
   gatewayAuthUnavailable: boolean;
+  expectedErrorOutput?: string;
 }): Promise<void> {
-  const { opts, runtime, safeError, gatewayAuthUnavailable } = params;
+  const { opts, runtime, safeError, gatewayAuthUnavailable, expectedErrorOutput } = params;
   const fallbackReason = gatewayAuthUnavailable
     ? "Gateway auth unavailable; showing config-only status."
     : "Gateway not reachable; showing config-only status.";
-  runtime.error(
-    `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
-  );
+  if (!opts.json) {
+    runtime.error(
+      expectedErrorOutput ??
+        `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
+    );
+  }
   const cfg = await requireValidConfig(runtime, { observe: false });
   if (!cfg) {
     return;

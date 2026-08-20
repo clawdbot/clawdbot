@@ -1,6 +1,6 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import fs from "node:fs";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -15,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
@@ -28,7 +29,6 @@ import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } f
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
-import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -48,7 +48,6 @@ type NodeHostManifest = {
   commands: string[];
   computerUse?: ComputerUseCapabilityDescriptor;
   pathEnv: string;
-  workerRuns?: WorkerAdmissionHandshake;
 };
 
 export type NodeHostInventory = {
@@ -58,12 +57,13 @@ export type NodeHostInventory = {
 
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
+  workerHostingEnabled: boolean;
   initialInventory: NodeHostInventory;
   start(params: {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
-    onRunnerAvailabilityChanged?: (available: boolean) => void;
+    onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -72,7 +72,11 @@ type ActiveNodeHostRuntime = {
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
-  updateGatewayConnection(connection?: { url: string; tlsFingerprint?: string }): void;
+  updateGatewayConnection(connection?: {
+    url: string;
+    tlsFingerprint?: string;
+    cloudflareAccess?: CloudflareAccessCredentials;
+  }): void;
   close(): Promise<void>;
 };
 
@@ -213,22 +217,20 @@ function ensureNodePathEnv(): string {
   return DEFAULT_NODE_PATH;
 }
 
-function createInventory(params: {
-  skills: unknown[] | null;
-  pluginTools: unknown[];
-  mcpManager?: NodeHostMcpManager;
-}): NodeHostInventory {
-  const pluginTools = [...params.pluginTools, ...(params.mcpManager?.descriptors ?? [])].toSorted(
-    (left, right) => {
-      const a = left as { pluginId?: string; name?: string };
-      const b = right as { pluginId?: string; name?: string };
-      return (
-        (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
-        (a.name ?? "").localeCompare(b.name ?? "")
-      );
-    },
-  );
-  return { skills: params.skills, pluginTools };
+function createInventory(
+  skills: unknown[] | null,
+  pluginTools: unknown[],
+  mcpDescriptors: readonly unknown[] = [],
+): NodeHostInventory {
+  const sortedPluginTools = [...pluginTools, ...mcpDescriptors].toSorted((left, right) => {
+    const a = left as { pluginId?: string; name?: string };
+    const b = right as { pluginId?: string; name?: string };
+    return (
+      (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
+      (a.name ?? "").localeCompare(b.name ?? "")
+    );
+  });
+  return { skills, pluginTools: sortedPluginTools };
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
@@ -240,8 +242,7 @@ function sameManifest(left: NodeHostManifest, right: NodeHostManifest): boolean 
     left.pathEnv === right.pathEnv &&
     sameStringList(left.caps, right.caps) &&
     sameStringList(left.commands, right.commands) &&
-    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse) &&
-    JSON.stringify(left.workerRuns) === JSON.stringify(right.workerRuns)
+    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse)
   );
 }
 
@@ -252,6 +253,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableAgentRuns?: boolean;
   /** The embedded app worker never advertises full worker session hosting. */
   enableWorkerRuns?: boolean;
+  /** Process-scoped worker hosting for environment-managed disposable nodes. */
+  forceWorkerRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -283,11 +286,9 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerInstallation =
-    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true
-      ? await resolveNodeWorkerInstallation()
-      : undefined;
-  const workerRuns = workerInstallation?.build;
+  const workerRunsEnabled =
+    params?.enableWorkerRuns === true &&
+    (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -313,30 +314,26 @@ export async function prepareNodeHostRuntime(params?: {
     ].toSorted(),
     ...(pluginManifest.computerUse ? { computerUse: pluginManifest.computerUse } : {}),
     pathEnv,
-    ...(workerRuns ? { workerRuns } : {}),
   });
   const manifest = buildManifest(pluginNodeHost);
-  const initialInventory = createInventory({
-    skills,
-    pluginTools: pluginNodeHost.nodePluginTools,
-  });
+  const initialInventory = createInventory(skills, pluginNodeHost.nodePluginTools);
 
   return {
     manifest,
+    workerHostingEnabled: workerRunsEnabled,
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
       const mcpAbort = new AbortController();
-      const workerWorkspace = workerInstallation
+      const workerWorkspace = workerRunsEnabled
         ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
-      const workerBundleInstaller = workerInstallation
+      const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor = workerInstallation
+      const workerSupervisor = workerRunsEnabled
         ? createNodeWorkerSupervisor({
             env,
-            localInstallation: workerInstallation,
-            onAvailabilityChanged: onRunnerAvailabilityChanged,
+            onCapacityChanged: onRunnerCapacityChanged,
             workspace: workerWorkspace,
           })
         : undefined;
@@ -354,22 +351,31 @@ export async function prepareNodeHostRuntime(params?: {
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
-      let gatewayConnection: { url: string; tlsFingerprint?: string } | undefined;
+      let gatewayConnection:
+        | {
+            url: string;
+            tlsFingerprint?: string;
+            cloudflareAccess?: CloudflareAccessCredentials;
+          }
+        | undefined;
       let manager: NodeHostMcpManager | undefined;
       let closing = false;
       let closePromise: Promise<void> | undefined;
+      const publishInventory = () =>
+        onInventoryChanged?.(
+          createInventory(skills, currentPluginNodeHost.nodePluginTools, manager?.descriptors),
+        );
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
+        onDescriptorsChanged: () => {
+          if (!closing && manager) {
+            publishInventory();
+          }
+        },
       }).then((resolved) => {
         manager = resolved;
         if (!closing) {
-          onInventoryChanged?.(
-            createInventory({
-              skills,
-              pluginTools: currentPluginNodeHost.nodePluginTools,
-              mcpManager: manager,
-            }),
-          );
+          publishInventory();
         }
         return resolved;
       });
@@ -381,13 +387,7 @@ export async function prepareNodeHostRuntime(params?: {
           currentManifest = nextManifest;
           onManifestChanged?.(nextManifest);
         }
-        onInventoryChanged?.(
-          createInventory({
-            skills,
-            pluginTools: currentPluginNodeHost.nodePluginTools,
-            mcpManager: manager,
-          }),
-        );
+        publishInventory();
       };
       const stopAvailabilityWatch = onManifestChanged
         ? watchRegisteredNodeHostCommandAvailability(availabilityContext, refreshAvailability)
@@ -458,6 +458,9 @@ export async function prepareNodeHostRuntime(params?: {
               ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
               ...(gatewayConnection?.tlsFingerprint
                 ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
+                : {}),
+              ...(gatewayConnection?.cloudflareAccess
+                ? { gatewayCloudflareAccess: gatewayConnection.cloudflareAccess }
                 : {}),
               ...(config.desktop?.host ? { desktopHostConfig: config.desktop.host } : {}),
               ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),

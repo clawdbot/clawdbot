@@ -15,9 +15,14 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type {
+  ChannelMessageSendPollContext,
+  MessageReceipt,
+  MessageReceiptSourceResult,
+  OutboundReplyFacts,
+} from "../message/types.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
@@ -575,16 +580,6 @@ export type ChannelMessagingAdapter = {
     threadId?: string | null;
   }) => string | undefined;
   /**
-   * @deprecated Use `targetResolver` for target id normalization and
-   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
-   * compatibility with older route parsing helpers.
-   */
-  parseExplicitTarget?: (params: { raw: string }) => {
-    to: string;
-    threadId?: string | number;
-    chatType?: ChatType;
-  } | null;
-  /**
    * Lightweight chat-type inference used before directory lookup so plugins can
    * steer peer-vs-group resolution without reimplementing host search flow.
    */
@@ -692,6 +687,7 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  reply?: OutboundReplyFacts;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -757,6 +753,8 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
+  /** Delegate conversation-read authorization to this adapter for bundled registrations only. */
+  providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
@@ -814,26 +812,31 @@ export type ChannelMessageActionAdapter = {
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
-export type ChannelPollResult = {
+export type ChannelPollResult = Pick<
+  MessageReceiptSourceResult,
+  "messageId" | "toJid" | "channelId" | "conversationId" | "pollId"
+> & {
   messageId: string;
-  toJid?: string;
-  channelId?: string;
-  conversationId?: string;
-  pollId?: string;
+  receipt?: MessageReceipt;
 };
 
 /** Shared poll input after core has normalized the common poll model. */
-export type ChannelPollContext = {
-  cfg: OpenClawConfig;
-  to: string;
-  poll: PollInput;
-  accountId?: string | null;
-  threadId?: string | null;
-  silent?: boolean;
-  isAnonymous?: boolean;
-  gatewayClientScopes?: readonly string[];
-  /** @internal Refresh durable timing before recipient-visible platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
+export type ChannelPollContext = Pick<
+  ChannelMessageSendPollContext,
+  | "cfg"
+  | "to"
+  | "poll"
+  | "accountId"
+  | "threadId"
+  | "silent"
+  | "isAnonymous"
+  | "gatewayClientScopes"
+  | "onPlatformSendDispatch"
+> & {
+  content?: string;
+  /** Trusted originating turn context for channel-owned delivery correlation. */
+  sessionKey?: string;
+  inboundEventKind?: InboundEventKind;
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

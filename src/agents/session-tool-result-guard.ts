@@ -24,6 +24,7 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
+import { resolveTerminalAssistantTranscriptRunId } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -588,6 +589,8 @@ export function installSessionToolResultGuard(
     sessionKey?: string;
     /** Optional agent id for selected-global transcript update broadcasts. */
     agentId?: string;
+    /** Exact run that owns terminal assistant transcript updates. */
+    runId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -639,6 +642,7 @@ export function installSessionToolResultGuard(
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
+  setTranscriptRunId: (runId: string | undefined) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   const originalAppendWithTranscriptAnchor =
@@ -665,6 +669,7 @@ export function installSessionToolResultGuard(
   const redactionConfig = opts?.redactLoggingConfig;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
+  let transcriptRunId = opts?.runId;
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
   const appendMessageAndCacheTranscriptSeq = (
@@ -909,10 +914,12 @@ export function installSessionToolResultGuard(
         callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
     });
     if (sessionTarget) {
+      const runId = resolveTerminalAssistantTranscriptRunId(finalMessage, transcriptRunId);
       void publishTranscriptUpdate(sessionTarget, {
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
+        ...(runId ? { runId } : {}),
       });
     }
 
@@ -949,6 +956,9 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
     },
     getPendingIds: pendingState.getPendingIds,
+    setTranscriptRunId: (runId) => {
+      transcriptRunId = runId;
+    },
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

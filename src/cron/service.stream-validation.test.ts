@@ -40,7 +40,9 @@ describe("cron stream schedule validation", () => {
   it("rejects creation while cron triggers are disabled", async () => {
     const cron = await createCron(false);
     try {
-      await expect(cron.add(streamJob())).rejects.toThrow("cron.triggers.enabled=true");
+      await expect(cron.add(streamJob())).rejects.toThrow(
+        "the operator set cron.triggers.enabled: false",
+      );
     } finally {
       cron.stop();
     }

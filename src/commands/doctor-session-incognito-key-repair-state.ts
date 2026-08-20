@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
@@ -6,9 +5,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export type ReservedKeyRename = { from: string; to: string };
 
@@ -187,14 +185,11 @@ export function readRepairJournal(database: DatabaseSync): ReservedKeyRename[] {
 }
 
 export function readRepairJournalReadOnly(env: NodeJS.ProcessEnv): ReservedKeyRename[] {
-  const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
-    return [];
-  }
-  return withOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
-    env,
-    path: statePath,
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
+      env,
+    }) ?? []
+  );
 }
 
 export function writeRepairJournal(

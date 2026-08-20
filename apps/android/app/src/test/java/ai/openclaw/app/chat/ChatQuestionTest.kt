@@ -179,6 +179,30 @@ class ChatQuestionTest {
     }
 
   @Test
+  fun gatewayWithoutQuestionListClearsStaleCardsWithoutRequestingQuestions() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesMethod = { method -> method != "question.list" }
+          respond("question.list") {
+            throw GatewayRequestRejected(
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "missing scope: operator.admin",
+              ),
+            )
+          }
+        }
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(record(id = "ask_stale")))
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(requests.none { it.first == "question.list" })
+      assertTrue(controller.questions.value.isEmpty())
+    }
+
+  @Test
   fun pendingRefreshPreservesSubmissionLock() =
     runTest {
       val resolveStarted = CompletableDeferred<Unit>()

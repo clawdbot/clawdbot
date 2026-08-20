@@ -4,6 +4,7 @@ import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
   normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -287,7 +288,6 @@ export {
   matchesExactOrPrefix,
   resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
-import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export {
   isClaudeAdaptiveThinkingDefaultModelId,

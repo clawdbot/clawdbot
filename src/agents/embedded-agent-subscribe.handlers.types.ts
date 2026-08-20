@@ -29,7 +29,6 @@ import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import type { AgentSessionEvent } from "./sessions/index.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
@@ -51,8 +50,7 @@ export type ToolCallSummary = {
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
-  actionFingerprint?: string;
-  fileTarget?: import("./tool-mutation.js").FileTarget;
+  ownerKey?: string;
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
@@ -75,9 +73,11 @@ export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{
     toolName?: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -117,6 +117,16 @@ export type EmbeddedAgentSubscribeState = {
   deltaBuffer: string;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream: ThinkingTagStreamState;
+  /**
+   * True while the buffered stream text belongs to an explicit commentary
+   * item (e.g. the Responses API "commentary" phase). Commentary is routed to
+   * a separate lane by the normal stream path, so the run-budget timeout
+   * flush must skip it too: flushing the raw deltaBuffer without this marker
+   * would publish reasoning/commentary bytes as assistant text.
+   */
+  deltaBufferIsCommentary: boolean;
+  /** Whether timeout settlement committed visible text for this message. */
+  hasFlushedPartialText: boolean;
   blockBuffer: string;
   blockState: {
     thinking: boolean;
@@ -330,7 +340,9 @@ type ToolHandlerParams = Pick<
   | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "coreBuiltinToolNames"
   | "replaySafeToolNames"
+  | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
@@ -393,8 +405,3 @@ export type ToolHandlerContext = {
   trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
-
-export type EmbeddedAgentSubscribeEvent =
-  | AgentSessionEvent
-  | { type: string; [k: string]: unknown }
-  | { type: "message_start"; message: AgentMessage };

@@ -185,7 +185,8 @@ function resolveRuntimeDiscordMessageActions() {
   }
 }
 
-const discordMessageActions = {
+const discordMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: true,
   resolveExecutionMode: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>
@@ -216,6 +217,7 @@ const discordMessageActions = {
     resolveRuntimeDiscordMessageActions()?.prepareSendPayload?.(ctx) ??
     discordMessageActionsImpl.prepareSendPayload?.(ctx) ??
     null,
+  supportsAction: ({ action }) => action !== "poll",
   handleAction: async (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
   ) => {

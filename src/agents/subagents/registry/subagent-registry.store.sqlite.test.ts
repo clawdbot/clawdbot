@@ -139,6 +139,24 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("preserves requester-owned final receipts in the existing SQLite payload", async () => {
+    await withTempStateEnv(async () => {
+      const requesterVisibleFinal = {
+        requesterTurnRunId: "run-requester",
+        batchRunIds: ["run-one"],
+      };
+      const run = createRun({ delivery: { status: "delivered", requesterVisibleFinal } });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
+
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery).toMatchObject({
+        status: "delivered",
+        requesterVisibleFinal,
+      });
+    });
+  });
+
   it.each([
     {
       name: "visible",

@@ -2,12 +2,17 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { formatErrorMessage } from "../infra/errors.js";
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
-import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import {
+  GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
+  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+} from "./events.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -28,7 +33,7 @@ import type {
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Pairing scope is for device-pairing handshakes only; chat transcript events
 // require operator-level session access. Pairing-scoped and node-role clients
@@ -38,6 +43,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   chat: [READ_SCOPE],
   "board.changed": [READ_SCOPE],
   "board.command": [READ_SCOPE],
+  "progressCard.changed": [READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
@@ -66,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
+  [GATEWAY_EVENT_DEVICE_PAIR_CHANGED]: [PAIRING_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "device.pair.setup.completed": [PAIRING_SCOPE],
@@ -94,11 +101,17 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
 // authoritative registry key, including malformed/sessionless agent events.
+const log = createSubsystemLogger("gateway/broadcast");
+
 const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "agent",
   "chat",
   "chat.side_result",
   "session.observer",
+  // Mirrors the raw agent tool event (full args/result snapshots) onto
+  // session subscribers; omitting it here would hand scoped clients the
+  // exact payload the registry gate suppresses on the `agent` event.
+  "session.tool",
 ]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
@@ -226,21 +239,7 @@ export function createGatewayBroadcaster(params: {
       opts?.agentId,
     );
     const isTargeted = Boolean(targetConnIds);
-    if (shouldLogWs()) {
-      const logMeta: Record<string, unknown> = {
-        event,
-        seq: "per-client",
-        clients: params.clients.size,
-        targets: targetConnIds ? targetConnIds.size : undefined,
-        dropIfSlow: opts?.dropIfSlow,
-        presenceVersion: opts?.stateVersion?.presence,
-        healthVersion: opts?.stateVersion?.health,
-      };
-      if (event === "agent") {
-        Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
-      }
-      logWs("out", "event", logMeta);
-    }
+    let outboundEventLogged = false;
     let frameBase:
       | {
           eventJSON: string;
@@ -248,6 +247,8 @@ export function createGatewayBroadcaster(params: {
           stateVersionFragment: string;
         }
       | undefined;
+    // Lazy so filtered-out broadcasts (zero eligible clients) never pay
+    // JSON.stringify for the payload.
     const getFrameBase = () => {
       if (!frameBase) {
         frameBase = {
@@ -298,6 +299,24 @@ export function createGatewayBroadcaster(params: {
         // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
         continue;
       }
+      if (!outboundEventLogged) {
+        outboundEventLogged = true;
+        logWs("out", "event", () => {
+          const logMeta: Record<string, unknown> = {
+            event,
+            seq: "per-client",
+            clients: params.clients.size,
+            targets: targetConnIds ? targetConnIds.size : undefined,
+            dropIfSlow: opts?.dropIfSlow,
+            presenceVersion: opts?.stateVersion?.presence,
+            healthVersion: opts?.stateVersion?.health,
+          };
+          if (event === "agent") {
+            Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
+          }
+          return logMeta;
+        });
+      }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
       if (!slow) {
@@ -325,16 +344,27 @@ export function createGatewayBroadcaster(params: {
         }
         continue;
       }
+      // Build the frame before consuming the seq: a serialization failure
+      // (circular/BigInt payload) throws identically for every client, and
+      // advancing seqs for a frame that never existed would fire every gap
+      // detector at once — a synchronized reconnect storm with no evidence.
+      let frame: string;
       try {
-        // Targeted frames ride the same per-client sequence as fanout frames:
-        // an unstamped frame is invisible to the client's gap detector, so a
-        // drop between two targeted sends would go unnoticed forever.
-        clientSeq.set(c, nextSeq);
         const base = getFrameBase();
-        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
+        frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
+      } catch (err) {
+        log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
+        return;
+      }
+      // Targeted frames ride the same per-client sequence as fanout frames:
+      // an unstamped frame is invisible to the client's gap detector, so a
+      // drop between two targeted sends would go unnoticed forever.
+      clientSeq.set(c, nextSeq);
+      try {
         c.socket.send(frame);
       } catch {
-        /* ignore */
+        // The consumed seq makes this send failure visible to the client's
+        // gap detector on its next received frame.
       }
     }
   };

@@ -347,7 +347,7 @@ struct ChatToolActivityRow: View {
             "gateway": "server.rack",
             "glob": "magnifyingglass",
             "grep": "magnifyingglass",
-            "image": "photo",
+            "view_image": "photo",
             "list": "magnifyingglass",
             "ls": "magnifyingglass",
             "memory": "brain",

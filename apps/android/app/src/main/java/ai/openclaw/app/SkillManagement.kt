@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 
@@ -12,6 +13,7 @@ private const val CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "clawhub_risk_acknowle
 internal const val CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS = 125_000L
 internal const val CLAWHUB_SKILL_GATEWAY_UNAVAILABLE = "Update the Gateway to search and install ClawHub skills from Android."
 internal val CLAWHUB_SKILL_GATEWAY_METHODS = setOf("skills.search", "skills.detail", "skills.install")
+internal const val CLAWHUB_UNSCANNED_TRUST_STATE = "not-scanned-by-clawhub"
 
 data class GatewayClawHubSkillSearchState(
   val query: String = "",
@@ -29,16 +31,30 @@ data class GatewayClawHubSkillSearchState(
 data class GatewayClawHubSkillSummary(
   val slug: String,
   val installRef: String?,
+  val installOnly: Boolean?,
+  val trustState: String?,
   val displayName: String,
   val summary: String?,
   val version: String?,
 ) {
   /**
    * Several publishers can share one slug, so the Gateway-supplied reference is what identifies a
-   * result, what distinguishes rows, and what detail and install must send back.
+   * result, what distinguishes rows, and what install must send back. It names the result's own
+   * source, so it is never rebuilt from owner and slug.
    */
   val reference: String
     get() = installRef?.trim()?.takeIf(String::isNotEmpty) ?: slug
+
+  /**
+   * Drives the affordance, so no client has to recognize external reference spellings itself.
+   * Only an explicit install-only result skips review: a Gateway that predates this field omits
+   * it, and those results must keep the reviewed-version flow they have always used.
+   */
+  val canReadDetails: Boolean
+    get() = installOnly != true
+
+  val isUnscannedSource: Boolean
+    get() = trustState == CLAWHUB_UNSCANNED_TRUST_STATE
 }
 
 data class GatewayClawHubInstallReview(
@@ -69,6 +85,8 @@ internal fun parseClawHubSearchResults(
       GatewayClawHubSkillSummary(
         slug = slug,
         installRef = value.string("installRef"),
+        installOnly = (value["installOnly"] as? JsonPrimitive)?.booleanOrNull,
+        trustState = value.string("trustState"),
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),
@@ -179,6 +197,31 @@ internal fun isClawHubSkillInstalled(
 ): Boolean {
   val reference = parseClawHubSkillReference(slug) ?: return false
   return skills.any { it.matchesClawHubReference(reference) }
+}
+
+internal fun isClawHubSkillInstalled(
+  skills: List<GatewaySkillSummary>,
+  searchResult: GatewayClawHubSkillSummary,
+): Boolean =
+  if (!searchResult.canReadDetails) {
+    isClawHubSkillInstalledByReference(skills, searchResult.reference)
+  } else {
+    searchResult.version?.let { version ->
+      isClawHubSkillInstalled(skills, searchResult.reference, version)
+    } ?: isClawHubSkillInstalled(skills, searchResult.reference)
+  }
+
+/**
+ * Readback for an install-only source. Its reference is not a `@owner/slug` spelling, so the slug
+ * comparison never matches it; the Gateway records the exact reference instead.
+ */
+internal fun isClawHubSkillInstalledByReference(
+  skills: List<GatewaySkillSummary>,
+  requestedReference: String,
+): Boolean {
+  val reference = requestedReference.trim()
+  if (reference.isEmpty()) return false
+  return skills.any { it.clawHubValid && it.clawHubRequestedReference == reference }
 }
 
 internal fun isClawHubSkillInstalled(

@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type {
   SkillProposalEvaluation,
   SkillProposalManifestEntry,
@@ -70,7 +71,7 @@ export function formatProposalList(proposals: readonly SkillProposalManifestEntr
   return proposals
     .map(
       (proposal) =>
-        `- ${proposal.id} [${proposal.status}, ${proposal.kind}, ${proposal.scanState}${proposal.workspaceMismatch ? ", previous workspace" : ""}] ${proposal.skillKey}: ${proposal.title}`,
+        `- ${proposal.id} [${proposal.status}, ${proposal.kind}, ${proposal.scanState}${proposal.workspaceMismatch ? ", previous workspace" : ""}${proposal.degradedState === "draft-missing" ? ", draft missing — reject and re-propose" : ""}] ${proposal.skillKey}: ${proposal.title}`,
     )
     .join("\n");
 }
@@ -93,18 +94,70 @@ export function formatProposalEvaluation(
     : text;
 }
 
-export function formatProposalInspect(proposal: SkillProposalReadResult): string {
-  const supportFiles =
-    proposal.supportFiles && proposal.supportFiles.length > 0
-      ? [
-          "",
-          "Support files:",
-          ...proposal.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
-        ]
-      : [];
+type SkillProposalInspectArtifact = {
+  path: string;
+  content: string;
+  sizeBytes: number;
+};
+
+type SkillProposalInspectArtifactMetadata = Omit<SkillProposalInspectArtifact, "content">;
+
+function formatArtifactManifest(
+  artifacts: readonly SkillProposalInspectArtifactMetadata[],
+  maxChars: number,
+): string[] {
+  const lines = [`Artifacts (${artifacts.length}):`];
+  for (const [index, file] of artifacts.entries()) {
+    const line = `- ${file.path} (${file.sizeBytes} bytes)`;
+    if ([...lines, line].join("\n").length > maxChars) {
+      const remaining = artifacts.length - index;
+      const omitted = `- … ${remaining} more artifact${remaining === 1 ? "" : "s"} in result metadata`;
+      if ([...lines, omitted].join("\n").length <= maxChars) {
+        lines.push(omitted);
+      }
+      break;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+export function resolveProposalInspectArtifact(
+  proposal: SkillProposalReadResult,
+  artifactPath?: string,
+): SkillProposalInspectArtifact | undefined {
+  if (!artifactPath || artifactPath === PROPOSAL_DRAFT_FILE) {
+    return {
+      path: PROPOSAL_DRAFT_FILE,
+      content: proposal.content,
+      sizeBytes: Buffer.byteLength(proposal.content),
+    };
+  }
+  const file = proposal.supportFiles?.find((candidate) => candidate.path === artifactPath);
+  return file
+    ? { path: file.path, content: file.content, sizeBytes: Buffer.byteLength(file.content) }
+    : undefined;
+}
+
+export function formatProposalInspect(
+  proposal: SkillProposalReadResult,
+  artifact: SkillProposalInspectArtifact,
+  maxChars: number,
+): {
+  text: string;
+  contentIncluded: boolean;
+  availableArtifacts: SkillProposalInspectArtifactMetadata[];
+} {
   const evaluation = proposal.record.evaluation;
   const evaluationLines = evaluation ? [formatProposalEvaluation(evaluation)] : [];
-  return [
+  const artifacts = [
+    { path: PROPOSAL_DRAFT_FILE, sizeBytes: Buffer.byteLength(proposal.content) },
+    ...(proposal.record.supportFiles ?? []).map((file) => ({
+      path: file.path,
+      sizeBytes: file.sizeBytes,
+    })),
+  ];
+  const prefix = [
     `Proposal: ${proposal.record.id}`,
     `Status: ${proposal.record.status}`,
     `Kind: ${proposal.record.kind}`,
@@ -113,7 +166,28 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
     `Scan: ${proposal.record.scan.state}`,
     ...evaluationLines,
     "",
-    proposal.content,
-    ...supportFiles,
-  ].join("\n");
+  ];
+  const suffix = ["", `--- ${artifact.path} ---`, artifact.content];
+  const manifestBudget = maxChars - [...prefix, ...suffix].join("\n").length - 2;
+  const text = [...prefix, ...formatArtifactManifest(artifacts, manifestBudget), ...suffix].join(
+    "\n",
+  );
+  if (text.length <= maxChars) {
+    return { text, contentIncluded: true, availableArtifacts: artifacts };
+  }
+  const safeId = truncateUtf16Safe(proposal.record.id, 80);
+  const safePath = truncateUtf16Safe(artifact.path, 120);
+  const summary = [
+    `Proposal: ${safeId}`,
+    `Selected artifact: ${safePath} (${artifact.sizeBytes} bytes)`,
+    "Content omitted: the complete artifact projection exceeds the selected-model inspect budget.",
+    `Next: inspect a smaller listed artifact with artifact_path, or run openclaw skills workshop inspect ${safeId} for complete operator output.`,
+    "",
+  ];
+  const manifest = formatArtifactManifest(artifacts, maxChars - summary.join("\n").length);
+  return {
+    text: truncateUtf16Safe([...summary, ...manifest].join("\n"), maxChars),
+    contentIncluded: false,
+    availableArtifacts: artifacts,
+  };
 }

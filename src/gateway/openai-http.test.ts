@@ -21,7 +21,6 @@ import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -1997,6 +1996,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects resolved terminal agent failures without exposing provider details", async () => {
+    const privateDetail = "raw provider detail should stay private";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+    } as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    const body = await res.text();
+    expect(res.status).toBe(500);
+    expect(JSON.parse(body)).toEqual({
+      error: { message: "internal error", type: "api_error" },
+    });
+    expect(body).not.toContain(privateDetail);
+  });
+
+  it("rejects resolved error stop reasons", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { stopReason: "error" },
+    } as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(500);
+  });
+
   it("forwards response_format into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
@@ -2464,10 +2497,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     "separates streamed content from the terminal finish for an official SDK $name",
     async ({ fail, providerTerminal, expected, protocolError }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const terminalAdmission = createDeferred<{
-        active: number;
-        drained: { drained: boolean; active: number };
-      }>();
+      const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
@@ -2484,9 +2514,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         // Agent settlement schedules the terminal in a later microtask. The
         // request must remain admitted until Node finishes the actual stream.
         const active = getActiveGatewayRootWorkCount();
-        void waitForActiveGatewayRootWork(0).then((drained) => {
-          terminalAdmission.resolve({ active, drained });
-        });
+        terminalAdmission.resolve({ active });
       });
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -2559,7 +2587,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           wireResponse.promise,
         ]);
         expect(admission.active).toBe(idleRootCount + 1);
-        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
         expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
 
@@ -3545,6 +3572,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
                   messages: [{ role: "user", content: "hi" }],
                 },
                 {
+                  "x-forwarded-for": "198.51.100.42",
                   "x-forwarded-proto": "https",
                   "x-forwarded-user": "operator@example.com",
                   "x-openclaw-scopes": scopes,
@@ -3564,6 +3592,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             port,
             { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
             {
+              "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
               "x-openclaw-scopes": "operator.admin, operator.write",
               "x-openclaw-sender-is-owner": "true",
@@ -3682,10 +3711,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(await cleanupAdmissionClosed.promise).toBe(false);
       expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-      expect(await waitForActiveGatewayRootWork(0)).toEqual({
-        drained: false,
-        active: idleRootCount + 1,
-      });
     } finally {
       finishAgentCleanup.resolve();
     }

@@ -592,14 +592,14 @@ export async function publishArtifactFiles({
     treeUrl: artifactUrl(publicRoot, indexArtifact),
   };
 }
-function upsertPrComment({ body, marker, prNumber, repo }) {
+function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
   run("gh", ["api", `repos/${repo}/pulls/${prNumber}`, "--jq", ".number"]);
   const commentId = run("gh", [
     "api",
     "--paginate",
     `repos/${repo}/issues/${prNumber}/comments`,
     "--jq",
-    `.[] | select(.body | contains("${marker}")) | .id`,
+    `.[] | select(.user.login == "openclaw-mantis[bot]" and (.body | contains("${marker}"))) | .id`,
   ])
     .trim()
     .split("\n")
@@ -622,10 +622,22 @@ function upsertPrComment({ body, marker, prNumber, repo }) {
         console.log(`Updated Mantis QA evidence comment on PR #${prNumber}.`);
         return;
       } catch {
+        if (!createMissing) {
+          console.log(
+            "Skipped stale Mantis QA evidence comment because its status is no longer active.",
+          );
+          return;
+        }
         console.warn(
           `Could not update existing Mantis QA evidence comment ${commentId}; creating a new one.`,
         );
       }
+    }
+    if (!createMissing) {
+      console.log(
+        "Skipped stale Mantis QA evidence comment because its status is no longer active.",
+      );
+      return;
     }
     run("gh", ["pr", "comment", prNumber, "--body-file", bodyFile], { stdio: "inherit" });
     console.log(`Created Mantis QA evidence comment on PR #${prNumber}.`);
@@ -671,6 +683,7 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
   }
   upsertPrComment({
     body,
+    createMissing: args.create_missing !== "false",
     marker,
     prNumber: targetPr,
     repo,

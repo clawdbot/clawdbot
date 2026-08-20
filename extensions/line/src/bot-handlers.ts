@@ -423,6 +423,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     let mediaUnavailable = false;
 
     if (isDownloadableLineMessageType(message.type)) {
+      const abortSignal = context.turnAdoptionLifecycle?.abortSignal;
       try {
         const originalFilename =
           message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
@@ -430,13 +431,17 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           message.id,
           account.channelAccessToken,
           mediaMaxBytes,
-          { originalFilename },
+          { originalFilename, ...(abortSignal ? { signal: abortSignal } : {}) },
         );
+        abortSignal?.throwIfAborted();
         allMedia.push({
           path: media.path,
           contentType: media.contentType,
         });
       } catch (err) {
+        if (abortSignal?.aborted) {
+          throw abortSignal.reason;
+        }
         if (isRetryableLineInboundMediaError(err)) {
           // Preparation-phase failure before turn adoption: reject so the durable
           // ingress drain retries the whole event once LINE finishes preparing the

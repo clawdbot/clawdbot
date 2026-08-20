@@ -52,11 +52,7 @@ vi.mock("../talk-session-registry.js", () => ({
 import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
-import {
-  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
-  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
-  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
-} from "./ws-types.js";
+import { GATEWAY_WS_CONNECTION_KIND_PROPERTY } from "./ws-types.js";
 
 async function waitForLazyMessageHandler() {
   await vi.dynamicImportSettled();
@@ -77,6 +73,7 @@ async function connectTestWs(
     socket?: GatewayWsTestSocket;
     clients?: Set<unknown>;
     options?: Partial<Parameters<typeof attachGatewayWsConnectionHandler>[0]>;
+    trustedProxies?: string[];
   } = {},
 ) {
   const logWsControl = createGatewayWsTestLogger();
@@ -87,6 +84,7 @@ async function connectTestWs(
     host: params.host,
     options: { ...params.options, logWsControl: logWsControl as never },
     socket: params.socket,
+    trustedProxies: params.trustedProxies,
   });
   await waitForLazyMessageHandler();
 
@@ -114,7 +112,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.useRealTimers();
   });
 
-  it("keeps loopback worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
+  it("keeps public worker sockets off the legacy challenge and plugin surface", async () => {
     const socket = createGatewayWsTestSocket();
     const previous = {
       socket: { terminate: vi.fn() },
@@ -122,13 +120,16 @@ describe("attachGatewayWsConnectionHandler", () => {
     };
     const clients = new Set<unknown>([previous]);
     const gatewayBudget = { release: vi.fn() };
-    const workerBudget = { release: vi.fn() };
+    const rateLimiter = { check: vi.fn() };
     const getPluginNodeCapabilities = vi.fn(() => [{ surface: "canvas" }]);
     const buildRequestContext = vi.fn(() => createGatewayWsTestRequestContext() as never);
     Object.assign(socket, {
       [GATEWAY_WS_CONNECTION_KIND_PROPERTY]: "worker",
-      [GATEWAY_WS_PREAUTH_BUDGET_PROPERTY]: workerBudget,
-      __openclawPreauthBudgetKey: "127.0.0.1",
+      __openclawPreauthBudgetKey: "203.0.113.10",
+    });
+    markPublicWorkerIngress(socket as never, {
+      clientIp: "203.0.113.10",
+      rateLimiter: rateLimiter as never,
     });
 
     await connectTestWs({
@@ -144,8 +145,12 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.send).not.toHaveBeenCalled();
     expect(getPluginNodeCapabilities).not.toHaveBeenCalled();
     const handler = firstAttachedWorkerHandlerParams() as {
+      publicAdmission: { clientIp: string; rateLimiter: unknown };
       setClient(client: never): boolean;
     };
+    expect(handler).toMatchObject({
+      publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
+    });
     const client = {
       socket,
       connect: { client: { id: "openclaw-worker", mode: "worker" } },
@@ -158,39 +163,6 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(attachGatewayWsMessageHandlerMock).not.toHaveBeenCalled();
     socket.emit("close", 1000, Buffer.alloc(0));
     expect(buildRequestContext).not.toHaveBeenCalled();
-    expect(workerBudget.release).toHaveBeenCalledWith("127.0.0.1");
-    expect(gatewayBudget.release).not.toHaveBeenCalled();
-  });
-
-  it("uses the main budget and public admission context for public worker sockets", async () => {
-    const socket = createGatewayWsTestSocket();
-    const gatewayBudget = { release: vi.fn() };
-    const rateLimiter = { check: vi.fn() };
-    Object.assign(socket, {
-      [GATEWAY_WS_CONNECTION_KIND_PROPERTY]: "worker",
-      [GATEWAY_WS_WORKER_INGRESS_PROPERTY]: "public",
-      __openclawPreauthBudgetKey: "203.0.113.10",
-    });
-    markPublicWorkerIngress(socket as never, {
-      clientIp: "203.0.113.10",
-      rateLimiter: rateLimiter as never,
-    });
-
-    await connectTestWs({
-      socket,
-      options: {
-        preauthConnectionBudget: gatewayBudget as never,
-      },
-    });
-
-    const handler = firstAttachedWorkerHandlerParams() as {
-      publicAdmission: { clientIp: string; rateLimiter: unknown };
-      setClient(client: never): boolean;
-    };
-    expect(handler).toMatchObject({
-      publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
-    });
-    expect(handler.setClient({ socket } as never)).toBe(true);
     expect(gatewayBudget.release).toHaveBeenCalledWith("203.0.113.10");
   });
 
@@ -240,9 +212,11 @@ describe("attachGatewayWsConnectionHandler", () => {
     const { passed } = await connectTestWs({
       host: "10.0.0.2:18789",
       headers: {
+        "x-forwarded-for": "203.0.113.10",
         "x-forwarded-host": "gateway.example.com",
         "x-forwarded-proto": "https",
       },
+      trustedProxies: ["127.0.0.1"],
       options: {
         gatewayHost: "10.0.0.2",
         port: 18789,
@@ -421,15 +395,46 @@ describe("attachGatewayWsConnectionHandler", () => {
     const socket = createGatewayWsTestSocket();
     const { passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
-      send: (frame: unknown) => void;
+      send: (frame: unknown) => { kind: string };
     };
     socket.send.mockClear();
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
 
-    handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } });
+    expect(
+      handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } }),
+    ).toEqual({ kind: "unavailable" });
 
     expect(socket.send).not.toHaveBeenCalled();
     expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+  });
+
+  it("distinguishes serialization failure from unavailable transports", async () => {
+    const socket = createGatewayWsTestSocket();
+    const { passed } = await connectTestWs({ socket });
+    const handlerParams = passed as {
+      send: (frame: unknown) => { kind: string; error?: unknown };
+    };
+    socket.send.mockClear();
+
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    expect(handlerParams.send(cyclic)).toMatchObject({
+      kind: "serialization",
+      error: expect.any(TypeError),
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+
+    socket.send.mockImplementationOnce(() => {
+      throw new Error("socket unavailable");
+    });
+    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+      kind: "unavailable",
+    });
+
+    socket.emit("close", 1000, Buffer.from("done"));
+    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+      kind: "unavailable",
+    });
   });
 
   it("keeps handshake phase advancement monotonic", async () => {

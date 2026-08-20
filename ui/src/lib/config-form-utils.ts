@@ -1,5 +1,101 @@
 // Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ConfigUiHints } from "../api/types.ts";
+
+export type JsonSchema = {
+  type?: string | string[];
+  title?: string;
+  description?: string;
+  tags?: string[];
+  "x-tags"?: string[];
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  items?: JsonSchema | JsonSchema[];
+  additionalItems?: JsonSchema | boolean;
+  additionalProperties?: JsonSchema | boolean;
+  enum?: unknown[];
+  enumIncludesNull?: boolean;
+  const?: unknown;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  multipleOf?: number;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  minItems?: number;
+  maxItems?: number;
+  uniqueItems?: boolean;
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
+  allOf?: JsonSchema[];
+  nullable?: boolean;
+};
+
+export function schemaType(schema: JsonSchema): string | undefined {
+  if (!schema) {
+    return undefined;
+  }
+  if (Array.isArray(schema.type)) {
+    return schema.type.find((type) => type !== "null") ?? schema.type[0];
+  }
+  return schema.type;
+}
+
+export function schemaMayAcceptString(schema: JsonSchema): boolean {
+  const declaredTypes = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (declaredTypes.length > 0 && !declaredTypes.includes("string")) {
+    return false;
+  }
+  if (schema.const !== undefined && typeof schema.const !== "string") {
+    return false;
+  }
+  if (schema.enum && !schema.enum.some((entry) => typeof entry === "string")) {
+    return false;
+  }
+  if (schema.allOf && !schema.allOf.every(schemaMayAcceptString)) {
+    return false;
+  }
+  if (schema.anyOf && !schema.anyOf.some(schemaMayAcceptString)) {
+    return false;
+  }
+  return !schema.oneOf || schema.oneOf.some(schemaMayAcceptString);
+}
+
+export function pathKey(path: Array<string | number>): string {
+  return path.filter((segment) => typeof segment === "string").join(".");
+}
+
+export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
+  const direct = hints[pathKey(path)];
+  if (direct) {
+    return direct;
+  }
+  const segments = path.map(String);
+  for (const [hintKey, hint] of Object.entries(hints)) {
+    if (!hintKey.includes("*")) {
+      continue;
+    }
+    const hintSegments = hintKey.split(".");
+    if (
+      hintSegments.length === segments.length &&
+      hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
+    ) {
+      return hint;
+    }
+  }
+  return undefined;
+}
+
+export function humanize(raw: string) {
+  return raw
+    .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .replace(/^./, (m) => m.toUpperCase());
+}
 
 export function cloneConfigObject<T>(value: T): T {
   return structuredClone(value);

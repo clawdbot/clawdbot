@@ -6,30 +6,26 @@ export function handleContextMenuEvent(
   event: MouseEvent | KeyboardEvent,
   trigger: HTMLElement | null,
   open: (trigger: HTMLElement | null, x: number, y: number) => void,
-): boolean {
+): void {
   if (event instanceof MouseEvent) {
     event.preventDefault();
+    event.stopPropagation();
     open(trigger, event.clientX, event.clientY);
-    return true;
+    return;
   }
-  if (
-    event.altKey ||
-    event.ctrlKey ||
-    event.metaKey ||
-    (event.key !== "ContextMenu" && (event.key !== "F10" || !event.shiftKey))
-  ) {
-    return false;
+  const shortcutKey = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+  if (event.altKey || event.ctrlKey || event.metaKey || !shortcutKey) {
+    return;
   }
   if (!trigger && !(event.target instanceof HTMLElement)) {
-    return false;
+    return;
   }
-  // Chromium on macOS needs the keyboard path; preventing the key default also
-  // keeps platforms that synthesize `contextmenu` from opening the menu twice.
+  // Prevent the shortcut default so macOS Chromium does not synthesize a second context menu.
   event.preventDefault();
+  event.stopPropagation();
   const resolvedTrigger = trigger ?? (event.target as HTMLElement);
   const rect = resolvedTrigger.getBoundingClientRect();
   open(resolvedTrigger, rect.right, rect.bottom + 4);
-  return true;
 }
 
 export function resolveAsciiShortcutKey(event: KeyboardEvent): string | null {

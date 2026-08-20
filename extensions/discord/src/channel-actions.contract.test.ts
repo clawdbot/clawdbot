@@ -9,7 +9,7 @@ describe("discord actions contract", () => {
     plugin: discordPlugin,
     cases: [
       {
-        name: "describes configured Discord actions and capabilities",
+        name: "describes configured Discord actions and canonical outbound poll",
         cfg: {
           channels: {
             discord: {
@@ -39,6 +39,7 @@ describe("discord actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
+        expectedCanonicalOutboundActions: ["poll"],
         expectedCapabilities: ["presentation"],
       },
     ],

@@ -102,6 +102,7 @@ function loadOpenClawPluginsInternal(
   if (cacheEnabled) {
     const cached = getReusableCachedPluginRegistry(context.cacheKey);
     if (cached) {
+      maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
         activatePluginRegistry(
           cached,

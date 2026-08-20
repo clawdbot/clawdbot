@@ -67,6 +67,8 @@ export type ClaudeLiveProcess = ClaudeLiveTurnHost & {
   cleanupPromise: Promise<void> | null;
   pendingControlRequest: ClaudeLivePendingControlRequest | null;
   mcpCaptureKey?: string;
+  /** Process-stable bearer whose server-side authority rotates per turn. */
+  mcpGrantToken?: string;
   nativeToolApprovalGrants: Set<string>;
   isIdle(): boolean;
   waitForExit(): Promise<void>;
@@ -265,6 +267,7 @@ function acceptControlRequest(
       sessionKey: turn.diagnosticRefs.sessionKey,
       agentId: turn.diagnosticRefs.agentId,
       toolCallId: toolUseId,
+      cwd: turn.cwd,
       abortSignal: turn.abortSignal,
       ask: turn.execPermission.ask,
     });
@@ -292,9 +295,12 @@ function acceptControlRequest(
               message:
                 outcome.kind === "deny" && outcome.reason === "policy-oversized"
                   ? "OpenClaw denied Claude native tool use (Bash): the command is too large to display for out-of-band approval. Split it into smaller commands and retry."
-                  : outcome.kind === "deny" && outcome.reason === "user" && !runAborted
-                    ? `OpenClaw user denied Claude native tool use (${toolName}).`
-                    : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
+                  : outcome.kind === "deny" && outcome.reason === "operand-binding"
+                    ? (outcome.message ??
+                      "OpenClaw denied Claude native tool use (Bash): the command could not be bound to stable script bytes.")
+                    : outcome.kind === "deny" && outcome.reason === "user" && !runAborted
+                      ? `OpenClaw user denied Claude native tool use (${toolName}).`
+                      : `OpenClaw approval was not granted for Claude native tool use (${toolName}).`,
             },
       });
     } catch {
@@ -494,6 +500,8 @@ export async function spawnClaudeProcess(params: {
     await mcpCaptureAttempt.cleanup?.();
     throw error;
   }
+  const revokeMcpProcessGrant =
+    params.context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken;
   session = {
     backend: params.context.preparedBackend.backend,
     key: params.key,
@@ -512,13 +520,21 @@ export async function spawnClaudeProcess(params: {
     currentTurn: null,
     idleTimer: null,
     cleanup: async () => {
-      await mcpCaptureAttempt.cleanup?.();
-      await params.cleanup();
+      try {
+        revokeMcpProcessGrant?.();
+      } finally {
+        try {
+          await mcpCaptureAttempt.cleanup?.();
+        } finally {
+          await params.cleanup();
+        }
+      }
     },
     cleanupPromise: null,
     closing: false,
     pendingControlRequest: null,
     mcpCaptureKey: params.mcpCaptureKey,
+    mcpGrantToken: params.context.preparedBackend.mcpClientGrantCapture?.transportToken,
     nativeToolApprovalGrants: new Set(),
     outstandingBackgroundTaskIds: new Set(),
     isIdle() {

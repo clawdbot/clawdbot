@@ -1,6 +1,10 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  FsListDirResult,
+  WorktreeRepositoryStatus,
+  WorktreesBranchesResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
@@ -11,10 +15,10 @@ import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
@@ -27,6 +31,7 @@ import {
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
+  renderAppSidebarOnline,
   renderAppSidebarPagesHead,
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
@@ -60,6 +65,7 @@ import {
   resolveLobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
+import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
@@ -71,6 +77,7 @@ const sidebarChromeImport = createIdleImport(() =>
 );
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
+  @state() attentionSummary: SidebarAttentionSummary = { count: 0, severity: null };
   @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
@@ -86,15 +93,43 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
-    const scope = this.sessionData.beginSessionMutation();
-    if (!scope) {
+    const sessions = this.context?.sessions;
+    const scope = sessions?.captureConnectionScope();
+    if (!sessions || !scope) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
-    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
       throw new Error(t("sessionsView.groupDefaultsStale"));
     }
     return result;
+  }
+
+  async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
+    const requestedPath = path?.trim();
+    const agent = this.activeChipAgent().agent;
+    if (!requestedPath) {
+      return agent?.workspaceGit === true
+        ? "git"
+        : agent?.workspaceGit === false
+          ? "not_git"
+          : "unavailable";
+    }
+    const sessions = this.context?.sessions;
+    const scope = sessions?.captureConnectionScope();
+    if (!sessions || !scope) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
+      repoRoot: requestedPath,
+      includeRepositoryStatus: true,
+    });
+    if (this.context?.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
+      throw new Error(t("sessionsView.groupDefaultsStale"));
+    }
+    return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
+      ? result.repositoryStatus
+      : "unavailable";
   }
 
   // Lazy: the controller pulls core token-suppression modules that must stay
@@ -435,7 +470,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const expandedAgentId = this.expandedAgentId();
     const liveRows = [
       ...(this.sessionData.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
+      ...Object.values(this.sessionData.sessionResultsByAgent).flatMap((result) => result.sessions),
     ];
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
     const catalogs = this.visibleSessionCatalogs();
@@ -466,7 +501,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
         toSidebarSession: navigationState.toSidebarSession,
-        creatorId: this.activeSessionCreatorId,
+        ownerId: this.activeSessionOwnerId,
         catalogOpenTarget: this.catalogOpenTarget,
         terminalAvailable: this.terminalAvailable,
       },
@@ -475,6 +510,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
+    const occupiedPluginPlacements = new Set(
+      sidebarZone.entries.flatMap((entry) =>
+        entry.type === "route" ? [`route:${entry.route}`] : [],
+      ),
+    );
     return html`
       <aside
         class="sidebar"
@@ -512,12 +552,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                     sidebarZone.workboardRows,
                   ),
                 )}
-                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                  (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
+                  .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
+                  .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
               </div>
             </nav>
-            ${this.renderSessions()}
+            ${renderAppSidebarOnline(this)} ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
             ${renderAppSidebarAttention(this)}
@@ -534,6 +574,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .refreshRequired=${this.refreshRequired}
               .onRefresh=${this.onRefresh}
               .onHoldUpdate=${this.onHoldUpdate}
+              .onReviewUpdate=${this.onReviewUpdate}
             ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}

@@ -5,10 +5,12 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
-import { readChatMessagesFromCache } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   authoritativeHistoryAppliedForRun,
   reconcileAuthoritativeTerminalHistory,
@@ -19,6 +21,7 @@ import {
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
+    chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
@@ -84,6 +87,20 @@ function createAssistantHistory(text: string, overrides: Omit<HistoryResult, "me
     messages: [{ role: "assistant", content: [{ type: "text", text }] }],
     ...overrides,
   };
+}
+
+function seedChatSnapshot(
+  state: ChatState,
+  target: { sessionKey: string; agentId?: string },
+): void {
+  if (!state.chatMessagesBySession) {
+    throw new Error("expected chat message cache");
+  }
+  cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+    messages: [],
+    pagination: { hasMore: false, completeSnapshot: true },
+    sessionId: "cached-session",
+  });
 }
 
 type SessionTestState = ChatState & {
@@ -351,7 +368,7 @@ describe("handleChatGatewayEvent", () => {
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
   });
 
-  it("caches final messages for a switched-away session", () => {
+  it("appends final messages to a switched-away session snapshot", () => {
     const visibleMessage = createTextChatMessage("assistant", "main visible");
     const state = createState({
       sessionKey: "main",
@@ -364,6 +381,7 @@ describe("handleChatGatewayEvent", () => {
       state: "final",
       message: createTextChatMessage("assistant", "other final"),
     };
+    seedChatSnapshot(state, { sessionKey: "other" });
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([visibleMessage]);
@@ -374,7 +392,7 @@ describe("handleChatGatewayEvent", () => {
     ).toEqual([payload.message]);
   });
 
-  it("caches one background final when three retained panes receive the same event", () => {
+  it("appends one background final when three retained panes receive the same event", () => {
     const cache = new Map();
     const states = ["one", "two", "three"].map((sessionKey) =>
       createState({ chatMessagesBySession: cache, sessionKey }),
@@ -385,6 +403,7 @@ describe("handleChatGatewayEvent", () => {
       state: "final",
       message: createTextChatMessage("assistant", "background final"),
     };
+    seedChatSnapshot(states[0]!, { sessionKey: "background" });
 
     for (const state of states) {
       expect(handleChatGatewayEvent(state, payload)).toBeNull();
@@ -414,7 +433,7 @@ describe("handleChatGatewayEvent", () => {
       payloadSessionKey: "agent:main:project",
       withConfiguredDefaults: false,
     },
-  ])("caches $name", ({ activeSessionKey, payloadSessionKey, withConfiguredDefaults }) => {
+  ])("appends $name", ({ activeSessionKey, payloadSessionKey, withConfiguredDefaults }) => {
     const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -433,6 +452,7 @@ describe("handleChatGatewayEvent", () => {
         },
       };
     }
+    seedChatSnapshot(state, { sessionKey: payloadSessionKey });
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(
@@ -443,7 +463,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessagesBySession?.size).toBe(1);
   });
 
-  it("caches inactive global finals under the payload agent only", () => {
+  it("appends inactive global finals under the payload agent only", () => {
     const visibleMessage = createTextChatMessage("assistant", "work visible");
     const state = createState({
       sessionKey: "global",
@@ -459,6 +479,7 @@ describe("handleChatGatewayEvent", () => {
       state: "final",
       message: createTextChatMessage("assistant", "main final"),
     };
+    seedChatSnapshot(state, { sessionKey: "global", agentId: "main" });
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([visibleMessage]);
@@ -836,39 +857,18 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamSegments).toEqual([]);
   });
 
-  it("does not replay persisted keyed commentary after retiring a same-run steer", () => {
-    const originalUser = createTextChatMessage("user", "Ask", undefined, 1);
-    const persistedCommentary = {
-      role: "assistant",
-      content: [{ type: "text", text: "Looking into it." }],
-      timestamp: 2,
-      openclawStreamFallback: {
-        itemId: "preamble-1",
-        replacementText: "Looking into it.",
-        source: "segment",
-      },
-    };
+  it("replaces an exact keyed final-answer stream with the persisted terminal", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
-      chatMessages: [originalUser, persistedCommentary],
-      chatQueue: [
-        {
-          id: "steer-1",
-          text: "Focus on the deployment too",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "run-1",
-          sendRunId: "steer-send-1",
-          sessionKey: "main",
-        },
-      ],
+      chatMessages: [user],
       chatStream: null,
       chatStreamStartedAt: null,
     }) as ChatState & {
       chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
     };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    state.chatStreamSegments = [{ text: "Final answer.", ts: 2, itemId: "final-answer-1" }];
 
     expect(
       handleChatGatewayEvent(state, {
@@ -879,135 +879,13 @@ describe("handleChatGatewayEvent", () => {
       }),
     ).toBe("final");
 
-    expect(state.chatQueue).toEqual([]);
-    expect(state.chatMessages).toHaveLength(4);
+    expect(state.chatMessages).toHaveLength(2);
     expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
-    expectTextChatMessage(state.chatMessages[2], "user", "Focus on the deployment too");
-    expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
   });
 
-  it("retires a reply steer chip after an exact-target terminal rejection", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "reply-steer-request",
-      chatQueue: [
-        {
-          id: "reply-steer-chip",
-          text: "Reply with deployment context",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "reply-steer-request",
-          sendRunId: "reply-steer-request",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "reply-steer-request",
-        sessionKey: "main",
-        state: "error",
-        errorMessage: "active run changed; review and retry",
-      }),
-    ).toBe("error");
-
-    expect(state.chatQueue).toEqual([]);
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatRunError).toEqual({
-      summary: "Error: active run changed; review and retry",
-    });
-  });
-
-  it("retires a landed steer chip when its request run finishes inside the active run", () => {
-    const activePrompt = {
-      id: "active-prompt",
-      text: "Keep this run active",
-      createdAt: 1,
-      sendRunId: "active-run",
-      sendState: "waiting-model" as const,
-      sessionKey: "main",
-    };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "active-run",
-      chatQueue: [
-        activePrompt,
-        {
-          id: "landed-steer-chip",
-          text: "Use the deployment plan",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "active-run",
-          sendRunId: "steer-request-run",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    expect(
-      handleChatGatewayEvent(state, {
-        runId: "steer-request-run",
-        sessionKey: "main",
-        state: "final",
-      }),
-    ).toBe("final");
-
-    expect(state.chatQueue).toEqual([activePrompt]);
-    expect(state.chatRunId).toBe("active-run");
-    expect(state.chatMessages).toEqual([
-      expect.objectContaining({
-        role: "user",
-        __openclaw: { idempotencyKey: "active-run:user" },
-      }),
-      expect.objectContaining({
-        role: "user",
-        __openclaw: { idempotencyKey: "steer-request-run:user" },
-      }),
-    ]);
-  });
-
-  it("keeps a pending steer chip when an unrelated request run finishes", () => {
-    const chip = {
-      id: "pending-steer-chip",
-      text: "Keep waiting for this steer",
-      createdAt: 3,
-      kind: "steered" as const,
-      pendingRunId: "active-run",
-      sendRunId: "steer-request-run",
-      sessionKey: "main",
-    };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "active-run",
-      chatQueue: [
-        chip,
-        {
-          id: "unrelated-pending-row",
-          text: "Keep unrelated pending work",
-          createdAt: 4,
-          pendingRunId: "unrelated-run",
-          sessionKey: "main",
-        },
-      ],
-    });
-
-    handleChatGatewayEvent(state, {
-      runId: "unrelated-run",
-      sessionKey: "main",
-      state: "final",
-    });
-
-    expect(state.chatQueue).toEqual([
-      chip,
-      expect.objectContaining({ id: "unrelated-pending-row" }),
-    ]);
-    expect(state.chatRunId).toBe("active-run");
-    expect(state.chatMessages).toEqual([]);
-  });
-
-  it("uses an already-persisted steer to recover the active stream boundary", () => {
+  it("preserves an already-recorded stream boundary for a persisted steer", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -1030,21 +908,22 @@ describe("handleChatGatewayEvent", () => {
           3,
         ),
       ],
-      chatQueue: [
-        {
-          id: "steer-1",
-          text: "Focus on deployment",
-          createdAt: 3,
-          kind: "steered",
-          pendingRunId: "run-1",
-          sendRunId: "steer-send-1",
-          sessionKey: "main",
-        },
-      ],
     }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+      chatStreamSegments: Array<{
+        text: string;
+        ts: number;
+        itemId: string;
+        boundaryRunId: string;
+      }>;
     };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    state.chatStreamSegments = [
+      {
+        text: "Looking into it.",
+        ts: 2,
+        itemId: "preamble-1",
+        boundaryRunId: "steer-send-1",
+      },
+    ];
 
     handleChatGatewayEvent(state, {
       runId: "run-1",
@@ -1053,12 +932,52 @@ describe("handleChatGatewayEvent", () => {
       message: createTextChatMessage("assistant", "Final answer.", undefined, 5),
     });
 
-    expect(state.chatQueue).toEqual([]);
     expect(state.chatMessages).toHaveLength(4);
     expectTextChatMessage(state.chatMessages[0], "user", "Ask");
     expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
     expectTextChatMessage(state.chatMessages[2], "user", "Focus on deployment");
     expectTextChatMessage(state.chatMessages[3], "assistant", "Final answer.");
+  });
+
+  it("keeps a terminal-only suffix after a steer with no post-boundary delta", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [
+        createTextChatMessage("user", "Ask", { idempotencyKey: "run-1:user" }, 1),
+        createTextChatMessage("user", "Steer", { idempotencyKey: "steer-1:user" }, 3),
+      ],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{
+        text: string;
+        ts: number;
+        runId: string;
+        boundaryRunId: string;
+      }>;
+    };
+    state.chatStreamSegments = [
+      { text: "Before steer.", ts: 2, runId: "run-1", boundaryRunId: "steer-1" },
+    ];
+
+    handleChatGatewayEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: createTextChatMessage(
+        "assistant",
+        "Before steer. Final unseen suffix.",
+        undefined,
+        4,
+      ),
+    });
+
+    expect(state.chatMessages).toHaveLength(4);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Before steer.");
+    expectTextChatMessage(state.chatMessages[2], "user", "Steer");
+    expectTextChatMessage(state.chatMessages[3], "assistant", "Final unseen suffix.");
   });
 
   it("clears keyed commentary when chatPersistCommentary is false", () => {
@@ -1887,15 +1806,40 @@ describe("handleChatGatewayEvent", () => {
     {
       name: "keeps stream segments visible when an error ends after a tool event",
       create(): TerminalErrorFixture {
+        const partial = "Visible text before tool.";
         return {
           previous: [createTextChatMessage("user", "Ping", undefined, 1)],
           stream: null,
-          segments: [{ text: "Visible text before tool.", ts: 100 }],
+          segments: [{ text: partial, ts: 100, toolCallId: "call-before-error" }],
           error: "gateway disconnected",
           expected: [
             ["user", "Ping"],
-            ["assistant", "Visible text before tool."],
+            ["assistant", partial],
           ],
+          verify: (state) => {
+            const streamState = state as ChatState & {
+              chatStreamSegments: NonNullable<TerminalErrorFixture["segments"]>;
+            };
+            expect(streamState.chatStreamSegments).toEqual([]);
+            const rendered = buildChatItems({
+              paneId: "terminal-error-stream-owner",
+              sessionKey: state.sessionKey,
+              runId: state.chatRunId,
+              messages: state.chatMessages,
+              toolMessages: [],
+              streamSegments: streamState.chatStreamSegments,
+              stream: state.chatStream,
+              streamStartedAt: state.chatStreamStartedAt,
+              showToolCalls: true,
+            }).flatMap((item) =>
+              item.kind === "group"
+                ? item.messages.map(({ message }) => extractText(message))
+                : item.kind === "stream"
+                  ? [item.text.trim()]
+                  : [],
+            );
+            expect(rendered.filter((text) => text === partial)).toHaveLength(1);
+          },
         };
       },
     },
@@ -2840,6 +2784,30 @@ describe("loadChatHistory filtering", () => {
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
   });
 
+  it("returns the original shared request revision to a later pane consumer", async () => {
+    const startup = createDeferred<HistoryResult>();
+    const request = vi.fn(() => startup.promise);
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 7 },
+    });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 8 },
+    });
+
+    const firstLoad = loadChatHistory(firstState, { startup: true });
+    const secondLoad = loadChatHistory(secondState, { startup: true });
+
+    expect(request).toHaveBeenCalledOnce();
+    startup.resolve(createAssistantHistory("shared revision"));
+    const [firstResult, secondResult] = await Promise.all([firstLoad, secondLoad]);
+
+    expect(firstResult).toMatchObject({ sourceCanonicalListRevision: 7 });
+    expect(secondResult).toMatchObject({ sourceCanonicalListRevision: 7 });
+  });
+
   it("keeps startup requests separate for different pane sessions", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const client = createTestClient(request);
@@ -2891,7 +2859,7 @@ describe("loadChatHistory filtering", () => {
     ]);
   });
 
-  it("falls back to chat.history when startup history is not advertised", async () => {
+  it("requests chat.startup even when the handshake methods omit it", async () => {
     const { request, state } = createResolvedHistoryState(
       { messages: [] },
       {
@@ -2906,7 +2874,7 @@ describe("loadChatHistory filtering", () => {
 
     await loadChatHistory(state, { startup: true });
 
-    expect(request).toHaveBeenCalledWith("chat.history", {
+    expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "main",
       limit: 100,
     });
@@ -2928,16 +2896,13 @@ describe("chat send Gateway requests", () => {
 });
 
 describe("loadChatHistory retry handling", () => {
-  it("falls back to chat.history when chat.startup is unknown", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "unknown method: chat.startup",
-        }),
-      )
-      .mockResolvedValueOnce(createAssistantHistory("fallback"));
+  it("surfaces unknown chat.startup failures without requesting chat.history", async () => {
+    const request = vi.fn().mockRejectedValue(
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: chat.startup",
+      }),
+    );
     const state = createHistoryState(request);
 
     await loadChatHistory(state, { startup: true });
@@ -2946,13 +2911,9 @@ describe("loadChatHistory retry handling", () => {
       sessionKey: "main",
       limit: 100,
     });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
-      sessionKey: "main",
-      limit: 100,
-    });
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "fallback" }] },
-    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.lastError).toContain("unknown method: chat.startup");
+    expect(state.chatError).toContain("unknown method: chat.startup");
   });
 
   it("retries retryable startup unavailability before showing history", async () => {

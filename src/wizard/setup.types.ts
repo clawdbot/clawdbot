@@ -15,7 +15,6 @@ export type QuickstartGatewayDefaults = {
   token?: SecretInput;
   password?: SecretInput;
   customBindHost?: string;
-  tailscaleResetOnExit: boolean;
 };
 
 export type GatewayWizardSettings = {
@@ -25,5 +24,4 @@ export type GatewayWizardSettings = {
   authMode: GatewayAuthChoice;
   gatewayToken?: string;
   tailscaleMode: "off" | "serve" | "funnel";
-  tailscaleResetOnExit: boolean;
 };

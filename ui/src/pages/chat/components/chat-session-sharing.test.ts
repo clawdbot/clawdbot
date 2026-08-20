@@ -71,7 +71,7 @@ describe("chat session sharing menu", () => {
     expect(onMemberChange).toHaveBeenCalledWith("alice", true);
   });
 
-  it("distinguishes people from channel-backed members", () => {
+  it("renders member presentation from identity.type, not from ID spelling", () => {
     const root = mount(
       renderChatSessionSharing({
         session: {
@@ -88,8 +88,12 @@ describe("chat session sharing menu", () => {
             members: [],
             identities: [
               { type: "human", id: "profile-vyctor", label: "Vyctor Brzezowski" },
+              // Human identity IDs are opaque (e.g. an inbound SenderId) and
+              // can contain "channel:" as a substring; the recorded type,
+              // not the ID string, must drive presentation.
               { type: "human", id: "channel:chn_design", label: "Design" },
-              { type: "human", id: "discord:channel:operations", label: "Operations" },
+              { type: "agent", id: "discord:channel:operations", label: "Operations" },
+              { type: "system", id: "channel:audit", label: "Audit" },
             ],
             role: "owner",
             allowedVisibilities: ["shared"],
@@ -101,16 +105,21 @@ describe("chat session sharing menu", () => {
       }),
     );
 
-    const human = root.querySelector('wa-dropdown-item[value="member:profile-vyctor"]');
-    const channels = [
+    const humans = [
+      root.querySelector('wa-dropdown-item[value="member:profile-vyctor"]'),
       root.querySelector('wa-dropdown-item[value="member:channel:chn_design"]'),
+    ];
+    const nonHumans = [
       root.querySelector('wa-dropdown-item[value="member:discord:channel:operations"]'),
+      root.querySelector('wa-dropdown-item[value="member:channel:audit"]'),
     ];
 
-    expect(human?.querySelector("openclaw-session-owner-chip")).not.toBeNull();
-    for (const channel of channels) {
-      expect(channel?.querySelector("openclaw-session-owner-chip")).toBeNull();
-      expect(channel?.querySelector(".chat-pane__sharing-channel-icon svg")).not.toBeNull();
+    for (const human of humans) {
+      expect(human?.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    }
+    for (const nonHuman of nonHumans) {
+      expect(nonHuman?.querySelector("openclaw-session-owner-chip")).toBeNull();
+      expect(nonHuman?.querySelector(".chat-pane__sharing-member-icon svg")).not.toBeNull();
     }
   });
 

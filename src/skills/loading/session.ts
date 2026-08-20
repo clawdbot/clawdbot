@@ -13,7 +13,8 @@ import {
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPromptCore, resolveSkillDisplayName } from "./skill-contract.js";
+import { resolveSkillDisplayName } from "./skill-contract.js";
+import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
@@ -277,7 +278,7 @@ function loadSkillFromFile(
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillsForPromptCore(visibleSkills);
+  return formatSkillsForPromptBounded({ skills: visibleSkills });
 }
 
 interface LoadSkillsOptions {

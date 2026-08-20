@@ -24,6 +24,28 @@ extension OnboardingAISetupModel {
         let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     }
 
+    @MainActor
+    struct ReconciliationDeadline {
+        private let clock: ContinuousClock
+        private let deadline: ContinuousClock.Instant
+
+        init(timeout: ContinuousClock.Duration, clock: ContinuousClock = .init()) {
+            self.clock = clock
+            self.deadline = clock.now.advanced(by: timeout)
+        }
+
+        var hasTimeRemaining: Bool {
+            self.clock.now < self.deadline
+        }
+
+        func remainingMilliseconds(cappedAt capMs: Int) -> Int {
+            OnboardingAISetupModel.remainingMilliseconds(
+                until: self.deadline,
+                clock: self.clock,
+                cappedAt: capMs)
+        }
+    }
+
     struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
             let brandId: String?
@@ -195,6 +217,13 @@ extension OnboardingAISetupModel {
     func canSelectCandidate(kind: String) -> Bool {
         guard !self.connected else { return false }
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
+    }
+
+    /// True when setup live-verified an already-configured route instead of
+    /// activating a new one. The custodian first-run handoff belongs only to
+    /// fresh activations; verified reopens land on the normal dashboard.
+    var verifiedExistingInference: Bool {
+        self.connected && self.selectedKind == "existing-model"
     }
 
     /// Once setup starts changing inference, its successful result belongs to

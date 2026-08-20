@@ -1,6 +1,7 @@
 // Google plugin entrypoint registers its OpenClaw integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
+import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -11,7 +12,10 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice-audio-queue";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -160,21 +164,9 @@ function resolveGoogleRealtimeProviderConfig(
   rawConfig: RealtimeVoiceProviderConfig,
   cfg?: { models?: { providers?: { google?: { apiKey?: unknown } } } },
 ): RealtimeVoiceProviderConfig {
-  const providers =
-    typeof rawConfig.providers === "object" &&
-    rawConfig.providers !== null &&
-    !Array.isArray(rawConfig.providers)
-      ? (rawConfig.providers as Record<string, unknown>)
-      : undefined;
-  const nested = providers?.google;
+  const providers = asOptionalRecord(rawConfig.providers);
   const raw =
-    typeof nested === "object" && nested !== null && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : typeof rawConfig.google === "object" &&
-          rawConfig.google !== null &&
-          !Array.isArray(rawConfig.google)
-        ? (rawConfig.google as Record<string, unknown>)
-        : rawConfig;
+    asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google) ?? rawConfig;
   return {
     ...raw,
     ...(raw.apiKey === undefined
@@ -470,7 +462,9 @@ export default definePluginEntry({
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
-    api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(
+      adaptMemoryEmbeddingProviderAdapter(geminiMemoryEmbeddingProviderAdapter),
+    );
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());

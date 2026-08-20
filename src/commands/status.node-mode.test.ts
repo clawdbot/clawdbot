@@ -28,9 +28,9 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         daemon: { installed: false },
         node: {
           installed: true,
-          loaded: true,
+          loadState: { status: "loaded" },
           externallyManaged: false,
-          runtimeShort: "running (pid 4321)",
+          runtime: { status: "running", pid: 4321 },
         },
       }),
     ).resolves.toEqual({
@@ -57,10 +57,9 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         daemon: { installed: false },
         node: {
           installed: true,
-          loaded: false,
+          loadState: { status: "not-loaded" },
           externallyManaged: false,
           runtime: { status: "stopped" },
-          runtimeShort: "stopped",
         },
       }),
     ).resolves.toBeNull();
@@ -74,9 +73,8 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         daemon: { installed: false },
         node: {
           installed: true,
-          loaded: true,
+          loadState: { status: "loaded" },
           externallyManaged: false,
-          runtimeShort: "running (pid 4321)",
         },
       }),
     ).resolves.toEqual({

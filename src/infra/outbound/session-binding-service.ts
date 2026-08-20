@@ -344,9 +344,7 @@ export function getSessionBindingService(): SessionBindingService {
 export const testing = {
   resetSessionBindingAdaptersForTests() {
     ADAPTERS_BY_CHANNEL_ACCOUNT.clear();
-    genericCurrentConversationBindingTesting.resetCurrentConversationBindingsForTests({
-      deletePersistedFile: true,
-    });
+    genericCurrentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
   },
   getRegisteredAdapterKeys() {
     return [...ADAPTERS_BY_CHANNEL_ACCOUNT.keys()];

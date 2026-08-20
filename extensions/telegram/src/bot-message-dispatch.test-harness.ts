@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
@@ -44,6 +45,7 @@ const createForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const deleteMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const editForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const editMessageTelegramHoisted = vi.hoisted(() => vi.fn());
+const editMessageReplyMarkupTelegramHoisted = vi.hoisted(() => vi.fn());
 const reactMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const sendMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const sendPollTelegramHoisted = vi.hoisted(() => vi.fn());
@@ -127,6 +129,7 @@ const createForumTopicTelegram = createForumTopicTelegramHoisted;
 const deleteMessageTelegram = deleteMessageTelegramHoisted;
 const editForumTopicTelegram = editForumTopicTelegramHoisted;
 export const editMessageTelegram = editMessageTelegramHoisted;
+export const editMessageReplyMarkupTelegram = editMessageReplyMarkupTelegramHoisted;
 const reactMessageTelegram = reactMessageTelegramHoisted;
 export const sendMessageTelegram = sendMessageTelegramHoisted;
 const sendPollTelegram = sendPollTelegramHoisted;
@@ -220,8 +223,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         history: resolved.history,
         admission: resolved.admission,
         botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () =>
-          await dispatchReplyWithBufferedBlockDispatcherHoisted({
+        runDispatch: async () => {
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcherHoisted({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
@@ -238,7 +241,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
             replyResolver: resolved.replyResolver,
-          }),
+          });
+          return withTelegramTestSettledReceipt(dispatchResult);
+        },
       });
       await params.adapter.onFinalize?.(result);
       return result;
@@ -270,6 +275,7 @@ vi.mock("./send.js", () => ({
   createForumTopicTelegram: createForumTopicTelegramHoisted,
   deleteMessageTelegram: deleteMessageTelegramHoisted,
   editForumTopicTelegram: editForumTopicTelegramHoisted,
+  editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,
   reactMessageTelegram: reactMessageTelegramHoisted,
   sendMessageTelegram: sendMessageTelegramHoisted,
@@ -375,6 +381,7 @@ function resetTelegramDispatchTestState() {
   deleteMessageTelegram.mockReset();
   editForumTopicTelegram.mockReset();
   editMessageTelegram.mockReset();
+  editMessageReplyMarkupTelegram.mockReset();
   reactMessageTelegram.mockReset();
   sendMessageTelegram.mockReset();
   sendPollTelegram.mockReset();
@@ -419,6 +426,7 @@ function resetTelegramDispatchTestState() {
   deleteMessageTelegram.mockResolvedValue(true);
   editForumTopicTelegram.mockResolvedValue(true);
   editMessageTelegram.mockResolvedValue({ ok: true });
+  editMessageReplyMarkupTelegram.mockResolvedValue({ ok: true });
   reactMessageTelegram.mockResolvedValue(true);
   sendMessageTelegram.mockResolvedValue({ message_id: 1001 });
   sendPollTelegram.mockResolvedValue({ message_id: 1001 });
@@ -554,18 +562,6 @@ export function allDeliveredReplyTexts(): string[] {
 
 export function expectDispatchParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), expected);
-}
-
-// The collapse bar edits the live window message in place (finalizeToPreview)
-// instead of deleting it and reposting the bar as a new message.
-export function expectWindowCollapsedTo(
-  stream: { finalizeToPreview: { mock: { calls: unknown[][] } } },
-  barText: string,
-) {
-  const calls = stream.finalizeToPreview.mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  const preview = calls.at(-1)?.[0] as { text?: string } | undefined;
-  expect(preview?.text).toBe(barText);
 }
 
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {

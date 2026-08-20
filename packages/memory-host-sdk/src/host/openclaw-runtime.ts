@@ -120,7 +120,6 @@ export {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
-  listRegisteredMemoryEmbeddingProviders,
 } from "../../../../src/plugins/memory-embedding-provider-runtime.js";
 export type {
   MemoryEmbeddingBatchChunk,

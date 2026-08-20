@@ -1,5 +1,6 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
@@ -15,6 +16,123 @@ import type {
   SessionEntry,
   SessionHeader,
 } from "./session-manager-types.js";
+
+const sessionEntryTypeSchema = z.enum([
+  "message",
+  "thinking_level_change",
+  "model_change",
+  "compaction",
+  "reset",
+  "branch_summary",
+  "custom",
+  "custom_message",
+  "label",
+  "session_info",
+]);
+const readableContentSchema = z.union([z.string(), z.array(z.looseObject({ type: z.string() }))]);
+const readableMessageSchema = z.discriminatedUnion("role", [
+  z.looseObject({ role: z.literal("user"), content: readableContentSchema }),
+  z.looseObject({ role: z.literal("assistant"), content: readableContentSchema }),
+  z.looseObject({
+    role: z.literal("toolResult"),
+    toolCallId: z.string(),
+    toolName: z.string(),
+    isError: z.boolean(),
+    content: z.array(z.unknown()),
+  }),
+  z.looseObject({
+    role: z.literal("custom"),
+    customType: z.string(),
+    content: readableContentSchema,
+  }),
+  z.looseObject({
+    role: z.literal("bashExecution"),
+    command: z.string(),
+    output: z.string(),
+  }),
+]);
+const indexedSessionEntryBaseShape = {
+  id: z.string().min(1),
+  parentId: z.union([z.string(), z.null()]).optional(),
+  timestamp: z.string().optional(),
+};
+const indexedSessionEntrySchema = z.discriminatedUnion("type", [
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("message"),
+    message: readableMessageSchema,
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("thinking_level_change"),
+    thinkingLevel: z.string().min(1),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("model_change"),
+    provider: z.string().min(1),
+    modelId: z.string().min(1),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("compaction"),
+    summary: z.string(),
+    firstKeptEntryId: z.string().min(1),
+    tokensBefore: z.custom<number>((value) => typeof value === "number"),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("reset"),
+    reason: z.coerce.string().pipe(z.enum(["new", "reset", "idle", "daily", "cron-stale"])),
+    firstKeptEntryId: z.string().optional(),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("branch_summary"),
+    fromId: z.string(),
+    summary: z.string(),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("custom"),
+    customType: z.string().min(1),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("custom_message"),
+    customType: z.string().min(1),
+    content: readableContentSchema,
+    display: z.boolean(),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("label"),
+    targetId: z.string().min(1),
+    label: z.string().optional(),
+  }),
+  z.looseObject({
+    ...indexedSessionEntryBaseShape,
+    type: z.literal("session_info"),
+    name: z.string().optional(),
+  }),
+]);
+const parentLinkedOpaqueEntrySchema = z.looseObject({
+  type: z
+    .unknown()
+    .optional()
+    .refine((type) => type !== "session" && type !== "leaf"),
+  id: z.string().min(1),
+  parentId: z.union([z.string(), z.null()]),
+});
+const opaqueLeafEntrySchema = z.looseObject({
+  type: z.literal("leaf"),
+  id: z.string().min(1),
+  parentId: z.union([z.string(), z.null()]),
+  targetId: z.union([z.string(), z.null()]),
+  appendParentId: z.union([z.string(), z.null()]).optional(),
+  appendMode: z.literal("side").optional(),
+});
+const sessionHeaderSchema = z.looseObject({ type: z.literal("session"), id: z.string() });
 
 export function isSessionContextMetadataEntry(entry: SessionEntry): boolean {
   return (
@@ -205,113 +323,19 @@ export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
 }
 
 function isSessionEntryType(type: unknown): boolean {
-  switch (type) {
-    case "message":
-    case "thinking_level_change":
-    case "model_change":
-    case "compaction":
-    case "reset":
-    case "branch_summary":
-    case "custom":
-    case "custom_message":
-    case "label":
-    case "session_info":
-      return true;
-    default:
-      return false;
-  }
+  return sessionEntryTypeSchema.safeParse(type).success;
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
-  if (
-    !isRecord(entry) ||
-    !isSessionEntryType(entry.type) ||
-    typeof entry.id !== "string" ||
-    entry.id.length === 0 ||
-    (entry.parentId !== undefined &&
-      entry.parentId !== null &&
-      typeof entry.parentId !== "string") ||
-    (entry.timestamp !== undefined && typeof entry.timestamp !== "string")
-  ) {
-    return false;
-  }
-  switch (entry.type) {
-    case "message":
-      return isReadableMessage(entry.message);
-    case "thinking_level_change":
-      return typeof entry.thinkingLevel === "string" && entry.thinkingLevel.length > 0;
-    case "model_change":
-      return (
-        typeof entry.provider === "string" &&
-        entry.provider.length > 0 &&
-        typeof entry.modelId === "string" &&
-        entry.modelId.length > 0
-      );
-    case "compaction":
-      return (
-        typeof entry.summary === "string" &&
-        typeof entry.firstKeptEntryId === "string" &&
-        entry.firstKeptEntryId.length > 0 &&
-        typeof entry.tokensBefore === "number"
-      );
-    case "reset":
-      return (
-        ["new", "reset", "idle", "daily", "cron-stale"].includes(String(entry.reason)) &&
-        (entry.firstKeptEntryId === undefined || typeof entry.firstKeptEntryId === "string")
-      );
-    case "branch_summary":
-      return typeof entry.fromId === "string" && typeof entry.summary === "string";
-    case "custom":
-      return typeof entry.customType === "string" && entry.customType.length > 0;
-    case "custom_message":
-      return (
-        typeof entry.customType === "string" &&
-        entry.customType.length > 0 &&
-        isReadableContent(entry.content) &&
-        typeof entry.display === "boolean"
-      );
-    case "label":
-      return (
-        typeof entry.targetId === "string" &&
-        entry.targetId.length > 0 &&
-        (entry.label === undefined || typeof entry.label === "string")
-      );
-    case "session_info":
-      return entry.name === undefined || typeof entry.name === "string";
-    default:
-      return false;
-  }
+  return indexedSessionEntrySchema.safeParse(entry).success;
 }
 
 function isReadableContent(value: unknown): boolean {
-  return (
-    typeof value === "string" ||
-    (Array.isArray(value) && value.every((part) => isRecord(part) && typeof part.type === "string"))
-  );
+  return readableContentSchema.safeParse(value).success;
 }
 
 function isReadableMessage(value: unknown): boolean {
-  if (!isRecord(value) || typeof value.role !== "string") {
-    return false;
-  }
-  switch (value.role) {
-    case "user":
-    case "assistant":
-      return isReadableContent(value.content);
-    case "toolResult":
-      return (
-        typeof value.toolCallId === "string" &&
-        typeof value.toolName === "string" &&
-        typeof value.isError === "boolean" &&
-        Array.isArray(value.content)
-      );
-    case "custom":
-      return typeof value.customType === "string" && isReadableContent(value.content);
-    case "bashExecution":
-      return typeof value.command === "string" && typeof value.output === "string";
-    default:
-      return false;
-  }
+  return readableMessageSchema.safeParse(value).success;
 }
 
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
@@ -345,17 +369,8 @@ function normalizePersistedLegacyHookMessage(value: unknown): unknown {
 export function parseParentLinkedOpaqueEntry(
   record: unknown,
 ): { id: string; parentId: string | null } | undefined {
-  if (
-    !isRecord(record) ||
-    record.type === "session" ||
-    record.type === "leaf" ||
-    typeof record.id !== "string" ||
-    record.id.length === 0 ||
-    (record.parentId !== null && typeof record.parentId !== "string")
-  ) {
-    return undefined;
-  }
-  return { id: record.id, parentId: record.parentId };
+  const parsed = parentLinkedOpaqueEntrySchema.safeParse(record);
+  return parsed.success ? { id: parsed.data.id, parentId: parsed.data.parentId } : undefined;
 }
 
 export function parseOpaqueLeafEntry(record: unknown):
@@ -367,26 +382,17 @@ export function parseOpaqueLeafEntry(record: unknown):
       appendMode?: "side";
     }
   | undefined {
-  if (
-    !isRecord(record) ||
-    record.type !== "leaf" ||
-    typeof record.id !== "string" ||
-    record.id.length === 0 ||
-    (record.parentId !== null && typeof record.parentId !== "string") ||
-    (record.targetId !== null && typeof record.targetId !== "string") ||
-    (record.appendParentId !== undefined &&
-      record.appendParentId !== null &&
-      typeof record.appendParentId !== "string") ||
-    (record.appendMode !== undefined && record.appendMode !== "side")
-  ) {
+  const parsed = opaqueLeafEntrySchema.safeParse(record);
+  if (!parsed.success) {
     return undefined;
   }
+  const leaf = parsed.data;
   return {
-    id: record.id,
-    parentId: record.parentId,
-    targetId: record.targetId,
-    ...(record.appendParentId !== undefined ? { appendParentId: record.appendParentId } : {}),
-    ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
+    id: leaf.id,
+    parentId: leaf.parentId,
+    targetId: leaf.targetId,
+    ...(leaf.appendParentId !== undefined ? { appendParentId: leaf.appendParentId } : {}),
+    ...(leaf.appendMode === "side" ? { appendMode: leaf.appendMode } : {}),
   };
 }
 
@@ -398,15 +404,15 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const fileEntries: FileEntry[] = [];
   const opaqueEntries: Array<{ index: number; record: unknown }> = [];
   const fileEntriesByOriginalIndex: Array<FileEntry | undefined> = [];
-  const header = entries.find(
-    (entry) => isRecord(entry) && entry.type === "session" && typeof entry.id === "string",
-  ) as SessionHeader | undefined;
+  const header = entries.find((entry) => sessionHeaderSchema.safeParse(entry).success) as
+    | SessionHeader
+    | undefined;
   const acceptsLegacyEntries = (header?.version ?? 1) < CURRENT_SESSION_VERSION;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
     const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
-    if (!hasHeader && isRecord(entry) && entry.type === "session" && typeof entry.id === "string") {
-      fileEntries.push(entry as unknown as SessionHeader);
+    if (!hasHeader && sessionHeaderSchema.safeParse(entry).success) {
+      fileEntries.push(entry);
       fileEntriesByOriginalIndex[originalIndex] = entry;
       hasHeader = true;
       continue;

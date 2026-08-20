@@ -244,11 +244,16 @@ function expectPendingApprovalText(
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
+  }
+  if (options.interactive && options.host !== "node") {
     expect(pendingText).toContain(
       (options.allowedDecisions ?? "").includes("allow-always")
         ? "Background mode requires pre-approved policy"
         : "Background mode requires an effective policy that allows pre-approval",
     );
+  }
+  if (options.host === "node") {
+    expect(pendingText).not.toContain("Background mode");
   }
   return details;
 }
@@ -726,7 +731,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain(
-      "Warning: background execution is disabled; running synchronously.",
+      "Warning: continuation options are unavailable; running synchronously.",
     );
     expect(getResultText(result)).toContain("node-ok");
   });
@@ -1005,7 +1010,7 @@ describe("exec approvals", () => {
   });
 
   it.each(["gateway", "node"] as const)(
-    "keeps background fallback warnings out of pending %s approvals",
+    "keeps unavailable continuation guidance out of pending %s approvals",
     async (host) => {
       let approvalRequest: Record<string, unknown> | undefined;
       vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1042,7 +1047,7 @@ describe("exec approvals", () => {
       });
 
       expect(result.details.status).toBe("approval-pending");
-      expect(getResultText(result)).not.toContain("background execution is disabled");
+      expect(getResultText(result)).not.toMatch(/process|background|yieldMs|poll/i);
       expect(approvalRequest?.warningText).toBeUndefined();
     },
   );
@@ -1324,6 +1329,7 @@ describe("exec approvals", () => {
 
   it("shows full chained gateway commands in approval-pending message", async () => {
     const calls: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} --version && ${JSON.stringify(process.execPath)} --version`;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
@@ -1343,10 +1349,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-chain-gateway", {
-      command: "npm view diver --json | jq .name && brew outdated",
+      command,
     });
 
-    expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
+    expectPendingCommandText(result, command);
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -1491,6 +1497,7 @@ describe("exec approvals", () => {
 
   it("shows full chained node commands in approval-pending message", async () => {
     const calls: string[] = [];
+    const command = `${JSON.stringify(process.execPath)} --version && ${JSON.stringify(process.execPath)} --version`;
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "node.invoke") {
@@ -1510,10 +1517,10 @@ describe("exec approvals", () => {
     });
 
     const result = await tool.execute("call-chain-node", {
-      command: "npm view diver --json | jq .name && brew outdated",
+      command,
     });
 
-    expectPendingCommandText(result, "npm view diver --json | jq .name && brew outdated");
+    expectPendingCommandText(result, command);
     expect(calls).toContain("exec.approval.request");
   });
 

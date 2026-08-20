@@ -755,6 +755,59 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
   });
 
+  it("records the required-preflight origin on native app-server compaction requests", async () => {
+    const fake = createFakeCodexClient({ retainedThreadId: null });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "fingerprint-1",
+        },
+      },
+    });
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          preflightRequired: true,
+          currentTokenCount: 456,
+        },
+        {
+          allowNonManualNativeRequest: true,
+          nativeCompactionRequest: "required_preflight",
+        },
+      ),
+    );
+
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      threadId: "thread-1",
+      signal: "thread/compact/start",
+      pending: false,
+      completed: true,
+      request: "required_preflight",
+      trigger: "budget",
+    });
+  });
+
   it("preserves projection when aborted before guarded native compaction", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -890,6 +943,76 @@ describe("maybeCompactCodexAppServerSession", () => {
         },
       },
     });
+  });
+
+  it("reports a recoverable stale-binding failure when a required-preflight native request sees the binding change", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const originalContextEngine = {
+      schemaVersion: 1 as const,
+      engineId: "lossless-claw",
+      policyFingerprint: "policy-1",
+      projection: {
+        schemaVersion: 1 as const,
+        mode: "thread_bootstrap" as const,
+        epoch: "epoch-1",
+        fingerprint: "fingerprint-1",
+      },
+    };
+    const sessionFile = await writeTestBinding({
+      contextEngine: originalContextEngine,
+    });
+    let bindingReads = 0;
+    const bindingStore = {
+      ...testCodexAppServerBindingStore,
+      read: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
+        const result = await testCodexAppServerBindingStore.read(...args);
+        if (bindingReads++ === 0) {
+          seedCodexTestBinding(sessionFile, {
+            threadId: "thread-2",
+            cwd: tempDir,
+            contextEngine: {
+              ...originalContextEngine,
+              projection: {
+                schemaVersion: 1,
+                mode: "thread_bootstrap",
+                epoch: "epoch-2",
+                fingerprint: "fingerprint-2",
+              },
+            },
+          });
+        }
+        return result;
+      }),
+    };
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          preflightRequired: true,
+          currentTokenCount: 456,
+        },
+        {
+          allowNonManualNativeRequest: true,
+          nativeCompactionRequest: "required_preflight",
+          bindingStore,
+        },
+      ),
+    );
+
+    // A required-preflight request has not compacted yet, so a binding change
+    // must surface as the recoverable failure rather than a benign ok:true skip,
+    // letting the queued harness fall back to the context engine.
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server binding changed before native compaction");
+    expect(result.failure?.reason).toBe("stale_thread_binding");
   });
 
   it("blocks same-process binding writes until guarded native compaction starts", async () => {
@@ -1098,6 +1221,39 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeTestBinding();
 
     const result = requireCompactResult(await startNodeExecCompaction(sessionFile));
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toContain(
+      "Codex-native native compaction is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+    expect(fake.request).not.toHaveBeenCalled();
+  });
+
+  it("uses the retained agent for unscoped explicit-roster compaction", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "node-session",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+        agentId: "alpha",
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: {
+            entries: {
+              alpha: { tools: { exec: { host: "node", node: "worker-1" } } },
+              beta: {},
+            },
+          },
+        },
+      }),
+    );
 
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
@@ -1769,6 +1925,35 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.result).toBeUndefined();
   });
 
+  it("reports required-preflight missing binding as a recoverable native failure", async () => {
+    const sessionFile = path.join(tempDir, "required-preflight-missing-binding.jsonl");
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          preflightRequired: true,
+        },
+        {
+          allowNonManualNativeRequest: true,
+          nativeCompactionRequest: "required_preflight",
+        },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      failure: {
+        reason: "missing_thread_binding",
+      },
+    });
+  });
+
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(
@@ -2126,7 +2311,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     warn.mockRestore();
   });
 
-  it("warns for legacy Lossless config even when the Lossless context engine slot is active", async () => {
+  it("warns for a legacy Lossless default when the Lossless slot is active", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -2152,15 +2337,11 @@ describe("maybeCompactCodexAppServerSession", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: "lossless",
-              compaction: {
-                model: "openai/gpt-5.4",
-                provider: "lossless-claw",
-              },
+          defaults: {
+            compaction: {
+              provider: "lossless-claw",
             },
-          ],
+          },
         },
       },
     });
@@ -2171,68 +2352,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       {
         sessionId: "session-1",
         sessionKey: "agent:lossless:session-1",
-        ignoredConfig: [
-          "agents.list.lossless.compaction.model",
-          "agents.list.lossless.compaction.provider",
-        ],
-      },
-    );
-    warn.mockRestore();
-  });
-
-  it("warns for inherited legacy Lossless provider when the Lossless slot is active", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding({}, "agent:lossless-child:session-1");
-    const contextEngine: ContextEngine = {
-      info: { id: "lcm", name: "Lossless Context Manager", ownsCompaction: true },
-      assemble: vi.fn() as never,
-      ingest: vi.fn() as never,
-      compact: vi.fn(async () => ({ ok: true, compacted: false, reason: "below threshold" })),
-    };
-
-    await maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:lossless-child:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-      contextEngine,
-      config: {
-        plugins: {
-          slots: {
-            contextEngine: "lossless-claw",
-          },
-        },
-        agents: {
-          defaults: {
-            compaction: {
-              provider: "lossless-claw",
-            },
-          },
-          list: [
-            {
-              id: "lossless-child",
-              compaction: {
-                model: "openai/gpt-5.4-mini",
-              },
-            },
-          ],
-        },
-      },
-    });
-
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(warn).toHaveBeenCalledWith(
-      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:lossless-child:session-1",
-        ignoredConfig: [
-          "agents.defaults.compaction.provider",
-          "agents.list.lossless-child.compaction.model",
-        ],
+        ignoredConfig: ["agents.defaults.compaction.provider"],
       },
     );
     warn.mockRestore();

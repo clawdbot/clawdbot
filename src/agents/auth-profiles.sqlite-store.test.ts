@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: mocks.resolveExternalCliAuthProfiles,
 }));
 
@@ -167,7 +168,7 @@ describe("auth profile sqlite store", () => {
     });
   });
 
-  it("fails closed when a credential source appears during a successful SQLite read", async () => {
+  it("keeps serving SQLite credentials when a credential source appears during the read", async () => {
     await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
       saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
       const legacyPath = path.join(agentDir, "auth.json");
@@ -185,12 +186,15 @@ describe("auth profile sqlite store", () => {
         return existsSync(pathname);
       });
       try {
-        expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
-          "requires legacy credential migration",
-        );
+        // The migrated store already owns these credentials, so a retired file
+        // appearing beside it is unarchived bytes rather than pending migration.
+        expect(
+          ensureAuthProfileStore(agentDir, { syncExternalCli: false }).profiles["openai:default"],
+        ).toMatchObject({ type: "api_key", provider: "openai", key: "not-a-real" });
       } finally {
         existsSpy.mockRestore();
       }
+      // Runtime never reads or removes it; Doctor still owns the archive step.
       expect(fs.existsSync(legacyPath)).toBe(true);
     });
   });

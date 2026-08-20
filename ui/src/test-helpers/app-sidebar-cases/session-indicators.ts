@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -12,8 +12,230 @@ function expectEmptyLead(row: Element | null) {
   expect(lead?.childElementCount).toBe(0);
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("AppSidebar session indicators", () => {
-  it("places Home activity in the same trailing endcap as session activity", async () => {
+  it("renders named glyphs as strokes and keeps emoji as text", async () => {
+    const glyphKey = "agent:main:glyph";
+    const emojiKey = "agent:main:emoji";
+    const sessions = createSessionsHarness("main", [glyphKey, emojiKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const glyph = result.sessions.find((row) => row.key === glyphKey);
+    const emoji = result.sessions.find((row) => row.key === emojiKey);
+    if (!glyph || !emoji) {
+      throw new Error("expected icon sessions");
+    }
+    glyph.icon = "braces";
+    emoji.icon = "🦞";
+
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    const glyphRow = sidebar.querySelector(`[data-session-key="${glyphKey}"]`);
+    const emojiRow = sidebar.querySelector(`[data-session-key="${emojiKey}"]`);
+
+    expect(glyphRow?.querySelector(".session-glyph__icon svg")).not.toBeNull();
+    expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
+    expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
+    expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
+  });
+
+  it("prioritizes session icons, then channel avatars, then owner chips", async () => {
+    const iconKey = "agent:main:icon-wins";
+    const avatarKey = "agent:main:channel-avatar";
+    const ownerKey = "agent:main:owner-fallback";
+    const sessions = createSessionsHarness("main", [iconKey, avatarKey, ownerKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    for (const row of result.sessions) {
+      row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+      row.owner = { actor: row.createdActor };
+      if (row.key !== ownerKey) {
+        row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(row.key)}`;
+      }
+    }
+    const iconRow = result.sessions.find((row) => row.key === iconKey);
+    if (!iconRow) {
+      throw new Error("expected icon row");
+    }
+    iconRow.icon = "🦞";
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(["avatar"], { type: "image/png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:channel-avatar");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    gatewayHarness.gateway.connection.token = "avatar-token";
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+
+    await waitForFast(() => {
+      expect(
+        sidebar.querySelector(`[data-session-key="${avatarKey}"] .channel-avatar`),
+      ).not.toBeNull();
+    });
+
+    const icon = sidebar.querySelector(`[data-session-key="${iconKey}"]`);
+    expect(icon?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
+    expect(icon?.querySelector("openclaw-channel-avatar")).toBeNull();
+    expect(icon?.querySelector(".session-owner-chip")).toBeNull();
+
+    const avatar = sidebar.querySelector(`[data-session-key="${avatarKey}"]`);
+    expect(avatar?.querySelector(".session-glyph--circular")).not.toBeNull();
+    expect(avatar?.querySelector(".channel-avatar")?.getAttribute("src")).toBe(
+      "blob:channel-avatar",
+    );
+    expect(avatar?.querySelector(".session-owner-chip")).toBeNull();
+
+    const owner = sidebar.querySelector(`[data-session-key="${ownerKey}"]`);
+    expect(owner?.querySelector("openclaw-channel-avatar")).toBeNull();
+    expect(owner?.querySelector(".session-owner-chip")).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}`,
+      {
+        headers: { Authorization: "Bearer avatar-token" },
+        signal: expect.any(AbortSignal),
+      },
+    );
+  });
+
+  it("refetches a mounted channel avatar when its route revision changes", async () => {
+    const avatarKey = "agent:main:avatar-revision";
+    const missingUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}?v=old`;
+    const restoredUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}?v=new`;
+    const sessions = createSessionsHarness("main", [avatarKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const row = result.sessions.find((sessionRow) => sessionRow.key === avatarKey);
+    if (!row) {
+      throw new Error("expected avatar row");
+    }
+    row.channelAvatarUrl = missingUrl;
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("?v=old")) {
+        return { ok: false, status: 404, blob: async () => new Blob([]) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        blob: async () => new Blob(["avatar"], { type: "image/png" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:channel-avatar-restored");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    gatewayHarness.gateway.connection.token = "avatar-token";
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+
+    // The pruned avatar 404s and its absence is cached under the old URL; the
+    // owner chip must keep the lead slot occupied instead of an empty circle.
+    await waitForFast(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    const missingRow = sidebar.querySelector(`[data-session-key="${avatarKey}"]`);
+    expect(missingRow?.querySelector(".channel-avatar")).toBeNull();
+    await waitForFast(() => {
+      expect(missingRow?.querySelector(".session-owner-chip")).not.toBeNull();
+    });
+
+    // A restored/replaced backing image arrives as a new route revision; the
+    // mounted row must fetch the new URL instead of reusing the sticky 404.
+    row.channelAvatarUrl = restoredUrl;
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${avatarKey}"] .channel-avatar`)
+          ?.getAttribute("src"),
+      ).toBe("blob:channel-avatar-restored");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      restoredUrl,
+      expect.objectContaining({ headers: { Authorization: "Bearer avatar-token" } }),
+    );
+    // Once the avatar renders, the chip fallback yields to the real image.
+    expect(
+      sidebar.querySelector(`[data-session-key="${avatarKey}"] .session-owner-chip`),
+    ).toBeNull();
+  });
+
+  it("keeps the owner chip when avatar auth is not ready", async () => {
+    const avatarKey = "agent:main:avatar-auth-pending";
+    const sessions = createSessionsHarness("main", [avatarKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const row = result.sessions.find((sessionRow) => sessionRow.key === avatarKey);
+    if (!row) {
+      throw new Error("expected avatar row");
+    }
+    row.channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(avatarKey)}`;
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    // No handshake and no token/password: the loader must not fetch, and the
+    // row must show the owner chip rather than an empty circle.
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const pendingSnapshot = gatewayHarness.gateway.snapshot as { hello: unknown };
+    pendingSnapshot.hello = null;
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessions.sessions);
+
+    const pendingRow = sidebar.querySelector(`[data-session-key="${avatarKey}"]`);
+    expect(pendingRow?.querySelector("openclaw-channel-avatar")).not.toBeNull();
+    expect(pendingRow?.querySelector(".channel-avatar")).toBeNull();
+    await waitForFast(() => {
+      expect(pendingRow?.querySelector(".session-owner-chip")).not.toBeNull();
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps Home activity and its active composer draft in the trailing endcap", async () => {
     const mainKey = "agent:main:main";
     const workingKey = "agent:main:working";
     const sessions = createSessionsHarness("main", [mainKey, workingKey]);
@@ -29,7 +251,9 @@ describe("AppSidebar session indicators", () => {
       createGatewayHarness({} as GatewayBrowserClient).gateway,
       sessions.sessions,
     );
-    sidebar.outboxCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = mainKey;
+    sidebar.outboxAttentionCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
     sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
     sidebar.requestUpdate();
     await sidebar.updateComplete;
@@ -48,9 +272,44 @@ describe("AppSidebar session indicators", () => {
       sessionSpinner?.getAttribute("aria-label"),
     );
     expect(
-      home?.querySelector(".nav-item__state .session-row-badge--queued")?.textContent,
+      home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
     ).toContain("2");
     expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+  });
+
+  it("shows when an admitted session is queued for a concurrency slot", async () => {
+    const sessionKey = "agent:main:thread:queued";
+    const gateway = createGatewayHarness({} as GatewayBrowserClient).gateway;
+    const harness = createSessionsHarness("main", ["agent:main:main", sessionKey]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 4 },
+          {
+            key: sessionKey,
+            kind: "direct",
+            label: "Queued repair",
+            updatedAt: 5,
+            hasActiveRun: true,
+            status: "queued",
+          },
+        ],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
+    expect(row?.textContent).toContain("Waiting for a concurrency slot");
+    const queued = row?.querySelector(".sidebar-child-session__status--queued");
+    expect(queued?.getAttribute("aria-label")).toBe("Queued");
+    expect(row?.querySelector(".session-run-spinner")).toBeNull();
   });
 
   it("preserves child PR indicators and leads a pinned child like any other", async () => {
@@ -243,13 +502,13 @@ describe("AppSidebar session indicators", () => {
 
     const forked = sidebar.querySelector(`[data-session-key="${keys.forked}"]`);
     expectEmptyLead(forked);
-    expect(
-      forked?.querySelector(".session-row-aside > .session-row-state .session-row-fork-indicator"),
-    ).not.toBeNull();
-    expect(forked?.querySelector(".session-row-fork-indicator")?.getAttribute("aria-label")).toBe(
-      "Forked session",
+    const forkIndicator = forked?.querySelector(
+      ".sidebar-recent-session__name .sidebar-session-fork-indicator",
     );
-    expect(forked?.querySelector(".session-row-fork-indicator")?.hasAttribute("title")).toBe(false);
+    expect(forkIndicator).not.toBeNull();
+    expect(forkIndicator?.getAttribute("aria-label")).toBe("Forked session");
+    expect(forkIndicator?.hasAttribute("title")).toBe(false);
+    expect(forked?.querySelector(".session-row-state")).toBeNull();
 
     const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
     expectEmptyLead(unread);
@@ -267,27 +526,34 @@ describe("AppSidebar session indicators", () => {
       runningUnread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
     ).not.toBeNull();
 
-    for (const key of [keys.forked, keys.unread, keys.runningUnread]) {
+    for (const key of [keys.unread, keys.runningUnread]) {
       const link = sidebar.querySelector(`[data-session-key="${key}"] a`);
       const descriptionId = link?.getAttribute("aria-describedby");
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked session");
-    expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
-    expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
+    for (const row of [forked, unread, runningUnread]) {
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
+    }
     expect(runningUnread?.querySelector(".session-row-state")?.getAttribute("aria-label")).toBe(
       "Active run · Unread",
     );
+
+    const openPullRequestIcon = sidebar.querySelector(
+      `[data-session-key="${keys.openPullRequest}"] [data-session-pr-state="open"] svg`,
+    );
+    const mergedPullRequestIcon = sidebar.querySelector(
+      `[data-session-key="${keys.mergedPullRequest}"] [data-session-pr-state="merged"] svg`,
+    );
+    expect(openPullRequestIcon).not.toBeNull();
+    expect(mergedPullRequestIcon).not.toBeNull();
+    expect(openPullRequestIcon?.isEqualNode(mergedPullRequestIcon ?? null)).toBe(false);
 
     for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
       expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
-      expect(row?.querySelector("a")?.getAttribute("title")).toContain(
-        key === keys.openPullRequest ? "Open PR" : "Merged",
-      );
+      expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
       expect(row?.querySelector("[data-session-pr-state]")?.hasAttribute("title")).toBe(false);
     }
 

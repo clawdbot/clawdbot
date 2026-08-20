@@ -1,11 +1,11 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { toErrorObject } from "../../../infra/errors.js";
-import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
+import { onDecodedOutput } from "../../decoded-output.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
@@ -20,6 +20,7 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
+import { createServiceChildRelayAdapter } from "../service-child-relay-host.js";
 import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -107,6 +108,23 @@ export async function createChildAdapter(params: {
     : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
+
+  if (
+    process.platform !== "win32" &&
+    params.ownedWorker === undefined &&
+    isServiceManagedRuntime()
+  ) {
+    return await createServiceChildRelayAdapter({
+      command: preparedSpawn.command,
+      args: preparedSpawn.args,
+      cwd: params.cwd,
+      env: preparedSpawn.env,
+      stdinMode,
+      input: params.input,
+      secretInput: params.secretInput,
+      oomScoreWrapperSelected: preparedSpawn.wrapped,
+    });
+  }
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
   // owns a process group that can be killed without touching the node host.
@@ -243,51 +261,9 @@ export async function createChildAdapter(params: {
       }
     : undefined;
 
-  const onStdout = (listener: (chunk: string) => void) => {
-    const stdoutDecoder = createWindowsOutputDecoder();
-    let flushed = false;
-    const flush = () => {
-      if (flushed) {
-        return;
-      }
-      flushed = true;
-      const tail = stdoutDecoder.flush();
-      if (tail) {
-        listener(tail);
-      }
-    };
-    child.stdout.on("data", (chunk) => {
-      const text = stdoutDecoder.decode(chunk);
-      if (text) {
-        listener(text);
-      }
-    });
-    child.stdout.once("end", flush);
-    child.stdout.once("close", flush);
-  };
+  const onStdout = (listener: (chunk: string) => void) => onDecodedOutput(child.stdout, listener);
 
-  const onStderr = (listener: (chunk: string) => void) => {
-    const stderrDecoder = createWindowsOutputDecoder();
-    let flushed = false;
-    const flush = () => {
-      if (flushed) {
-        return;
-      }
-      flushed = true;
-      const tail = stderrDecoder.flush();
-      if (tail) {
-        listener(tail);
-      }
-    };
-    child.stderr.on("data", (chunk) => {
-      const text = stderrDecoder.decode(chunk);
-      if (text) {
-        listener(text);
-      }
-    });
-    child.stderr.once("end", flush);
-    child.stderr.once("close", flush);
-  };
+  const onStderr = (listener: (chunk: string) => void) => onDecodedOutput(child.stderr, listener);
 
   let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let waitError: unknown;

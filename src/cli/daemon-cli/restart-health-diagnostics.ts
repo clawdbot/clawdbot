@@ -11,6 +11,9 @@ function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string
   if (snapshot.portUsage.errors?.length) {
     lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
   }
+  if (snapshot.probeError) {
+    lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+  }
   return lines;
 }
 

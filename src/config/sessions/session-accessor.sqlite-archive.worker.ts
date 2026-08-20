@@ -6,6 +6,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import {
   encodeMaterializedSessionTranscriptArchive,
   hashSessionArchiveBytes,
+  MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
   type TranscriptArchivePublishPlan,
   type TranscriptArchivePublishResult,
@@ -248,8 +249,17 @@ function runWorkerPort(
   port: NonNullable<typeof parentPort>,
   plans: readonly TranscriptArchiveWorkerPlan[],
 ): void {
-  const results = plans.map((plan) => materializeTranscriptArchiveInWorker(plan));
-  port.postMessage({ type: "done", results } satisfies TranscriptArchiveWorkerMessage);
+  let materializedBytes = 0;
+  for (const plan of plans) {
+    const result = materializeTranscriptArchiveInWorker(plan);
+    materializedBytes += result.archive?.bytes.byteLength ?? 0;
+    if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
+      throw new Error(
+        `Archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; use fewer sessions`,
+      );
+    }
+    port.postMessage({ type: "done", results: [result] } satisfies TranscriptArchiveWorkerMessage);
+  }
   port.close();
 }
 

@@ -8,6 +8,7 @@ import {
   sessionPullRequestsForGateway,
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
@@ -25,6 +26,7 @@ type SessionPullRequestIndicatorsOptions = {
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
   getGateway: () => ApplicationGateway | undefined;
+  getSessions: () => SessionCapability | undefined;
 };
 
 /** Projects pushed PR snapshots for the currently visible worktree rows. */
@@ -121,7 +123,22 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       const snapshot = store.get(this.scopedKey(session.key));
       // Empty failure snapshots retain the rendered chip; snapshots carrying
       // last-known PRs can also hydrate a newly mounted row.
-      if (!snapshot || (snapshot.status !== "ready" && snapshot.pullRequests.length === 0)) {
+      if (!snapshot) {
+        const removed = this.states.delete(session.key);
+        if (removed) {
+          const sessions = this.options.getSessions();
+          if (sessions) {
+            sessions.setPullRequestSummary(
+              session.key,
+              undefined,
+              sessions.capturePullRequestEpoch(session.key),
+            );
+          }
+        }
+        changed = removed || changed;
+        continue;
+      }
+      if (snapshot.status !== "ready" && snapshot.pullRequests.length === 0) {
         continue;
       }
       const entry = {

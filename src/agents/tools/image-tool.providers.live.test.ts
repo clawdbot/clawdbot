@@ -236,7 +236,7 @@ async function runLiveDownscaleCase(testCase: LiveProviderCase) {
       result = await tool.execute(`live-${testCase.provider}-large-image`, {
         prompt:
           "Look at the center of the image. Reply with one lowercase word naming that center color.",
-        image: imagePath,
+        path: imagePath,
       });
     } catch (err) {
       if (isSkippableLiveError(err)) {

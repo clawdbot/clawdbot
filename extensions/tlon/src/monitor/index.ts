@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -108,29 +109,34 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Helper to authenticate with retry logic
   async function authenticateWithRetry(maxAttempts = 10): Promise<string> {
-    for (const attempt of Array.from(
-      { length: Math.max(1, maxAttempts) },
-      (_, index) => index + 1,
-    )) {
-      if (opts.abortSignal?.aborted) {
-        throw new Error("Aborted while waiting to authenticate");
-      }
-      try {
-        runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
-        return await authenticate(accountUrl, accountCode, { ssrfPolicy });
-      } catch (error: unknown) {
-        runtime.error?.(
-          `[tlon] Failed to authenticate (attempt ${attempt}): ${formatErrorMessage(error)}`,
-        );
-        if (attempt >= maxAttempts) {
+    let authAttempt = 0;
+    return await retryAsync(
+      async () => {
+        authAttempt += 1;
+        if (opts.abortSignal?.aborted) {
+          throw new Error("Aborted while waiting to authenticate");
+        }
+        try {
+          runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
+          return await authenticate(accountUrl, accountCode, { ssrfPolicy });
+        } catch (error: unknown) {
+          runtime.error?.(
+            `[tlon] Failed to authenticate (attempt ${authAttempt}): ${formatErrorMessage(error)}`,
+          );
           throw error;
         }
-        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
-        runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
-        await sleepWithAbort(delay, opts.abortSignal);
-      }
-    }
-    throw new Error("unreachable Tlon authentication retry loop exit");
+      },
+      {
+        attempts: Math.max(1, maxAttempts),
+        minDelayMs: 0,
+        shouldRetry: () => !opts.abortSignal?.aborted,
+        delayMs: ({ attempt }) => Math.min(30_000, 1_000 * 2 ** (attempt - 1)),
+        onRetry: ({ delayMs }) => {
+          runtime.log?.(`[tlon] Retrying authentication in ${delayMs}ms...`);
+        },
+        sleep: (delayMs) => sleepWithAbort(delayMs, opts.abortSignal),
+      },
+    );
   }
 
   let api: UrbitSSEClient | null = null;

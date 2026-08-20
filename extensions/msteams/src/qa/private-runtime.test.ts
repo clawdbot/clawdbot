@@ -82,4 +82,19 @@ describe("Microsoft Teams private QA runtime", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves Connector HTTP status for transport retry classification", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ error: "gateway timeout" }, { status: 504 })),
+    );
+    const runtime = resolveMSTeamsPrivateQaRuntime(completeEnv, completeBootstrap);
+    if (!runtime) {
+      throw new Error("expected Microsoft Teams private QA runtime");
+    }
+
+    await expect(
+      runtime.client.post("/v3/conversations/test/activities", {}),
+    ).rejects.toMatchObject({ statusCode: 504 });
+  });
 });
