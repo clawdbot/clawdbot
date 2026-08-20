@@ -314,6 +314,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     (userTurnInput
       ? createUserTurnTranscriptRecorder({
           input: userTurnInput,
+          ...(unresolvedSourceIndexes.size > 0
+            ? { promptSuppressedFactIndexes: [...unresolvedSourceIndexes] }
+            : {}),
           target: () => ({
             sessionId: preparedSessionState.sessionId,
             sessionKey: sessionKey ?? preparedSessionState.sessionId,

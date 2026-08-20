@@ -151,10 +151,12 @@ export type CreateUserTurnTranscriptRecorderParams = {
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+  promptSuppressedFactIndexes?: readonly number[];
 };
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
+  readonly promptSuppressedFactIndexes?: readonly number[];
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;

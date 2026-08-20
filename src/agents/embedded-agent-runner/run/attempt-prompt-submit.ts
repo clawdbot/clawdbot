@@ -339,6 +339,12 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     attempt.userTurnTranscriptRecorder?.message ??
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
+  for (const factIndex of attempt.userTurnTranscriptRecorder?.promptSuppressedFactIndexes ?? []) {
+    const fact = persistedMedia[factIndex];
+    if (fact) {
+      persistedMedia[factIndex] = { ...fact, hydrationSuppressed: true };
+    }
+  }
 
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,

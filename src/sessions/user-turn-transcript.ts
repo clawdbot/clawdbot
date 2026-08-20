@@ -595,6 +595,7 @@ export function createUserTurnTranscriptRecorder(
     get message() {
       return message;
     },
+    promptSuppressedFactIndexes: params.promptSuppressedFactIndexes,
     resolveMessage: resolveMessageForPersistence,
     replaceTextBeforePersistence: (text) => {
       if (persisted || runtimePersisted || sentToProvider) {

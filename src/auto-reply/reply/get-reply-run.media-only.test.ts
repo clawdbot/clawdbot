@@ -1132,6 +1132,7 @@ describe("runPreparedReply media-only handling", () => {
       { path: "/tmp/unreadable.png", contentType: "image/png", kind: "image" },
     ]);
     expect(persisted.mediaImageLayout).toEqual({ slots: [{ kind: "offloaded", factIndex: 0 }] });
+    expect(call.followupRun.userTurnTranscriptRecorder?.promptSuppressedFactIndexes).toEqual([0]);
   });
 
   it.each([

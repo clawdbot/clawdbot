@@ -370,6 +370,64 @@ describe("plugin harness prompt media", () => {
     }
   });
 
+  it("skips a recorder fact suppressed for this prompt while keeping the persisted record clean", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-harness-prompt-suppressed-"),
+    );
+    const imagePath = path.join(workspaceDir, "present.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const media = [
+      { path: imagePath, contentType: "image/png" },
+      { path: path.join(workspaceDir, "missing.png"), contentType: "image/png" },
+    ];
+    const message = {
+      role: "user",
+      content: "compare these",
+      __openclaw: {
+        media,
+        mediaImageLayout: {
+          slots: [
+            { kind: "inline", factIndex: 0 },
+            { kind: "offloaded", factIndex: 1 },
+          ],
+        },
+      },
+    };
+    const buildInput = (promptSuppressedFactIndexes?: number[]) =>
+      ({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          images: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+          imageOrder: ["inline"],
+          media,
+          sessionId: "session-prompt-suppressed",
+          userTurnTranscriptRecorder: { message, promptSuppressedFactIndexes },
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-prompt-suppressed",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      }) as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0];
+    try {
+      await expect(preparePluginHarnessPromptImages(buildInput())).rejects.toThrow(
+        /failed to hydrate 1 structured image attachment/,
+      );
+
+      const result = await preparePluginHarnessPromptImages(buildInput([1]));
+
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
+      expect(media[1]).not.toHaveProperty("hydrationSuppressed");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces an unsuppressed identity-less inline fact with no image block", async () => {
     await expect(
       preparePluginHarnessPromptImages({
