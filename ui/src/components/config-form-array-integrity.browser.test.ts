@@ -142,7 +142,7 @@ describe("config form array integrity", () => {
       schema: {
         type: "array",
         items: {
-          oneOf: [{ type: "string" }, { type: "number" }],
+          oneOf: [{ type: "string", minLength: 1 }, { type: "number" }],
         },
       },
       value: [],
@@ -167,6 +167,7 @@ describe("config form array integrity", () => {
       draftValue.dispatchEvent(new Event("input", { bubbles: true }));
       await draftHost.updateComplete;
       expectElement(findAddButton(draftHost), "string-number array draft commit").click();
+      await draftHost.updateComplete;
     };
 
     const identifier = "1048113311314608148";

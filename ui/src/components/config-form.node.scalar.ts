@@ -100,8 +100,7 @@ function coerceTextInputValue(
   schema: ConfigNodeRenderParams["schema"],
 ): string | number | boolean {
   const trimmed = value.trim();
-  const booleanCandidate =
-    trimmed === "true" ? true : trimmed === "false" ? false : undefined;
+  const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
   if (
     booleanCandidate !== undefined &&
     (schema.anyOf ?? schema.oneOf ?? []).some(
