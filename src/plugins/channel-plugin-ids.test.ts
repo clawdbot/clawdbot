@@ -141,14 +141,14 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         realtimeVoiceProviders: ["openai"],
         imageGenerationProviders: ["openai"],
         videoGenerationProviders: ["openai"],
-        memoryEmbeddingProviders: ["openai"],
+        embeddingProviders: ["openai"],
       },
     },
     {
       id: "ollama",
       enabledByDefault: true,
       providers: ["ollama"],
-      contracts: { memoryEmbeddingProviders: ["ollama"] },
+      contracts: { embeddingProviders: ["ollama"] },
     },
     {
       id: "generic-embedding",

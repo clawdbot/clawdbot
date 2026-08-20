@@ -191,6 +191,7 @@ async function resolveTelegramCommandAuth(params: {
         accountId,
         chatId,
         isGroup,
+        threadSpec,
         senderId,
         senderUsername,
       })
@@ -236,7 +237,7 @@ async function resolveTelegramCommandAuth(params: {
         accountId,
         chatId,
         isGroup,
-        resolvedThreadId,
+        threadSpec,
         senderId,
         senderUsername,
       })
@@ -246,7 +247,7 @@ async function resolveTelegramCommandAuth(params: {
     accountId,
     chatId,
     isGroup,
-    resolvedThreadId,
+    threadSpec,
     senderId,
     senderUsername,
   });
@@ -359,6 +360,7 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     groupConfig,
     topicConfig,
+    threadSpec,
     commandAuthorized,
     senderIsOwner: ownerAccess.senderIsOwner,
   };
@@ -395,14 +397,12 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const threadSpec = resolveTelegramMessageThreadSpec(params.msg, auth.isForum);
   const { route, bindingMode } = resolveTelegramConversationRoute({
     cfg: runtimeCfg,
     accountId: params.accountId,
     chatId: auth.chatId,
     isGroup: auth.isGroup,
-    resolvedThreadId: auth.resolvedThreadId,
-    replyThreadId: threadSpec.id,
+    threadSpec: auth.threadSpec,
     senderId: auth.senderId,
     topicAgentId: auth.topicConfig?.agentId,
   });
@@ -423,7 +423,7 @@ export async function prepareTelegramCommandDispatch(
           params.bot.api.sendMessage(
             auth.chatId,
             "Configured ACP binding is unavailable right now. Please try again.",
-            buildTelegramThreadParams(threadSpec) ?? {},
+            buildTelegramThreadParams(auth.threadSpec) ?? {},
           ),
       });
       return null;
@@ -446,7 +446,7 @@ export async function prepareTelegramCommandDispatch(
     chatId: auth.chatId,
     isGroup: auth.isGroup,
     senderId: auth.senderId,
-    dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
+    dmThreadId: auth.threadSpec.scope === "dm" ? auth.threadSpec.id : undefined,
     botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
   });
   const buildDeliveryBaseOptions = (keys?: {
@@ -468,7 +468,7 @@ export async function prepareTelegramCommandDispatch(
     mediaMaxBytes: params.mediaMaxBytes,
     replyToMode: turnSettings.replyToMode,
     textLimit: turnSettings.textLimit,
-    thread: threadSpec,
+    thread: auth.threadSpec,
     tableMode,
     chunkMode,
     linkPreview: runtimeTelegramCfg.linkPreview,
@@ -481,8 +481,8 @@ export async function prepareTelegramCommandDispatch(
     runtimeTelegramCfg,
     turnSettings,
     ...auth,
-    threadSpec,
-    threadParams: buildTelegramThreadParams(threadSpec),
+    threadSpec: auth.threadSpec,
+    threadParams: buildTelegramThreadParams(auth.threadSpec),
     route,
     mediaLocalRoots,
     targetSessionKey,
@@ -541,7 +541,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
     CommandBody: params.prompt,
     CommandArgs: params.commandArgs,
     From: dispatch.isGroup
-      ? buildTelegramGroupFrom(dispatch.chatId, dispatch.resolvedThreadId)
+      ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
       : `telegram:${dispatch.chatId}`,
     To: `slash:${dispatch.senderId || dispatch.chatId}`,
     ChatType: dispatch.isGroup ? "group" : "direct",

@@ -1,14 +1,14 @@
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {

@@ -8,9 +8,9 @@ import {
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
+export { z };
 
 const ChannelActionsSchema = z
   .object({

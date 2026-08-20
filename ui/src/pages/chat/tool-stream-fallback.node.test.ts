@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   agentEvent,
   createHost,
@@ -41,16 +41,21 @@ function requireFallbackStatus(host: ReturnType<typeof createHost>): FallbackSta
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
+  const globalWithWindow = globalThis as typeof globalThis & {
+    window?: Window & typeof globalThis;
+  };
+  let installedTestWindow = false;
 
   beforeAll(() => {
-    const globalWithWindow = globalThis as typeof globalThis & {
-      window?: Window & typeof globalThis;
-    };
     if (!globalWithWindow.window) {
       globalWithWindow.window = globalThis as unknown as Window & typeof globalThis;
+      installedTestWindow = true;
+    }
+  });
+
+  afterAll(() => {
+    if (installedTestWindow) {
+      Reflect.deleteProperty(globalWithWindow, "window");
     }
   });
 

@@ -38,7 +38,9 @@ const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
   () => import("./server-plugin-bootstrap.js"),
 );
-const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-close.runtime.js"));
+const loadGatewayShutdownModule = createLazyRuntimeModule(
+  () => import("./server-shutdown.runtime.js"),
+);
 
 const log = createSubsystemLogger("gateway");
 const logDiscovery = log.child("discovery");
@@ -112,16 +114,6 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
   ].join(" ");
 }
 
-async function closeMcpLoopbackServerOnDemand(): Promise<void> {
-  const { closeMcpLoopbackServer } = await import("./mcp-http.js");
-  await closeMcpLoopbackServer();
-}
-
-async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
-  const { stopTaskRegistryMaintenance } = await import("../tasks/task-registry.maintenance.js");
-  stopTaskRegistryMaintenance();
-}
-
 export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
   const { resetPreparedModelCatalogStateForTest } = await loadGatewayModelCatalogModule();
   await resetPreparedModelCatalogStateForTest();
@@ -153,15 +145,19 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       loadWorkerEnvironmentStartupModule,
       loadWorkerPlacementStartupModule,
     });
+    // An in-place update may replace every hashed chunk before SIGTERM arrives.
+    // Resolve and retain the complete shutdown graph while the install is healthy.
+    const shutdownRuntime = await runtime.startupTrace.measure(
+      "gateway.shutdown-runtime-import",
+      async () => (await loadGatewayShutdownModule()).prepareGatewayShutdownRuntime(),
+    );
     lifecycleRuntime = await prepareGatewayLifecycle({
       runtime,
       port,
       log,
       logCron,
       diagnosticsEnabled: bootstrap.diagnosticsEnabled,
-      loadGatewayCloseModule,
-      closeMcpLoopbackServerOnDemand,
-      stopTaskRegistryMaintenanceOnDemand,
+      shutdownRuntime,
     });
     if (bootstrap.cfgAtStart.gateway?.tls?.enabled && !runtime.gatewayTls.enabled) {
       throw new Error(runtime.gatewayTls.error ?? "gateway tls: failed to enable");

@@ -635,6 +635,7 @@ describe("models.list", () => {
               name: "Llama Secure",
               provider: "vllm",
               input: ["text", "image", "document"],
+              tags: ["default"],
             },
           ],
         },
@@ -684,9 +685,11 @@ describe("models.list", () => {
                 agentRuntime: {
                   id: "openclaw",
                   cloudPlacementSupported: true,
+                  devicePlacementSupported: true,
                   source: "implicit",
                 },
                 available: false,
+                tags: ["default"],
               },
             ],
           },
@@ -742,9 +745,11 @@ describe("models.list", () => {
                 agentRuntime: {
                   id: "openclaw",
                   cloudPlacementSupported: true,
+                  devicePlacementSupported: true,
                   source: "implicit",
                 },
                 available: false,
+                tags: ["default"],
               },
             ],
           },
@@ -791,9 +796,11 @@ describe("models.list", () => {
               agentRuntime: {
                 id: "openclaw",
                 cloudPlacementSupported: true,
+                devicePlacementSupported: true,
                 source: "implicit",
               },
               available: false,
+              tags: ["default"],
             },
           ],
         },
@@ -891,6 +898,7 @@ describe("models.list", () => {
               id: "llama-local",
               name: "Llama Local",
               provider: "vllm",
+              tags: ["default"],
             },
           ],
         },
@@ -954,6 +962,7 @@ describe("models.list", () => {
               name: "Llama Secure",
               provider: "vllm",
               available: false,
+              tags: ["default"],
             },
           ],
         },
@@ -995,6 +1004,7 @@ describe("models.list", () => {
                 agentRuntime: {
                   id: "codex",
                   cloudPlacementSupported: false,
+                  devicePlacementSupported: false,
                   source: "implicit",
                 },
                 available: false,
@@ -1088,6 +1098,7 @@ describe("models.list", () => {
               agentRuntime: {
                 id: "codex",
                 cloudPlacementSupported: false,
+                devicePlacementSupported: false,
                 source: "implicit",
               },
               available: true,
@@ -1099,6 +1110,7 @@ describe("models.list", () => {
               agentRuntime: {
                 id: "codex",
                 cloudPlacementSupported: false,
+                devicePlacementSupported: false,
                 source: "implicit",
               },
               available: true,
@@ -1138,6 +1150,7 @@ describe("models.list", () => {
               agentRuntime: {
                 id: "codex",
                 cloudPlacementSupported: false,
+                devicePlacementSupported: false,
                 source: "implicit",
               },
               available: true,
@@ -1149,6 +1162,7 @@ describe("models.list", () => {
               agentRuntime: {
                 id: "codex",
                 cloudPlacementSupported: false,
+                devicePlacementSupported: false,
                 source: "implicit",
               },
               available: true,
@@ -1207,6 +1221,7 @@ describe("models.list", () => {
                 name: "Llama Configured",
                 provider: "vllm",
                 available: true,
+                tags: ["default"],
               },
               {
                 id: "llama-discovered",
@@ -1282,6 +1297,7 @@ describe("models.list", () => {
                   agentRuntime: {
                     id: "codex",
                     cloudPlacementSupported: false,
+                    devicePlacementSupported: false,
                     source: "implicit",
                   },
                   available: true,
@@ -1355,9 +1371,11 @@ describe("models.list", () => {
                   agentRuntime: {
                     id: "claude-cli",
                     cloudPlacementSupported: false,
+                    devicePlacementSupported: false,
                     source: "model",
                   },
                   available: true,
+                  tags: ["configured"],
                 },
               ],
             },

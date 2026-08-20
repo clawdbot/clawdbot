@@ -1,7 +1,7 @@
 // Doctor config preflight tests cover last-known-good snapshots and config snapshot promotion.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeConfigHealthStateToStore } from "../config/io.health-state.js";
@@ -17,6 +17,10 @@ import {
   runDoctorConfigPreflight,
   shouldSkipPluginValidationForDoctorConfigPreflight,
 } from "./doctor-config-preflight.js";
+
+const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
@@ -72,6 +76,25 @@ async function seedLastKnownGood(
 describe("runDoctorConfigPreflight", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    noteMock.mockClear();
+  });
+
+  it("renders legacy context-budget notices with their config paths", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        models: { providers: { openai: { contextTokens: 64_000 } } },
+      });
+
+      await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+      });
+
+      const output = noteMock.mock.calls.map(([message]) => message).join("\n");
+      expect(output).toContain("- models.providers.openai.contextTokens:");
+      expect(output).not.toContain("- : ");
+    });
   });
 
   it("supports non-observing config reads", async () => {

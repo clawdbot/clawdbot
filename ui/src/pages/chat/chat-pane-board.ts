@@ -185,7 +185,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
-      active: board.face === "dashboard",
+      active: board.face === "dashboard" && this.visuallyPresented,
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
@@ -341,7 +341,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       board.hasBoard &&
       Boolean(sessionKey) &&
       (board.face === "dashboard" || this.retainedBoardSessionKey === sessionKey);
-    const boardActive = board.face === "dashboard";
+    const boardActive = board.face === "dashboard" && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
         active,
@@ -393,6 +393,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardCommand(event: BoardCommandEvent): void {
+    if (!this.presented) {
+      return;
+    }
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!sessionKey || this.resolveBoardSessionKey(event.sessionKey) !== sessionKey) {
@@ -437,9 +440,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const reopenDock = dock === "hidden" ? board.reopenDock : dock;
     this.lastVisibleBoardDock.set(`${sessionKey}:${board.activeTabId}`, reopenDock);
     this.persistBoardReopenDock(board, reopenDock);
+    const owner = this.headerOutcomeOwner;
     void board.provider
       .applyOps([{ kind: "tab_update", tabId: board.activeTabId, chatDock: dock }])
-      .catch((error: unknown) => this.publishHeaderError(error));
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
   protected renderBoardDivider(dock: BoardVisibleChatDock) {

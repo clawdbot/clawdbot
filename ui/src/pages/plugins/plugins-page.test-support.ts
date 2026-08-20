@@ -18,11 +18,21 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import type { PluginRowMessage } from "./view.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
+
+const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
+  "config.set",
+  "plugins.install",
+  "plugins.list",
+  "plugins.search",
+  "plugins.setEnabled",
+  "plugins.uninstall",
+]);
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -104,11 +114,7 @@ function createSnapshot(
     phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
-    },
+    hello: PLUGINS_GATEWAY_HELLO,
     assistantAgentId: "main",
     sessionKey: "main",
     lastError: null,
@@ -249,6 +255,7 @@ export function createContext(
   return {
     gateway,
     basePath: "",
+    resourceBasePath: "",
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),

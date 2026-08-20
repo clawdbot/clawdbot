@@ -323,6 +323,18 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
     expect(events).toContain("toolcall_end");
   });
 
+  it("preserves unsafe integers in provider-confirmed tool arguments", async () => {
+    const { result, events } = await streamMistralTerminalFixture({
+      finishReason: "tool_calls",
+      done: true,
+      toolArguments: ['{"target":9223372036854775807}'],
+    });
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", arguments: { target: "9223372036854775807" } }),
+    );
+    expect(events).toContain("toolcall_end");
+  });
+
   it.each(["null", "[]", "42", '"dangerous"'] as const)(
     "rejects a provider-confirmed non-object JSON argument: %s",
     async (argumentsJson) => {

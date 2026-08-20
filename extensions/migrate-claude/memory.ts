@@ -2,12 +2,12 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
-import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/file-access-runtime";
+import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,

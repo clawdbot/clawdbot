@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   ensureRepoToolNodeModulesLink,
   resolveRepoToolBinPath,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 
 function run(command: string, args: string[], options: SpawnSyncOptions) {
   const result = spawnSync(command, args, options);

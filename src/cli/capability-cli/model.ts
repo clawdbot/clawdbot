@@ -11,11 +11,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
@@ -172,6 +168,7 @@ async function runModelRun(params: {
   model?: string;
   thinking?: ThinkLevel;
   transport: CapabilityTransport;
+  agent?: string;
 }) {
   const explicitModelOverride = requireProviderModelOverride(params.model);
   const cfg =
@@ -181,7 +178,7 @@ async function runModelRun(params: {
           targetIds: getModelsCommandSecretTargetIds(),
         })
       : getRuntimeConfig();
-  const agentId = resolveDefaultAgentId(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer model run");
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
     cfg,
@@ -408,7 +405,7 @@ async function runModelAuthStatus() {
 
 async function runModelAuthLogout(provider: string, agent?: string) {
   const cfg = getRuntimeConfig();
-  const agentId = agent?.trim() || resolveDefaultAgentId(cfg);
+  const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model auth logout");
   const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
@@ -460,6 +457,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
+    .option(
+      "--agent <id>",
+      "Agent whose model and credentials own the run (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -477,6 +478,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           model: opts.model as string | undefined,
           thinking,
           transport,
+          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -550,7 +552,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .command("logout")
     .description("Remove saved auth profiles for one provider")
     .requiredOption("--provider <id>", "Provider id")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option(
+      "--agent <id>",
+      "Agent id (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {

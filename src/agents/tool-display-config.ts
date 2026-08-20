@@ -189,22 +189,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
           label: "navigate",
           detailKeys: ["url", "node", "nodeId"],
         },
-        eval: {
-          label: "eval",
-          detailKeys: ["javaScript", "node", "nodeId"],
-        },
-        snapshot: {
-          label: "snapshot",
-          detailKeys: ["format", "node", "nodeId"],
-        },
-        a2ui_push: {
-          label: "A2UI push",
-          detailKeys: ["jsonlPath", "node", "nodeId"],
-        },
-        a2ui_reset: {
-          label: "A2UI reset",
-          detailKeys: ["node", "nodeId"],
-        },
       },
     },
     dashboard: {
@@ -315,10 +299,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Goal",
       detailKeys: ["status"],
     },
-    update_plan: {
+    progress_card: {
       emoji: "🗺️",
-      title: "Update Plan",
-      detailKeys: ["explanation", "plan.0.step"],
+      title: "Progress Card",
+      detailKeys: ["plan.0.step", "markdown"],
     },
     ask_user: {
       emoji: "❓",
@@ -369,6 +353,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "📊",
       title: "Session Status",
       detailKeys: ["sessionKey", "model"],
+    },
+    github_publish: {
+      emoji: "🔀",
+      title: "GitHub Publish",
+      detailKeys: ["title"],
+    },
+    github_identity_status: {
+      emoji: "🔐",
+      title: "GitHub Identity Status",
+      detailKeys: [],
     },
     sessions: {
       emoji: "🗂️",
@@ -523,9 +517,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Apply Patch",
       detailKeys: [],
     },
+    // Historical transcripts retain the old name. This display-only entry
+    // preserves their presentation without restoring a runtime tool alias.
     image: {
       emoji: "🖼️",
       title: "Image",
+      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
+    },
+    view_image: {
+      emoji: "🖼️",
+      title: "View Image",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
     },
     image_generate: {
@@ -583,7 +584,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
-    sessions_yield: { emoji: "⏸️", title: "Yield", detailKeys: ["message"] },
+    sessions_yield: { emoji: "⏸️", title: "Yield" },
     tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
   },
 };

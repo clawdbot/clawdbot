@@ -1,49 +1,14 @@
+import {
+  BOUNDARY_GUARD_FIXTURE_ROOT,
+  CHAINED_ASSERTION_EXCLUDED_ROOTS,
+  TYPE_ASSERTION_PRODUCTION_ROOTS,
+  TYPE_ASSERTION_TEST_FILE_SUFFIXES,
+  isSkippedTypeAssertionTestPath,
+  pathMatchesTypeAssertionRoot,
+} from "./lib/type-assertion-guard-scope.mjs";
+
 const EXPRESSION_WRAPPER_RE =
   /^(?:ChainExpression|ParenthesizedExpression|TSAsExpression|TSNonNullExpression|TSTypeAssertion)$/;
-const BOUNDARY_GUARD_FIXTURE_ROOT = "test/fixtures/oxlint-boundary-guards";
-// Shared test-path policy for guards that intentionally exclude fixture, mock, and harness code.
-const TEST_FILE_SUFFIXES = [
-  ".test.ts",
-  ".test.tsx",
-  ".spec.ts",
-  ".spec.tsx",
-  ".test-utils.ts",
-  ".test-utils.tsx",
-  ".test-harness.ts",
-  ".test-harness.tsx",
-  ".e2e-harness.ts",
-  ".e2e-harness.tsx",
-];
-const TEST_PATH_MARKERS = [
-  "/test/",
-  "/tests/",
-  "__tests__",
-  "/e2e/",
-  "test-helpers",
-  "test-support",
-  "test-fixtures",
-  "test-mocks",
-  "test-utils",
-  "mock-http",
-  "-harness.",
-  ".test-utils.",
-  "/mocks/",
-];
-
-function pathMatchesRoot(repoPath, root) {
-  return repoPath === root || repoPath.startsWith(`${root}/`);
-}
-
-function isSkippedTestPath(repoPath) {
-  if (pathMatchesRoot(repoPath, BOUNDARY_GUARD_FIXTURE_ROOT)) {
-    return false;
-  }
-  const slashPrefixedPath = `/${repoPath}`;
-  return (
-    TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
-    TEST_PATH_MARKERS.some((marker) => slashPrefixedPath.includes(marker))
-  );
-}
 
 function unwrapExpression(node) {
   let current = node;
@@ -61,8 +26,8 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
       const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
       if (
         !filename.endsWith(".ts") ||
-        !roots.some((root) => pathMatchesRoot(repoPath, root)) ||
-        TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
       ) {
         return {};
@@ -147,9 +112,9 @@ function noChainedTypeAssertionsRule({ excludedRoots = [], roots }) {
       const cwd = context.cwd.replaceAll("\\", "/");
       const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
       if (
-        !roots.some((root) => pathMatchesRoot(repoPath, root)) ||
-        excludedRoots.some((root) => pathMatchesRoot(repoPath, root)) ||
-        isSkippedTestPath(repoPath)
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        excludedRoots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        isSkippedTypeAssertionTestPath(repoPath)
       ) {
         return {};
       }
@@ -625,90 +590,11 @@ export default {
         "Use registerHttpRoute({ path, auth, match, handler }) and registerPluginHttpRoute for dynamic webhook paths.",
     }),
     "no-widen-then-assert": noWidenThenAssertRule({
-      roots: ["src", "extensions", "packages", "ui/src", "test/fixtures/oxlint-boundary-guards"],
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
     }),
     "no-chained-type-assertions": noChainedTypeAssertionsRule({
-      roots: ["src", "extensions", "packages", "ui/src", BOUNDARY_GUARD_FIXTURE_ROOT],
-      // Burn-down ledger — shrink only; see PR #124060/#124073/#124079/#124082.
-      excludedRoots: [
-        "extensions/amazon-bedrock-mantle",
-        "extensions/anthropic-vertex",
-        "extensions/browser",
-        "extensions/codex",
-        "extensions/copilot",
-        "extensions/deepinfra",
-        "extensions/diagnostics-otel",
-        "extensions/diagnostics-prometheus",
-        "extensions/discord",
-        "extensions/github-copilot",
-        "extensions/google",
-        "extensions/googlechat",
-        "extensions/imessage",
-        "extensions/line",
-        "extensions/llm-task",
-        "extensions/longcat",
-        "extensions/matrix",
-        "extensions/microsoft-foundry",
-        "extensions/msteams",
-        "extensions/qa-lab",
-        "extensions/reef",
-        "extensions/signal",
-        "extensions/slack",
-        "extensions/sms",
-        "extensions/synology-chat",
-        "extensions/telegram",
-        "extensions/tlon",
-        "extensions/voice-call",
-        "extensions/whatsapp",
-        "extensions/workboard",
-        "extensions/zalo",
-        "extensions/zalouser",
-        "packages/ai",
-        "src/acp/client.ts", // Node and Web ReadableStream types live in separate namespaces.
-        "src/acp/server.ts", // Node and Web ReadableStream types live in separate namespaces.
-        "src/agents/agent-hooks/compaction-safeguard.ts", // AgentMessage custom roles exceed the Copilot header message contract.
-        "src/agents/agent-model-discovery.ts", // Persisted registry rows need a fully resolved model parser owner.
-        "src/agents/embedded-agent-helpers/images.ts", // Assistant blocks cross the tool-image sanitizer's narrower block namespace.
-        "src/agents/embedded-agent-runner/run/attempt-stream.ts", // Synthetic yield stream metadata is wider than the provider model contract.
-        "src/agents/embedded-agent-runner/run/images.ts", // Provider-only video blocks cross the canonical AgentMessage namespace.
-        "src/agents/mcp-http-fetch.ts", // Undici Response crosses the DOM FetchLike type namespace.
-        "src/agents/model-auth-model.ts", // Null Authorization sentinel crosses the SDK's string-only header type.
-        "src/agents/model-provider-auth.ts", // Route-fact cache keys cross a config-only hash API.
-        "src/agents/modes/interactive/theme/theme.ts", // Global symbol registry and Proxy receiver bridge duplicate module copies.
-        "src/agents/subagents/spawn/subagent-depth.ts", // Generic session projections cross the fixed accessor entry type.
-        "src/agents/tool-search-transcript.ts", // Synthetic target turns omit provider-owned assistant metadata.
-        "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
-        "src/commands/channel-test-registry.ts", // Test support.
-        "src/commands/doctor/cron/legacy-repair.ts", // Partially validated legacy rows cross the canonical cron store type.
-        "src/commands/doctor/cron/legacy-store-migration.ts", // Legacy loader carries partial rows in the canonical store envelope.
-        "src/commands/doctor/cron/warnings.ts", // Doctor inspects partially parsed cron rows.
-        "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
-        "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.
-        "src/gateway/cli-session-history.claude.ts", // External CLI messages cross the canonical transcript redactor.
-        "src/gateway/mcp-app-standalone.ts", // Generated standalone browser code bridges the DOM namespace.
-        "src/gateway/server-methods/chat-transcript-inject.ts", // Gateway media blocks exceed the canonical message content union.
-        "src/gateway/test-http-response.ts", // Test support.
-        "src/infra/backup-volatile-stat-cache.ts", // node-tar's cache expects full Stats for a synthetic sentinel.
-        "src/infra/diagnostic-trace-propagation.ts", // Global symbol registry crosses module copies.
-        "src/infra/net/runtime-fetch.ts", // Undici and DOM fetch types live in separate namespaces.
-        "src/infra/state-migrations.meeting-transcripts-files.ts", // Legacy summary validation does not prove element types.
-        "src/infra/unhandled-rejections.ts", // Global symbol registry crosses module copies.
-        "src/meeting-bot/browser-controller.ts", // Generic health fallbacks cannot construct arbitrary platform subtypes.
-        "src/meeting-bot/platform-adapter.ts", // Generic parsers add adapter-owned health and transcript fields.
-        "src/meeting-bot/plugin-shell.ts", // Type-only plugin namespace factory has no runtime value.
-        "src/plugin-sdk/channel-config-helpers.ts", // Public SDK accessor generics are intentionally decoupled.
-        "src/plugin-sdk/provider-stream-shared.ts", // Untyped normalizer events need a transport stream API redesign.
-        "src/plugin-sdk/qa-runtime.ts", // Public SDK lazy module exposes a narrower runtime surface.
-        "src/plugins/hook-isolation.ts", // Optional WebAssembly globals bridge runtime type namespaces.
-        "src/plugins/interactive.ts", // Dynamic plugin context keys cross the generic handler seam.
-        "src/plugins/loader-runtime-load.ts", // Discovery-only runtime is widened by the registry proxy.
-        "src/plugins/registry-runtime.ts", // Bundled owner wrapper crosses the public inbound generic.
-        "src/plugins/runtime/index.ts", // Lazy assembly adds required runtime capabilities after construction.
-        "src/process/exec-spawn.ts", // Rebuilt Execa options cross its result generic.
-        "src/proxy-capture/store.sqlite.ts", // Implementation preserves overloaded shipped constructor contracts.
-        "src/trajectory/export.ts", // Legacy migration mutates pre-canonical transcript entries.
-        "ui/src",
-      ],
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
+      excludedRoots: CHAINED_ASSERTION_EXCLUDED_ROOTS,
     }),
   },
 };

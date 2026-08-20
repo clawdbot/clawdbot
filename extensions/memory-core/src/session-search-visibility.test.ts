@@ -922,6 +922,80 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     });
   });
 
+  it.each([
+    { sandboxed: false, visible: true },
+    { sandboxed: true, visible: false },
+  ])(
+    "applies canonical-main tree visibility with sandboxed=$sandboxed",
+    async ({ sandboxed, visible }) => {
+      combinedSessionStore = {
+        "agent:main:slack:channel:team": {
+          sessionId: "team",
+          updatedAt: 1,
+          sessionFile: "/tmp/sessions/team.jsonl",
+          chatType: "channel",
+        },
+      };
+      const hit: MemorySearchResult = {
+        path: "sessions/team.jsonl",
+        source: "sessions",
+        score: 1,
+        snippet: "team context",
+        startLine: 1,
+        endLine: 2,
+      };
+
+      const filtered = await filterMemorySearchHitsBySessionVisibility({
+        cfg: asOpenClawConfig({
+          tools: { sessions: { visibility: "tree" } },
+          agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
+        }),
+        requesterSessionKey: "agent:main:main",
+        sandboxed,
+        hits: [hit],
+      });
+
+      expect(filtered).toEqual(visible ? [hit] : []);
+    },
+  );
+
+  it("applies canonical global-main tree visibility in an explicit fleet", async () => {
+    combinedSessionStore = {
+      "agent:main:slack:channel:team": {
+        sessionId: "team",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/team.jsonl",
+        chatType: "channel",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/team.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "team context",
+      startLine: 1,
+      endLine: 2,
+    };
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg: asOpenClawConfig({
+        session: { scope: "global" },
+        tools: { sessions: { visibility: "tree" } },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, research: {} },
+        },
+      }),
+      agentId: "main",
+      requesterSessionKey: "global",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
   it("keeps same-agent live orphan transcript hits", async () => {
     combinedSessionStore = {};
     const hit: MemorySearchResult = {

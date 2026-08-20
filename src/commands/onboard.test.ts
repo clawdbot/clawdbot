@@ -948,7 +948,6 @@ describe("setupWizardCommand", () => {
         skipSkills: false,
         acceptRisk: false,
         json: false,
-        tailscaleResetOnExit: undefined,
         customImageInput: undefined,
       },
       runtime,
@@ -960,6 +959,7 @@ describe("setupWizardCommand", () => {
   });
 
   it.each([
+    ["--agent-name", { agentName: "robby" }],
     ["--tui", { tui: true }],
     ["--skip-ui", { skipUi: true }],
   ])("keeps %s on guided onboarding", async (_label, opts) => {
@@ -981,7 +981,6 @@ describe("setupWizardCommand", () => {
     ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
     ["--skip-bootstrap", { skipBootstrap: true }],
     ["--no-install-daemon", { installDaemon: false }],
-    ["--no-tailscale-reset-on-exit", { tailscaleResetOnExit: false }],
     ["--custom-text-input", { customImageInput: false }],
     ["--daemon-runtime", { daemonRuntime: "node" as const }],
     ["a provider auth flag", { mistralApiKey: "sk-x" }],

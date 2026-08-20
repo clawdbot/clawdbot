@@ -42,6 +42,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -302,8 +303,6 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 }
 
 function exitWithError(message: string): never {
-  defaultRuntime.error(message);
-  defaultRuntime.exit(1);
   throw new Error(message);
 }
 
@@ -325,9 +324,6 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 }> {
   // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-  if (source === "local") {
-    defaultRuntime.log(theme.muted("Writing local approvals."));
-  }
   const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
   if (isNativeApprovalsSnapshot(snapshot) && !snapshot.enabled) {
     exitWithError(
@@ -363,6 +359,9 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     });
     next = await loadSnapshot(params.opts, params.nodeId);
   } else if (params.source === "local") {
+    // Announced at the write, not at target resolution: no-op allowlist edits and
+    // rejected `set` input never reach here and must not claim a write happened.
+    defaultRuntime.log(theme.muted("Writing local approvals."));
     next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
@@ -380,6 +379,16 @@ function formatCliError(err: unknown): string {
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
+}
+
+function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
+  rethrowExpectedCliError(err);
+  const message = formatCliError(err);
+  if (opts.json) {
+    throw new Error(message);
+  }
+  defaultRuntime.error(message);
+  defaultRuntime.exit(1);
 }
 
 function isApprovalDecision(value: string): value is ApprovalDecision {
@@ -1082,8 +1091,7 @@ async function runAllowlistMutation(
       targetLabel: context.targetLabel,
     });
   } catch (err) {
-    defaultRuntime.error(formatCliError(err));
-    defaultRuntime.exit(1);
+    failApprovalsCommand(err, opts);
   }
 }
 
@@ -1132,8 +1140,7 @@ export function registerExecApprovalsCli(program: Command) {
         }
         renderPendingApprovals(entries);
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(pendingCmd);
@@ -1146,8 +1153,7 @@ export function registerExecApprovalsCli(program: Command) {
       try {
         await resolvePendingApproval(id, decision, opts);
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(resolveCmd);
@@ -1187,8 +1193,7 @@ export function registerExecApprovalsCli(program: Command) {
         renderApprovalsSnapshot(snapshot, targetLabel);
         renderEffectivePolicy({ report: effectivePolicy });
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
@@ -1236,8 +1241,7 @@ export function registerExecApprovalsCli(program: Command) {
         file.version = 1;
         await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(setCmd);

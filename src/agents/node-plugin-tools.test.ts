@@ -12,6 +12,7 @@ import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
+import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry, createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -35,7 +36,7 @@ function replaceNodePluginTools(
 
 function createCodeModeHarness(tools: AnyAgentTool[]) {
   const catalogRef = createToolSearchCatalogRef();
-  const config = { tools: { codeMode: true } } as never;
+  const config = { tools: { codeMode: { enabled: true, timeoutMs: 120_000 } } } as never;
   const ctx = {
     config,
     runtimeConfig: config,
@@ -256,12 +257,21 @@ describe("createNodePluginTools", () => {
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
       payload: {
         content: [
-          { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
+          {
+            type: "image",
+            data: "aW1hZ2UtMQ==",
+            mimeType: "image/png",
+            annotations: { audience: ["assistant"] },
+            _meta: { detailCanary: "must-not-leak" },
+          },
           { type: "text", text: "first" },
           { type: "text", text: "second" },
           { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
+          { type: "image", data: 42, mimeType: "image/png" },
+          { type: "audio", data: "audio-canary", mimeType: "audio/wav" },
         ],
         structuredContent: { hits: 2 },
+        isError: true,
       },
     });
 
@@ -286,12 +296,22 @@ describe("createNodePluginTools", () => {
     expect(tool.executionMode).toBe("sequential");
     expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
     expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "hits": 2\n}' },
       { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
       { type: "text", text: "first" },
       { type: "text", text: "second" },
       { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
-      { type: "text", text: '{\n  "hits": 2\n}' },
+      { type: "text", text: '{"type":"image","data":42,"mimeType":"image/png"}' },
+      { type: "text", text: "[audio audio/wav]" },
     ]);
+    expect(result.details).toEqual({
+      mcpServer: "docs",
+      mcpTool: "search",
+      structuredContent: { hits: 2 },
+      status: "error",
+    });
+    expect(JSON.stringify(result.details)).not.toContain("canary");
+    expect(isToolResultError(result)).toBe(true);
   });
 
   it("projects node MCP schemas and calls through the exact namespace catalog entry", async () => {
@@ -351,11 +371,12 @@ describe("createNodePluginTools", () => {
       `,
     );
 
-    expect(details.status).toBe("completed");
+    expect(details.status, JSON.stringify(details)).toBe("completed");
     expect(details.value).toEqual({
       api: expect.stringContaining("query: string;"),
       called: {
-        content: [{ type: "text", text: "found" }],
+        mcpServer: "docs",
+        mcpTool: "search",
         structuredContent: { hits: 1 },
       },
       allHasNodeMcp: false,
@@ -375,6 +396,33 @@ describe("createNodePluginTools", () => {
       },
       { scopes: ["operator.write"], signal: expect.any(AbortSignal) },
     );
+  });
+
+  it("makes empty MCP application results visible", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "node-mcp",
+          name: "docs_fail",
+          description: "Fail without content",
+          parameters: { type: "object", properties: {} },
+          command: "mcp.tools.call.v1",
+          mcp: { server: "docs", tool: "fail" },
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({
+      payload: { content: [], isError: true },
+    });
+
+    const tool = expectDefined(createNodePluginTools({})[0], "node MCP tool");
+    const result = await tool.execute("empty-error", {});
+
+    expect(result.content).toEqual([
+      { type: "text", text: "MCP tool failed without returning content." },
+    ]);
+    expect(isToolResultError(result)).toBe(true);
   });
 
   it("disambiguates gateway-node and node-node MCP server collisions", async () => {
@@ -399,7 +447,23 @@ describe("createNodePluginTools", () => {
       });
     }
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: { content: [{ type: "text", text: "node-b" }] },
+      payload: {
+        content: [
+          {
+            type: "image",
+            data: 42,
+            mimeType: "image/png",
+            annotations: { audience: ["assistant"], canary: "malformed-annotations" },
+            _meta: { canary: "malformed-meta" },
+          },
+          {
+            type: "text",
+            text: "node-b",
+            annotations: { canary: "text-annotations" },
+            _meta: { canary: "text-meta" },
+          },
+        ],
+      },
     });
 
     const { codeModeTools, compacted } = createCodeModeHarness([
@@ -419,7 +483,7 @@ describe("createNodePluginTools", () => {
       `,
     );
 
-    expect(details.status).toBe("completed");
+    expect(details.status, JSON.stringify(details)).toBe("completed");
     expect(details.value).toEqual({
       files: [
         "mcp/index.d.ts",
@@ -428,7 +492,11 @@ describe("createNodePluginTools", () => {
         "mcp/nodeCDocs.d.ts",
         "mcp/tickets.d.ts",
       ],
-      called: { content: [{ type: "text", text: "node-b" }] },
+      called: {
+        mcpServer: "docs",
+        mcpTool: "search_c",
+        content: [{ type: "text", text: "node-b" }],
+      },
     });
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",

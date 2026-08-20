@@ -4,8 +4,7 @@ import {
   expectProviderOnboardPrimaryAndFallbacks,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { buildMistralModelDefinition } from "./model-definitions.js";
-import { MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
+import { buildMistralModelDefinition, MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
 import { applyMistralConfig, applyMistralProviderConfig } from "./onboard.js";
 
 describe("mistral onboard", () => {

@@ -29,6 +29,21 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   scans should stay on GitHub-hosted runners unless measured evidence says
   Blacksmith is required.
 
+## Rejected Experiments
+
+- **Actions-artifact checkout (2026-08-16):** Do not recommend replacing the
+  shared Blacksmith Git fetch with a preflight-produced workspace or `.git`
+  artifact. [PR #124818](https://github.com/openclaw/openclaw/pull/124818)
+  measured a 16s Blacksmith checkout baseline versus 7s hosted. The best direct
+  artifact variant cost 1s to pack, 3s to upload, and 11s median to restore;
+  including the serial prefix left only about 1s median improvement and
+  regressed Blacksmith's fast-fetch runs. The official artifact client was
+  worse: [run 31971531521](https://github.com/openclaw/openclaw/actions/runs/31971531521)
+  measured 22s median download plus 2s materialization. Blacksmith's fast
+  Actions-cache path does not imply fast Actions-artifact downloads. Reconsider
+  only with measured end-to-end proof for a different transport, including its
+  producer cost and fast-fetch regressions.
+
 ## First Checks
 
 Before changing CI, collect current pressure:

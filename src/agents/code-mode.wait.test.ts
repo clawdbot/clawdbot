@@ -13,6 +13,14 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+import { jsonResult } from "./tools/common.js";
+
+function createTerminalBridgeHarness() {
+  const harness = createCodeModeHarness();
+  const config = { tools: { codeMode: { enabled: true, timeoutMs: 60_000 } } } as never;
+  const ctx = { ...harness.ctx, config, runtimeConfig: config };
+  return { ...harness, config, tools: createCodeModeTools(ctx) };
+}
 
 describe("Code Mode wait, scope, and suspended runs", () => {
   beforeEach(() => {
@@ -67,6 +75,98 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.status).toBe("completed");
     expect(resumed.value).toBe("done");
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
+  });
+
+  it("retains terminal bridge evidence until a yielded run completes through wait", async () => {
+    const { config, catalogRef, tools } = createTerminalBridgeHarness();
+    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
+      ...jsonResult({ terminal: true }),
+      terminate: true,
+    }));
+    applyCodeModeCatalog({
+      tools: [...tools, terminal],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = await expectDefined(tools[0], "exec tool").execute(
+      "code-call-terminal-yield",
+      {
+        code: `
+          await tools.callValue("terminal_action", {});
+          await yield_control("pause");
+          return "done";
+        `,
+      },
+    );
+
+    expect(resultDetails(suspended).status).toBe("waiting");
+    expect(suspended.terminate).toBeUndefined();
+
+    let resumed = await expectDefined(tools[1], "wait tool").execute("code-wait-terminal-yield", {
+      runId: resultDetails(suspended).runId,
+    });
+    for (let index = 1; index < 8 && resultDetails(resumed).status === "waiting"; index += 1) {
+      expect(resumed.terminate).toBeUndefined();
+      resumed = await expectDefined(tools[1], "wait tool").execute(
+        `code-wait-terminal-yield-${index}`,
+        { runId: resultDetails(resumed).runId },
+      );
+    }
+
+    expect(resultDetails(resumed)).toMatchObject({ status: "completed", value: "done" });
+    expect(resumed.terminate).toBe(true);
+  });
+
+  it("discards retained terminal bridge evidence when a yielded run fails", async () => {
+    const { config, catalogRef, tools } = createTerminalBridgeHarness();
+    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
+      ...jsonResult({ terminal: true }),
+      terminate: true,
+    }));
+    applyCodeModeCatalog({
+      tools: [...tools, terminal],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const suspended = await expectDefined(tools[0], "exec tool").execute(
+      "code-call-terminal-yield-failure",
+      {
+        code: `
+          await tools.callValue("terminal_action", {});
+          await yield_control("pause");
+          throw new Error("resumed failure");
+        `,
+      },
+    );
+
+    expect(resultDetails(suspended).status).toBe("waiting");
+    expect(suspended.terminate).toBeUndefined();
+
+    let resumed = await expectDefined(tools[1], "wait tool").execute(
+      "code-wait-terminal-yield-failure",
+      { runId: resultDetails(suspended).runId },
+    );
+    for (let index = 1; index < 8 && resultDetails(resumed).status === "waiting"; index += 1) {
+      expect(resumed.terminate).toBeUndefined();
+      resumed = await expectDefined(tools[1], "wait tool").execute(
+        `code-wait-terminal-yield-failure-${index}`,
+        { runId: resultDetails(resumed).runId },
+      );
+    }
+
+    expect(resultDetails(resumed)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("resumed failure"),
+    });
+    expect(resumed.terminate).toBeUndefined();
   });
 
   it("keeps a safe suspension clean and wraps network content after wait resumes it", async () => {

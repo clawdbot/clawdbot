@@ -1,10 +1,5 @@
-// SQLite row mapping for the device pairing and bootstrap-token stores.
-// The domain modules (device-pairing.ts, device-bootstrap.ts) mutate full
-// in-memory snapshots under a process-local lock; persistence replaces the
-// affected table contents in one immediate transaction. That preserves the
-// snapshot semantics the retired devices/*.json files had (including
-// cross-process last-writer-wins per store) while WAL + busy_timeout make
-// concurrent gateway/CLI access safe at the statement level.
+// SQLite row mapping for device pairing and bootstrap-token snapshots.
+// Immediate transactions preserve last-writer-wins semantics across Gateway and CLI processes.
 import type { DatabaseSync } from "node:sqlite";
 import {
   resolvePairingSetupAccess,
@@ -27,6 +22,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type {
   DeviceAuthToken,
   DeviceBootstrapTokenRecord,
@@ -637,6 +633,9 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
       kysely.deleteFrom("device_bootstrap_tokens").where("token_key", "=", tokenRow.token_key),
     );
     if (completion) {
+      if (record.profile?.purpose === "cloud-worker") {
+        bindCloudWorkerSetupCompletion({ db, completion });
+      }
       executeSqliteQuerySync(
         db,
         kysely

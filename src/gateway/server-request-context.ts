@@ -28,11 +28,13 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
+  configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
     GatewayServerLiveState,
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  getGatewayMethodRegistry: NonNullable<GatewayRequestContext["getGatewayMethodRegistry"]>;
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
@@ -68,19 +70,13 @@ type GatewayRequestContextParams = {
   nodeUnsubscribeAll: GatewayRequestContext["nodeUnsubscribeAll"];
   hasConnectedTalkNode: GatewayRequestContext["hasConnectedTalkNode"];
   clients: Set<GatewayRequestContextClient>;
+  isConnectionActive: NonNullable<GatewayRequestContext["isConnectionActive"]>;
   invalidateDeviceTransports?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
-  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
-  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: {
-    deviceId: string;
-    publicKey: string;
-    scopes: string[];
-  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
@@ -88,6 +84,7 @@ type GatewayRequestContextParams = {
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDiskSpaceReader?: GatewayRequestContext["workerPlacementDiskSpaceReader"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
+  githubPublicationService?: GatewayRequestContext["githubPublicationService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
@@ -172,6 +169,7 @@ export function createGatewayRequestContext(
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
+    configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
     get cron() {
@@ -181,6 +179,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    getGatewayMethodRegistry: params.getGatewayMethodRegistry,
     gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
@@ -227,8 +226,7 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
-    isConnectionActive: (connId) =>
-      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
+    isConnectionActive: params.isConnectionActive,
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
@@ -371,9 +369,6 @@ export function createGatewayRequestContext(
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
-    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
-    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
     ...(params.nodeDesktopService
       ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
@@ -391,6 +386,9 @@ export function createGatewayRequestContext(
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
+      : {}),
+    ...(params.githubPublicationService
+      ? { githubPublicationService: params.githubPublicationService }
       : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,

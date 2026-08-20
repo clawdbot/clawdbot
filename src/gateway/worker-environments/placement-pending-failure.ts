@@ -2,6 +2,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   isCurrentPlacementTurnClaim,
+  placementTurnOwner,
   required,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
@@ -34,18 +35,11 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
               claimId: persisted.claimId,
               runId: persisted.runId,
               placementGeneration: persisted.generation,
-              owner:
-                persisted.owner === "worker"
-                  ? {
-                      kind: "worker",
-                      environmentId: pending.environmentId,
-                      ownerEpoch: persisted.ownerEpoch,
-                    }
-                  : {
-                      kind: "local",
-                      environmentId: pending.environmentId,
-                      ownerEpoch: pending.ownerEpoch,
-                    },
+              owner: placementTurnOwner({
+                executionMode: current.executionMode,
+                environmentId: pending.environmentId,
+                activeOwnerEpoch: pending.ownerEpoch,
+              }),
             }
           : null;
         const exactClaim =

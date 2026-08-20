@@ -225,7 +225,7 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
 
       await gateway.setMethodResponse("sessions.list", workerRecoverySessionsList(true));
       await page.reload();
-      const alert = page.getByRole("alert").filter({ hasText: "Cloud worker failed" });
+      const alert = page.getByRole("alert").filter({ hasText: "Runner failed" });
       await alert.waitFor({ timeout: 10_000 });
       expect(await alert.textContent()).toContain("provider reported lease destroyed");
       await capture(page, "05-after-workspace-recovery-error.png");

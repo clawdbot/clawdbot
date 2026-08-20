@@ -138,7 +138,6 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
     });
     await retried;
     expect(requestCount).toBe(2);
-    expect(errors).toHaveLength(2);
     expect(errors.map((error) => error.message)).toEqual([
       "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
       "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",

@@ -209,6 +209,8 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
+  /** Prepared boundary for an explicit session permission mode. */
+  sessionRoot?: string;
   serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };

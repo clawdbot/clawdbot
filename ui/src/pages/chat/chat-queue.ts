@@ -1,10 +1,13 @@
 // Control UI page module owns Chat queue storage and queue item cleanup.
+import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
-import { cloneChatAttachmentsMetadata } from "./attachment-payload-store.ts";
+import {
+  releaseChatAttachmentPayloads,
+  cloneChatAttachmentsMetadata,
+} from "./attachment-payload-store.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -13,6 +16,7 @@ import {
   resolveStoredChatOutboxScope,
   updateStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
+  type StoredChatQueueReplacement,
   type ChatComposerScope,
   type StoredChatOutbox,
   type StoredChatOutboxScope,
@@ -28,6 +32,18 @@ type ChatQueueStoreHost = {
 };
 type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
+
+export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
+  return (
+    isMovableChatQueueItem(item) &&
+    (item.sendState === undefined || item.sendState === "waiting-idle") &&
+    !item.localCommandName
+  );
+}
+
+export function steerableQueuedMessage(queue: readonly ChatQueueItem[]): ChatQueueItem | undefined {
+  return queue.toSorted(compareChatQueueOrder).find(isSteerableQueuedMessage);
+}
 
 function isProcessLiveQueueProjection(item: ChatQueueItem): boolean {
   return item.sendState === "sending" || item.sendState === "executing-command";
@@ -71,32 +87,6 @@ export function syncVisibleChatQueueProjection(
   options: { requestUpdate?: boolean } = {},
 ): void {
   chatOutboxOwner(host).syncHost(host, options);
-}
-
-export function setTransientQueuedMessageProjection(
-  host: ChatQueueScopedSessionHost,
-  sessionKey: string,
-  item: ChatQueueItem,
-  agentId?: string,
-): boolean {
-  const scope = resolveStoredChatOutboxScope(host, sessionKey, agentId);
-  const owner = chatOutboxOwner(host);
-  const outbox = owner.durable(host, item.id);
-  if (!outbox?.queue.some((entry) => entry.id === item.id)) {
-    return false;
-  }
-  owner.projectLive(host, scope, item.id, item);
-  return true;
-}
-
-export function clearTransientQueuedMessageProjection(
-  host: ChatQueueScopedSessionHost,
-  sessionKey: string,
-  id: string,
-  agentId?: string,
-) {
-  const scope = resolveStoredChatOutboxScope(host, sessionKey, agentId);
-  chatOutboxOwner(host).projectLive(host, scope, id);
 }
 
 export function subscribeChatOutboxProjection(host: ChatQueueScopedSessionHost): () => void {
@@ -144,13 +134,12 @@ export function enqueuePendingRunMessage(
   if (!trimmed && !hasAttachments) {
     return;
   }
-  // Local commands join an existing run without a wire chat.send, so this is
-  // intentionally a non-SteeredChip pending row with no fake sendRunId.
+  // Local commands join an existing run without a wire chat.send, so this
+  // pending row intentionally has no fake send identity.
   const item: ChatQueueItem = {
     id: generateUUID(),
     text: trimmed,
     createdAt: Date.now(),
-    kind: "steered",
     attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
     pendingRunId,
     ...(sender ? { sender } : {}),
@@ -167,30 +156,7 @@ export function readChatQueueForScope(
   return chatOutboxOwner(host).snapshot(host, scope);
 }
 
-export function replacePendingQueuedMessageProjection(
-  host: ChatQueueScopedSessionHost,
-  sessionKey: string,
-  id: string,
-  pendingRunId: string,
-  replacement: ChatQueueItem,
-  agentId?: string,
-): boolean {
-  const queue = readChatQueueForScope(host, sessionKey, agentId);
-  if (!queue.some((item) => item.id === id && item.pendingRunId === pendingRunId)) {
-    return false;
-  }
-  writeChatQueueForScope(
-    host,
-    sessionKey,
-    queue.map((item) =>
-      item.id === id && item.pendingRunId === pendingRunId ? replacement : item,
-    ),
-    agentId,
-  );
-  return true;
-}
-
-export function writeChatQueueForScope(
+function writeChatQueueForScope(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   queue: ChatQueueItem[],
@@ -336,7 +302,7 @@ export function updateQueuedMessagesForSession(
 }
 
 /**
- * `replacesId` admits the item as the stored replacement for another row, which
+ * `replaces` admits the item as the stored replacement for another row, which
  * retires the source in the same write. A rejected write changes nothing, so an
  * edited message can never lose both its original and its replacement.
  */
@@ -344,12 +310,12 @@ export function admitQueuedMessageForSession(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   item: ChatQueueItem,
-  replacesId?: string,
+  replaces?: StoredChatQueueReplacement,
 ): boolean {
   const owner = chatOutboxOwner(host);
   const scope = resolveStoredChatOutboxScope(host, sessionKey, item.agentId);
   owner.keep(host, scope, item);
-  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replacesId)) {
+  if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId, replaces)) {
     return false;
   }
   if (item.sendState !== "waiting-model") {

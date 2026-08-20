@@ -105,7 +105,6 @@ vi.mock("./plugin-node-host.js", () => ({
 
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: 0,
     descriptors: [],
     callMcpTool: vi.fn(),
     close: vi.fn(async () => {}),
@@ -226,7 +225,10 @@ describe("runNodeHost optional publications", () => {
         ).toEqual([
           [
             NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-            { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+            {
+              protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+              workerHost: { enabled: false },
+            },
           ],
         ]);
       });

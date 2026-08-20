@@ -14,6 +14,7 @@ import {
 } from "../infra/backup-archive-path-policy.js";
 import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -67,12 +68,18 @@ type SqliteSnapshotEntry = NormalizedArchiveEntry & {
 
 type ExpectedSqliteRole = "agent" | "global";
 
-async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
+async function listArchiveEntries(archivePath: string) {
   const entries: ArchiveEntry[] = [];
+  let invalidReason: string | undefined;
   await tar.t({
     file: archivePath,
     gzip: true,
     maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
+    onwarn: (code, message) => {
+      if (code === "TAR_BAD_ARCHIVE" && invalidReason === undefined) {
+        invalidReason = formatErrorMessage(message);
+      }
+    },
     onReadEntry: (entry) => {
       entries.push({
         path: entry.path,
@@ -82,7 +89,7 @@ async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> 
       });
     },
   });
-  return entries;
+  return { entries, invalidReason };
 }
 
 async function extractManifest(params: {
@@ -539,13 +546,39 @@ async function verifySqliteSnapshots(params: {
   }
 }
 
-/** Verify a backup archive and return its normalized, integrity-checked inventory. */
-export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
-  const archivePath = resolveUserPath(archive);
-  const rawEntries = await listArchiveEntries(archivePath);
-  if (rawEntries.length === 0) {
-    throw new Error("Backup archive is empty.");
+async function verifyResolvedBackupArchive(archivePath: string): Promise<BackupVerifyResult> {
+  let archiveStat;
+  try {
+    archiveStat = await fs.stat(archivePath);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      throw new Error(
+        "Archive does not exist. Check the path and run `openclaw backup verify <archive>` again.",
+        { cause: error },
+      );
+    }
+    throw new Error(
+      `Archive could not be inspected. ${formatErrorMessage(error)} Check the path and file permissions, then try again.`,
+      { cause: error },
+    );
   }
+  if (!archiveStat.isFile()) {
+    throw new Error(
+      "Archive must be a regular file. Choose a backup archive created by `openclaw backup create` and try again.",
+    );
+  }
+
+  const listing = await listArchiveEntries(archivePath).catch((error: unknown) => {
+    throw new Error(
+      `Archive could not be read or parsed. ${formatErrorMessage(error)} Check the file permissions and archive integrity, then try again.`,
+    );
+  });
+  if (listing.invalidReason) {
+    throw new Error(
+      `Archive is not a valid OpenClaw backup. ${listing.invalidReason.replace(/[.!?]*$/u, ".")} Choose another archive or create a new one with \`openclaw backup create\`.`,
+    );
+  }
+  const rawEntries = listing.entries;
 
   const entries = rawEntries.map((entry) => ({
     raw: entry.path,
@@ -611,6 +644,15 @@ export async function verifyBackupArchive(archive: string): Promise<BackupVerify
   };
 
   return result;
+}
+
+/** Verify a backup archive and return its normalized, integrity-checked inventory. */
+export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
+  const archivePath = resolveUserPath(archive);
+  return await verifyResolvedBackupArchive(archivePath).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : formatErrorMessage(error);
+    throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
+  });
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */

@@ -19,9 +19,11 @@ import {
   AUDIT_ACTIVITY_DIRECTIONS,
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
+  findAuditActivityFilterConflict,
 } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
+import { isExpectedCliError } from "../cli/failure-output.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -178,7 +180,30 @@ function validateAuditFilter(
   }
 }
 
+const AUDIT_FILTER_FLAGS = {
+  sessionKey: "--session",
+  direction: "--direction",
+  channel: "--channel",
+} as const;
+
+function validateAuditFilterCombination(options: AuditListCommandOptions): void {
+  const conflict = findAuditActivityFilterConflict(options);
+  if (!conflict) {
+    return;
+  }
+  const flag = AUDIT_FILTER_FLAGS[conflict.field];
+  if (conflict.type === "kind") {
+    throw new Error(`${flag} only applies to --kind ${formatHumanList(conflict.supportedKinds)}.`);
+  }
+  throw new Error(
+    `${flag} cannot be combined with ${AUDIT_FILTER_FLAGS[conflict.conflictingField]}.`,
+  );
+}
+
 function formatAuditGatewayError(error: unknown): Error {
+  if (isExpectedCliError(error)) {
+    return error;
+  }
   const message = formatErrorMessage(error);
   const operatorMessage =
     message === "invalid audit.activity.list range or cursor"
@@ -343,6 +368,33 @@ function contextIdentityLines(context: ExecutionIdentityContextV1): string[] {
   ];
 }
 
+function contextLineageLines(context: ExecutionIdentityContextV1): string[] {
+  const lineage = context.lineage;
+  if (!lineage) {
+    return [fieldLine("Parent", "absent")];
+  }
+  return [
+    fieldLine(
+      "Parent context",
+      lineage.parentContextId ? "present" : "unknown",
+      lineage.parentContextId,
+    ),
+    fieldLine(
+      "Parent execution",
+      lineage.parentExecutionId ? "present" : "unknown",
+      lineage.parentExecutionId,
+    ),
+    fieldLine("Parent run", lineage.parentRunId ? "present" : "unknown", lineage.parentRunId),
+    fieldLine(
+      "Parent agent",
+      lineage.parentAgentPrincipal ? "present" : "unknown",
+      lineage.parentAgentPrincipal ? principalText(lineage.parentAgentPrincipal) : undefined,
+    ),
+    fieldLine("Delegation", lineage.delegationRef ? "present" : "unknown", lineage.delegationRef),
+    fieldLine("Depth", "present", String(lineage.depth)),
+  ];
+}
+
 function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
   return IDENTITY_FIELD_LABELS.map((label) => fieldLine(label, state));
 }
@@ -392,15 +444,7 @@ function formatAuditRunInspection(result: AuditRunInspectResult): string[] {
       ...identityLines.slice(8),
       "",
       "Lineage",
-      result.identity.context.lineage
-        ? fieldLine(
-            "Parent",
-            "present",
-            result.identity.context.lineage.parentRunId ??
-              result.identity.context.lineage.parentContextId ??
-              `depth ${String(result.identity.context.lineage.depth)}`,
-          )
-        : fieldLine("Parent", "absent"),
+      ...contextLineageLines(result.identity.context),
     );
   } else if (result.identity.state === "ambiguous") {
     lines.push(
@@ -526,6 +570,7 @@ export async function auditListCommand(
   validateAuditFilter(options.kind, "--kind", AUDIT_ACTIVITY_KINDS);
   validateAuditFilter(options.status, "--status", AUDIT_ACTIVITY_STATUSES);
   validateAuditFilter(options.direction, "--direction", AUDIT_ACTIVITY_DIRECTIONS);
+  validateAuditFilterCombination(options);
   const after = parseAuditTimestamp(options.after, "--after");
   const before = parseAuditTimestamp(options.before, "--before");
   if (after !== undefined && before !== undefined && after > before) {

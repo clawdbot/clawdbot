@@ -6,7 +6,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
@@ -46,7 +46,7 @@ function resolveCachedManifestSuppressionResolver(params: {
   });
   const cwd = process.cwd();
   const envFingerprint = resolvePluginMetadataEnvFingerprint(params.env);
-  const metadataSnapshot = getCurrentPluginMetadataSnapshotState().snapshot;
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot(params);
   if (
     cached !== undefined &&
     cached.config === params.config &&

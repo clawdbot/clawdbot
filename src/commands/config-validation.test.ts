@@ -115,8 +115,12 @@ describe("requireValidConfig", () => {
 
   it("blocks invalid config before emitting compatibility advice", async () => {
     readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
       exists: true,
       valid: false,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: {},
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
     });
@@ -134,8 +138,12 @@ describe("requireValidConfig", () => {
 
   it("replaces doctor fix advice for plugin packaging compiled-output failures", async () => {
     readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
       exists: true,
       valid: false,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: {},
       config: {},
       issues: [
         {
@@ -167,8 +175,12 @@ describe("requireValidConfig", () => {
 
   it("keeps doctor fix advice for normal invalid config failures", async () => {
     readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
       exists: true,
       valid: false,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: {},
       config: {},
       issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
       legacyIssues: [],

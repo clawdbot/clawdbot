@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
 import {
   createSequencedTestDraftStream,
   createTestDraftStream,
@@ -220,8 +221,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         history: resolved.history,
         admission: resolved.admission,
         botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () =>
-          await dispatchReplyWithBufferedBlockDispatcherHoisted({
+        runDispatch: async () => {
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcherHoisted({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
@@ -238,7 +239,9 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
             replyResolver: resolved.replyResolver,
-          }),
+          });
+          return withTelegramTestSettledReceipt(dispatchResult);
+        },
       });
       await params.adapter.onFinalize?.(result);
       return result;
@@ -554,18 +557,6 @@ export function allDeliveredReplyTexts(): string[] {
 
 export function expectDispatchParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), expected);
-}
-
-// The collapse bar edits the live window message in place (finalizeToPreview)
-// instead of deleting it and reposting the bar as a new message.
-export function expectWindowCollapsedTo(
-  stream: { finalizeToPreview: { mock: { calls: unknown[][] } } },
-  barText: string,
-) {
-  const calls = stream.finalizeToPreview.mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  const preview = calls.at(-1)?.[0] as { text?: string } | undefined;
-  expect(preview?.text).toBe(barText);
 }
 
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {

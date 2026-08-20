@@ -23,14 +23,14 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
+import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
-  approveDevicePairing,
   getPairedDevice,
   requestDevicePairing,
   resolveNodePairingState,
-  revokeDeviceToken,
 } from "../infra/device-pairing.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";

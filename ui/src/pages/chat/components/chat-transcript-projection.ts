@@ -56,6 +56,7 @@ import type {
   TranscriptAnnouncement,
   TranscriptRow,
 } from "./chat-transcript-controller.ts";
+import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -207,10 +208,11 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,
@@ -219,7 +221,6 @@ export function projectChatTranscript(
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
-    planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,
     loading: props.loading,
     searchOpen: state.searchOpen,
@@ -237,8 +238,12 @@ export function projectChatTranscript(
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
+  const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
+    setExpansionState(
+      expandedToolCards,
+      toolCardId,
+      !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
+    );
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
@@ -284,7 +289,9 @@ export function projectChatTranscript(
     );
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
+  const isEmpty =
+    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
@@ -307,7 +314,7 @@ export function projectChatTranscript(
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
     !props.userId;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const activeContinuationByGroupKey = new Map<
@@ -338,7 +345,7 @@ export function projectChatTranscript(
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
-    basePath: props.basePath,
+    resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
@@ -348,6 +355,7 @@ export function projectChatTranscript(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -448,8 +456,6 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        planStatus: props.planStatus,
-        planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
@@ -513,9 +519,7 @@ export function projectChatTranscript(
       return true;
     }
     const previous = collapsedItems[index - 1];
-    const isActiveStatusRun =
-      item.parts.some((part) => part.kind === "reading-indicator") &&
-      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    const isActiveStatusRun = item.parts.every((part) => part.kind === "reading-indicator");
     if (
       previous?.kind !== "group" ||
       !isActiveStatusRun ||
@@ -529,8 +533,6 @@ export function projectChatTranscript(
       parts: item.parts,
       options: {
         ...streamGroupOptions,
-        planStatus: props.planStatus,
-        planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
@@ -606,6 +608,14 @@ export function projectChatTranscript(
       content: backgroundTasks,
     });
   }
+  const typingIndicator = renderChatTypingIndicator(props.typingActors);
+  if (typingIndicator) {
+    transcriptRows.push({
+      kind: "content",
+      key: "presence:typing",
+      content: typingIndicator,
+    });
+  }
   trackTranscriptRenderDependencies(state, [
     chatItems,
     locale,
@@ -631,7 +641,6 @@ export function projectChatTranscript(
     Boolean(props.runWorking),
     props.startupStatus?.phase,
     Boolean(props.waitingApproval),
-    props.planStatus,
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
@@ -639,12 +648,14 @@ export function projectChatTranscript(
     props.userId,
     props.userName,
     props.userAvatar,
-    props.basePath,
+    props.typingActors,
+    props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.replyMessageAccess?.revision ?? 0,

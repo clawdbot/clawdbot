@@ -23,20 +23,23 @@ import {
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
-import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
-import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import { moveChatPanePlacement, reclaimChatPanePlacement } from "./chat-pane-placement.ts";
+import {
+  applySelectedSessionProjection,
+  resolveAssistantAttachmentAuthToken,
+} from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import {
-  invalidateChatMetadataCache,
   refreshChatModelAuthStatus,
   refreshPageChat,
+  retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import {
   reconcileStaleChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
@@ -57,7 +60,35 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     super.disconnectedCallback();
   }
 
+  protected async moveHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
+    const onMovingChange = (movingKey: string | null) => {
+      if (movingKey !== null || this.headerPlacementMovingKey === row.key) {
+        this.headerPlacementMovingKey = movingKey;
+      }
+    };
+    await moveChatPanePlacement({
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
+      movingKey: this.headerPlacementMovingKey,
+      row,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
+      onMovingChange,
+      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      requestUpdate: () => this.requestUpdate(),
+    });
+  }
+
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
     const onReclaimingChange = (reclaimingKey: string | null) => {
       // A later reclaim may take ownership before this request settles. Only
       // the request that still owns the row may clear the pane's progress key.
@@ -66,16 +97,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     };
     await reclaimChatPanePlacement({
-      client: this.connectedClient,
-      connectionGeneration: this.connectionGeneration,
-      gatewaySnapshot: this.context.gateway.snapshot,
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
       row,
-      isCurrent: (client, generation) =>
-        this.connectedClient === client && this.connectionGeneration === generation,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
-      publishError: (error) => this.publishHeaderError(error),
-      refreshReplacement: (agentId) => this.context.sessions.refreshReplacement(agentId),
+      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
     });
   }
@@ -96,8 +126,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         agentId,
       ),
     );
-    for (const { key } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key });
+    for (const { key, agentId } of stateValue.deletedSessions) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
     state.sessionsResult = stateValue.result;
     state.sessionsResultAgentId = stateValue.agentId;
@@ -172,7 +202,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls
+      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
+      state.automaticallyFetchFavicons === config.automaticallyFetchFavicons
     ) {
       return;
     }
@@ -182,6 +213,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
+    state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
     state.requestUpdate?.();
   }
 
@@ -229,11 +261,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       invalidateChatAvatarCache(state);
       invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
-      invalidateChatMetadataCache(state);
+      retireChatMetadataRequests(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
       this.taskSuggestionsRequestVersion += 1;
-      this.taskSuggestions = [];
+      this.setTaskSuggestions([]);
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
       this.resetTaskSuggestionCloudProfiles();
@@ -265,6 +297,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (sourceChanged) {
+      retireSessionWorkspaceCheckout(state);
+    }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
@@ -395,9 +430,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           applyChatAgentsList(state, agentsList, startupClient);
         }
         state.requestUpdate?.();
-        if (state.sessionKey === startupSessionKey) {
-          this.sendPendingSkillWorkshopRevision(startupSessionKey);
-        }
       };
       this.connectedClient = startupClient;
       setQuestionPromptClient(this.questionPromptState, startupClient);

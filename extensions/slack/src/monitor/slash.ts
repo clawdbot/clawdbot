@@ -16,8 +16,6 @@ import {
   resolveEffectiveAgentRuntime,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth-native";
-import {
   type CommandArgs,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -48,13 +46,17 @@ import {
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
+import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
 import { formatSlackError } from "../errors.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
-import type { SlackMonitorContext } from "./context.js";
-import { normalizeSlackChannelType, resolveSlackChatType } from "./context.js";
+import {
+  normalizeSlackChannelType,
+  resolveSlackChatType,
+  type SlackMonitorContext,
+} from "./context.js";
 import { resolveSlackDeferredActionTarget } from "./deferred-action-routing.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
 import { resolveSlackListenerEventScope, type SlackEventScope } from "./event-scope.js";
@@ -1288,12 +1290,13 @@ async function deliverSlackSlashResponseWithWebApi(params: {
 
   if (payload.response_type === "in_channel") {
     const postSlackMessage = params.client.chat.postMessage;
-    await postSlackMessage({
+    const response = await postSlackMessage({
       channel: params.command.channel_id,
       text,
       ...(blocks ? { blocks } : {}),
       ...(mrkdwn !== undefined ? { mrkdwn } : {}),
     });
+    requireSlackPostMessageTimestamp(response);
   } else {
     await params.client.chat.postEphemeral({
       channel: params.command.channel_id,

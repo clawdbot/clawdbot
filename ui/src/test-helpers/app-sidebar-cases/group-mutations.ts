@@ -277,6 +277,38 @@ describe("AppSidebar group mutation collapsed state", () => {
     );
   });
 
+  it("rejects repository inspection from a retired same-client connection", async () => {
+    const inspection = deferred<{
+      branches: Array<{ kind: "local"; name: string }>;
+      defaultBranch: string;
+      repositoryStatus: "git";
+    }>();
+    const client = {
+      request: async (method: string) => {
+        if (method === "worktrees.branches") {
+          return await inspection.promise;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      },
+    } as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+
+    const pending = sidebar.inspectSessionGroupRepository("/repos/client");
+    gatewayHarness.publish({ phase: "stopped" });
+    gatewayHarness.publish({ phase: "connected" });
+    inspection.resolve({
+      branches: [{ kind: "local", name: "main" }],
+      defaultBranch: "main",
+      repositoryStatus: "git",
+    });
+
+    await expect(pending).rejects.toThrow(
+      "Gateway connection replaced before the defaults were saved. Try again.",
+    );
+  });
+
   it("leaves the catalog alone when the delete confirm is cancelled", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({});
     const menu = await openGroupMenu(sidebar);

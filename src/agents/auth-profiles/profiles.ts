@@ -78,6 +78,7 @@ function resetSuccessfulUsageStats(
     blockedModel: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
+    cooldownClassification: undefined,
     cooldownModel: undefined,
     disabledUntil: undefined,
     disabledReason: undefined,
@@ -201,11 +202,18 @@ export function upsertAuthProfile(params: {
   });
 }
 
-/** Removes all auth profiles and related state for a provider. */
+/** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
 export async function removeProviderAuthProfilesWithLock(params: {
   provider: string;
   agentDir?: string;
+  profileIds?: readonly string[];
 }): Promise<AuthProfileStore | null> {
+  if (params.profileIds) {
+    return await removeAuthProfilesWithLock({
+      agentDir: params.agentDir,
+      profileIds: params.profileIds,
+    });
+  }
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,

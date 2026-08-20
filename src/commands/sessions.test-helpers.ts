@@ -5,8 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 
 const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknown> }>(() => ({
   loadConfig: () => ({
@@ -89,10 +94,14 @@ export async function writeStore(
   const storeDir = path.join(os.tmpdir(), dirName);
   fs.mkdirSync(storeDir, { recursive: true });
   const storePath = path.join(storeDir, "sessions.json");
+  const agentId = options.agentId ?? "main";
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+  openOpenClawAgentDatabase({ agentId, path: databasePath });
   for (const [sessionKey, entry] of Object.entries(data)) {
-    await replaceSessionEntry({ agentId: options.agentId ?? "main", sessionKey, storePath }, entry);
+    await replaceSessionEntry({ agentId, sessionKey, storePath }, entry);
   }
-  return storePath;
+  closeOpenClawAgentDatabaseByPath(databasePath);
+  return databasePath;
 }
 
 /** Removes the temporary SQLite session store created by writeStore. */

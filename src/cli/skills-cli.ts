@@ -17,10 +17,10 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
+  CLAWHUB_SKILLS_SH_REF_PREFIX,
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
   fetchClawHubSkillCard,
-  fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -33,6 +33,7 @@ import {
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
+  verifySkillWithClawHub,
 } from "../skills/lifecycle/clawhub.js";
 import {
   installSkillFromSource,
@@ -68,6 +69,7 @@ import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -445,13 +447,14 @@ async function runSkillProposalApply(
 ): Promise<SkillProposalApplyResult> {
   const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
     await import("../gateway/call.js");
+  let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
-    await callGateway({
+    proposal = await callGateway<SkillProposalReadResult>({
       config: resolved.config,
-      method: "health",
-      params: {},
+      method: "skills.proposals.inspect",
+      params: { agentId: resolved.agentId, proposalId },
       timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
@@ -484,12 +487,20 @@ async function runSkillProposalApply(
       throw err;
     }
     try {
+      const reviewedProposal = await inspectSkillProposal(proposalId, {
+        agentId: resolved.agentId,
+        workspaceDir: resolved.workspaceDir,
+      });
+      if (!reviewedProposal) {
+        throw new Error(`Skill proposal not found: ${proposalId}`, { cause: err });
+      }
       return await applySkillProposal({
         agentId: resolved.agentId,
         eventActor: { type: "system", id: "cli" },
         workspaceDir: resolved.workspaceDir,
         config: resolved.config,
         proposalId,
+        expectedRevisionHash: reviewedProposal.revisionHash,
       });
     } finally {
       await lock.release();
@@ -499,7 +510,11 @@ async function runSkillProposalApply(
   return await callGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
-    params: { agentId: resolved.agentId, proposalId },
+    params: {
+      agentId: resolved.agentId,
+      proposalId,
+      expectedRevisionHash: proposal.revisionHash,
+    },
     timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
@@ -595,7 +610,7 @@ export function registerSkillsCli(program: Command) {
           const installRef = normalizeOptionalString(entry.installRef);
           const skillRef = formatClawHubSearchText(installRef ?? entry.slug);
           const isExternalSource =
-            installRef?.startsWith("skills-sh:") === true &&
+            installRef?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX) === true &&
             entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE;
           const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
           const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
@@ -704,7 +719,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          if (slug.trim().startsWith("skills-sh:") && opts.version) {
+          if (slug.trim().startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX) && opts.version) {
             defaultRuntime.error("--version is not supported for skills-sh references.");
             defaultRuntime.exit(1);
             return;
@@ -874,7 +889,7 @@ export function registerSkillsCli(program: Command) {
         let exitCode: number | undefined;
         const reportError =
           hasJsonOutput(opts) || opts.card !== true
-            ? (message: string) => defaultRuntime.writeJson({ error: message })
+            ? (message: string) => defaultRuntime.writeJson(formatCliJsonFailure(message))
             : defaultRuntime.error;
         try {
           const workspace = resolveClawHubTargetWorkspace(command, opts, reportError);
@@ -891,7 +906,7 @@ export function registerSkillsCli(program: Command) {
             reportError(target.error);
             exitCode = 1;
           } else {
-            const verification = await fetchClawHubSkillVerification({
+            const result = await verifySkillWithClawHub({
               slug: target.slug,
               ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               ...(target.requestedReference
@@ -901,7 +916,11 @@ export function registerSkillsCli(program: Command) {
               tag: target.tag,
               baseUrl: target.baseUrl,
             });
-            if (opts.card && !hasJsonOutput(opts)) {
+            if (!result.ok) {
+              reportError(result.error);
+              exitCode = 1;
+            } else if (opts.card && !hasJsonOutput(opts)) {
+              const verification = result.value;
               const cardUrl = readVerifiedSkillCardUrl(verification);
               if (!cardUrl.ok) {
                 reportError(cardUrl.error);
@@ -915,6 +934,7 @@ export function registerSkillsCli(program: Command) {
                 exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
               }
             } else {
+              const verification = result.value;
               defaultRuntime.writeJson(buildSkillVerificationOutput(verification, target));
               exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
             }
@@ -944,6 +964,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(formatSkillCuratorStatus(status));
     } catch (err) {
+      rethrowExpectedCliError(err);
       defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
@@ -970,6 +991,7 @@ export function registerSkillsCli(program: Command) {
             `${action[0]?.toUpperCase()}${action.slice(1)} ${result.skillKey}\n`,
           );
         } catch (err) {
+          rethrowExpectedCliError(err);
           defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
@@ -1003,6 +1025,7 @@ export function registerSkillsCli(program: Command) {
       }
       defaultRuntime.writeStdout(format(result));
     } catch (err) {
+      rethrowExpectedCliError(err);
       defaultRuntime.error(formatErrorMessage(err));
       defaultRuntime.exit(1);
     }
@@ -1217,14 +1240,23 @@ export function registerSkillsCli(program: Command) {
           runWorkshopAction(
             opts,
             command,
-            ({ agentId, workspaceDir }) =>
-              action({
+            async ({ agentId, workspaceDir }) => {
+              const reviewed =
+                name === "reject"
+                  ? await inspectSkillProposal(proposalId, { agentId, workspaceDir })
+                  : undefined;
+              if (name === "reject" && !reviewed) {
+                throw new Error(`Skill proposal not found: ${proposalId}`);
+              }
+              return action({
                 agentId,
                 eventActor: { type: "system", id: "cli" },
                 workspaceDir,
                 proposalId,
+                ...(reviewed ? { expectedRevisionHash: reviewed.revisionHash } : {}),
                 reason: opts.reason,
-              }),
+              });
+            },
             (record) => `${verb} ${record.id}\n`,
           ),
       );

@@ -99,8 +99,11 @@ vi.mock("./doctor-workspace.js", async (importOriginal) => {
   };
 });
 
-import { noteMemorySearchHealth } from "./doctor-memory-search.js";
-import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
+import {
+  noteMemorySearchHealth,
+  maybeRepairMemoryRecallHealth,
+  noteMemoryRecallHealth,
+} from "./doctor-memory-search.js";
 import { formatRootMemoryFilesWarning } from "./doctor-workspace.js";
 
 function shortTermAudit(overrides: Record<string, unknown> = {}) {

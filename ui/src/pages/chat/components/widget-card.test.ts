@@ -485,19 +485,17 @@ describe("widget-card presentation", () => {
     } as unknown as BoardProvider;
   }
 
-  it("drops the panel inset for non-card pinned presentations", () => {
+  it("keeps widget content edge-to-edge with controls outside a visible header", () => {
     const host = document.createElement("div");
     render(
       renderToolPreview(preview, "chat_message", { boardProvider: providerWith("full-bleed") }),
       host,
     );
-    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
-      true,
-    );
-
-    render(renderToolPreview(preview, "chat_message", { boardProvider: providerWith() }), host);
-    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
-      false,
+    expect(host.querySelector(".chat-tool-card__preview-header")).toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-label")).toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-actions")).not.toBeNull();
+    expect(host.querySelector(".chat-tool-card__preview-frame")?.getAttribute("title")).toBe(
+      "Clock",
     );
   });
 });

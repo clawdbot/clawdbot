@@ -5,9 +5,9 @@
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import { terminalDocumentPath } from "../../app/terminal-document-mode.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
@@ -61,6 +61,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
   /** Agent whose workspace and sandbox policy own newly opened sessions. */
   @property({ attribute: false }) agentId: string | null = null;
+  /** Conversation that owns newly opened session-scoped terminals. */
+  @property({ attribute: false }) sessionKey: string | null = null;
   /** Whether the connected gateway advertises the terminal surface. */
   @property({ type: Boolean }) available = false;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
@@ -70,14 +72,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   /** Configured Control UI mount prefix used by document links. */
   @property({ attribute: false }) basePath = "";
   /**
-   * Terminal-only document mode (`/terminal` or `?view=terminal`): fills the
+   * Focused terminal document mode (`/focus/terminal`): fills the
    * viewport, stays open while available, and omits dock chrome.
    */
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
-  /** Shell instance reserved for a terminal explicitly moved below a chat session. */
-  @property({ type: Boolean }) sessionBottomOnly = false;
 
   @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
@@ -126,6 +126,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   private readonly onDocumentPointerDown = (event: PointerEvent) =>
     this.handleDocumentPointerDown(event);
 
+  private get sessionBottomOnly(): boolean {
+    return !this.embedded && this.sessionKey !== null;
+  }
+
   override connectedCallback(): void {
     super.connectedCallback();
     this.terminalSessions.connectHost();
@@ -155,7 +159,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if ((changed.has("embedded") || changed.has("sessionBottomOnly")) && !this.fullscreen) {
+    if ((changed.has("embedded") || changed.has("sessionKey")) && !this.fullscreen) {
       if (this.embedded || this.sessionBottomOnly) {
         window.removeEventListener("keydown", this.onGlobalKeyDown);
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
@@ -262,10 +266,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     return this.dockLayout.restoreOpenState();
   }
 
-  clearTerminalPanelResizeListeners(): void {
-    this.dockLayout.clearResizeListeners();
-  }
-
   private handleGlobalKey(event: KeyboardEvent): void {
     // Ctrl+` toggles the terminal, matching common IDE shells.
     if (isTerminalPanelShortcut(event)) {
@@ -365,7 +365,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private openFullscreen(): void {
-    openExternalUrlSafe(terminalDocumentPath(this.basePath));
+    const focusPath = buildControlUiFocusPath({ kind: "terminal" }, this.basePath);
+    if (focusPath) {
+      openExternalUrlSafe(focusPath);
+    }
   }
 
   resetTerminalSessionPicker(): void {
@@ -376,6 +379,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   findTerminalPanelViewport(): Element | null {
     return this.renderRoot.querySelector(".tp-viewport");
+  }
+
+  private retryTerminalOpen(): void {
+    this.terminalPanelErrorText = null;
+    this.terminalSessions.openRetry.run();
   }
 
   override render() {
@@ -400,6 +408,14 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
+    const terminalError = this.terminalPanelErrorText
+      ? {
+          text: this.terminalPanelErrorText,
+          retry: this.terminalSessions.openRetry.available
+            ? () => this.retryTerminalOpen()
+            : undefined,
+        }
+      : null;
     const sessionPicker = renderTerminalSessionPicker({
       open: this.sessionPickerOpen,
       loading: this.sessionPickerTask.status === TaskStatus.PENDING,
@@ -443,12 +459,12 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           },
           () => void this.terminalSessions.openSession(),
         )}
-        ${renderTerminalPanelViewport(
-          this.terminalSessions.activeId,
+        ${renderTerminalPanelViewport({
+          activeId: this.terminalSessions.activeId,
           connecting,
-          this.terminalPanelErrorText,
-          this.terminalPanelUploadController,
-        )}
+          error: terminalError,
+          uploadController: this.terminalPanelUploadController,
+        })}
       </section>
     `;
   }

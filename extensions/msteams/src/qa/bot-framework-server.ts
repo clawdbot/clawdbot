@@ -17,6 +17,8 @@ type ServerOptions = {
   onOutbound: (activity: MSTeamsQaOutboundActivity) => Promise<void>;
 };
 
+const AMBIGUOUS_GATEWAY_TIMEOUT_MARKER = "QA-MSTEAMS-AMBIGUOUS-504";
+
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -72,7 +74,16 @@ export async function startMSTeamsQaBotFrameworkServer(options: ServerOptions) {
         conversationId: route.conversationId,
         ...(route.threadId ? { threadId: route.threadId } : {}),
       });
-      sendJson(response, 200, { id: activityId });
+      // This fixture records the accepted activity before returning 504, modeling a gateway
+      // timeout whose upstream side effect cannot safely be replayed by the Teams adapter.
+      const acceptedButTimedOut =
+        typeof activity.text === "string" &&
+        activity.text.includes(AMBIGUOUS_GATEWAY_TIMEOUT_MARKER);
+      sendJson(
+        response,
+        acceptedButTimedOut ? 504 : 200,
+        acceptedButTimedOut ? { error: "gateway timeout after acceptance" } : { id: activityId },
+      );
     })().catch((error: unknown) => {
       sendJson(response, 500, {
         error: coerceErrorMessage(error),

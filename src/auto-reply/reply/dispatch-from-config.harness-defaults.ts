@@ -13,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -24,7 +25,6 @@ import {
   loadSessionStoreEntry,
   resolveSessionStorePathCore,
 } from "./dispatch-from-config.runtime.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
 
@@ -263,6 +263,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
+      agentId: params.sessionAgentId,
       defaultProvider: defaultModelRef.provider,
     });
     const parentSessionKey = resolveHarnessDefaultParentSessionKey(params);

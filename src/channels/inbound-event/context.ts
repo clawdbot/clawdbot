@@ -24,8 +24,10 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
-import type { ChannelIngressCommandAccess } from "../message-access/runtime-types.js";
-import type { ResolvedChannelMessageIngress } from "../message-access/runtime-types.js";
+import type {
+  ChannelIngressCommandAccess,
+  ResolvedChannelMessageIngress,
+} from "../message-access/runtime-types.js";
 import type {
   CommandFacts,
   ConversationFacts,
@@ -576,6 +578,7 @@ function buildChannelInboundEventContextValue(
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
+    ConversationAvatar: params.conversation.avatar,
     ChannelContext: params.channelContext,
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,

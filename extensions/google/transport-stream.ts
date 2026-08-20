@@ -4,6 +4,7 @@ import {
   calculateCost,
   getEnvApiKey,
   resolveProviderContext,
+  type AssistantMessage,
   type Context,
   type Model,
   type ProviderCallStreamOptions,
@@ -131,24 +132,9 @@ type GoogleTransportContentBlock =
       thoughtSignature?: string;
     };
 
-type MutableAssistantOutput = {
-  role: "assistant";
+type MutableAssistantOutput = Omit<AssistantMessage, "api" | "content"> & {
   content: Array<GoogleTransportContentBlock>;
   api: CanonicalGoogleTransportApi;
-  provider: string;
-  model: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  errorMessage?: string;
 };
 
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
@@ -1389,7 +1375,7 @@ function pushTextBlockEnd(
       type: "thinking_end",
       contentIndex: blockIndex,
       content: block.thinking,
-      partial: output as never,
+      partial: output,
     });
     return;
   }
@@ -1398,7 +1384,7 @@ function pushTextBlockEnd(
       type: "text_end",
       contentIndex: blockIndex,
       content: block.text,
-      partial: output as never,
+      partial: output,
     });
   }
 }
@@ -1469,7 +1455,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 execute: openSse,
               })
             : await openSse(apiKey);
-        stream.push({ type: "start", partial: output as never });
+        stream.push({ type: "start", partial: output });
         let currentBlockIndex = -1;
         let sawTerminalReason = false;
         let terminalGenerationError: Error | undefined;
@@ -1510,7 +1496,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             for (const part of candidate.content.parts) {
               const hasThoughtSignature =
                 typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
-              const hasText = typeof part.text === "string";
+              const rawText = part.text;
+              const hasText = typeof rawText === "string";
+              const partText = typeof rawText === "string" ? rawText : "";
               if (hasText || (hasThoughtSignature && !part.functionCall)) {
                 if (hasThoughtSignature && !hasText && part.thought !== true) {
                   const latestBlock = output.content[output.content.length - 1];
@@ -1539,7 +1527,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                     stream.push({
                       type: "thinking_start",
                       contentIndex: currentBlockIndex,
-                      partial: output as never,
+                      partial: output,
                     });
                   } else {
                     output.content.push({ type: "text", text: "" });
@@ -1547,14 +1535,13 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                     stream.push({
                       type: "text_start",
                       contentIndex: currentBlockIndex,
-                      partial: output as never,
+                      partial: output,
                     });
                   }
                 }
                 const activeBlock = output.content[currentBlockIndex];
                 if (activeBlock?.type === "thinking") {
-                  const delta = hasText ? part.text : "";
-                  activeBlock.thinking += delta;
+                  activeBlock.thinking += partText;
                   activeBlock.thinkingSignature = retainThoughtSignature(
                     activeBlock.thinkingSignature,
                     part.thoughtSignature,
@@ -1562,11 +1549,11 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   stream.push({
                     type: "thinking_delta",
                     contentIndex: currentBlockIndex,
-                    delta,
-                    partial: output as never,
+                    delta: partText,
+                    partial: output,
                   });
                 } else if (activeBlock?.type === "text") {
-                  activeBlock.text += part.text;
+                  activeBlock.text += partText;
                   activeBlock.textSignature = retainThoughtSignature(
                     activeBlock.textSignature,
                     part.thoughtSignature,
@@ -1574,8 +1561,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   stream.push({
                     type: "text_delta",
                     contentIndex: currentBlockIndex,
-                    delta: part.text,
-                    partial: output as never,
+                    delta: partText,
+                    partial: output,
                   });
                 }
               }
@@ -1607,19 +1594,19 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 stream.push({
                   type: "toolcall_start",
                   contentIndex: blockIndex,
-                  partial: output as never,
+                  partial: output,
                 });
                 stream.push({
                   type: "toolcall_delta",
                   contentIndex: blockIndex,
                   delta: JSON.stringify(toolCall.arguments),
-                  partial: output as never,
+                  partial: output,
                 });
                 stream.push({
                   type: "toolcall_end",
                   contentIndex: blockIndex,
                   toolCall,
-                  partial: output as never,
+                  partial: output,
                 });
               }
             }
@@ -1663,7 +1650,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
-    return eventStream as unknown as ReturnType<StreamFn>;
+    return eventStream;
   };
 }
 

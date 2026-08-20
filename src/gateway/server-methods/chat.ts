@@ -43,7 +43,6 @@ export {
 export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 export {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
 } from "./chat-history-budget.js";

@@ -104,6 +104,20 @@ describe("sandbox/tool-policy", () => {
     ).toBe(true);
   });
 
+  it.each([["image"], ["image*"]] as const)(
+    "keeps legacy %s denies fail-closed for view_image until Doctor migrates them",
+    (legacyDeny) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { sandbox: { mode: "all", scope: "agent" } } },
+        tools: { sandbox: { tools: { allow: ["read"], deny: [legacyDeny] } } },
+      };
+
+      const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
+      expect(resolved.deny).toContain("view_image");
+      expect(isToolAllowed(resolved, "view_image")).toBe(false);
+    },
+  );
+
   it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
     // An empty allowlist means allow all except denies; alsoAllow should only
     // remove matching default denies, not turn allow-all into allow-some.

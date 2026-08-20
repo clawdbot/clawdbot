@@ -12,6 +12,7 @@ import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../.
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
@@ -24,6 +25,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import "../../styles/plugins.css";
@@ -227,6 +229,16 @@ function activeSkillMutation(props: SkillsProps, skillKey: string): boolean {
 
 function activeClawHubMutation(props: SkillsProps, ref: string): boolean {
   return props.operation?.kind === "clawhub" && props.operation.ref === ref;
+}
+
+function installedClawHubSearchResult(props: SkillsProps, result: ClawHubSearchResult): boolean {
+  if (result.installOnly !== true) {
+    return false;
+  }
+  const reference = clawHubSkillRef(result);
+  return (props.report?.skills ?? []).some(
+    (skill) => skill.clawhub?.valid === true && skill.clawhub.requestedReference === reference,
+  );
 }
 
 export function renderSkills(props: SkillsProps) {
@@ -456,36 +468,52 @@ function renderClawHubResults(props: SkillsProps) {
     ${results.map((r) => {
       const iconUrl = safeExternalHref(r.icon ?? undefined);
       // Same slug can appear once per publisher, so the reference is the only thing that tells
-      // otherwise identical rows apart — and it is what detail and install send back.
+      // otherwise identical rows apart — and it is what install sends back.
       const ref = clawHubSkillRef(r);
+      // Detail stays available unless the result is explicitly install-only, so results from a
+      // gateway that predates the flag keep the review-then-install flow.
+      const detailRef = r.installOnly ? undefined : ref;
+      const installed = installedClawHubSearchResult(props, r);
+      const trustSuffix = r.trustState ? ` · ${t("skillsPage.notScannedByClawHub")}` : "";
+      const rowCopy = html`
+        ${iconUrl
+          ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
+          : nothing}
+        <span class="clawhub-skill-result__copy">
+          <span class="settings-row__title">${r.displayName}</span>
+          <span class="settings-row__desc">
+            ${r.summary ? `${clampText(r.summary, 100)} · ${ref}` : ref}${trustSuffix}
+          </span>
+        </span>
+      `;
       return html`
-        <div class="settings-row plugins-item plugins-item--clickable">
-          <button
-            type="button"
-            class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
-            aria-label=${t("skillsPage.openDetails", { name: ref })}
-            @click=${() => props.onClawHubDetailOpen(ref)}
-          >
-            ${iconUrl
-              ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
-              : nothing}
-            <span class="clawhub-skill-result__copy">
-              <span class="settings-row__title">${r.displayName}</span>
-              <span class="settings-row__desc">
-                ${r.summary ? `${clampText(r.summary, 100)} · ${ref}` : ref}
-              </span>
-            </span>
-          </button>
+        <div class="settings-row plugins-item ${detailRef ? "plugins-item--clickable" : ""}">
+          ${detailRef
+            ? html`<button
+                type="button"
+                class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
+                aria-label=${t("skillsPage.openDetails", { name: detailRef })}
+                @click=${() => props.onClawHubDetailOpen(detailRef)}
+              >
+                ${rowCopy}
+              </button>`
+            : html`<div class="settings-row__text clawhub-skill-result__button">${rowCopy}</div>`}
           <div class="settings-row__control">
             ${r.version ? renderSettingsValue(`v${r.version}`) : nothing}
             <button
               class="btn btn--sm"
-              ?disabled=${skillInstallLocked(props)}
-              @click=${() => props.onClawHubInstall(ref)}
+              ?disabled=${installed || skillInstallLocked(props)}
+              @click=${() => {
+                if (!installed) {
+                  props.onClawHubInstall(ref);
+                }
+              }}
             >
-              ${activeClawHubMutation(props, ref)
-                ? t("skillsPage.installing")
-                : t("skillsPage.install")}
+              ${installed
+                ? t("skillsPage.installed")
+                : activeClawHubMutation(props, ref)
+                  ? t("skillsPage.installing")
+                  : t("skillsPage.install")}
             </button>
           </div>
         </div>
@@ -741,7 +769,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
 
           ${message
             ? html`<div class="callout ${message.kind === "error" ? "danger" : "success"}">
-                ${message.message}
+                ${formatUiExternalText(message.message)}
               </div>`
             : nothing}
           ${skill.primaryEnv
@@ -821,11 +849,13 @@ function renderInstalledClawHubOverview(
   if (link.status === "invalid") {
     return html`<div class="callout danger">
       <div style="font-weight: 600; margin-bottom: 4px;">${t("skillsPage.invalidLink")}</div>
-      <div>${link.reason}</div>
+      <div>${formatUiExternalText(link.reason)}</div>
     </div>`;
   }
   const auditHref = safeExternalHref(verdict?.securityAuditUrl ?? undefined);
-  const reasonText = verdict?.reasons?.length ? verdict.reasons.join(", ") : null;
+  const reasonText = verdict?.reasons?.length
+    ? formatUiExternalText(verdict.reasons.join(", "))
+    : null;
   const installedRef = `${link.ownerHandle ? `@${link.ownerHandle}/` : ""}${link.slug}@${link.installedVersion}`;
   return html`
     <div
@@ -873,7 +903,11 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     </div>`;
   }
   return html`
-    <article class="sidebar-markdown" style="max-width: 100%; overflow-wrap: anywhere;">
+    <article
+      class="sidebar-markdown"
+      style="max-width: 100%; overflow-wrap: anywhere;"
+      @click=${handleMarkdownCodeBlockClick}
+    >
       ${unsafeHTML(toSanitizedMarkdownHtml(content))}
     </article>
   `;

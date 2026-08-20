@@ -93,7 +93,6 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
   tailscale?: TailscaleMode;
-  tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
   skipChannels?: boolean;

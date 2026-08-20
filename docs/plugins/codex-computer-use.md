@@ -38,7 +38,7 @@ available before the turn starts.
 The iOS app is separate from Codex Computer Use. It does not install or proxy
 the Codex `computer-use` MCP server and it is not a desktop-control backend.
 Instead, the iOS app connects as an OpenClaw node and exposes mobile
-capabilities through node commands such as `canvas.*`, `camera.*`, `screen.*`,
+capabilities through node commands such as `camera.*`, `screen.*`,
 `location.*`, and `talk.*`.
 
 Use [iOS](/platforms/ios) when you want an agent to drive an iPhone node
@@ -108,9 +108,19 @@ With this config, OpenClaw checks Codex app-server before each Codex-mode
 turn. If Computer Use is missing but Codex app-server has already discovered
 an installable marketplace, OpenClaw asks Codex app-server to install or
 re-enable the plugin and reload MCP servers. Before starting an isolated
-Codex app-server on macOS, auto-install also copies the official signed
+Codex app-server on macOS, auto-install also provisions the official signed
 Computer Use service app from the selected desktop app bundle into that
-Codex home's `computer-use` directory when the native client is missing.
+Codex home's `computer-use` directory. OpenClaw verifies the outer service and
+nested client signatures, bundle identities, versions, builds, and code hashes.
+It installs a missing or incomplete copy, or stages and verifies a replacement
+before swapping out a complete copy whose signed identity no longer matches the
+selected desktop distribution. Failed swaps roll back without changing the
+rest of the isolated Codex home. This native-app synchronization runs only for
+OpenClaw-owned isolated agent homes. User-scoped homes and explicit
+`CODEX_HOME` overrides retain their existing native bundle ownership.
+The agent directory is the trusted ownership boundary. Within it, native-service
+provisioning rejects symlinked Codex-home, `computer-use`, and service-app paths,
+and revalidates the owned parent around each staged swap.
 On macOS, when no matching
 marketplace is registered and a standard desktop app bundle exists, OpenClaw
 also tries to register the bundled Codex marketplace from
@@ -145,7 +155,10 @@ OpenClaw serializes native Codex config reads and Computer Use installation
 inside one running Gateway. A separate Codex process or another Gateway is not
 part of that fence. After changing native Codex plugin config outside the
 Gateway, restart the Gateway and start a new chat before relying on the new
-selection.
+selection. Restart the Gateway after updating the selected ChatGPT or Codex
+desktop app as well; cold app-server startup then verifies and, when needed,
+refreshes each isolated home's signed Computer Use service before launching it.
+Warm clients are intentionally not polled for desktop bundle changes.
 
 ## Commands
 

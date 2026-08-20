@@ -127,9 +127,32 @@ const report: HookStatusReport = {
 const { registerHooksCli } = await import("./hooks-cli.js");
 
 function createHooksProgram(): Command {
-  const program = new Command();
+  const program = new Command().enablePositionalOptions();
   registerHooksCli(program);
   return program;
+}
+
+function configureExplicitFleet() {
+  const config = {
+    ...sourceConfig,
+    agents: {
+      ownership: "explicit" as const,
+      list: [
+        { id: "main", workspace: "/tmp/openclaw-main-workspace" },
+        { id: "research", workspace: "/tmp/openclaw-research-workspace" },
+      ],
+    },
+  };
+  mocks.getRuntimeConfig.mockReturnValue(config);
+  mocks.listAgentIds.mockReturnValue(["main", "research"]);
+  mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue(undefined);
+  mocks.resolveDefaultAgentId.mockImplementation(() => {
+    throw new Error("selection required");
+  });
+  mocks.resolveAgentWorkspaceDir.mockImplementation(
+    (_config: unknown, agentId: string) => `/tmp/openclaw-${agentId}-workspace`,
+  );
+  return config;
 }
 
 describe("hooks CLI metadata config keys", () => {
@@ -337,35 +360,62 @@ describe("hooks CLI metadata config keys", () => {
     }
   });
 
-  it("rejects a parent --agent for hook writes", async () => {
+  it.each([
+    ["enable", ["hooks", "--agent", "research", "enable", "display-name"], true],
+    ["enable", ["hooks", "enable", "display-name", "--agent", "research"], true],
+    ["disable", ["hooks", "--agent", "research", "disable", "display-name"], false],
+    ["disable", ["hooks", "disable", "display-name", "--agent", "research"], false],
+  ])("uses --agent for %s hook discovery", async (_label, argv, enabled) => {
+    const explicitFleet = configureExplicitFleet();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      sourceConfig: explicitFleet,
+      hash: "config-hash",
+    });
+
+    await createHooksProgram().parseAsync(argv, { from: "user" });
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(explicitFleet, "research");
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        ...explicitFleet,
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: {
+              "metadata-key": {
+                env: { HOOK_ENV: "preserved" },
+                enabled,
+              },
+            },
+          },
+        },
+      },
+      baseHash: "config-hash",
+    });
+  });
+
+  it("leaves config unchanged when the selected hook agent is invalid", async () => {
+    const explicitFleet = configureExplicitFleet();
+    const initialConfig = structuredClone(explicitFleet);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      sourceConfig: explicitFleet,
+      hash: "config-hash",
+    });
+
     await expect(
-      createHooksProgram().parseAsync(["hooks", "--agent", "research", "enable", "display-name"], {
+      createHooksProgram().parseAsync(["hooks", "enable", "display-name", "--agent", "retired"], {
         from: "user",
       }),
-    ).rejects.toThrow("does not support --agent");
+    ).rejects.toThrow("__exit__:1");
 
+    expect(capture.runtimeErrors.at(-1)).toContain('Unknown agent id "retired"');
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(explicitFleet).toEqual(initialConfig);
   });
 
   it("keeps the explicit owner in the offline hooks fallback", async () => {
-    const explicitFleet = {
-      agents: {
-        ownership: "explicit",
-        list: [
-          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
-          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
-        ],
-      },
-    };
-    mocks.getRuntimeConfig.mockReturnValue(explicitFleet);
-    mocks.listAgentIds.mockReturnValue(["ops", "research"]);
-    mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue(undefined);
-    mocks.resolveDefaultAgentId.mockImplementation(() => {
-      throw new Error("selection required");
-    });
-    mocks.resolveAgentWorkspaceDir.mockImplementation(
-      (_config: unknown, agentId: string) => `/tmp/openclaw-${agentId}-workspace`,
-    );
+    const explicitFleet = configureExplicitFleet();
 
     await createHooksProgram().parseAsync(["hooks", "list", "--agent", "research", "--json"], {
       from: "user",

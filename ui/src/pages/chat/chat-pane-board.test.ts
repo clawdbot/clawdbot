@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -11,6 +12,7 @@ import {
   type BoardProvider,
 } from "../../lib/board/provider.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -26,6 +28,8 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   paneId: string;
+  presented: boolean;
+  presentedChanged: (presented: boolean) => void;
   sessionKey: string;
   resetConfirmationOpen: boolean;
   routeFace: "chat" | "dashboard";
@@ -62,7 +66,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
     sessions,
-    gateway: { snapshot: { client, phase: "connected" } },
+    gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
   pane.state = {
     chatError: null,
@@ -181,7 +185,7 @@ describe("chat pane board shell", () => {
     pane.state.client = client;
     pane.context = {
       ...pane.context,
-      gateway: { snapshot: { client, phase: "connected" } },
+      gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
     pane.boardProvider = mockBoardProvider("agent:main:current");
@@ -318,6 +322,24 @@ describe("chat pane board shell", () => {
     });
   });
 
+  it("does not publish a board dock failure after leaving and returning", async () => {
+    const pane = createTestPane();
+    const provider = mockBoardProvider("agent:main:stale-board-outcome");
+    const applied = createDeferred<never>();
+    const applyOps = vi.spyOn(provider, "applyOps").mockReturnValue(applied.promise);
+    pane.boardProvider = provider;
+    pane.presentedChanged = () => undefined;
+
+    pane.handleBoardDockChange("left");
+    pane.presented = false;
+    pane.presented = true;
+    applied.reject(new Error("stale board dock failed"));
+    await applied.promise.catch(() => undefined);
+    await vi.waitFor(() => expect(applyOps).toHaveBeenCalledOnce());
+
+    expect(pane.state.lastError).toBeNull();
+    expect(pane.state.chatError).toBeNull();
+  });
   it("activates an existing tabbed chat panel when reopening a side dock", () => {
     const pane = createTestPane();
     const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");

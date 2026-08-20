@@ -1,6 +1,7 @@
 /** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
@@ -693,6 +694,50 @@ describe("AcpSessionManager", () => {
       message: "ACP operation aborted.",
     });
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the exact elicitation closure with the manager-composed turn signal", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    let captured: AcpRuntimeTurnInput | undefined;
+    runtimeState.runTurn.mockImplementationOnce(async function* (input) {
+      captured = input;
+      await new Promise<void>((resolve) => {
+        input.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done" as const, status: "cancelled" as const };
+    });
+    const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
+    const caller = new AbortController();
+    const manager = new AcpSessionManager();
+
+    const turn = manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "ask",
+      mode: "prompt",
+      requestId: "r-elicitation",
+      signal: caller.signal,
+      onElicitation,
+    });
+    await vi.waitFor(() => expect(captured).toBeDefined());
+
+    expect(captured?.onElicitation).toBe(onElicitation);
+    expect(captured?.signal).not.toBe(caller.signal);
+    expect(captured?.signal?.aborted).toBe(false);
+
+    caller.abort();
+    await turn;
+    expect(captured?.signal?.aborted).toBe(true);
   });
 
   it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {

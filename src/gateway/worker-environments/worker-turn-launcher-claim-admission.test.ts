@@ -3,8 +3,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerTurnLaunchRequest } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -146,10 +147,16 @@ describe("worker turn launcher claim admission", () => {
       },
     });
     placements.markWorkspaceResultPending(priorClaim);
+    placements.startWorkspaceResultDrain(priorClaim);
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementationOnce(async () => {
       placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
       placements.acceptWorkspaceResult(priorClaim);
-      placements.completeWorkspaceResultAndReleaseTurn(priorClaim, { reclaim: true });
+      completeReclaimedWorkspaceTeardown({
+        placements,
+        turnClaim: priorClaim,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      });
     });
     const provider = createWorkerSessionTurnPlacementProvider({
       environments: unusedEnvironments(),
@@ -184,7 +191,7 @@ describe("worker turn launcher claim admission", () => {
       killed: false;
       termination: "exit";
     }>();
-    const launchTurn = vi.fn((request: Parameters<WorkerTunnelHandle["launchTurn"]>[0]) => {
+    const launchTurn = vi.fn((request: WorkerTurnLaunchRequest) => {
       request.onDispatchReady?.();
       commandStarted.resolve();
       return commandFinished.promise;
@@ -245,11 +252,17 @@ describe("worker turn launcher claim admission", () => {
         timestamp: 31,
       }),
     );
+    const launchRequest = launchTurn.mock.calls[0]?.[0];
+    if (!launchRequest) {
+      throw new Error("expected worker launch request");
+    }
+    expect(launchRequest.plan.assignment).toMatchObject({
+      workspaceDir: "/worker/workspace",
+      permissionMode: "workspace",
+      workerContainmentRoot: "/worker/workspace",
+    });
     createWorkerSessionPlacementGate(placements).updateAckCursors({
-      sessionId: SESSION_ID,
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      runId: "run-overlap",
+      claim: launchRequest.turnClaim,
       transcriptSeq: 2,
       liveSeq: 1,
     });
@@ -328,10 +341,7 @@ describe("worker turn launcher claim admission", () => {
               }),
             );
             createWorkerSessionPlacementGate(placements).updateAckCursors({
-              sessionId: SESSION_ID,
-              environmentId: ENVIRONMENT_ID,
-              ownerEpoch: OWNER_EPOCH,
-              runId: "run-model-failed",
+              claim: request.turnClaim,
               transcriptSeq: 2,
               liveSeq: 1,
             });
@@ -357,10 +367,7 @@ describe("worker turn launcher claim admission", () => {
             }),
           );
           createWorkerSessionPlacementGate(placements).updateAckCursors({
-            sessionId: SESSION_ID,
-            environmentId: ENVIRONMENT_ID,
-            ownerEpoch: OWNER_EPOCH,
-            runId: "run-model-recovered",
+            claim: request.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
           });

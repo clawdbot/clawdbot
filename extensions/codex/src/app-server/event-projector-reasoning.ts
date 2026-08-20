@@ -19,6 +19,7 @@ type ReasoningTextGroup = {
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type PlanUpdateSource = "codex-app-server" | "openclaw";
+type NativePlanUpdate = { markdown?: string; steps: AgentPlanStep[] };
 
 export class CodexReasoningProjection {
   private readonly reasoningTextByGroup = new Map<string, ReasoningTextGroup>();
@@ -31,6 +32,7 @@ export class CodexReasoningProjection {
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly emitAgentEvent: (event: AgentEvent) => void,
+    private readonly onNativePlanUpdate?: (update: NativePlanUpdate) => void | Promise<void>,
   ) {}
 
   async handleReasoningDelta(method: ReasoningDeltaMethod, params: JsonObject): Promise<void> {
@@ -76,7 +78,10 @@ export class CodexReasoningProjection {
     });
   }
 
-  handleTurnPlanUpdated(params: JsonObject, source: PlanUpdateSource = "codex-app-server"): void {
+  async handleTurnPlanUpdated(
+    params: JsonObject,
+    source: PlanUpdateSource = "codex-app-server",
+  ): Promise<void> {
     const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
@@ -101,6 +106,12 @@ export class CodexReasoningProjection {
       // Structured turn updates are the canonical latest plan. Retain the last
       // non-empty update so the terminal transcript proves planning occurred.
       this.turnPlanText = planText;
+    }
+    if (source === "codex-app-server" && plan) {
+      await this.onNativePlanUpdate?.({
+        ...(typeof explanation === "string" ? { markdown: explanation } : {}),
+        steps: plan,
+      });
     }
     this.emitPlanUpdate(
       {
@@ -146,7 +157,7 @@ export class CodexReasoningProjection {
     params: { explanation?: string | null; steps?: AgentPlanStep[] },
     source: PlanUpdateSource = "codex-app-server",
   ): void {
-    if (!params.explanation && (!params.steps || params.steps.length === 0)) {
+    if (!params.explanation && params.steps === undefined) {
       return;
     }
     this.emitAgentEvent({
@@ -156,7 +167,7 @@ export class CodexReasoningProjection {
         title: "Plan updated",
         source,
         ...(params.explanation ? { explanation: params.explanation } : {}),
-        ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
+        ...(params.steps ? { steps: params.steps } : {}),
       },
     });
   }
