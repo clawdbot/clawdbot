@@ -5,7 +5,6 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildRemoteCommand, sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
-import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
 import { resolveExecServerPath } from "./path-uri.js";
@@ -20,7 +19,7 @@ const CLOSED_PROCESS_EVICTION_MS = 60_000;
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
-  socket: WebSocket,
+  notify: ManagedProcess["emitNotification"],
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "process/start params");
@@ -48,11 +47,7 @@ export async function startProcess(
     terminationRequested: false,
     child: null,
     waiters: [],
-    emitNotification: (method, notificationParams) => {
-      if (socket.readyState === 1) {
-        socket.send(JSON.stringify({ jsonrpc: "2.0", method, params: notificationParams }));
-      }
-    },
+    emitNotification: notify,
     evictProcess: () => {
       if (managed.evictionTimer) {
         return;
@@ -91,10 +86,7 @@ async function runProcess(
   managed: ManagedProcess,
   params: { argv: string[]; cwd: string; env: Record<string, string> },
 ): Promise<void> {
-  const backend = execServer.sandbox.backend;
-  if (!backend) {
-    throw new Error("OpenClaw sandbox backend is unavailable.");
-  }
+  const backend = execServer.backend;
   throwIfProcessStartCancelled(managed);
   const remoteExec = prepareSandboxChildExec(backend, params.env);
   const execSpec = await backend.buildExecSpec({

@@ -21,6 +21,7 @@ import {
 } from "./config.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   resetCodexTestBindingStore,
@@ -723,7 +724,7 @@ describe("startCodexAttemptThread", () => {
     );
   });
 
-  it("requires app-server environment support for remote-exec placement", async () => {
+  it("propagates environment registration failures for remote-exec placement", async () => {
     const sandbox = {
       ...createSandboxContext({}),
       placementExecutionMode: "remote-exec" as const,
@@ -735,12 +736,11 @@ describe("startCodexAttemptThread", () => {
     const environmentAdd = await waitForRequest(harness, "environment/add");
     harness.send({
       id: environmentAdd.id,
-      error: { code: -32601, message: "unknown variant environment/add" },
+      error: { code: -32603, message: "environment registration failed" },
     });
 
-    await expect(run).rejects.toThrow(
-      "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
-    );
+    await expect(run).rejects.toThrow("environment registration failed");
+    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
     expect(
       readHarnessMessages(harness.writes).some((entry) => entry.method === "thread/start"),
     ).toBe(false);
