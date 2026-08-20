@@ -2247,6 +2247,54 @@ describe("CLI attempt execution", () => {
     );
   });
 
+  it("deduplicates ACP transcript retries with shared run-derived keys", async () => {
+    const sessionKey = "agent:main:direct:acp-idempotent";
+    const sessionEntry = makeSessionEntry("session-acp-idempotent");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const persistTurn = async () =>
+      await persistAcpTurnTranscript({
+        body: "investigate this",
+        userInput: {
+          text: "investigate this",
+          idempotencyKey: "run-acp-idempotent:user",
+        },
+        assistantIdempotencyKey: "run-acp-idempotent",
+        finalText: "investigation complete",
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionAgentId: "main",
+        sessionCwd: tmpDir,
+        config: {},
+      });
+
+    await persistTurn();
+    await persistTurn();
+
+    const messages = await readSessionMessages(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        storePath,
+      }),
+    );
+    expect(messages).toHaveLength(2);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        idempotencyKey: "run-acp-idempotent:user",
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        idempotencyKey: "run-acp-idempotent",
+        model: "acp-runtime",
+      }),
+    ]);
+  });
+
   it("does not append a CLI transcript after the session is deleted", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-deleted";
     const staleSessionFile = path.join(tmpDir, "session-cli-stale.jsonl");

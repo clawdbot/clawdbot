@@ -669,6 +669,9 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "caller-run", auditOnly: false }),
     );
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "caller-run" }),
+    );
   });
 
   it("keeps audit run ids unique when channel message ids repeat", async () => {

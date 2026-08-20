@@ -2741,6 +2741,40 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(persistedAssistant?.idempotencyKey).toBe("idem-final-mirror");
   });
 
+  it("does not mirror a turn already persisted by the dispatch runtime", async () => {
+    await createTranscriptFixture("openclaw-chat-send-runtime-owned-transcript-");
+    await appendTranscriptMessage(transcriptScope(), {
+      message: {
+        role: "user",
+        content: "hello",
+        idempotencyKey: "idem-runtime-owned-transcript:user",
+        timestamp: 1,
+      },
+      idempotencyLookup: "scan",
+      now: 1,
+    });
+    await appendSourceReplyMirrorEntry({
+      text: "runtime-owned reply",
+      provider: "openclaw",
+      model: "acp-runtime",
+      idempotencyKey: "idem-runtime-owned-transcript",
+      now: 2,
+    });
+    mockState.finalText = "runtime-owned reply";
+    const { send } = createChatRequestFixture();
+
+    const broadcast = await send({
+      idempotencyKey: "idem-runtime-owned-transcript",
+      message: "hello",
+    });
+
+    expect(extractFirstTextBlock(broadcast)).toBe("runtime-owned reply");
+    expect(readPersistedUserMessages()).toHaveLength(1);
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]?.model).toBe("acp-runtime");
+  });
+
   it("persists non-agent delivery mirrors to SQLite without creating active JSONL", async () => {
     await withSqliteTranscriptFixtureState("openclaw-chat-send-final-sqlite-", async () => {
       mockState.finalText = "sqlite mirror text";

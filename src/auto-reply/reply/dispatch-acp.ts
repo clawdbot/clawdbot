@@ -690,6 +690,7 @@ export async function tryDispatchAcpReplyCore(params: {
         promptText: transcriptPromptText,
         finalText,
         meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
+        runId: existingRunId,
         threadId: params.ctx.MessageThreadId,
       });
     } catch (error) {

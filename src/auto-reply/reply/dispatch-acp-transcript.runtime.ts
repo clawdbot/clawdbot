@@ -6,6 +6,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 
 export async function persistAcpDispatchTranscript(params: {
   cfg: OpenClawConfig;
@@ -13,6 +14,7 @@ export async function persistAcpDispatchTranscript(params: {
   promptText: string;
   finalText: string;
   meta?: SessionAcpMeta;
+  runId?: string;
   threadId?: string | number;
 }): Promise<void> {
   const promptText = params.promptText.trim();
@@ -20,6 +22,7 @@ export async function persistAcpDispatchTranscript(params: {
   if (!promptText && !finalText) {
     return;
   }
+  const runId = params.runId?.trim();
 
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -41,7 +44,16 @@ export async function persistAcpDispatchTranscript(params: {
   await persistAcpTurnTranscript({
     body: promptText,
     transcriptBody: promptText,
+    ...(runId && promptText
+      ? {
+          userInput: {
+            text: promptText,
+            idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
+          },
+        }
+      : {}),
     finalText,
+    ...(runId ? { assistantIdempotencyKey: runId } : {}),
     sessionId,
     sessionKey: params.sessionKey,
     sessionEntry,
