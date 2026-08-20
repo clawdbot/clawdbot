@@ -19,34 +19,6 @@ const A2UI_V09_ACTION_KEYS = [
 /** A2UI message dialects recognized by the Canvas validator. */
 type A2UIVersion = "v0.8" | "v0.9";
 
-/** Builds a minimal A2UI JSONL payload that renders text in a single surface. */
-export function buildA2UITextJsonl(text: string) {
-  const surfaceId = "main";
-  const rootId = "root";
-  const textId = "text";
-  const payloads = [
-    {
-      surfaceUpdate: {
-        surfaceId,
-        components: [
-          {
-            id: rootId,
-            component: { Column: { children: { explicitList: [textId] } } },
-          },
-          {
-            id: textId,
-            component: {
-              Text: { text: { literalString: text }, usageHint: "body" },
-            },
-          },
-        ],
-      },
-    },
-    { beginRendering: { surfaceId, root: rootId } },
-  ];
-  return payloads.map((payload) => JSON.stringify(payload)).join("\n");
-}
-
 /** Validates A2UI JSONL and returns the detected dialect/version metadata. */
 function validateA2UIJsonl(jsonl: string) {
   const lines = jsonl.split(/\r?\n/);
@@ -137,13 +109,4 @@ function validateA2UIJsonl(jsonl: string) {
 /** Validates A2UI JSONL against the Canvas runtime's currently supported dialect. */
 export function validateSupportedA2UIJsonl(jsonl: string) {
   return validateA2UIJsonl(jsonl);
-}
-
-/** Keeps native Canvas pushes on the renderer generation shipped by node clients. */
-export function validateNativeA2UIJsonl(jsonl: string) {
-  const parsed = validateA2UIJsonl(jsonl);
-  if (parsed.version !== "v0.8") {
-    throw new Error("OpenClaw currently supports v0.8 only for native Canvas pushes");
-  }
-  return parsed;
 }

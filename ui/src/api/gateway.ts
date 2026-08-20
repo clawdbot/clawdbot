@@ -213,17 +213,6 @@ function formatBrowserWebSocketConstructorError(err: unknown, url: string): Erro
     details,
   };
 }
-async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
-  if (!material || typeof crypto === "undefined" || !crypto.subtle) {
-    return "";
-  }
-  try {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  } catch {
-    return "";
-  }
-}
 
 async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
   if (!material || typeof crypto === "undefined" || !crypto.subtle) {
@@ -494,7 +483,8 @@ export class GatewayBrowserClient {
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    this.opts.bootstrapToken = this.opts.bootstrapProfile = undefined;
+    this.opts.bootstrapToken = undefined;
+    this.opts.bootstrapProfile = undefined;
     this.scopeUpgradeBinding = plan.deviceIdentity && {
       clientId: plan.params.client.id,
       deviceId: plan.deviceIdentity.deviceId,
