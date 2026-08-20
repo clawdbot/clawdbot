@@ -51,6 +51,7 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
+import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-policy.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   createOpenAIResponsesAssistantOutput,
@@ -369,15 +370,20 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           return;
         }
         const sessionId = options?.sessionId;
+        // A native api.openai.com connection is eligible by default. A
+        // custom/proxy endpoint (e.g. a self-hosted OmniRoute deployment) has
+        // no native trust signal, so it is eligible only once the operator
+        // has explicitly opted a model in via `compat.supportsResponsesContinuation`.
         const httpContinuationEligible =
           config.httpContinuation &&
           !websocketMode &&
           !getAiTransportHost().requiresManagedTransport(model) &&
-          supportsNativeOpenAIResponsesEndpoint({
+          (supportsNativeOpenAIResponsesEndpoint({
             provider: model.provider,
             api: model.api,
             baseUrl: model.baseUrl,
-          });
+          }) ||
+            resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
           sessionId &&

@@ -394,4 +394,57 @@ describe("openai responses payload policy", () => {
     applyOpenAIResponsesPayloadPolicy(payload, policy);
     expect((payload.input[0] as Record<string, unknown>).status).toBe("completed");
   });
+
+  it("never promotes store for a custom endpoint without the explicit continuation opt-in", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+    expect(policy.explicitStore).toBeUndefined();
+  });
+
+  it("promotes store for a custom endpoint once the operator opts a model in explicitly", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(true);
+    expect(policy.explicitStore).toBe(true);
+  });
+
+  it("never lets the continuation opt-in promote store for azure-openai-responses (store is hardcoded off downstream)", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "azure-openai-responses",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+  });
+
+  it("ignores the continuation opt-in for a non-Responses api", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-completions",
+        provider: "omniroute",
+        baseUrl: "https://omniroute.example.com/v1",
+        compat: { supportsResponsesContinuation: true },
+      },
+      { storeMode: "provider-policy" },
+    );
+    expect(policy.explicitContinuationOptIn).toBe(false);
+  });
 });

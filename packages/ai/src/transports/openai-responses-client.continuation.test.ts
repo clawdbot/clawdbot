@@ -120,15 +120,32 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   };
 }
 
+// A custom/proxy OpenAI-Responses-compatible endpoint (e.g. a self-hosted
+// OmniRoute deployment) carries no native-host trust signal on its own --
+// the operator's explicit per-model opt-in is the *only* path to eligibility.
+const customEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+  compat: { supportsResponsesContinuation: true },
+} satisfies Model<"openai-responses">;
+
+const unoptedCustomEndpointModel = {
+  ...model,
+  provider: "omniroute",
+  baseUrl: "https://omniroute.example.com/v1",
+} satisfies Model<"openai-responses">;
+
 async function run(
   context: Context,
   options: {
     sessionId?: string;
     onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
+    model?: Model<"openai-responses">;
   },
 ): Promise<AssistantMessage> {
-  const stream = await createOpenAIResponsesTransportStreamFn()(model, context, {
+  const stream = await createOpenAIResponsesTransportStreamFn()(options.model ?? model, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
     transport: "sse",
@@ -230,6 +247,67 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(sseState.requests[0]).toMatchObject({ store: true });
     expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
     expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("engages for a custom/proxy endpoint once the operator opts a model in explicitly", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload, model: customEndpointModel },
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload, model: customEndpointModel },
+    );
+
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("engages for a custom/proxy endpoint purely from the real store policy, with no onPayload store override", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const identity = (payload: Record<string, unknown>) => payload;
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload: identity, model: customEndpointModel },
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload: identity, model: customEndpointModel },
+    );
+
+    expect(sseState.requests[0]).toMatchObject({ store: true });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
+  it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+    const first = await run(
+      { messages: [firstUser], tools: [] },
+      { onPayload, model: unoptedCustomEndpointModel },
+    );
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload, model: unoptedCustomEndpointModel },
+    );
+
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[1]?.input).toHaveLength(3);
   });
 
   it("keeps final store:false turns stateless and sends full history", async () => {

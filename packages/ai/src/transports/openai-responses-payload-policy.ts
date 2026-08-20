@@ -56,6 +56,7 @@ type OpenAIResponsesEndpointClass =
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
+  explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
@@ -68,6 +69,7 @@ type OpenAIResponsesPayloadPolicy = {
 type OpenAIResponsesPayloadCapabilities = {
   allowsOpenAIServiceTier: boolean;
   allowsResponsesStore: boolean;
+  explicitContinuationOptIn: boolean;
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
@@ -219,7 +221,11 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
+  key:
+    | "supportsInstructions"
+    | "supportsPromptCacheKey"
+    | "supportsResponsesContinuation"
+    | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -276,6 +282,19 @@ function resolveOpenAIResponsesPayloadCapabilities(
         : isResponsesApi && usesExplicitProxyLikeEndpoint;
   const supportsResponsesStoreField =
     readCompatPayloadBoolean(model.compat, "supportsStore") !== false && isResponsesApi;
+  // Provider-owned opt-in for a custom/proxy OpenAI-Responses-compatible
+  // endpoint (self-hosted router, gateway, etc.): the endpoint class itself
+  // carries no trust signal, so eligibility here comes entirely from an
+  // operator explicitly confirming, per model, that the backend correctly
+  // resolves `previous_response_id` and persists `store: true` turns.
+  // Azure is excluded: azure-openai-responses.ts hardcodes `store: false`
+  // downstream regardless, so opting in there would be a no-op.
+  const explicitContinuationOptIn =
+    isResponsesApi &&
+    supportsResponsesStoreField &&
+    provider !== "azure-openai" &&
+    provider !== "azure-openai-responses" &&
+    readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
 
   return {
     allowsOpenAIServiceTier:
@@ -295,6 +314,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
+    explicitContinuationOptIn,
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
@@ -406,12 +426,12 @@ export function resolveOpenAIResponsesPayloadPolicy(
     storeMode === "preserve"
       ? undefined
       : storeMode === "disable"
-        ? capabilities.allowsResponsesStore
+        ? capabilities.allowsResponsesStore || capabilities.explicitContinuationOptIn
           ? true
           : capabilities.supportsResponsesStoreField
             ? false
             : undefined
-        : capabilities.allowsResponsesStore
+        : capabilities.allowsResponsesStore || capabilities.explicitContinuationOptIn
           ? true
           : undefined;
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
@@ -443,6 +463,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
+    explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
