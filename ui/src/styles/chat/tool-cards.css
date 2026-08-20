@@ -2330,7 +2330,6 @@ openclaw-tooltip.chat-tasks-status__preview {
   color: var(--text);
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
