@@ -13,6 +13,7 @@ import {
   readRecorderSession,
   recoverRecorderStartup,
   recorderArtifacts,
+  screenshotRecorder,
   type RecorderOperations,
   type RecorderSession,
   renderGoldenImagePreflight,
@@ -33,6 +34,10 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-desktop-recorder-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function recorderSessionArg(root: string, sessionPath: string): string {
+  return path.relative(root, sessionPath);
 }
 
 function testSession(): RecorderSession {
@@ -679,6 +684,7 @@ describe("Telegram Desktop recorder window geometry", () => {
       window: { height: 995, width: 648, x: 636, y: 45 },
     });
     const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 648 }));
+    const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({ stderr: "", stdout: "" }));
     const operations = {
       createCroppedMotionPreview: cropped,
       createMotionPreview: vi.fn(async () => ({})),
@@ -693,19 +699,27 @@ describe("Telegram Desktop recorder window geometry", () => {
         stdout: JSON.stringify({ ok: true }),
       })) as RunCommand,
       scpFromRemote: vi.fn(async () => undefined),
-      sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      sshRun,
     } satisfies RecorderOperations;
 
     await stopRecorder(
       root,
-      { command: "stop", crop: "telegram-window", keepBox: false, sessionPath },
+      {
+        command: "stop",
+        crop: "telegram-window",
+        keepBox: false,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(cropped).toHaveBeenCalledWith(
       expect.objectContaining({
-        crop: { cropWidth: 648, height: 995, width: 648, x: 636, y: 45 },
+        crop: { cropWidth: 648, height: 600, width: 648, x: 636, y: 440 },
       }),
     );
+    expect(
+      sshRun.mock.calls.some(([params]) => params.command.includes("scrot -o -a 636,440,648,600")),
+    ).toBe(true);
   });
 });
 
@@ -730,10 +744,77 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       artifacts: { screenshot },
     });
 
-    expect(recorderArtifacts(root, { command: "artifacts", sessionPath })).toEqual({
+    expect(
+      recorderArtifacts(root, {
+        command: "artifacts",
+        sessionPath: recorderSessionArg(root, sessionPath),
+      }),
+    ).toEqual({
       artifacts: { screenshot },
     });
     expect(fs.statSync(screenshot).mode & 0o040).toBe(0o040);
+  });
+
+  it("keeps every recorder path inside its fixed working directory", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    writeRecorderSession(sessionPath, testSession());
+    expect(() =>
+      recorderArtifacts(root, { command: "artifacts", sessionPath: "../recorder.json" }),
+    ).toThrow("--session must stay inside the recorder root");
+    await expect(
+      screenshotRecorder(
+        root,
+        {
+          command: "screenshot",
+          output: path.join(root, "escape.png"),
+          sessionPath: "recorder.json",
+        },
+        {
+          createCroppedMotionPreview: vi.fn(async () => ({
+            crop: "",
+            fps: 24,
+            outputWidth: 430,
+          })),
+          createMotionPreview: vi.fn(async () => ({})),
+          inspectCrabbox: vi.fn(async () => {
+            throw new Error("must reject output before inspect");
+          }),
+          runCommand: vi.fn<RunCommand>(),
+          scpFromRemote: vi.fn(async () => undefined),
+          sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+        },
+      ),
+    ).rejects.toThrow("--output must be relative");
+  });
+
+  it("writes the default screenshot beside a relative session path", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "attempt", "recorder.json");
+    fs.mkdirSync(path.dirname(sessionPath));
+    writeRecorderSession(sessionPath, testSession());
+    const scpFromRemote = vi.fn(async () => undefined);
+
+    const output = await screenshotRecorder(
+      root,
+      { command: "screenshot", sessionPath: recorderSessionArg(root, sessionPath) },
+      {
+        createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 430 })),
+        createMotionPreview: vi.fn(async () => ({})),
+        inspectCrabbox: vi.fn(async () => ({
+          sshHost: "host",
+          sshKey: "/tmp/key",
+          sshPort: "22",
+          sshUser: "user",
+        })),
+        runCommand: vi.fn<RunCommand>(),
+        scpFromRemote,
+        sshRun: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      },
+    );
+
+    expect(path.dirname(output)).toBe(path.dirname(sessionPath));
+    expect(scpFromRemote).toHaveBeenCalledWith(expect.objectContaining({ local: output }));
   });
 
   it("sweeps unrecorded Desktop sessions after interrupted provisioning", async () => {
@@ -757,7 +838,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     };
 
     await expect(
-      recoverRecorderStartup(root, { command: "recover", sessionPath }, { runCommand }),
+      recoverRecorderStartup(
+        root,
+        { command: "recover", sessionPath: recorderSessionArg(root, sessionPath) },
+        { runCommand },
+      ),
     ).resolves.toEqual({ recovered: true });
     expect(calls).toContainEqual({
       args: ["driver.py", "terminate-desktop-sessions", "--json"],
@@ -824,7 +909,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
         sshUser: "user",
       })),
     } satisfies RecorderOperations;
-    await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
+    await stopRecorder(
+      root,
+      { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+      operations,
+    );
     expect(calls.some((call) => call.args.includes("terminate-session"))).toBe(true);
     expect(calls.some((call) => call.args[0] === "stop")).toBe(false);
   });
@@ -854,7 +943,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const stopped = await stopRecorder(
       root,
-      { command: "stop", keepBox: true, sessionPath },
+      {
+        command: "stop",
+        keepBox: true,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(stopped.keepBox).toBe(true);
@@ -895,8 +988,16 @@ describe("Telegram Desktop recorder session lifecycle", () => {
       sshRun,
     } satisfies RecorderOperations;
 
-    await viewRecorder(root, { command: "view", messageId: "42", sessionPath }, operations);
-    await stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations);
+    await viewRecorder(
+      root,
+      { command: "view", messageId: "42", sessionPath: recorderSessionArg(root, sessionPath) },
+      operations,
+    );
+    await stopRecorder(
+      root,
+      { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+      operations,
+    );
 
     expect(inspectCrabbox).toHaveBeenCalledTimes(2);
     expect(sshCommands[0]).toContain('xdotool windowmap "$win"');
@@ -937,7 +1038,12 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const stopped = await stopRecorder(
       root,
-      { command: "stop", crop: "telegram-window", keepBox: false, sessionPath },
+      {
+        command: "stop",
+        crop: "telegram-window",
+        keepBox: false,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(stopped.cleanupErrors).toBeUndefined();
@@ -969,7 +1075,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
 
     const stopped = await stopRecorder(
       root,
-      { command: "stop", keepBox: false, sessionPath },
+      {
+        command: "stop",
+        keepBox: false,
+        sessionPath: recorderSessionArg(root, sessionPath),
+      },
       operations,
     );
     expect(stopped.artifacts).toEqual({
@@ -1005,7 +1115,11 @@ describe("Telegram Desktop recorder session lifecycle", () => {
     } satisfies RecorderOperations;
 
     await expect(
-      stopRecorder(root, { command: "stop", keepBox: false, sessionPath }, operations),
+      stopRecorder(
+        root,
+        { command: "stop", keepBox: false, sessionPath: recorderSessionArg(root, sessionPath) },
+        operations,
+      ),
     ).rejects.toThrow("terminate Telegram Desktop session: terminate failed");
 
     expect(calls).toContainEqual({

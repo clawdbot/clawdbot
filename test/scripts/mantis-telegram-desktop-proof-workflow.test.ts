@@ -454,6 +454,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(installRun).toContain(
       "PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin",
     );
+    expect(installRun).toContain(
+      'cd "/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+    );
     expect(installRun).not.toContain("dangerouslyAllowAllBuilds");
     expect(installRun).not.toContain("ffmpeg-static");
     expect(installRun).not.toContain("ffprobe-static");
@@ -505,7 +508,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish --focus-message-id ID`");
     expect(prompt).toContain("`block --missing-primitive NAME --reason TEXT`");
-    expect(prompt).toContain("clears the QA account's local chat history");
+    expect(prompt).toContain("raw full-window footage remains");
+    expect(prompt).toContain("never stale chat history");
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
@@ -573,6 +577,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(candidateRun).toContain(
       'tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE"',
     );
+    expect(candidateRun).toContain(".artifacts/build-all-cache dist/plugin-sdk");
+    expect(candidateRun).toContain('find "$candidate_root/dist/plugin-sdk" -type l');
+    expect(candidateRun).toContain('find "$candidate_root/dist/plugin-sdk" -type f -links +1');
     expect(candidateRun.indexOf("tar --no-same-owner")).toBeLessThan(
       candidateRun.indexOf('sudo chown -R mantis-builder:mantis-builder "$candidate_root"'),
     );
@@ -830,9 +837,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       stopSession.indexOf("destroyMantisSut(state.sut)"),
     );
     const startSession = laneScript.slice(laneScript.indexOf("async function startLane"));
-    expect(startSession.indexOf('"clear-chat"')).toBeLessThan(
-      startSession.indexOf("Promise.allSettled"),
-    );
+    expect(startSession).not.toContain('"clear-chat"');
+    expect(startSession).not.toContain("historyClearMode");
     expect(startSession.indexOf("Promise.allSettled")).toBeLessThan(
       startSession.indexOf('"serve"'),
     );

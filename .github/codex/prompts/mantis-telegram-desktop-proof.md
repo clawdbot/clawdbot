@@ -55,9 +55,10 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 `start` returns the exact capability/budget list. No generic exec/eval or raw
 Telegram API exists. If a required action is absent, use `block`; do not route
 around the credential boundary.
-Each lane clears the QA account's local chat history before recorder startup.
-Recording starts with the empty chat hidden. `send` and `turn` hold the model
-response until their exact session-owned outbound message is visible.
+Recording starts with Telegram hidden. `send` and `turn` hold the model response
+until their exact session-owned outbound message is visible. Published screenshots
+and video use the bottom proof viewport; raw full-window footage remains private.
+Use only session-owned messages and events as evidence—never stale chat history.
 
 The observer remains live between commands. This allows sequences such as:
 send → inspect draft edits → wait → send `/stop` → inspect deletion/wipe → focus
@@ -70,10 +71,9 @@ each side ends as complete, failed, or blocked with its own trusted facts.
 ## Judge and publish
 
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
-PNG, final PNG, and cropped GIF. Confirm one conversation pane, no personal chat
-list/right pane, the evaluated message fully visible near the bottom, and the
-recording covering the behavior—not only its final state. Iterate within the
-three-attempt budget; all attempts remain recorded.
+PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
+near the bottom and the recording covers the behavior—not only its final state.
+Iterate within the three-attempt budget; all attempts remain recorded.
 
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each

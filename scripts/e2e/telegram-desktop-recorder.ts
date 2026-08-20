@@ -55,6 +55,24 @@ const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
 const DEFAULT_PREVIEW_FPS = 24;
 const DEFAULT_PREVIEW_WIDTH = 1920;
+const PROOF_VIEWPORT_HEIGHT = 600;
+
+function proofViewport(window: RecorderSession["window"]): {
+  cropWidth: number;
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+} {
+  const height = Math.min(PROOF_VIEWPORT_HEIGHT, window.height);
+  return {
+    cropWidth: window.width,
+    height,
+    width: window.width,
+    x: window.x,
+    y: window.y + window.height - height,
+  };
+}
 
 const remotePaths = {
   desktopLog: `${REMOTE_ROOT}/telegram-desktop.log`,
@@ -394,16 +412,20 @@ function assertOutputDirWritable(outputDir: string): void {
   }
 }
 
-function resolveOutputDir(cwd: string, outputDir: string): string {
-  if (path.isAbsolute(outputDir)) {
-    throw new Error("--output-dir must be repo-relative.");
+function resolveRecorderPath(cwd: string, supplied: string, option: string): string {
+  if (path.isAbsolute(supplied)) {
+    throw new Error(`${option} must be relative.`);
   }
-  const resolved = path.resolve(cwd, outputDir);
+  const resolved = path.resolve(cwd, supplied);
   const relative = path.relative(cwd, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("--output-dir must stay inside the repository.");
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${option} must stay inside the recorder root.`);
   }
   return resolved;
+}
+
+function resolveOutputDir(cwd: string, outputDir: string): string {
+  return resolveRecorderPath(cwd, outputDir, "--output-dir");
 }
 
 async function stopBox(params: {
@@ -658,7 +680,7 @@ export async function recoverRecorderStartup(
   opts: RecoverOptions,
   operations: Pick<RecorderOperations, "runCommand"> = defaultOperations,
 ): Promise<{ recovered: boolean }> {
-  const startupPath = recorderStartupPath(path.resolve(cwd, opts.sessionPath));
+  const startupPath = recorderStartupPath(resolveRecorderPath(cwd, opts.sessionPath, "--session"));
   if (!fs.existsSync(startupPath)) {
     return { recovered: false };
   }
@@ -706,7 +728,7 @@ export function recorderArtifacts(
   cwd: string,
   opts: ArtifactsOptions,
 ): { artifacts: Record<string, string> } {
-  const sessionPath = path.resolve(cwd, opts.sessionPath);
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
   const outputDir = path.dirname(sessionPath);
   const session = readRecorderSession(sessionPath);
   const artifacts: Record<string, string> = {};
@@ -746,7 +768,8 @@ export async function viewRecorder(
   opts: ViewOptions,
   operations: RecorderOperations = defaultOperations,
 ): Promise<void> {
-  const session = readRecorderSession(opts.sessionPath);
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const session = readRecorderSession(sessionPath);
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
   const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
   await operations.sshRun({
@@ -762,6 +785,7 @@ export async function viewRecorder(
 }
 
 async function captureScreenshot(params: {
+  crop: ReturnType<typeof proofViewport>;
   cwd: string;
   inspect: CrabboxInspect;
   localPath: string;
@@ -769,7 +793,7 @@ async function captureScreenshot(params: {
   remotePath: string;
 }): Promise<void> {
   await params.operations.sshRun({
-    command: `set -euo pipefail\nDISPLAY=:99 scrot -o ${shellQuote(params.remotePath)}`,
+    command: `set -euo pipefail\nDISPLAY=:99 scrot -o -a ${params.crop.x},${params.crop.y},${params.crop.width},${params.crop.height} ${shellQuote(params.remotePath)}`,
     cwd: params.cwd,
     inspect: params.inspect,
     run: params.operations.runCommand,
@@ -788,23 +812,26 @@ export async function screenshotRecorder(
   opts: ScreenshotOptions,
   operations: RecorderOperations = defaultOperations,
 ): Promise<string> {
-  const session = readRecorderSession(opts.sessionPath);
-  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
-  const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const session = readRecorderSession(sessionPath);
   const output =
     opts.output ??
     path.join(
       path.dirname(opts.sessionPath),
       `telegram-desktop-recorder-screenshot-${new Date().toISOString().replace(/[:.]/gu, "-")}.png`,
     );
+  const outputPath = resolveRecorderPath(cwd, output, "--output");
+  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
+  const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
   await captureScreenshot({
+    crop: proofViewport(session.window),
     cwd,
     inspect,
-    localPath: path.resolve(cwd, output),
+    localPath: outputPath,
     operations,
     remotePath: `${REMOTE_ROOT}/screenshot.png`,
   });
-  return path.resolve(cwd, output);
+  return outputPath;
 }
 
 export async function stopRecorder(
@@ -812,9 +839,10 @@ export async function stopRecorder(
   opts: StopOptions,
   operations: RecorderOperations = defaultOperations,
 ): Promise<RecorderSession> {
-  const session = readRecorderSession(opts.sessionPath);
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const session = readRecorderSession(sessionPath);
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
-  const outputDir = path.dirname(path.resolve(cwd, opts.sessionPath));
+  const outputDir = path.dirname(sessionPath);
   const errors: string[] = [];
   const artifacts: Record<string, string> = {};
   const attempt = async (label: string, action: () => Promise<void>) => {
@@ -870,6 +898,7 @@ export async function stopRecorder(
     }
     await attempt("final screenshot", async () => {
       await captureScreenshot({
+        crop: proofViewport(session.window),
         cwd,
         inspect: activeInspect,
         localPath: screenshotPath,
@@ -911,13 +940,7 @@ export async function stopRecorder(
     );
     await attempt("cropped motion preview", async () => {
       await operations.createCroppedMotionPreview({
-        crop: {
-          cropWidth: session.window.width,
-          height: session.window.height,
-          width: session.window.width,
-          x: session.window.x,
-          y: session.window.y,
-        },
+        crop: proofViewport(session.window),
         croppedGifPath,
         croppedVideoPath,
         cwd,
@@ -961,7 +984,7 @@ export async function stopRecorder(
     keepBox: opts.keepBox,
     stoppedAt: new Date().toISOString(),
   };
-  writeRecorderSession(opts.sessionPath, stopped);
+  writeRecorderSession(sessionPath, stopped);
   if (errors.length) {
     throw new Error(`Recorder stop completed with errors:\n${errors.join("\n")}`);
   }
@@ -973,7 +996,8 @@ async function statusRecorder(
   opts: StatusOptions,
   operations: RecorderOperations,
 ): Promise<Record<string, unknown>> {
-  const session = readRecorderSession(opts.sessionPath);
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const session = readRecorderSession(sessionPath);
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
   const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
   return {

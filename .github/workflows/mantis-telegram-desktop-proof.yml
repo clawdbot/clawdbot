@@ -276,6 +276,7 @@ jobs:
           cat >"${RUNNER_TEMP}/telegram-desktop-recorder-exec" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
+          cd "/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           exec env -i \
             HOME="${HOME}" \
             OPENCLAW_TELEGRAM_USER_CRABBOX_BIN=/usr/local/bin/crabbox \
@@ -524,9 +525,13 @@ jobs:
             pnpm-lock.yaml \
             pnpm-workspace.yaml \
             tsconfig.json; then
+            # Observed 2026-08: cache-only seeding still rebuilt tsdown-unified for 3m04s;
+            # its cache contract also requires the live plugin-SDK outputs it will replace.
             tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
-              .artifacts/build-all-cache
+              .artifacts/build-all-cache dist/plugin-sdk
             test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
+            test -z "$(find "$candidate_root/dist/plugin-sdk" -type l -print -quit)"
+            test -z "$(find "$candidate_root/dist/plugin-sdk" -type f -links +1 -print -quit)"
             echo "Seeded candidate build-all cache from the trusted baseline."
           else
             echo "Candidate changed the build-cache engine closure; building without the baseline seed."
@@ -823,8 +828,8 @@ jobs:
                 any(.invocations[]; .command == "send") and
                 any(.invocations[]; .command == "finish") and
                 (.artifacts.screenshot.bytes > 10000) and
-                (.artifacts.video.bytes > 10000) and
-                (.artifacts.previewGifCropped.bytes > 10000)
+                (.artifacts.previewGifCropped.bytes > 10000) and
+                (.artifacts.trimmedVideoCropped.bytes > 10000)
               ' "$verdict" >/dev/null
             fi
             sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
@@ -846,8 +851,8 @@ jobs:
               test "$(sudo sha256sum "$source" | cut -d ' ' -f1)" = "$artifact_sha"
               sudo install -m 0644 "$source" "$trusted_output/$lane/$artifact_file"
             done < <(sudo jq -r '.artifacts | to_entries[] | [.key, .value.file, (.value.bytes | tostring), .value.sha256] | @tsv' "$verdict")
-            gif_file="$(sudo jq -r '.artifacts.previewGifCropped.file // .artifacts.previewGif.file // empty' "$verdict")"
-            video_file="$(sudo jq -r '.artifacts.trimmedVideoCropped.file // .artifacts.trimmedVideo.file // .artifacts.video.file // empty' "$verdict")"
+            gif_file="$(sudo jq -r '.artifacts.previewGifCropped.file // empty' "$verdict")"
+            video_file="$(sudo jq -r '.artifacts.trimmedVideoCropped.file // empty' "$verdict")"
             screenshot_file="$(sudo jq -r '.artifacts.screenshot.file // empty' "$verdict")"
             if [[ -n "$gif_file" ]]; then
               sudo install -m 0644 "$SESSION_ROOT/published/$lane/$gif_file" \

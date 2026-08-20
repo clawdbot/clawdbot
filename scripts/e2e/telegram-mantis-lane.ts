@@ -154,6 +154,20 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function recorderRelativePath(file: string): string {
+  const root = path.resolve(requiredEnv("OPENCLAW_MANTIS_SESSION_ROOT"));
+  const relative = path.relative(root, path.resolve(file));
+  if (
+    !relative ||
+    path.isAbsolute(relative) ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error("Recorder paths must stay inside the private Mantis session root.");
+  }
+  return relative;
+}
+
 function parseCli(argv: string[]): { command: string; values: Map<string, string> } {
   const [command, ...args] = argv;
   if (!command || command.startsWith("--") || args.length % 2 !== 0) {
@@ -526,6 +540,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
   const observerJournal = path.join(privateDir, "telegram-events.ndjson");
   const observerLog = path.join(privateDir, "observer.log");
   const observerPidFile = path.join(privateDir, "observer.pid.json");
+  const recorderOutputDir = recorderRelativePath(privateDir);
   const startup: StartupSession = {
     attempt,
     lane,
@@ -546,28 +561,11 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
   let sut: Awaited<ReturnType<typeof startMantisSut>> | undefined;
   let observerPid: number | undefined;
   try {
+    // Observed 2026-08: TDLib 1.8.0 returned CHANNEL_INVALID when asked to clear
+    // this QA supergroup locally. Keep shared history; narrow published evidence.
     const bot = z
       .object({ id: z.union([z.string(), z.number()]).transform(String) })
       .parse(await telegramBotApi(credential.sutToken, "getMe"));
-    const clearedChat = z
-      .object({
-        chatId: z.union([z.string(), z.number()]).transform(String),
-        mode: z.literal("self"),
-        ok: z.literal(true),
-      })
-      .parse(
-        JSON.parse(
-          await runCommandOutput(requiredEnv("OPENCLAW_TELEGRAM_USER_DRIVER_CMD"), [
-            "clear-chat",
-            "--chat",
-            credential.groupId,
-            "--json",
-          ]),
-        ),
-      );
-    if (clearedChat.chatId !== credential.groupId) {
-      throw new Error("The user driver cleared a different Telegram chat.");
-    }
     startup.recorderRequested = true;
     saveStartup(roots.sessionRoot, startup);
     const [sutResult, recorderResult] = await Promise.allSettled([
@@ -598,7 +596,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
         "--provider",
         "docker",
         "--output-dir",
-        privateDir,
+        recorderOutputDir,
         "--chat",
         credential.groupId,
         "--user-driver",
@@ -666,12 +664,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       startedAt: startup.startedAt,
       sut: sutRuntimeSchema.parse(sut),
     };
-    appendInvocation(
-      state,
-      "start",
-      { config: configFile.relative, historyClearMode: clearedChat.mode, repoRoot },
-      0,
-    );
+    appendInvocation(state, "start", { config: configFile.relative, repoRoot }, 0);
     saveActive(roots.sessionRoot, state);
     fs.rmSync(startupFile(roots.sessionRoot, lane));
     outputJson({
@@ -709,7 +702,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
         recorderCommand,
         "--session",
-        recorderSession,
+        recorderRelativePath(recorderSession),
       ]).catch((cleanupError: unknown) => cleanupErrors.push(coerceErrorMessage(cleanupError)));
     }
     const cleanupSut = sut ?? startup.sut;
@@ -771,7 +764,7 @@ async function abortStartup(startup: StartupSession, roots: Roots): Promise<void
     await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
       recorderCommand,
       "--session",
-      startup.recorderSession,
+      recorderRelativePath(startup.recorderSession),
     ]).catch((error: unknown) => errors.push(coerceErrorMessage(error)));
   }
   const sut = startup.sut;
@@ -867,7 +860,7 @@ async function revealSentMessage(
   await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "view",
     "--session",
-    state.recorderSession,
+    recorderRelativePath(state.recorderSession),
     "--message-id",
     sent.messageId,
   ]);
@@ -1002,7 +995,7 @@ async function focusMessage(state: ActiveSession, messageId: string): Promise<vo
   await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "view",
     "--session",
-    state.recorderSession,
+    recorderRelativePath(state.recorderSession),
     "--message-id",
     messageId,
   ]);
@@ -1021,9 +1014,9 @@ async function screenshot(
   await runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "screenshot",
     "--session",
-    state.recorderSession,
+    recorderRelativePath(state.recorderSession),
     "--output",
-    output,
+    recorderRelativePath(output),
   ]);
   validateMedia(output);
   const publicFile = path.join(
@@ -1057,6 +1050,20 @@ function copyArtifacts(
     result[name] = artifact(privateTarget);
   }
   return result;
+}
+
+export function publishableRecorderArtifacts(
+  files: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(files).filter(
+      ([name]) =>
+        name === "previewGifCropped" ||
+        name === "screenshot" ||
+        name === "trimmedVideoCropped" ||
+        /^inspection\d+$/u.test(name),
+    ),
+  );
 }
 
 async function stopActiveLane(
@@ -1112,7 +1119,7 @@ async function stopActiveLane(
   const recorderStop = runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "stop",
     "--session",
-    state.recorderSession,
+    recorderRelativePath(state.recorderSession),
     ...(crop ? ["--crop", "telegram-window"] : []),
   ]);
   for (const action of [
@@ -1174,7 +1181,7 @@ async function finalize(
         await runCommandOutput(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
           "artifacts",
           "--session",
-          state.recorderSession,
+          recorderRelativePath(state.recorderSession),
         ]),
       ),
     ).artifacts;
@@ -1194,7 +1201,7 @@ async function finalize(
     if (!state.lastViewedMessageId) {
       primaryError ??= new Error("The session did not focus the evaluated message.");
     }
-    for (const name of ["screenshot", "video", "previewGifCropped"] as const) {
+    for (const name of ["screenshot", "previewGifCropped", "trimmedVideoCropped"] as const) {
       const file = recorderArtifacts[name];
       if (!file) {
         primaryError ??= new Error(`Recorder did not produce ${name}.`);
@@ -1212,7 +1219,11 @@ async function finalize(
   const publicOutput = path.join(roots.outputRoot, state.lane);
   let artifactRecords: Record<string, ReturnType<typeof artifact>> = {};
   try {
-    artifactRecords = copyArtifacts(recorderArtifacts, privatePublished, publicOutput);
+    artifactRecords = copyArtifacts(
+      publishableRecorderArtifacts(recorderArtifacts),
+      privatePublished,
+      publicOutput,
+    );
   } catch (error) {
     primaryError ??= error;
   }
@@ -1292,7 +1303,7 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
           await runCommandOutput(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
             "artifacts",
             "--session",
-            state.recorderSession,
+            recorderRelativePath(state.recorderSession),
           ]),
         ),
       ).artifacts;
@@ -1310,7 +1321,11 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
   const publicOutput = path.join(roots.outputRoot, state.lane);
   let artifactRecords: Record<string, ReturnType<typeof artifact>> = {};
   try {
-    artifactRecords = copyArtifacts(recorderArtifacts, privatePublished, publicOutput);
+    artifactRecords = copyArtifacts(
+      publishableRecorderArtifacts(recorderArtifacts),
+      privatePublished,
+      publicOutput,
+    );
   } catch (error) {
     errors.push(coerceErrorMessage(error));
   }

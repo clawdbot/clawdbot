@@ -17,17 +17,13 @@ sys.modules["telegram_user_driver"] = module
 spec.loader.exec_module(module)
 
 class Client:
-    def __init__(self, clear_for_self=True, clear_for_all=True):
+    def __init__(self):
         self.requests = []
         self.updates = []
-        self.clear_for_self = clear_for_self
-        self.clear_for_all = clear_for_all
     def next_update(self, timeout=0):
         return self.updates.pop(0) if self.updates else None
     def request(self, payload, timeout=20):
         self.requests.append(payload)
-        if payload.get("@type") == "getChat":
-            return {"id": payload["chat_id"], "can_be_deleted_only_for_self": self.clear_for_self, "can_be_deleted_for_all_users": self.clear_for_all}
         return {"@type": "ok"}
 
 class Driver:
@@ -57,16 +53,6 @@ with tempfile.TemporaryDirectory() as root:
     public.mkdir()
     private.mkdir()
     driver = Driver()
-    clear_driver = object.__new__(module.UserDriver)
-    clear_driver.client = Client()
-    clear_mode = clear_driver.clear_chat_history(-100123)
-    all_users_driver = object.__new__(module.UserDriver)
-    all_users_driver.client = Client(clear_for_self=False, clear_for_all=True)
-    try:
-        all_users_driver.clear_chat_history(-100123)
-        all_users_error = ""
-    except module.DriverError as error:
-        all_users_error = str(error)
     observer = module.UserObserver(driver, -100123, 99, private / "events.ndjson", public)
     (public / "proof.txt").write_text("visible media")
     staged_media = Path(observer.resolve_media("proof.txt"))
@@ -177,10 +163,6 @@ with tempfile.TemporaryDirectory() as root:
     child.wait(timeout=10)
     print(json.dumps({
         "bystanderError": bystander_error,
-        "allUsersError": all_users_error,
-        "allUsersRequests": all_users_driver.client.requests,
-        "clearMode": clear_mode,
-        "clearRequests": clear_driver.client.requests,
         "deleted": deleted,
         "events": observer.events,
         "mediaError": media_error,
@@ -221,22 +203,12 @@ describe("Telegram user observer", () => {
       { actor: "user", kind: "message", messageId: "124", text: "/stop" },
       { actor: "bot", kind: "message", messageId: "127", text: "fast reply" },
       { actor: "bot", isPermanent: true, kind: "delete", messageId: "123" },
-      { actor: "unknown", isPermanent: true, kind: "delete", messageId: "126" },
     ]);
     expect(result.stdout).not.toContain("private bystander text");
     expect(result.stdout).not.toContain("pending duplicate");
     expect(value.truncated).toBe(true);
     expect(value.terminated).toBe(true);
     expect(value.bystanderError).toBe("Message 125 was not observed in this session.");
-    expect(value.allUsersError).toBe("The QA chat cannot be cleared locally before recording.");
-    expect(value.allUsersRequests).toEqual([{ "@type": "getChat", chat_id: -100123 }]);
-    expect(value.clearMode).toBe("self");
-    expect(value.clearRequests).toContainEqual({
-      "@type": "deleteChatHistory",
-      chat_id: -100123,
-      remove_from_chat_list: false,
-      revoke: false,
-    });
     expect(value.mediaError).toBe(
       "Media must be a regular file inside the Mantis output directory.",
     );

@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { publishableRecorderArtifacts } from "../../scripts/e2e/telegram-mantis-lane.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -50,8 +51,8 @@ async function setupHarness(
     observerLog: path.join(root, "observer.log"),
     observerPidFile: path.join(root, "observer.pid.json"),
     observerSocket,
-    privateDir: path.join(root, "attempt"),
-    recorderSession: path.join(root, "attempt", "recorder.json"),
+    privateDir: path.join(sessionRoot, "attempt"),
+    recorderSession: path.join(sessionRoot, "attempt", "recorder.json"),
     repoRoot: "/prepared/candidate",
     sendCount: 0,
     startedAt: new Date().toISOString(),
@@ -71,7 +72,7 @@ async function setupHarness(
     let input = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
-      input += chunk;
+      input += chunk.toString();
     });
     socket.on("end", () => {
       const request = JSON.parse(input) as Record<string, unknown>;
@@ -144,6 +145,27 @@ async function runLane(env: NodeJS.ProcessEnv, args: string[]) {
 }
 
 describe("Telegram Mantis free-form lane", () => {
+  it("publishes only cropped visual evidence", () => {
+    expect(
+      publishableRecorderArtifacts({
+        desktopLog: "/private/desktop.log",
+        ffmpegLog: "/private/ffmpeg.log",
+        inspection1: "/private/inspection.png",
+        previewGif: "/private/full.gif",
+        previewGifCropped: "/private/cropped.gif",
+        screenshot: "/private/cropped.png",
+        trimmedVideo: "/private/full.mp4",
+        trimmedVideoCropped: "/private/cropped.mp4",
+        video: "/private/raw.mp4",
+      }),
+    ).toEqual({
+      inspection1: "/private/inspection.png",
+      previewGifCropped: "/private/cropped.gif",
+      screenshot: "/private/cropped.png",
+      trimmedVideoCropped: "/private/cropped.mp4",
+    });
+  });
+
   it("lets the agent compose sends and continuous event observations", async () => {
     const harness = await setupHarness();
     try {
@@ -180,7 +202,7 @@ describe("Telegram Mantis free-form lane", () => {
         "observe",
       ]);
       expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
-        `view --session ${path.join(path.dirname(harness.outputRoot), "attempt", "recorder.json")} --message-id 101`,
+        "view --session attempt/recorder.json --message-id 101",
       );
       expect(JSON.parse(fs.readFileSync(harness.recorderControlLog, "utf8"))).toMatchObject({
         hold: true,
