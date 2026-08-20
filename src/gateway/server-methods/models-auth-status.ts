@@ -51,10 +51,8 @@ import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.se
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  listAvailableManifestContractValues,
-  loadManifestContractSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
@@ -87,20 +85,17 @@ export type {
 
 const log = createSubsystemLogger("models-auth-status");
 
-function resolveApiKeyUsageStatusProviders(cfg: OpenClawConfig): ReadonlySet<UsageProviderId> {
-  try {
-    const snapshot = loadManifestContractSnapshot({ config: cfg });
-    return new Set(
-      listAvailableManifestContractValues({
-        snapshot,
-        contract: "usageProviders",
-        config: cfg,
-      }),
-    );
-  } catch (err) {
-    log.warn(`usage provider manifest discovery failed: ${formatForLog(err)}`);
-    return new Set();
-  }
+function resolveApiKeyUsageStatusProviders(
+  cfg: OpenClawConfig,
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">,
+): ReadonlySet<UsageProviderId> {
+  return new Set(
+    listAvailableManifestContractValues({
+      snapshot,
+      contract: "usageProviders",
+      config: cfg,
+    }),
+  );
 }
 
 type PreparedAuthMetadataLookupParams = ProviderAuthAliasLookupParams & {
@@ -687,7 +682,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         allowKeychainPrompt: false,
         authAliasLookupParams,
       });
-      const apiKeyUsageStatusProviders = resolveApiKeyUsageStatusProviders(cfg);
+      const apiKeyUsageStatusProviders = resolveApiKeyUsageStatusProviders(
+        cfg,
+        preparedSnapshot.metadataSnapshot,
+      );
 
       // Usage queries usually need refreshable credentials. Keep API-key status
       // enrichment explicit so static auth providers are not polled by default.

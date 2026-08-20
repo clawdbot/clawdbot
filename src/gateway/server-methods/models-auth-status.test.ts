@@ -119,7 +119,6 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
 
 vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
   listAvailableManifestContractValues: mocks.listAvailableManifestContractValues,
-  loadManifestContractSnapshot: vi.fn(() => ({ index: {}, plugins: [] })),
 }));
 
 vi.mock("../server-model-catalog-auth.js", () => ({
@@ -1180,6 +1179,12 @@ describe("models.authStatus", () => {
   });
 
   it("loads API-key usage for providers declared by the manifest contract", async () => {
+    const metadataSnapshot = {
+      index: { plugins: [] },
+      manifestRegistry: { plugins: [] },
+      plugins: [],
+    };
+    setPreparedMetadataSnapshot(metadataSnapshot);
     mocks.listAvailableManifestContractValues.mockReturnValue(["manifest-usage"]);
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
@@ -1197,22 +1202,11 @@ describe("models.authStatus", () => {
       config: expect.any(Object),
       timeoutMs: 5_000,
     });
-  });
-
-  it("does not load API-key usage when manifest discovery fails", async () => {
-    mocks.listAvailableManifestContractValues.mockImplementation(() => {
-      throw new Error("invalid manifest");
+    expect(mocks.listAvailableManifestContractValues).toHaveBeenCalledWith({
+      snapshot: metadataSnapshot,
+      contract: "usageProviders",
+      config: expect.any(Object),
     });
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [createApiKeyProfile("deepseek")],
-      providers: [createStaticApiKeyProvider("deepseek")],
-    });
-
-    await readAuthStatus();
-
-    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
   it("serves stale usage immediately while one background refresh replaces it", async () => {
