@@ -1,5 +1,5 @@
 // Scalar edit sessions keep their initial primitive branch while focused rerenders apply patches.
-export type ScalarValueBranch = "string" | "number" | "boolean";
+type ScalarValueBranch = "string" | "number" | "boolean";
 
 export type ScalarEditHint = {
   branch?: ScalarValueBranch;
