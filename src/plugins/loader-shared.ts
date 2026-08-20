@@ -15,6 +15,7 @@ import {
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import { normalizeCededChannelId } from "./channel-validation.js";
 import {
   resolveEffectiveEnableState,
   type NormalizedPluginsConfig,
@@ -291,12 +292,18 @@ export function pushPluginValidationError(params: {
 }
 
 /**
- * Which channels each plugin has ceded to a preferred replacement, keyed by plugin id.
+ * Which channels each plugin has ceded to a preferred replacement, keyed by plugin id, plus the
+ * claimant each ceded channel went to, keyed by canonical channel id.
  *
  * Channel schema ownership already decides this, per channel, and skips a claimant the operator
  * selected by hand. Reading its decision is what makes the runtime owner and the validated schema
  * the same plugin by construction; deriving a second answer at registration time would leave the
  * two free to disagree, which is the defect this whole path exists to close.
+ *
+ * A cede only stands when a claimant it yields to is part of this load. Schema ownership is
+ * computed from the whole manifest registry, but a scoped load can contain the ceding plugin
+ * without the preferred claimant, and skipping registration then would strand the channel with no
+ * runtime owner at all instead of the fallback that served it.
  *
  * Built once per load: the policy resolves preferences from the manifest, the built-in channel
  * registration, and any external catalog, and the map is small — a plugin cedes nothing unless
@@ -307,25 +314,102 @@ export function collectCededChannelIdsByPlugin(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Map<string, string[]> {
-  const displaced = collectDisplacedChannelOwners(
-    params.registry,
-    createConfiguredChannelOwnershipPolicy({
-      config: params.config,
-      sourceConfig: params.sourceConfig,
-      registry: params.registry,
-      env: params.env,
-    }),
-  );
-  const cededByPlugin = new Map<string, string[]>();
+  onlyPluginIdSet: ReadonlySet<string> | null;
+  dreamingSidecar: AuthorizedDreamingSidecar | null;
+}): {
+  cededChannelIdsByPlugin: Map<string, string[]>;
+  cededChannelOwners: Map<string, string>;
+} {
+  const policy = createConfiguredChannelOwnershipPolicy({
+    config: params.config,
+    sourceConfig: params.sourceConfig,
+    registry: params.registry,
+    env: params.env,
+  });
+  const displaced = collectDisplacedChannelOwners(params.registry, policy);
+  const claimantsByChannel = new Map<string, string[]>();
+  for (const record of params.registry.plugins) {
+    for (const channelId of record.channels) {
+      const claimedId = normalizeCededChannelId(channelId);
+      const claimants = claimantsByChannel.get(claimedId) ?? [];
+      claimantsByChannel.set(claimedId, claimants);
+      claimants.push(record.id);
+    }
+  }
+  const cededChannelIdsByPlugin = new Map<string, string[]>();
+  const cededChannelOwners = new Map<string, string>();
   for (const [channelId, pluginIds] of displaced) {
+    const claimedId = normalizeCededChannelId(channelId);
+    // Only an active claimant can take the channel. Claimants are read from every manifest, so
+    // "not displaced" alone would let a denied or entry-disabled plugin hold the cede in place for
+    // a channel it will never register — the same dead channel the scope check above exists to
+    // prevent. Activity is read from the policy that decided the displacement, so the loader and
+    // the config layer answer this the same way.
+    const cededTo = claimantsByChannel.get(claimedId)?.find(
+      (claimantId) =>
+        !pluginIds.has(claimantId) &&
+        policy.isPluginActive(claimantId, claimedId) &&
+        matchesScopedPluginOrDreamingSidecar({
+          onlyPluginIdSet: params.onlyPluginIdSet,
+          pluginId: claimantId,
+          sidecar: params.dreamingSidecar,
+        }),
+    );
+    if (cededTo === undefined) {
+      continue;
+    }
+    cededChannelOwners.set(claimedId, cededTo);
     for (const pluginId of pluginIds) {
-      const channels = cededByPlugin.get(pluginId) ?? [];
-      cededByPlugin.set(pluginId, channels);
+      const channels = cededChannelIdsByPlugin.get(pluginId) ?? [];
+      cededChannelIdsByPlugin.set(pluginId, channels);
       channels.push(channelId);
     }
   }
-  return cededByPlugin;
+  return { cededChannelIdsByPlugin, cededChannelOwners };
+}
+
+/**
+ * Flags every ceded channel that finished the load with no registration at all. Restoring the
+ * ceding plugin instead is deliberately off the table: it would hand the channel to the fallback
+ * at runtime while the Gateway schema, computed from config and blind to load outcomes, still
+ * names the replacement. A rolled-back, quarantined, or unloadable replacement therefore leaves
+ * the channel dead, and only this diagnostic says why.
+ */
+export function pushCededChannelWithoutOwnerDiagnostics(params: {
+  registry: PluginRegistry;
+  cededChannelOwners: ReadonlyMap<string, string>;
+}): void {
+  for (const record of params.registry.plugins) {
+    // Bundle-format plugins register their channels outside this loader, so absence from the
+    // runtime catalog says nothing about whether such a channel is served.
+    if (record.status !== "loaded" || record.format === "bundle") {
+      continue;
+    }
+    for (const channelId of record.cededChannelIds ?? []) {
+      const claimedId = normalizeCededChannelId(channelId);
+      const registered =
+        params.registry.channels.some(
+          (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,
+        ) ||
+        params.registry.channelSetups.some(
+          (entry) => normalizeCededChannelId(entry.plugin.id) === claimedId,
+        );
+      if (registered) {
+        continue;
+      }
+      const cededTo = params.cededChannelOwners.get(claimedId);
+      const cededToRecord = params.registry.plugins.find((entry) => entry.id === cededTo);
+      if (cededTo === undefined || cededToRecord?.format === "bundle") {
+        continue;
+      }
+      params.registry.diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `ceded channel has no registered owner: ${channelId} (ceded to ${cededTo})`,
+      });
+    }
+  }
 }
 
 /** Builds the common manifest-backed record shape used by runtime and CLI loaders. */

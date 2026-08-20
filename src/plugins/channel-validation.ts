@@ -1,9 +1,11 @@
 // Validates channel plugin metadata from manifests and config.
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listChatChannels } from "../channels/chat-meta.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
@@ -32,6 +34,18 @@ function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined
     docsPath: `/channels/${id}`,
     blurb: normalizeOptionalString(channel.description) ?? "",
   };
+}
+
+/**
+ * Key for deciding whether two channel-id spellings name the same runtime channel. A registration
+ * carries whatever id the plugin passed, while a ceded entry carries the manifest claim after
+ * built-in alias canonicalization; runtime lookups lowercase and alias-resolve both, so comparing
+ * raw spellings would let a case or alias variant slip past a cede the config layer decided.
+ */
+export function normalizeCededChannelId(channelId: string): string {
+  return (
+    normalizeChatChannelId(channelId) ?? normalizeOptionalLowercaseString(channelId) ?? channelId
+  );
 }
 
 function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): string[] {

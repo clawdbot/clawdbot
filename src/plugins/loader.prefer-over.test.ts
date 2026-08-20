@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { loadOpenClawPluginCliRegistry } from "./loader.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
@@ -93,6 +94,8 @@ function writeMultiChannelPlugin(params: {
   channelIds: string[];
   toolName: string;
   preferOver?: Record<string, string[]>;
+  registeredChannelIds?: string[];
+  throwOnRegister?: boolean;
 }): string {
   const pluginDir = path.join(params.rootDir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -123,7 +126,7 @@ function writeMultiChannelPlugin(params: {
     ),
     "utf-8",
   );
-  const registrations = params.channelIds
+  const registrations = (params.registeredChannelIds ?? params.channelIds)
     .map(
       (channelId) => `api.registerChannel({
           plugin: {
@@ -157,6 +160,7 @@ function writeMultiChannelPlugin(params: {
           parameters: { type: "object", properties: {} },
           execute() { return { content: [{ type: "text", text: "ok" }] }; },
         }, { name: ${JSON.stringify(params.toolName)} });
+        ${params.throwOnRegister ? 'throw new Error("register failed after channel registration");' : ""}
       },
     };`,
     "utf-8",
@@ -507,5 +511,319 @@ describe("plugin loader preferOver activation", () => {
     expect(diagnostics).toContain("channel already registered: qqbot");
     expect(diagnostics).not.toContain("plugin tool name conflict");
     expect(registry.tools.map((tool) => tool.pluginId)).toHaveLength(1);
+  });
+
+  // Registration accepts whatever id the plugin passes, while the cede list carries the manifest
+  // claim. Downstream lookups lowercase both and treat them as the same channel, so a raw-string
+  // comparison lets a differently-cased registration slip past its own cede and re-opens the
+  // order-dependent duplicate path the cede exists to close.
+  it("cedes a channel registered under a case variant of the manifest claim", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+      registeredChannelIds: ["ZZALPHA", "zzbeta"],
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    // One runtime owner however the registration spelled the id.
+    const alphaOwners = registry.channels.filter(
+      (entry) => entry.plugin.id.toLowerCase() === "zzalpha",
+    );
+    expect(alphaOwners.map((entry) => entry.pluginId)).toEqual(["zz-replacement"]);
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzbeta")?.pluginId).toBe(
+      "zz-fallback",
+    );
+    expect(registry.tools.map((tool) => tool.pluginId).toSorted()).toEqual([
+      "zz-fallback",
+      "zz-replacement",
+    ]);
+  });
+
+  // Schema ownership is computed from every manifest, but a scoped load may carry only the ceding
+  // plugin. Skipping its registration then leaves the channel with no runtime owner at all — on
+  // the fallback path the same load served it — so the cede must not apply.
+  it("keeps a ceded channel when a scoped load omits the preferred claimant", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+      onlyPluginIds: ["zz-fallback"],
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    expect(owner("zzalpha")).toBe("zz-fallback");
+    expect(owner("zzbeta")).toBe("zz-fallback");
+    expect(
+      registry.plugins.find((plugin) => plugin.id === "zz-fallback")?.cededChannelIds,
+    ).toBeUndefined();
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "ceded channel has no registered owner",
+    );
+  });
+
+  it("still cedes when the scoped load contains both claimants", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+      onlyPluginIds: ["zz-fallback", "zz-replacement"],
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    expect(owner("zzalpha")).toBe("zz-replacement");
+    expect(owner("zzbeta")).toBe("zz-fallback");
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "channel already registered",
+    );
+  });
+
+  // Claimants come from every manifest, so a third claimant the operator disabled is neither
+  // displaced nor loadable. Reading it as the plugin the channel went to would hold the cede in
+  // place for a channel nothing registers, which is the dead channel the scope check exists to
+  // prevent — reached by a different route. Registry order puts the disabled claimant first so it
+  // is the one a scope-only check would pick.
+  it.each([
+    {
+      name: "cedes to the active claimant past a disabled one",
+      onlyPluginIds: ["zz-fallback", "zz-inactive", "zz-replacement"],
+      expectedOwner: "zz-replacement",
+    },
+    {
+      name: "keeps the channel when only the disabled claimant is in scope",
+      onlyPluginIds: ["zz-fallback", "zz-inactive"],
+      expectedOwner: "zz-fallback",
+    },
+  ])("$name", ({ onlyPluginIds, expectedOwner }) => {
+    const root = makePluginLoaderTempDir();
+    // The fallback claims a second, uncontested channel so auto-enable keeps it enabled. A plugin
+    // whose only channel is displaced is disabled in config and never reaches the loader at all.
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const inactiveDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-inactive",
+      channelIds: ["zzalpha"],
+      toolName: "zz_inactive_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: {
+        entries: { "zz-inactive": { enabled: false } },
+        load: { paths: [fallbackDir, inactiveDir, replacementDir] },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+      onlyPluginIds,
+    });
+
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      expectedOwner,
+    );
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "ceded channel has no registered owner",
+    );
+  });
+
+  // The CLI registry loads no runtime channels, but its records carry the same cede list, so a
+  // scoped CLI load has to reach the same answer as the runtime loader or the surfaces disagree.
+  it("scopes the CLI registry cede list to the plugins in the load", async () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const scopedToCeder = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+      onlyPluginIds: ["zz-fallback"],
+    });
+    expect(
+      scopedToCeder.plugins.find((plugin) => plugin.id === "zz-fallback")?.cededChannelIds,
+    ).toBeUndefined();
+
+    const scopedToBoth = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+      onlyPluginIds: ["zz-fallback", "zz-replacement"],
+    });
+    expect(
+      scopedToBoth.plugins.find((plugin) => plugin.id === "zz-fallback")?.cededChannelIds,
+    ).toEqual(["zzalpha"]);
+  });
+
+  // Restoring the ceding plugin after its replacement rolls back would hand the channel to the
+  // fallback while the Gateway schema, computed from config, still names the replacement. The
+  // load keeps the cede, so it has to say the channel ended up with no owner at all.
+  it("reports a ceded channel whose preferred claimant fails during register", () => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+      throwOnRegister: true,
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: { load: { paths: [fallbackDir, replacementDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(registry.plugins.find((plugin) => plugin.id === "zz-replacement")?.status).toBe("error");
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")).toBeUndefined();
+    const diagnostic = registry.diagnostics.find((diag) =>
+      diag.message.includes("ceded channel has no registered owner"),
+    );
+    expect(diagnostic).toMatchObject({
+      level: "error",
+      pluginId: "zz-fallback",
+      message: "ceded channel has no registered owner: zzalpha (ceded to zz-replacement)",
+    });
   });
 });

@@ -81,12 +81,6 @@ export async function loadOpenClawPluginCliRegistry(
     emitWarning: false,
     warningCacheKey: `${context.cacheKey}::cli-metadata`,
   });
-  const cededChannelIdsByPlugin = collectCededChannelIdsByPlugin({
-    registry: manifestRegistry,
-    config: context.cfg,
-    sourceConfig: context.activationSourceConfig,
-    env: context.env,
-  });
   const seenIds = new Map<string, PluginRecord["origin"]>();
   const memorySlot = context.normalized.slots.memory;
   let selectedMemoryPluginId: string | null = null;
@@ -96,6 +90,14 @@ export async function loadOpenClawPluginCliRegistry(
     activationSource: context.activationSource,
     manifestRegistry,
     memorySlot,
+  });
+  const { cededChannelIdsByPlugin } = collectCededChannelIdsByPlugin({
+    registry: manifestRegistry,
+    config: context.cfg,
+    sourceConfig: context.activationSourceConfig,
+    env: context.env,
+    onlyPluginIdSet,
+    dreamingSidecar,
   });
 
   for (const candidate of orderedCandidates) {
