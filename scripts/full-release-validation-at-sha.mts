@@ -83,8 +83,10 @@ temporary branches by default. --keep-branch retains both branches. Exact-target
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
 -f fail_fast=true to cancel each child after its first failed job. The release
-profile defaults to beta for alpha/beta package versions and stable otherwise;
-pass -f release_profile=full for the broad advisory sweep.`);
+branch accepts only its final package version or a matching beta prerelease.
+Exact alpha tags remain supported for Tideclaw. The release profile defaults to
+beta for beta candidates and exact alpha tags, and stable otherwise; pass
+-f release_profile=full for the broad advisory sweep.`);
 }
 
 function run(command: string, args: string[], options: CommandOptions = {}) {
@@ -279,12 +281,12 @@ export function verifyTargetRef(
   if (releaseMatch) {
     const releaseVersion = releaseMatch[1]!;
     const prereleasePattern = new RegExp(
-      `^${releaseVersion.replaceAll(".", "\\.")}-(?:alpha|beta)\\.[1-9][0-9]*$`,
+      `^${releaseVersion.replaceAll(".", "\\.")}-beta\\.[1-9][0-9]*$`,
       "u",
     );
     if (targetVersion !== releaseVersion && !prereleasePattern.test(targetVersion)) {
       throw new Error(
-        `Target package version ${targetVersion} does not belong to release branch ${targetRef}`,
+        `Target package version ${targetVersion} does not belong to release branch ${targetRef}; expected ${releaseVersion} or a beta prerelease of it`,
       );
     }
   } else if (extendedStableMatch) {

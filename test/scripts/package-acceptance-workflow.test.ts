@@ -280,12 +280,88 @@ function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: str
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
     "Validate release inputs",
   );
+  const workdir = tempDirs.make("full-release-input-validation-");
+  mkdirSync(resolve(workdir, "target"));
+  writeFileSync(resolve(workdir, "target", "package.json"), '{"version":"2026.8.1"}\n', "utf8");
   return spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: workdir,
     encoding: "utf8",
     env: {
       PATH: process.env.PATH,
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
+      TARGET_CONTEXT_REF: "",
+      TARGET_REF: "main",
+    },
+  });
+}
+
+function runFullReleaseTargetIdentityValidation(params: {
+  comparisonStatus?: string;
+  remoteSha?: string;
+  targetContextRef?: string;
+  targetRef: string;
+  version: string;
+}) {
+  const step = workflowStep(
+    workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+    "Validate release inputs",
+  );
+  const workdir = tempDirs.make("full-release-target-identity-");
+  const fakeBin = resolve(workdir, "bin");
+  mkdirSync(fakeBin);
+  mkdirSync(resolve(workdir, "target"));
+  writeFileSync(
+    resolve(workdir, "target", "package.json"),
+    `${JSON.stringify({ version: params.version })}\n`,
+    "utf8",
+  );
+  writeFileSync(
+    resolve(fakeBin, "git"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"ls-remote"* ]]; then
+  printf '%s\\t%s\\n' "$FAKE_REMOTE_SHA" "$FAKE_REMOTE_REF"
+  exit 0
+fi
+exit 64
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    resolve(fakeBin, "gh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"api repos/"*"/compare/"* ]]; then
+  printf '%s\\n' "$FAKE_COMPARISON_STATUS"
+  exit 0
+fi
+exit 64
+`,
+    { mode: 0o755 },
+  );
+  const targetSha = params.targetRef.match(/^[a-f0-9]{40}$/u)?.[0] ?? "a".repeat(40);
+  const normalizedContextRef = (params.targetContextRef ?? params.targetRef)
+    .replace(/^refs\/heads\//u, "")
+    .replace(/^refs\/tags\//u, "");
+  const remoteRef = normalizedContextRef.startsWith("v")
+    ? `refs/tags/${normalizedContextRef}`
+    : `refs/heads/${normalizedContextRef}`;
+  return spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      FAKE_COMPARISON_STATUS: params.comparisonStatus ?? "ahead",
+      FAKE_REMOTE_REF: remoteRef,
+      FAKE_REMOTE_SHA: params.remoteSha ?? targetSha,
+      GH_TOKEN: "test-token",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      RELEASE_PROFILE: "beta",
+      SKIP_PACKAGE_TELEGRAM_E2E: "false",
+      TARGET_CONTEXT_REF: params.targetContextRef ?? "",
+      TARGET_REF: params.targetRef,
+      TARGET_SHA: targetSha,
     },
   });
 }
@@ -3773,6 +3849,73 @@ describe("package artifact reuse", () => {
     expect(umbrella.status, umbrella.stderr).toBe(0);
   });
 
+  it.each([
+    ["release/2026.8.1", "2026.8.1"],
+    ["release/2026.8.1", "2026.8.1-beta.3"],
+    ["extended-stable/2026.7.33", "2026.7.33"],
+    ["v2026.8.1", "2026.8.1"],
+    ["v2026.8.1-alpha.2", "2026.8.1-alpha.2"],
+    ["v2026.8.1-beta.3", "2026.8.1-beta.3"],
+  ])("accepts direct Full Release Validation identity %s at package %s", (targetRef, version) => {
+    const result = runFullReleaseTargetIdentityValidation({ targetRef, version });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each([
+    ["release/2026.8.1", "2026.8.2", "does not belong to release branch"],
+    ["release/2026.8.1", "2026.8.1-alpha.2", "expected 2026.8.1 or a beta prerelease"],
+    ["extended-stable/2026.7.33", "2026.7.33-beta.1", "does not match extended-stable branch"],
+    ["v2026.8.1", "2026.8.1-beta.1", "does not match release tag"],
+    ["v2026.8.1-alpha.2", "2026.8.1-alpha.3", "does not match release tag"],
+  ])(
+    "rejects direct Full Release Validation identity %s at package %s",
+    (targetRef, version, error) => {
+      const result = runFullReleaseTargetIdentityValidation({ targetRef, version });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+    },
+  );
+
+  it("validates an exact-SHA helper target against its canonical release context", () => {
+    const accepted = runFullReleaseTargetIdentityValidation({
+      targetContextRef: "release/2026.8.1",
+      targetRef: "a".repeat(40),
+      version: "2026.8.1-beta.3",
+    });
+    const rejected = runFullReleaseTargetIdentityValidation({
+      targetContextRef: "release/2026.8.1",
+      targetRef: "a".repeat(40),
+      version: "2026.8.1-alpha.3",
+    });
+
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("expected 2026.8.1 or a beta prerelease");
+  });
+
+  it("rejects exact-SHA release contexts outside the named branch or tag", () => {
+    const divergedBranch = runFullReleaseTargetIdentityValidation({
+      comparisonStatus: "diverged",
+      remoteSha: "b".repeat(40),
+      targetContextRef: "release/2026.8.1",
+      targetRef: "a".repeat(40),
+      version: "2026.8.1-beta.3",
+    });
+    const mismatchedTag = runFullReleaseTargetIdentityValidation({
+      remoteSha: "b".repeat(40),
+      targetContextRef: "v2026.8.1-alpha.2",
+      targetRef: "a".repeat(40),
+      version: "2026.8.1-alpha.2",
+    });
+
+    expect(divergedBranch.status).toBe(1);
+    expect(divergedBranch.stderr).toContain("is not reachable from release context branch");
+    expect(mismatchedTag.status).toBe(1);
+    expect(mismatchedTag.stderr).toContain("does not match release tag");
+  });
+
   it.each(["stable", "full"])(
     "preserves normal %s validation when Telegram deferral is false",
     (releaseProfile) => {
@@ -4811,12 +4954,18 @@ describe("package artifact reuse", () => {
     const workflowInputs = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW).on?.workflow_dispatch
       ?.inputs;
     const resolveTargetJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target");
+    const resolveTargetSteps = resolveTargetJob.steps ?? [];
     const evidenceReuseJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse");
     const releaseChecksJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks");
     const npmTelegramJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_telegram");
     const performanceJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     const summaryJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
     const targetSummaryStep = workflowStep(resolveTargetJob, "Summarize target");
+    const targetManifestCheckout = workflowStep(
+      resolveTargetJob,
+      "Checkout target package manifest",
+    );
+    const releaseInputValidation = workflowStep(resolveTargetJob, "Validate release inputs");
     const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
     const releaseChecksDispatchStep = workflowStep(
       releaseChecksJob,
@@ -4834,6 +4983,24 @@ describe("package artifact reuse", () => {
     });
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
+    expect(targetManifestCheckout.with).toMatchObject({
+      ref: "${{ steps.resolve.outputs.sha }}",
+      path: "target",
+      "sparse-checkout": "package.json",
+      "sparse-checkout-cone-mode": false,
+      "persist-credentials": false,
+    });
+    expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
+      resolveTargetSteps.indexOf(releaseInputValidation),
+    );
+    expectTextToIncludeAll(releaseInputValidation.run, [
+      'target_version="$(jq -er',
+      "does not belong to release branch",
+      "does not match ${identity_kind}",
+      "is not reachable from release context branch",
+      "does not match release tag",
+      "target_context_ref must be a canonical OpenClaw release branch or tag.",
+    ]);
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
     expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(
@@ -6921,6 +7088,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       'VALIDATION_SHA="<full-commit-sha>"',
       '-f ref="$VALIDATION_SHA"',
       '-f expected_sha="$VALIDATION_SHA"',
+      'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+      'VALIDATION_SHA="<full-release-candidate-sha>"',
+      "--target-ref release/YYYY.M.PATCH",
+      '--workflow-sha "$TOOLING_SHA"',
     ]);
     for (const text of [releaseCi, releaseCiNotes, testing, parallels, ciDocs, maintainer]) {
       expect(text).toContain("Validation SHA + Tooling SHA");

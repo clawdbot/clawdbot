@@ -179,8 +179,10 @@ use `release_gate=true`.)
 
 The release branch may advance after the Code SHA is frozen. The helper accepts
 that frozen SHA only while it remains an ancestor of the canonical release
-branch and its package version still belongs to that release line.
-Extended-stable branches and tags require an exact package-version match.
+branch and its package version is either the branch's final version or a
+matching beta prerelease. Alpha remains on the Tideclaw path with a matching
+alpha branch and exact alpha tag. Extended-stable branches and all tags require
+an exact package-version match.
 Always pass the previously recorded full Tooling SHA for release-branch runs.
 Never replace it with a fresh `main` lookup. The Tooling SHA must declare the
 current release-isolation contract; older workflow revisions fail closed.
@@ -199,12 +201,13 @@ against the Release SHA. The parent must report
 dispatching child lanes. Npm preflight and package/install acceptance still run
 against the exact Release SHA and its new tarball bytes.
 
-The SHA-pinned helper infers `beta` for alpha/beta package versions and `stable`
-for stable/correction versions and passes the Validation SHA + Tooling SHA run
-identity. `beta` without soak is the bounded beta-publish gate. Run broad live
-QA and E2E as postpublish confidence with `run_release_soak=true` or explicit
-groups. Stable and full profiles force the release soak. Use a narrow
-`rerun_group` after focused fixes; never widen automatically.
+The SHA-pinned helper infers `beta` for matching beta release candidates and
+exact alpha tags, and `stable` for stable/correction versions, then passes the
+Validation SHA + Tooling SHA run identity. `beta` without soak is the bounded
+beta-publish gate. Run broad live QA and E2E as postpublish confidence with
+`run_release_soak=true` or explicit groups. Stable and full profiles force the
+release soak. Use a narrow `rerun_group` after focused fixes; never widen
+automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.

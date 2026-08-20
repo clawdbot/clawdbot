@@ -375,7 +375,8 @@ pnpm ci:full-release \
 
 The helper verifies that the recorded Tooling SHA remains reachable from current
 `origin/main`, pushes `release-ci/<workflow-sha>-...` at that exact commit,
-infers `beta` from alpha/beta package versions and `stable` otherwise, and
+accepts only the release branch's final package version or a matching beta
+prerelease, infers `beta` for that beta path and `stable` for final versions, and
 dispatches `Full Release Validation` with the Validation SHA as `expected_sha`.
 Target resolution rejects a mismatch before child dispatch. Every child workflow
 `headSha` must match the Tooling SHA. Pass `-f reuse_evidence=false` to force a
@@ -383,7 +384,9 @@ fresh run or `-f release_profile=full` for the broad advisory sweep. Never
 replace the recorded Tooling SHA with a fresh `main` lookup. The helper rejects
 pinned tooling that lacks the current release-isolation contract or the
 `expected_sha` dispatch input and never silently selects newer tooling. The
-workflow itself never writes repository refs.
+workflow itself never writes repository refs. Tideclaw alpha validation remains
+on its matching alpha branch and exact alpha tag rather than a regular
+`release/*` context.
 
 After the Code SHA is green, commit only `CHANGELOG.md` and run the same helper with the Release SHA:
 

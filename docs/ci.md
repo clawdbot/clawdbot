@@ -392,14 +392,22 @@ For pinned commit proof on a fast-moving branch, use the helper instead of
 `gh workflow run ... --ref main -f ref=<sha>`:
 
 ```bash
-pnpm ci:full-release --sha <full-sha>
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+VALIDATION_SHA="<full-release-candidate-sha>"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
 helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
 SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
-`headSha` matches the Tooling SHA.
+`headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
+it from moving `main`. Regular release branches accept only their final package
+version or a matching beta prerelease; Tideclaw alpha validation uses its exact
+alpha tag and matching alpha branch.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you

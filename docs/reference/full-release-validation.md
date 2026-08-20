@@ -29,9 +29,12 @@ Record the Tooling SHA once for the release and reuse it for later Code-SHA,
 Release-SHA, and focused reruns. Do not refresh it from moving `main`.
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. The helper infers the `beta` profile from alpha/beta
-package versions and `stable` otherwise. Pass alternate workflow inputs with
-`-f key=value`; use `-f release_profile=full` only for the broad advisory sweep.
+end-to-end agent turn. Regular `release/*` targets accept only the branch's final
+package version or a matching beta prerelease. Tideclaw alpha validation uses
+its exact alpha tag and matching alpha branch. The helper maps beta releases and
+exact alpha tags to the `beta` profile and final versions to `stable`. Pass
+alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
+only for the broad advisory sweep.
 `fail_fast` defaults to `false`, so dispatched child workflows finish and expose
 independent failures together. Pass `-f fail_fast=true` when the shorter
 first-failure cancellation path is preferable.

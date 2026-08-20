@@ -301,6 +301,15 @@ describe("full-release-validation-at-sha", () => {
       verifyTargetRef(
         "release/2026.7.1",
         candidateSha,
+        "2026.7.1-alpha.5",
+        () => branchTipSha,
+        () => true,
+      ),
+    ).toThrow("expected 2026.7.1 or a beta prerelease of it");
+    expect(() =>
+      verifyTargetRef(
+        "release/2026.7.1",
+        candidateSha,
         "2026.7.1",
         () => branchTipSha,
         () => false,
@@ -633,7 +642,7 @@ describe("full-release-validation-at-sha", () => {
       ]);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(
-        "Target package version 2026.7.9 does not belong to release branch release/2026.8.1",
+        "Target package version 2026.7.9 does not belong to release branch release/2026.8.1; expected 2026.8.1 or a beta prerelease of it",
       );
       expect(fixture.readCalls(fixture.gitCallsPath).filter((args) => args[0] === "push")).toEqual(
         [],

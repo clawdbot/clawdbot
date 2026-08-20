@@ -326,10 +326,12 @@ classification and run-identity rules.
 The helper verifies and pins the recorded Tooling SHA on trusted `main`, passes
 the resolved Code SHA as `expected_sha`, and records the canonical release
 branch as context. Reuse that SHA for the release; never refresh it from moving
-`main`. It
-infers `beta` for alpha/beta package versions and `stable` for
-stable/correction versions. Pass `-f release_profile=full` only for the broad
-advisory provider/media sweep. Do not make `full` faster by silently dropping
+`main`. Regular release branches accept only their final package version or a
+matching beta prerelease. Tideclaw alpha validation uses its matching alpha
+branch and exact alpha tag. The helper infers `beta` for beta candidates and
+exact alpha tags, and `stable` for stable/correction versions. Pass
+`-f release_profile=full` only for the broad advisory provider/media sweep. Do
+not make `full` faster by silently dropping
 suites; use the bounded phase that matches the release decision.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
