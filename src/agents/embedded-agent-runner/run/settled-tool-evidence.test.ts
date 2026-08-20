@@ -191,6 +191,32 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
+  it.each([
+    {
+      label: "nonterminal",
+      currentMeta: { toolName: "write", toolCallId: "tool_1" },
+      expected: SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    },
+    {
+      label: "terminal",
+      currentMeta: { toolName: "write", toolCallId: "tool_1", terminate: true },
+      expected: null,
+    },
+  ])(
+    "uses the $label current occurrence when a provider reuses a tool-call id",
+    ({ currentMeta, expected }) => {
+      const attempt = makeSettledIdleWriteAttempt();
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams({
+          ...attempt,
+          toolMetas: [{ toolName: "write", toolCallId: "tool_1", terminate: true }, currentMeta],
+        }),
+      );
+
+      expect(instruction).toBe(expected);
+    },
+  );
+
   it("continues when the current requested batch mixes terminal and nonterminal results", () => {
     const attempt = makeSettledIdleWriteAttempt();
     const toolUseAssistant = makeLastAssistant({

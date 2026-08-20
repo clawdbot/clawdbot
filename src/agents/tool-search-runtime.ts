@@ -722,6 +722,7 @@ export function formatToolSearchControlResult<T>(
   payload: T,
   runtime: ToolSearchRuntime | undefined,
   parentToolCallId?: string,
+  terminalBatchStatus?: "waiting" | "completed" | "failed",
 ): AgentToolResult<T> {
   let result: AgentToolResult<T> = jsonResult(payload);
   const content = result.content[0];
@@ -733,9 +734,10 @@ export function formatToolSearchControlResult<T>(
     const text = wrapExternalContent(modelText, { source: "api" });
     result = { ...result, content: [{ ...content, text }] };
   }
-  return runtime?.takeTerminalTargetBatch(parentToolCallId)
-    ? { ...result, terminate: true }
-    : result;
+  const terminal =
+    terminalBatchStatus !== "waiting" &&
+    runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
+  return terminalBatchStatus !== "failed" && terminal ? { ...result, terminate: true } : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

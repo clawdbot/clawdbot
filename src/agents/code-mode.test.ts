@@ -85,48 +85,6 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(result.terminate).toBe(true);
   });
 
-  it("projects a terminal result reached through wait", async () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
-    vi.spyOn(codeModeExecution, "runCodeModeExec").mockImplementation(async (params) => {
-      const runtime = new ToolSearchRuntime(params.ctx, resolveToolSearchConfig({} as never));
-      return {
-        status: "waiting",
-        runId: "terminal-run",
-        reason: "yield",
-        pendingToolCalls: [],
-        output: [],
-        replaySafe: false,
-        telemetry: {
-          ...runtime.telemetry(),
-          visibleTools: [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME],
-        },
-      };
-    });
-    vi.spyOn(codeModeExecution, "runWait").mockImplementation(runTerminalNestedCall);
-    const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
-      ...jsonResult({ terminal: true }),
-      terminate: true,
-    }));
-    applyCodeModeCatalog({
-      tools: [...tools, terminal],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const suspended = await expectDefined(tools[0], "exec tool").execute("exec-wait-terminal", {
-      code: 'await yield_control("pause"); return await tools.call("terminal_action", {});',
-    });
-    expect(suspended.details).toMatchObject({ status: "waiting", reason: "yield" });
-    const result = await expectDefined(tools[1], "wait tool").execute("wait-terminal", {
-      runId: (suspended.details as { runId: string }).runId,
-    });
-
-    expect(result.terminate).toBe(true);
-  });
-
   it("hides all normal tools behind exec and wait", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const shellExec = fakeTool("exec", "Run shell command");

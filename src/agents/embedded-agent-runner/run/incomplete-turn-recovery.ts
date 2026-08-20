@@ -304,10 +304,11 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   const hasSettledTerminalToolFailure = allToolsProvenSettled && failedTerminalToolNames.size > 0;
   const hasIntentionalTerminalToolBatch =
     allToolsProvenSettled &&
-    requestedToolCalls.every(({ id, name }) =>
-      params.attempt.toolMetas.some(
-        (meta) => meta.toolCallId === id && meta.toolName === name && meta.terminate === true,
-      ),
+    requestedToolCalls.every(
+      ({ id, name }) =>
+        params.attempt.toolMetas.findLast(
+          (meta) => meta.toolCallId === id && meta.toolName === name,
+        )?.terminate === true,
     );
   // ToolErrorSummary has no call id: its owner must match a failed result in the
   // proven terminal batch, or a stale/unrelated error could authorize finalization.
