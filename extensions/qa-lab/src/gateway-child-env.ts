@@ -17,17 +17,21 @@ import {
 import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 
-const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
+const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS = Object.freeze([
+  "BASH_ENV",
+  "BASHOPTS",
+  "ENV",
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
   "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL",
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
   "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
+  "SHELLOPTS",
 ]);
 
-function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
+function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_ENV_VARS) {
     delete env[envKey];
   }
   return env;
@@ -112,10 +116,12 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  // Parent shell startup controls must be removed after caller patches so no
+  // launcher or runtime child can import them before its own allowlist runs.
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  return scrubQaGatewayChildSecretEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
+  return scrubQaGatewayChildEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
 }
 
 export async function stageQaCodexMockModelCatalog(params: {

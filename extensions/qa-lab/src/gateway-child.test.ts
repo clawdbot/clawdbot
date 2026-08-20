@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 // Qa Lab tests cover gateway child plugin behavior.
 import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -824,6 +824,57 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
   });
+
+  it.runIf(process.platform === "linux")(
+    "scrubs inherited shell startup env before the workflow allowlist runs",
+    async () => {
+      const tempRoot = await tempDirs.makeTempDir("qa-shell-startup-env-");
+      const markerPath = path.join(tempRoot, "bash-env-ran");
+      const bashEnvPath = path.join(tempRoot, "malicious-bash-env");
+      const allowlistProbePath = path.join(tempRoot, "allowlist-probe.sh");
+      await writeFile(bashEnvPath, `printf 'ran' > ${JSON.stringify(markerPath)}\n`, "utf8");
+      await writeFile(
+        allowlistProbePath,
+        `
+          set -Eeuo pipefail
+          for key in BASH_ENV BASHOPTS ENV SHELLOPTS; do
+            ! compgen -e | grep -Fxq "$key"
+          done
+          declare -A keep_env=([SAFE_VALUE]=1)
+          while IFS= read -r key; do
+            if [[ -z "\${keep_env[$key]+x}" ]]; then
+              unset "$key"
+            fi
+          done < <(compgen -e)
+          printf '%s' "\${SAFE_VALUE:?}"
+        `,
+        "utf8",
+      );
+      const env = buildQaRuntimeEnv({
+        ...createParams({ SAFE_VALUE: "base" }),
+        runtimeEnvPatch: {
+          SAFE_VALUE: "allowlist-survived",
+          BASH_ENV: bashEnvPath,
+          BASHOPTS: "checkwinsize",
+          ENV: bashEnvPath,
+          SHELLOPTS: "braceexpand",
+        },
+      });
+
+      for (const key of ["BASH_ENV", "BASHOPTS", "ENV", "SHELLOPTS"]) {
+        expect(env[key]).toBeUndefined();
+      }
+
+      const result = spawnSync("/bin/bash", ["--noprofile", "--norc", allowlistProbePath], {
+        encoding: "utf8",
+        env,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("allowlist-survived");
+      await expect(readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
   it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
     const tempParent = await tempDirs.makeTempDir("qa-gateway-env-scrub-");

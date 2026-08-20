@@ -931,27 +931,16 @@ describe("release Telegram QA workflow", () => {
     );
   });
 
-  it("strips inherited Bash startup state before the first isolated child", () => {
+  it("does not defer Bash startup cleanup to the privileged launcher", () => {
     const createSut = requireRun(
       "run_telegram",
       "Create isolated Telegram SUT identity and launcher",
     );
     const launcher = extractHereDocument(createSut, "LAUNCHER");
-    const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
-    const stripOptions = "export -n BASHOPTS SHELLOPTS";
-    const stripStartupFiles = "unset BASH_ENV ENV";
-    const isolatedSpawn = "/usr/bin/unshare";
-    const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
 
     expect(launcher).not.toContain("export PS1=");
-    expect(launcher.indexOf(stripOptions)).toBeGreaterThan(-1);
-    expect(launcher.indexOf(stripStartupFiles)).toBeGreaterThan(launcher.indexOf(stripOptions));
-    expect(launcher.indexOf(isolatedSpawn)).toBeGreaterThan(launcher.indexOf(stripStartupFiles));
-    expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
-    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(verification));
-    expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
-    expect(launcher.match(/\/bin\/bash -ceu/gu)).toHaveLength(2);
-    expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
+    expect(launcher).not.toContain("export -n BASHOPTS SHELLOPTS");
+    expect(launcher).not.toContain("unset BASH_ENV ENV");
   });
 
   it("mounts an isolated SUT-owned tmp without exposing the host tmp tree", () => {

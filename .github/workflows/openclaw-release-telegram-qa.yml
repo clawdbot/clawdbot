@@ -1663,8 +1663,6 @@ jobs:
           chmod 0600 "$launcher_stage_file"
           trap 'rm -f "$launcher_stage_file"' EXIT
           export launcher_stage_file
-          export -n BASHOPTS SHELLOPTS
-          unset BASH_ENV ENV
           /usr/bin/unshare \
             --mount \
             --fork \
