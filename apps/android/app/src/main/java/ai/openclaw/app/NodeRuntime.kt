@@ -1404,8 +1404,9 @@ class NodeRuntime private constructor(
         replaceGatewayMethods(hello.methods)
         val operatorScopes = normalizeOperatorScopes(hello.authScopes)
         _operatorScopes.value = operatorScopes
+        // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
-          selectGatewayDevicePairingCapabilities(hello.methods, operatorScopes)
+          selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         val mainSessionKey =
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
