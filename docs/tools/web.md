@@ -126,7 +126,7 @@ xAI Responses.
 | [Ollama Web Search](/tools/ollama-search)        | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
 | [Parallel](/tools/parallel-search)               | Dense excerpts ranked for LLM context                          | --                                               | `PARALLEL_API_KEY` (paid)                                                               |
 | [Parallel Search (Free)](/tools/parallel-search) | Dense excerpts ranked for LLM context                          | --                                               | None (free Search MCP)                                                                  |
-| [Perplexity](/tools/perplexity-search)           | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY`                                             |
+| [Perplexity](/tools/perplexity-search)           | Structured snippets                                            | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY`                                                                    |
 | [SearXNG](/tools/searxng-search)                 | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
 | [Tavily](/tools/tavily)                          | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
 
@@ -220,7 +220,7 @@ API-backed providers first:
 3. **Gemini** -- `plugins.entries.google.config.webSearch.apiKey`, `GEMINI_API_KEY`, or `models.providers.google.apiKey` (order 20)
 4. **Grok** -- xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
 5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
-6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
+6. **Perplexity** -- `PERPLEXITY_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
 7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
 8. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`; optional `plugins.entries.exa.config.webSearch.baseUrl` overrides the Exa endpoint (order 65)
 9. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey` (order 70)
@@ -485,10 +485,6 @@ provider, OpenClaw does not show the `x_search` prompt.
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape. Gemini treats `day` freshness as a recency hint; wider
   freshness values and explicit dates set Google Search grounding time ranges.
-  Perplexity behaves the same way when you use the Sonar/OpenRouter
-  compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
-  `model` or `OPENROUTER_API_KEY`); that path also drops `max_tokens` and
-  `max_tokens_per_page` support.
   SearXNG accepts `http://` only for trusted private-network or loopback hosts;
   public SearXNG endpoints must use `https://`.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
