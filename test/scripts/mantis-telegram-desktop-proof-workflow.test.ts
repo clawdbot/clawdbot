@@ -327,6 +327,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(dispatchText).toContain("@openclaw-mantis");
     expect(dispatchText).toContain("telegram desktop proof");
     expect(dispatchText).toContain('new Set(["admin", "maintain", "write"])');
+    expect(dispatchText).toContain('context.actor !== "clawsweeper[bot]"');
+    expect(dispatchText).toContain("Ignoring Mantis label applied by");
     expect(dispatchText).toContain("actions.createWorkflowDispatch");
     expect(dispatchText).toContain('workflow_id: "mantis-telegram-desktop-proof.yml"');
     expect(dispatchText).toContain('inputs.allow_fork_candidate = "true"');

@@ -64,6 +64,10 @@ jobs:
               requestSource = "issue_comment";
             } else {
               const pr = context.payload.pull_request;
+              if (context.actor !== "clawsweeper[bot]") {
+                core.notice(`Ignoring Mantis label applied by ${context.actor}.`);
+                return;
+              }
               if (pr.head.repo?.full_name !== `${owner}/${repo}`) {
                 core.notice(
                   "ClawSweeper labels do not authorize secret-bearing fork execution; a maintainer can invoke Mantis from a PR comment.",
