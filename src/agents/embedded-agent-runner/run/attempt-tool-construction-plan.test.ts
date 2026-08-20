@@ -380,7 +380,7 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
-    for (const toolName of ["suggest_task", "dismiss_task"]) {
+    for (const toolName of ["suggest_task", "dismiss_task", "screen"]) {
       expectConstructionPlan(
         resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
         {
