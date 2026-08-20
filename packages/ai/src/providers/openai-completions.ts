@@ -698,16 +698,19 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  const requestedReasoning = options?.reasoning;
   const explicitlyDisabledByThinkingLevel =
-    options?.reasoning !== undefined &&
+    requestedReasoning !== undefined &&
     model.thinkingLevelMap !== undefined &&
-    Object.hasOwn(model.thinkingLevelMap, options.reasoning) &&
-    model.thinkingLevelMap[options.reasoning] === null;
+    Object.hasOwn(model.thinkingLevelMap, requestedReasoning) &&
+    model.thinkingLevelMap[requestedReasoning] === null;
   const clampedReasoning =
-    options?.reasoning && !explicitlyDisabledByThinkingLevel
-      ? clampThinkingLevel(model, options.reasoning)
-      : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+    requestedReasoning !== undefined ? clampThinkingLevel(model, requestedReasoning) : undefined;
+  const shouldDisableReasoning =
+    explicitlyDisabledByThinkingLevel &&
+    (requestedReasoning !== "off" || clampedReasoning === "off");
+  const reasoningEffort =
+    shouldDisableReasoning || clampedReasoning === "off" ? undefined : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
