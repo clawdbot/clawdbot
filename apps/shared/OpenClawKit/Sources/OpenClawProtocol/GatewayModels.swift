@@ -16877,6 +16877,7 @@ public struct CronListParams: Codable, Sendable {
     public let enabled: AnyCodable?
     public let schedulekind: AnyCodable?
     public let lastrunstatus: AnyCodable?
+    public let trigger: AnyCodable?
     public let sortby: AnyCodable?
     public let sortdir: AnyCodable?
     public let agentid: String?
@@ -16891,6 +16892,7 @@ public struct CronListParams: Codable, Sendable {
         enabled: AnyCodable? = nil,
         schedulekind: AnyCodable? = nil,
         lastrunstatus: AnyCodable? = nil,
+        trigger: AnyCodable? = nil,
         sortby: AnyCodable? = nil,
         sortdir: AnyCodable? = nil,
         agentid: String? = nil,
@@ -16904,6 +16906,7 @@ public struct CronListParams: Codable, Sendable {
         self.enabled = enabled
         self.schedulekind = schedulekind
         self.lastrunstatus = lastrunstatus
+        self.trigger = trigger
         self.sortby = sortby
         self.sortdir = sortdir
         self.agentid = agentid
@@ -16919,6 +16922,7 @@ public struct CronListParams: Codable, Sendable {
         case enabled
         case schedulekind = "scheduleKind"
         case lastrunstatus = "lastRunStatus"
+        case trigger
         case sortby = "sortBy"
         case sortdir = "sortDir"
         case agentid = "agentId"

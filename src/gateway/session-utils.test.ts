@@ -815,6 +815,65 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session defaults and rows use the concrete runtime thinking policy", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push(
+      {
+        pluginId: "anthropic",
+        source: "test",
+        provider: {
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [],
+          resolveThinkingProfile: () => ({
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          }),
+        },
+      },
+      {
+        pluginId: "anthropic",
+        source: "test",
+        provider: {
+          id: "claude-cli",
+          label: "Claude CLI",
+          auth: [],
+          resolveThinkingProfile: () => ({
+            levels: [{ id: "off" }],
+            defaultLevel: "off",
+          }),
+        },
+      },
+    );
+    setTestActivePluginRegistry(registry);
+
+    const cfg = createModelDefaultsConfig({ primary: "anthropic/claude-mythos-5" });
+    const catalog = [
+      {
+        provider: "anthropic",
+        id: "claude-mythos-5",
+        name: "Claude Mythos 5",
+        reasoning: false,
+        thinkingPolicyProvider: "claude-cli",
+      },
+    ];
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(row.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(defaults.thinkingDefault).toBe("off");
+    expect(row.thinkingDefault).toBe("off");
+  });
+
   test("session defaults and rows use dynamic catalog context limits with authored caps", () => {
     const catalog = [
       {

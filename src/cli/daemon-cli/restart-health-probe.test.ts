@@ -31,6 +31,7 @@ describe("restart health", () => {
       const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       await once(gateway, "listening");
       const port = (gateway.address() as AddressInfo).port;
+      const timeoutSpy = failure === "timeout" ? vi.spyOn(globalThis, "setTimeout") : undefined;
       gateway.on("connection", (socket) => {
         sendMinimalGatewayConnectChallenge(socket);
         socket.on("message", (data) => {
@@ -46,7 +47,9 @@ describe("restart health", () => {
               ...hello,
               server: { ...hello.server, version: "2026.8.1" },
             });
-          } else if (failure !== "timeout") {
+          } else if (failure === "timeout") {
+            timeoutSpy?.mock.calls.findLast(([, delay]) => delay === 3_000)?.[0]();
+          } else {
             socket.send(
               JSON.stringify({
                 type: "res",
@@ -88,6 +91,10 @@ describe("restart health", () => {
         expect(snapshot.gatewayVersion).toBe("2026.8.1");
         expect(snapshot.versionMismatch).toBeUndefined();
         expect(snapshot.probeError).toBe(failure);
+        expect(firstCallArg(probeGateway)).toMatchObject({
+          includeDetails: true,
+          timeoutMs: 3_000,
+        });
         expect(renderRestartDiagnostics(snapshot)).toContain(`Gateway probe failed: ${failure}`);
       } finally {
         await closeMinimalGatewayServer(gateway);

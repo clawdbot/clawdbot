@@ -13,19 +13,22 @@ const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
+const DISPATCH_WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof-dispatch.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const PREFLIGHT_PROMPT = ".github/codex/prompts/mantis-telegram-desktop-preflight.md";
 const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
   if?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
   uses?: string;
-  with?: Record<string, boolean | string>;
+  with?: Record<string, boolean | number | string>;
 };
 
 type WorkflowJob = {
@@ -39,6 +42,12 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    issue_comment?: {
+      types?: string[];
+    };
+    pull_request_target?: {
+      types?: string[];
+    };
     workflow_dispatch?: {
       inputs?: Record<
         string,
@@ -294,19 +303,95 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).toContain("throw error;");
   });
 
-  it("requires explicit maintainer dispatch before executing a PR worktree", () => {
+  it("accepts maintainer comments and ClawSweeper labels without wasting proof setup", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
+    const dispatchWorkflow = parse(readFileSync(DISPATCH_WORKFLOW, "utf8")) as Workflow;
+    const dispatchText = readFileSync(DISPATCH_WORKFLOW, "utf8");
+    const dispatch = dispatchWorkflow.jobs?.dispatch;
+    const resolver = workflow.jobs?.resolve_request;
+    const capture = workflow.jobs?.run_telegram_desktop_proof;
+    const noVisible = workflow.jobs?.report_no_visible_change;
 
     expect(workflow.on?.workflow_dispatch).toBeDefined();
     expect(workflow.on?.workflow_dispatch?.inputs?.approved_head_sha?.required).toBe(false);
-    expect(workflowText).not.toContain("issue_comment:");
-    expect(workflowText).not.toContain("pull_request_target:");
-    expect(workflowText).not.toContain("clear_issue_comment_reaction:");
+    expect(workflow.on?.workflow_dispatch?.inputs?.request_source?.required).toBe(false);
+    expect(workflow.on?.issue_comment).toBeUndefined();
+    expect(workflow.on?.pull_request_target).toBeUndefined();
+    expect(dispatchWorkflow.on?.issue_comment?.types).toEqual(["created"]);
+    expect(dispatchWorkflow.on?.pull_request_target?.types).toEqual(["labeled"]);
+    expect(dispatchWorkflow.permissions).toEqual({
+      actions: "write",
+      "pull-requests": "read",
+    });
+    expect(dispatchText).toContain("@openclaw-mantis");
+    expect(dispatchText).toContain("telegram desktop proof");
+    expect(dispatchText).toContain('new Set(["admin", "maintain", "write"])');
+    expect(dispatchText).toContain('context.actor !== "clawsweeper[bot]"');
+    expect(dispatchText).toContain("Ignoring Mantis label applied by");
+    expect(dispatchText).toContain("actions.createWorkflowDispatch");
+    expect(dispatchText).toContain('workflow_id: "mantis-telegram-desktop-proof.yml"');
+    expect(dispatchText).toContain('inputs.allow_fork_candidate = "true"');
+    expect(dispatchText).toContain("inputs.approved_head_sha = pr.head.sha");
+    expect(dispatchText).toContain("pr.head.repo?.full_name");
+    expect(dispatchText).toContain("if (!pr.head.repo)");
+    expect(dispatchText).not.toContain("actions/checkout");
+    expect(dispatchText).not.toContain("secrets.");
+    expect(dispatch?.steps).toHaveLength(1);
+    expect(workflowText).toContain('setOutput("request_source", requestSource)');
+    expect(workflowText).toContain('context.actor === "github-actions[bot]"');
+    expect(workflowText).toContain(
+      'const dispatcherSources = new Set(["clawsweeper_label", "issue_comment"]);',
+    );
+    expect(workflowText).toContain("dispatcherSources.has(inputs.request_source)");
+    expect(workflowText).toContain('requestSource === "clawsweeper_label"');
+    expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
-    expect(workflowText).not.toContain("allow-bot-users: clawsweeper[bot]");
-    expect(workflowText).toContain('setOutput("request_source", "workflow_dispatch")');
+    expect(workflowText).not.toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
     expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
+
+    const preflightCheckout = resolver?.steps?.find(
+      (step) => step.name === "Checkout preflight refs",
+    );
+    expect(preflightCheckout?.if).toContain("requires_preflight == 'true'");
+    expect(preflightCheckout?.with?.["fetch-depth"]).toBe(1);
+    const preflightFetch = resolver?.steps?.find((step) => step.name === "Fetch exact PR head");
+    expect(preflightFetch?.run?.match(/git fetch/gu)).toHaveLength(1);
+    expect(preflightFetch?.run).toContain('"$BASELINE_SHA"');
+    expect(preflightFetch?.run).toContain('"+refs/pull/${MANTIS_PR_NUMBER}/head:');
+    const classifier = resolver?.steps?.find((step) => step.name === "Classify visible behavior");
+    expect(classifier?.uses).toContain("openai/codex-action@");
+    expect(classifier?.with?.["codex-version"]).toBe("0.148.0");
+    expect(classifier?.with?.sandbox).toBe("read-only");
+    expect(classifier?.with?.effort).toBe("low");
+    expect(classifier?.with?.["output-schema"]).toContain('"enum": ["run", "skip"]');
+    expect(classifier?.with?.["prompt-file"]).toBe(PREFLIGHT_PROMPT);
+    expect(classifier?.with?.["allow-bot-users"]).toBe("github-actions[bot]");
+    expect(classifier?.["continue-on-error"]).toBe(true);
+    expect(readFileSync(PREFLIGHT_PROMPT, "utf8")).toContain(
+      "focus inspection, not to override the diff",
+    );
+    expect(readFileSync(PREFLIGHT_PROMPT, "utf8")).toContain(
+      "changes are also internal-only unless they change what an end user sees in",
+    );
+    expect(capture?.if).toContain("needs.resolve_request.outputs.visibility_decision != 'skip'");
+    expect(noVisible?.if).toContain("needs.resolve_request.outputs.visibility_decision == 'skip'");
+    const noVisibleComment = noVisible?.steps?.find(
+      (step) => step.name === "Comment that no visible proof applies",
+    );
+    const noVisibleToken = noVisible?.steps?.find(
+      (step) => step.name === "Create Mantis GitHub App token",
+    );
+    expect(noVisibleToken?.with?.["permission-pull-requests"]).toBe("write");
+    expect(noVisibleComment?.with?.script).toContain(
+      "There was nothing visible to test in this PR at all.",
+    );
+    expect(noVisibleComment?.with?.script).toContain("mantis-telegram-desktop-proof");
+    expect(noVisibleComment?.with?.script).toContain(
+      'comment.user?.login === "openclaw-mantis[bot]"',
+    );
+    expect(noVisibleComment?.with?.script).toContain("Could not update Mantis comment");
+    expect(noVisibleComment?.with?.script).toContain("issues.createComment");
     expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
       "steps.trusted_evidence.outcome == 'success'",
     );
@@ -326,9 +411,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
-    expect(captureJob?.if).toBe(
-      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
-    );
+    expect(captureJob?.if).toContain("needs.resolve_request.outputs.publish_artifact_name == ''");
+    expect(captureJob?.if).toContain("needs.resolve_request.outputs.visibility_decision != 'skip'");
     expect(workflow.jobs?.validate_refs).toBeUndefined();
     expect(publishJob?.if).toBe(
       "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",

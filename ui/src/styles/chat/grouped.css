@@ -23,6 +23,9 @@
 }
 
 .chat-group.user.chat-group--peer {
+  /* The left-aligned identity owns the leading edge while hidden details
+     reserve their desktop footprint after it. */
+  --chat-footer-detail-position: static;
   flex-direction: row;
 }
 
@@ -203,9 +206,13 @@
   min-width: 0;
 }
 
+.chat-group.user.chat-group--peer .chat-group-footer__meta {
+  min-height: 24px;
+}
+
 /* Own-message footers are right-aligned, so hover-revealed time/actions must
    slot in to the LEFT of the always-visible name; otherwise the name jumps
-   sideways on hover. Peer footers are left-aligned and already stable. */
+   sideways on hover. */
 .chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
   order: 1;
 }
@@ -228,6 +235,10 @@
 .chat-group.assistant .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
+}
+
+.chat-group.user.chat-group--peer .chat-group-footer button:focus-visible {
+  opacity: 1;
 }
 
 .chat-message-actions-row {
@@ -750,6 +761,16 @@ img.chat-avatar.chat-avatar--logo {
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
     --chat-persistent-footer-opacity: 1;
+  }
+
+  :where(.chat-thread)
+    .chat-group.user.chat-group--peer:not(.chat-group--meta-revealed, :focus-within) {
+    --chat-footer-detail-position: absolute;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
 
   .chat-group-footer-actions .chat-copy-btn,

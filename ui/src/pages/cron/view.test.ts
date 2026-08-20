@@ -135,6 +135,17 @@ describe("cron view list pane", () => {
     lastStatusFilter.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "unknown" });
 
+    const triggerFilter = getElement(
+      container,
+      '[data-test-id="cron-jobs-trigger-filter"]',
+      HTMLSelectElement,
+    );
+    triggerFilter.value = "conditional";
+    triggerFilter.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onJobsFiltersChange).toHaveBeenCalledWith({
+      cronJobsTriggerFilter: "conditional",
+    });
+
     const reset = getElement(
       container,
       '[data-test-id="cron-jobs-filters-reset"]',
@@ -158,7 +169,10 @@ describe("cron view list pane", () => {
 
   it("renders table rows with schedule and status cells and selects on click", () => {
     const onSelectJob = vi.fn();
-    const job = createJob("job-1", { state: { nextRunAtMs: Date.now() + 60_000 } });
+    const job = createJob("job-1", {
+      trigger: { script: "json({ fire: true })" },
+      state: { nextRunAtMs: Date.now() + 60_000 },
+    });
     const paused = createJob("job-2", { name: "Paused task", enabled: false });
     const failed = createJob("job-3", {
       name: "Failing task",
@@ -181,6 +195,9 @@ describe("cron view list pane", () => {
     );
     expect(rows[0]?.querySelector(".cron-last-glyph--ok")).toBeNull();
     expect(rows[0]?.textContent).toContain("n/a");
+    expect(rows[0]?.querySelector(".cron-trigger-icon")?.getAttribute("aria-label")).toBe(
+      "Trigger configured",
+    );
 
     (rows[1] as HTMLElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
@@ -660,6 +677,39 @@ describe("cron view editor", () => {
       form: { ...DEFAULT_CRON_FORM, payloadKind: "systemEvent", sessionTarget: "main" },
     });
     expect(systemEvent.querySelector("#cron-payload-model")).toBeNull();
+
+    const conditional = renderView({
+      createOpen: true,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        triggerEnabled: true,
+        triggerScript: "json({ fire: true })",
+      },
+    });
+    expect(conditional.querySelector("#cron-trigger-script")).toBeInstanceOf(HTMLTextAreaElement);
+    expect(conditional.querySelector(".cron-trigger-summary")?.textContent).toContain(
+      "Trigger configured",
+    );
+  });
+
+  it("hides trigger authoring when the operator disabled triggers but keeps clear available", () => {
+    const onFormChange = vi.fn();
+    const disabled = renderView({ createOpen: true, triggersEnabled: false, onFormChange });
+    expect(disabled.querySelector("#cron-trigger-script")).toBeNull();
+    expect(disabled.textContent).toContain("disabled by cron.triggers.enabled");
+
+    const configured = renderView({
+      createOpen: true,
+      triggersEnabled: false,
+      onFormChange,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        triggerEnabled: true,
+        triggerScript: "json({ fire: true })",
+      },
+    });
+    getButtonByText(configured, "Clear trigger").click();
+    expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 
   it("renders script payloads as highlighted read-only code without exposing script authoring", () => {

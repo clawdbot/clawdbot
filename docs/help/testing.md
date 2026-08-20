@@ -464,11 +464,17 @@ set. Maintainers can start it from the Actions UI through `Mantis Scenario`
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper for PR visual proof. Start it from the Actions UI with
 freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a PR comment:
+telegram-desktop-proof`), or from a maintainer PR comment:
 
 ```text
 @openclaw-mantis telegram desktop proof
 ```
+
+ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
+automatically for branches in `openclaw/openclaw`. Fork PRs require the
+maintainer comment. Manual requests stop before desktop setup and comment
+`There was nothing visible to test in this PR at all.` when the diff has no
+Telegram-visible behavior.
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves
 the change, runs the real-user Crabbox Telegram Desktop proof lane on

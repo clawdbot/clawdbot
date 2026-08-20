@@ -1230,6 +1230,43 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
+  test("rejects thinking levels forbidden by the concrete runtime policy", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "claude-cli"
+        ? { levels: [{ id: "off" }], defaultLevel: "off" }
+        : {
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          },
+    );
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-mythos-5" },
+          },
+        },
+      } as OpenClawConfig,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        thinkingLevel: "medium",
+      },
+      loadGatewayModelCatalog: async () => [
+        {
+          provider: "anthropic",
+          id: "claude-mythos-5",
+          name: "Claude Mythos 5",
+          reasoning: false,
+          thinkingPolicyProvider: "claude-cli",
+        },
+      ],
+    });
+
+    expectPatchError(result, 'thinkingLevel "medium" is not supported');
+  });
+
   test("accepts xhigh thinking patches from configured catalog compat", async () => {
     const entry = expectPatchOk(
       await runPatch({

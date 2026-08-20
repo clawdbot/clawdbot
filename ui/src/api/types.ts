@@ -555,6 +555,7 @@ export type {
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
 export type CronJobsEnabledFilter = NonNullable<CronListParams["enabled"]>;
+export type CronJobsTriggerFilter = NonNullable<CronListParams["trigger"]>;
 export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
 export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
 export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];

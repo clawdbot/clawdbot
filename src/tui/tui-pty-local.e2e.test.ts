@@ -1111,6 +1111,23 @@ describe("TUI PTY real backends", () => {
   );
 
   it(
+    "prints local usage costs without submitting a model request",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished);
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("/usage cost\r", { delay: false });
+        await fixture.run.waitForOutput("Usage cost", LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.waitForOutput("Last 30d", LOCAL_OUTPUT_TIMEOUT_MS);
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "drives and steers the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
       const fixture = await startLocalModeTui(onTestFinished, {
@@ -1694,6 +1711,47 @@ export default {
       it(name, run, timeoutMs);
     });
   }
+
+  registerGatewayTest(
+    "routes usage cost through Gateway chat.send without patching or invoking the model",
+    async ({ onTestFinished }) => {
+      const shared = await requireSharedGatewayFixture();
+      const scenario = GATEWAY_SCENARIOS.command;
+      const sessionKey = `agent:${scenario.agentId}:tui-pty-usage-cost`;
+      await shared.controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
+      const initialModelRequests = shared.mockModel.requests().length;
+      const proxy = await startGatewayRpcDelayProxy(shared.gateway.url, []);
+      const cleanupProxy = registerIdempotentCleanup(
+        onTestFinished,
+        async () => await proxy.stop(),
+      );
+      const fixture = await startIsolatedGatewayPty({
+        gateway: shared.gateway,
+        registerCleanup: onTestFinished,
+        sessionKey,
+        url: proxy.url,
+      });
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        const requestOffset = proxy.requests.length;
+        await fixture.run.write("/usage cost\r", { delay: false });
+        await fixture.run.waitForOutput("Last 30d", LOCAL_OUTPUT_TIMEOUT_MS);
+
+        const requests = proxy.requests.slice(requestOffset);
+        expect(requests.filter((request) => request.method === "chat.send")).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ sessionKey, message: "/usage cost" }),
+          }),
+        ]);
+        expect(requests.some((request) => request.method === "sessions.patch")).toBe(false);
+        expect(shared.mockModel.requests()).toHaveLength(initialModelRequests);
+      } finally {
+        await fixture.cleanup();
+        await cleanupProxy();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
 
   registerGatewayTest(
     "authenticates valid tokens and rejects invalid tokens through a real Gateway PTY",
