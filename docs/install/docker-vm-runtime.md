@@ -47,6 +47,12 @@ all three directories in backups. The auth-profile secret directory contains
 the local encryption key for OAuth-backed auth profile token material, so it
 must persist but remain separate from `OPENCLAW_CONFIG_DIR`.
 
+Ephemeral runtimes that reconnect model credentials after replacement can set
+`OPENCLAW_AGENT_DIR` to a writable runtime-only directory while keeping
+`OPENCLAW_STATE_DIR` and `OPENCLAW_WORKSPACE_DIR` on durable storage. This keeps
+auth profile payloads and refresh state out of the durable agent database; the
+runtime must reconnect credentials after the directory is removed.
+
 ## Run the maintained Docker setup
 
 ```bash

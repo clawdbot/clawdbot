@@ -50,6 +50,21 @@ describe("shared auth store path resolution", () => {
     expect(resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
   });
 
+  it("keeps an explicit agent directory outside durable shared state", async () => {
+    const env = makeStateEnv();
+    const runtimeAgentDir = tempDirs.make("openclaw-runtime-auth-");
+    env.OPENCLAW_AGENT_DIR = runtimeAgentDir;
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+    const { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } =
+      await import("./path-resolve.js");
+
+    expect(resolveSharedAuthStoreOwnership(env)).toEqual({ location: "legacy-main" });
+    expect(resolveSharedAuthStorePath(env)).toBe(
+      path.join(runtimeAgentDir, "openclaw-agent.sqlite"),
+    );
+    expect(resolveSharedAuthStorePath(env)).not.toContain(env.OPENCLAW_STATE_DIR);
+  });
+
   it("caches ownership independently for each canonical state root", async () => {
     const firstEnv = makeStateEnv();
     const secondEnv = makeStateEnv();
