@@ -270,6 +270,7 @@ async function runCodexExecResume(params: {
       "--skip-git-repo-check",
       "--output-last-message",
       outputPath,
+      "--",
       params.sessionId,
       "-",
     ];

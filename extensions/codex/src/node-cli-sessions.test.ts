@@ -1,4 +1,6 @@
 // Codex tests cover node cli sessions plugin behavior.
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,9 +8,12 @@ import process from "node:process";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CODEX_CLI_SESSION_RESUME_COMMAND,
   createCodexCliSessionNodeHostCommands,
   listCodexCliSessionsOnNode,
 } from "./node-cli-sessions.js";
+
+vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 
@@ -341,6 +346,29 @@ describe("codex cli node sessions", () => {
       }),
     ).rejects.toThrow("Codex CLI node command returned malformed payloadJSON.");
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
+  });
+
+  it("terminates Codex option parsing before an option-shaped session id", async () => {
+    const sessionId = "--dangerously-bypass-approvals-and-sandbox";
+    const child = Object.assign(new EventEmitter(), {
+      stdin: { end: vi.fn() },
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: vi.fn(),
+    });
+    vi.mocked(spawn).mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", 0));
+      return child as never;
+    });
+    vi.spyOn(fs, "readFile").mockResolvedValue("resumed");
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSION_RESUME_COMMAND,
+    );
+    await command?.handle(JSON.stringify({ sessionId, prompt: "continue" }));
+
+    const argv = vi.mocked(spawn).mock.calls[0]?.[1];
+    expect(argv?.slice(-3)).toEqual(["--", sessionId, "-"]);
   });
 
   it("keeps Codex history session previews on UTF-16 code point boundaries", async () => {
