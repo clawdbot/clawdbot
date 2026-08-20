@@ -142,6 +142,15 @@ describe("config draft model", () => {
               fractionalInteger: { type: "integer" },
               unionRadix: { anyOf: [{ type: "integer" }, { type: "string" }] },
               unionScientific: { anyOf: [{ type: "integer" }, { type: "string" }] },
+              unionDigits: {
+                oneOf: [{ type: "integer" }, { type: "string", pattern: "^[0-9]+$" }],
+              },
+              unionEnum: {
+                anyOf: [
+                  { type: "number", const: 60 },
+                  { type: "string", enum: ["60"] },
+                ],
+              },
             },
           },
           uiHints: {},
@@ -165,6 +174,8 @@ describe("config draft model", () => {
     runtimeConfig.patchForm(["fractionalInteger"], "42.5");
     runtimeConfig.patchForm(["unionRadix"], "0o17");
     runtimeConfig.patchForm(["unionScientific"], "1e5");
+    runtimeConfig.patchForm(["unionDigits"], "00123");
+    runtimeConfig.patchForm(["unionEnum"], "60");
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     const submission = submitted.find((entry) => entry.method === "config.set");
@@ -180,9 +191,10 @@ describe("config draft model", () => {
       decimal: 0.5,
       fractionalInteger: "42.5",
       unionRadix: "0o17",
-      // Unions with a string variant keep the string: the input is already
-      // schema-valid, and numeric parses can be lossy (64-bit ids).
+      // String-capable unions keep the text input; the Gateway owns constraints.
       unionScientific: "1e5",
+      unionDigits: "00123",
+      unionEnum: "60",
     });
     runtimeConfig.dispose();
   });
@@ -210,7 +222,16 @@ describe("config draft model", () => {
                 type: "object",
                 additionalProperties: {
                   type: "array",
-                  items: { anyOf: [{ type: "string" }, { type: "number" }] },
+                  items: {
+                    oneOf: [
+                      {
+                        type: "string",
+                        allOf: [{ pattern: "^[0-9]+$" }],
+                        not: { const: "never" },
+                      },
+                      { type: "number" },
+                    ],
+                  },
                 },
               },
               bigInteger: { type: "integer" },
@@ -239,7 +260,7 @@ describe("config draft model", () => {
     expect(typeof raw).toBe("string");
     expect(JSON.parse(raw as string)).toEqual({
       allowFrom: { discord: ["1048113311314608148", 42] },
-      // Beyond 2^53 a lossy integer parse must not happen even for pure
+      // Beyond 2^53 an unsafe integer parse must not happen even for pure
       // integer fields; the string is kept for the gateway to reject loudly.
       bigInteger: "10481133113146081487",
       label: "after",

@@ -23,6 +23,23 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("-2.5E-3", false)).toBe(-0.0025);
     expect(coerceConfigFormNumberString("1e5", true)).toBe(100_000);
     expect(coerceConfigFormNumberString("", false)).toBeUndefined();
+    expect(coerceConfigFormNumberString("9007199254740991", true)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(coerceConfigFormNumberString("9.007199254740991e15", true)).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(coerceConfigFormNumberString("9007199254740992", true)).toBe("9007199254740992");
+    expect(coerceConfigFormNumberString("9007199254740993", true)).toBe("9007199254740993");
+    expect(coerceConfigFormNumberString("-9007199254740993", false)).toBe("-9007199254740993");
+    expect(coerceConfigFormNumberString("9007199254740992.0", true)).toBe("9007199254740992.0");
+    expect(coerceConfigFormNumberString("9007199254740993.0", true)).toBe("9007199254740993.0");
+    expect(coerceConfigFormNumberString("10481133113146081487e0", true)).toBe(
+      "10481133113146081487e0",
+    );
+    expect(coerceConfigFormNumberString("9.007199254740993e15", true)).toBe("9.007199254740993e15");
+    expect(coerceConfigFormNumberString("-9.007199254740993e15", true)).toBe(
+      "-9.007199254740993e15",
+    );
+    expect(coerceConfigFormNumberString("0.10", false)).toBe(0.1);
 
     for (const spelling of [
       "0x10",

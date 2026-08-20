@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigFormCollectionDraftProps = {
@@ -89,17 +90,34 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       return { ok: true, value: null };
     }
     const valueType = schemaType(schema);
+    const variants = schema.anyOf ?? schema.oneOf ?? [];
+    const stringNumberUnion =
+      variants.some((variant) => schemaType(variant) === "string") &&
+      variants.some((variant) => ["number", "integer"].includes(schemaType(variant) ?? ""));
+    if (
+      (valueType === "string" || stringNumberUnion) &&
+      isSupportedConfigValueValid(schema, this.draftValue)
+    ) {
+      return { ok: true, value: this.draftValue };
+    }
     if (valueType === "string") {
       return { ok: true, value: this.draftValue };
     }
     if (valueType === "number" || valueType === "integer") {
-      const value = Number(this.draftValue);
-      return this.draftValue.trim() && Number.isFinite(value)
-        ? { ok: true, value }
+      const coerced = coerceConfigFormNumberString(this.draftValue, valueType === "integer");
+      return typeof coerced === "number"
+        ? { ok: true, value: coerced }
         : { ok: false, message: t("configForm.invalidNumber") };
     }
     try {
-      return { ok: true, value: JSON.parse(this.draftValue) };
+      const parsed = JSON.parse(this.draftValue) as unknown;
+      if (typeof parsed === "number") {
+        const coerced = coerceConfigFormNumberString(this.draftValue, false);
+        return typeof coerced === "number"
+          ? { ok: true, value: coerced }
+          : { ok: false, message: t("configForm.invalidNumber") };
+      }
+      return { ok: true, value: parsed };
     } catch {
       return { ok: false, message: t("configForm.invalidJson") };
     }

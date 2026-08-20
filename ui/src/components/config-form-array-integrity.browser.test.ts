@@ -134,6 +134,45 @@ describe("config form array integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["values"], []);
   });
 
+  it("preserves unquoted 64-bit strings added to string-number arrays", async () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        items: {
+          oneOf: [{ type: "string", pattern: "^[0-9]+$" }, { type: "number" }],
+        },
+      },
+      value: [],
+      path: ["allowFrom"],
+      onPatch,
+    });
+
+    const draftHost = expectElement(
+      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      "string-number array draft",
+    );
+    expectElement(findAddButton(container), "string-number array add").click();
+    await draftHost.updateComplete;
+    const draftValue = expectElement(
+      draftHost.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        "[data-collection-draft-value]",
+      ),
+      "string-number array draft value",
+    );
+    const identifier = "1048113311314608148";
+    draftValue.value = identifier;
+    draftValue.dispatchEvent(new Event("input", { bubbles: true }));
+    await draftHost.updateComplete;
+    expectElement(findAddButton(draftHost), "string-number array draft commit").click();
+
+    expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
+    expect(onPatch.mock.calls[0]?.[1]?.[0]).not.toBe(Number(identifier));
+    container.remove();
+  });
+
   it("keeps large and unique array minimums incrementally editable", async () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
