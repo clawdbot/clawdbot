@@ -501,7 +501,7 @@ function writeAttemptFacts(roots: Roots, lane: Lane, attempt: number, facts: unk
   writeJsonAtomic(path.join(roots.outputRoot, lane, filename), facts, 0o644);
 }
 
-export function publishTerminalLaneFacts(params: {
+function publishTerminalLaneFacts(params: {
   artifacts: Record<string, ReturnType<typeof artifact>>;
   attempt: number;
   facts: unknown;
