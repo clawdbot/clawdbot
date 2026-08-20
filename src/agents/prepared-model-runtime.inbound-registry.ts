@@ -3,6 +3,7 @@ import {
   listRuntimePluginIdsFromRegistry,
   registryMatchesManifestPluginIds,
 } from "../plugins/active-runtime-registry.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -56,13 +57,21 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     }
     const activeRegistry = getActivePluginRegistry();
     const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
-    // Inbound dispatch belongs to the exact active Gateway generation; its independent
-    // model-selected registry remains the only mutable prepared-context owner.
+    // Reuse is generation-bound: the requesting snapshot must BE the process-current
+    // published generation, or a leaked/older active registry could satisfy the
+    // manifest match (bundled records compare by id+origin only) and serve another
+    // generation's plugins. Identity, not equivalence, is the authority check here.
+    const currentGenerationSnapshot = getCurrentPluginMetadataSnapshot({
+      config: input.config,
+      workspaceDir: metadataSnapshot.workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
+    });
     const reusableGatewayRegistry =
       input.allowGatewaySubagentBinding === true &&
       input.env === undefined &&
       getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
       activeRegistry &&
+      currentGenerationSnapshot === metadataSnapshot &&
       (activeWorkspaceDir === undefined || activeWorkspaceDir === metadataSnapshot.workspaceDir) &&
       registryMatchesManifestPluginIds(
         activeRegistry,
