@@ -955,7 +955,11 @@ export function createHookRunner(
   async function runAuthorizedPromptBuild(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
-    params: { toolAuthorityFingerprint: string; activeToolNames: readonly string[] },
+    params: {
+      toolAuthorityFingerprint: string;
+      activeToolNames: readonly string[];
+      assertHostActive: () => void;
+    },
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
     const sourceFingerprint = params.toolAuthorityFingerprint.trim();
     if (!sourceFingerprint) {
@@ -970,6 +974,7 @@ export function createHookRunner(
       if (!token.active) {
         throw new Error("prompt tool authority is no longer active");
       }
+      params.assertHostActive();
     };
     const authority: PluginHookToolAuthority = Object.freeze({
       fingerprint: createHash("sha256")
@@ -984,6 +989,7 @@ export function createHookRunner(
       assertActive,
     });
     try {
+      assertActive();
       const result = await runModifyingHook<
         "before_prompt_build",
         PluginHookBeforePromptBuildResult
@@ -996,6 +1002,7 @@ export function createHookRunner(
           includeRegistration: (registration) => registration.requiresToolAuthority === true,
         },
       );
+      assertActive();
       if (!result) {
         return undefined;
       }

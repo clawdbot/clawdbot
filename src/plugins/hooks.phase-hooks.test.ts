@@ -278,11 +278,55 @@ describe("phase hooks merger", () => {
       {
         toolAuthorityFingerprint: "turn-authority",
         activeToolNames: ["message"],
+        assertHostActive: () => undefined,
       },
     );
     const retainedAuthority = enrichment.mock.calls[0]?.[1].toolAuthority;
 
     expect(result).toEqual({ prependContext: "authorized context" });
     expect(() => retainedAuthority?.assertActive()).toThrow("no longer active");
+  });
+
+  it("rejects enrichment that finishes after the host authority closes", async () => {
+    let releaseEnrichment: () => void = () => {
+      throw new Error("enrichment gate was not initialized");
+    };
+    const enrichmentGate = new Promise<void>((resolve) => {
+      releaseEnrichment = resolve;
+    });
+    const enrichment = vi.fn(async () => {
+      await enrichmentGate;
+      return { prependContext: "stale authorized context" };
+    });
+    registry.typedHooks.push({
+      pluginId: "enricher",
+      hookName: "before_prompt_build",
+      handler: enrichment,
+      requiresToolAuthority: true,
+      source: "test",
+    });
+    const runner = createHookRunner(registry);
+    let hostActive = true;
+    const run = runner.runAuthorizedPromptBuild(
+      { prompt: "test", messages: [] },
+      {},
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: ["memory_search"],
+        assertHostActive: () => {
+          if (!hostActive) {
+            throw new Error("host turn authority is no longer active");
+          }
+        },
+      },
+    );
+    await vi.waitFor(() => {
+      expect(enrichment).toHaveBeenCalledOnce();
+    });
+
+    hostActive = false;
+    releaseEnrichment();
+
+    await expect(run).rejects.toThrow("host turn authority is no longer active");
   });
 });

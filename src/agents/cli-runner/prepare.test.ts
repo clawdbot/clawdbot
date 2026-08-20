@@ -30,6 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
+import {
   createTestAdmittedRunContext,
   createTestPreparedRunAdmission,
 } from "../admitted-run-context.test-support.js";
@@ -2033,10 +2037,22 @@ describe("prepareCliRunContext", () => {
       })),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
-
-    const context = await fixture.prepare({
-      toolAuthorityFingerprint: "turn-authority",
+    const preparedRunAdmission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("run-test"),
+      facts: {
+        runId: "run-test",
+        agentId: "main",
+        ingress: { kind: "system", boundary: "test", state: "present" },
+      },
     });
+
+    const context = await fixture
+      .prepare({
+        toolAuthorityFingerprint: "turn-authority",
+        preparedRunAdmission,
+      })
+      .finally(preparedRunAdmission.close);
 
     expect(context.params.prompt).toBe("authorized memory context\n\nlatest ask");
     expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
@@ -2045,6 +2061,7 @@ describe("prepareCliRunContext", () => {
       {
         toolAuthorityFingerprint: "turn-authority",
         activeToolNames: [],
+        assertHostActive: expect.any(Function),
       },
     );
   });

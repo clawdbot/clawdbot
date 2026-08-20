@@ -767,6 +767,43 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("does not inject recall that completes after the turn authority closes", async () => {
+    let releaseRecall: () => void = () => {
+      throw new Error("recall gate was not initialized");
+    };
+    const recallGate = new Promise<void>((resolve) => {
+      releaseRecall = resolve;
+    });
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await recallGate;
+      await writeUsableMemoryTranscript(params.sessionFile, "stale private memory");
+      return { payloads: [{ text: "- stale private memory" }] };
+    });
+    let authorityActive = true;
+    const result = runPromptBuild(
+      { prompt: "what should i remember?" },
+      {
+        toolAuthority: {
+          fingerprint: "closing-memory-authority",
+          allows: () => true,
+          assertActive: () => {
+            if (!authorityActive) {
+              throw new Error("turn authority is no longer active");
+            }
+          },
+        },
+      },
+    );
+    await vi.waitFor(() => {
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
+
+    authorityActive = false;
+    releaseRecall();
+
+    await expect(result).resolves.toBeUndefined();
+  });
+
   it("keeps the outer hook timeout at the live-config ceiling", () => {
     registerPluginConfig({ timeoutMs: 90_000 });
 

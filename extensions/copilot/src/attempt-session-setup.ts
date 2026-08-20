@@ -74,6 +74,9 @@ export async function createCopilotSessionSetup(params: {
     promptPolicyResult = promptToolPolicy?.apply();
     promptBuild = { prompt: input.prompt, developerInstructions: "" };
   } else {
+    if (!ordinaryAttemptInput) {
+      throw new Error("Copilot ordinary attempt authority is unavailable.");
+    }
     if (!promptToolPolicy) {
       throw new Error("Copilot ordinary attempts require a prompt tool policy.");
     }
@@ -95,6 +98,7 @@ export async function createCopilotSessionSetup(params: {
       toolAuthority: {
         fingerprint: input.toolAuthorityFingerprint,
         activeToolNames: () => promptPolicyResult?.callableToolNames ?? [],
+        assertActive: ordinaryAttemptInput.hostCapabilities.assertActive,
       },
     });
   }

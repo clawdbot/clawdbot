@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -173,15 +174,21 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         });
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
   const hookRunner = input.hookRunner;
+  const assertHostActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    attempt.abortSignal,
+  );
   const authorizedHookResult =
     input.isRawModelRun ||
     isSettledTurnFinalization ||
     !hookRunner ||
-    !attempt.toolAuthorityFingerprint
+    !attempt.toolAuthorityFingerprint ||
+    !assertHostActive
       ? undefined
       : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
           toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
           activeToolNames: promptCacheToolNames,
+          assertHostActive,
         });
   const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolPolicyName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;

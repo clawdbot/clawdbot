@@ -39,6 +39,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   toolAuthority?: {
     fingerprint?: string;
     activeToolNames: () => readonly string[];
+    assertActive: () => void;
   };
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
@@ -94,13 +95,15 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     params.developerInstructions,
     promptBuildResult?.toolsAllow,
   );
-  const toolAuthorityFingerprint = params.toolAuthority?.fingerprint?.trim();
+  const toolAuthority = params.toolAuthority;
+  const toolAuthorityFingerprint = toolAuthority?.fingerprint?.trim();
   const authorizedPromptBuildResult =
-    hookRunner && toolAuthorityFingerprint
+    hookRunner && toolAuthorityFingerprint && toolAuthority
       ? await hookRunner
           .runAuthorizedPromptBuild(promptEvent, hookCtx, {
             toolAuthorityFingerprint,
-            activeToolNames: params.toolAuthority?.activeToolNames() ?? [],
+            activeToolNames: toolAuthority.activeToolNames(),
+            assertHostActive: toolAuthority.assertActive,
           })
           .catch((error: unknown) => {
             log.warn(`authorized before_prompt_build hook failed: ${String(error)}`);

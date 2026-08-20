@@ -49,7 +49,10 @@ import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  resolvePreparedRunAdmission,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -1079,7 +1082,17 @@ export async function prepareCliRunContext(
     : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
   const authorizedPromptBuildResult = await (async () => {
-    if (!promptBuildHookRunner || !params.toolAuthorityFingerprint) {
+    const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
+    if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
+      return undefined;
+    }
+    const admittedParams = await admitPreparedParams(params);
+    params = admittedParams;
+    const assertHostActive = resolveAdmittedRunActiveAssertion(
+      admittedParams.admittedRunContext,
+      admittedParams.abortSignal,
+    );
+    if (!assertHostActive) {
       return undefined;
     }
     try {
@@ -1090,8 +1103,9 @@ export async function prepareCliRunContext(
         },
         promptBuildHookContext,
         {
-          toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+          toolAuthorityFingerprint,
           activeToolNames: promptTools.map((tool) => tool.name),
+          assertHostActive,
         },
       );
     } catch (error) {

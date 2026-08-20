@@ -2936,19 +2936,28 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("fails closed when before_prompt_build restricts Codex tools", async () => {
+    const authorizedEnrichment = vi.fn(() => ({ prependContext: "private recalled context" }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_prompt_build",
           handler: () => ({ toolsAllow: ["message"] }),
         },
+        {
+          hookName: "before_prompt_build",
+          handler: authorizedEnrichment,
+          requiresToolAuthority: true,
+        },
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolAuthorityFingerprint = "restrictive-turn-authority";
 
-    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex app-server cannot enforce before_prompt_build toolsAllow",
     );
+    expect(authorizedEnrichment).not.toHaveBeenCalled();
   });
 
   it("releases adopted startup resources when continuity prompt rebuilding fails", async () => {

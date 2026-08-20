@@ -153,6 +153,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       toolAuthority: {
         fingerprint: "turn-authority",
         activeToolNames: () => activeToolNames,
+        assertActive: () => undefined,
       },
     });
 
