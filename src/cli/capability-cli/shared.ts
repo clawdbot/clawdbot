@@ -3,7 +3,10 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { listAgentIds, resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -117,12 +120,7 @@ export function resolveCapabilityProviderAgentId(
     surface,
     hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
   });
-  if (!listAgentIds(cfg).includes(agentId)) {
-    throw new Error(
-      `Unknown agent id "${agentId}". Run \`openclaw agents list\` to see configured agents.`,
-    );
-  }
-  return agentId;
+  return resolveConfiguredAgentId(cfg, agentId);
 }
 
 export function resolveCapabilityAgentOption(

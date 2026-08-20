@@ -1,6 +1,7 @@
 // Session store target discovery maps configured and on-disk agent stores to canonical targets.
 import fsSync from "node:fs";
 import path from "node:path";
+import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -655,11 +656,8 @@ export function resolveSessionStoreTargets(
       // offers --agent/--all-agents instead of the ambient owner chain.
       tryResolveLegacyCompatibilityAgentId(cfg) ??
       resolveDefaultAgentId(cfg);
-    const knownAgentIds = new Set(listAgentIds(cfg).map(normalizeAgentId));
-    if (hasAgent && !knownAgentIds.has(defaultAgentId)) {
-      throw new Error(
-        `Unknown agent id "${opts.agent}". Use "openclaw agents list" to see configured agents.`,
-      );
+    if (hasAgent) {
+      resolveConfiguredAgentId(cfg, defaultAgentId);
     }
     const target = resolveExplicitSessionStoreTarget({ defaultAgentId, env, store: opts.store });
     if (
@@ -689,13 +687,8 @@ export function resolveSessionStoreTargets(
   }
 
   if (hasAgent) {
-    const knownAgents = listAgentIds(cfg);
     const requested = normalizeAgentId(opts.agent ?? "");
-    if (!knownAgents.includes(requested)) {
-      throw new Error(
-        `Unknown agent id "${opts.agent}". Use "openclaw agents list" to see configured agents.`,
-      );
-    }
+    resolveConfiguredAgentId(cfg, requested);
     return [
       {
         agentId: requested,
