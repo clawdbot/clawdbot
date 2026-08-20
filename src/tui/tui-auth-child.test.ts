@@ -30,6 +30,7 @@ function emitExit(
 
 describe("TUI auth child owner", () => {
   afterEach(() => {
+    vi.useRealTimers();
     killTreeMocks.signalProcessTree.mockReset();
   });
 
@@ -60,6 +61,7 @@ describe("TUI auth child owner", () => {
   });
 
   it("cancels gracefully, then force-kills only the still-active child", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const owner = createTuiAuthChildOwner();
     const child = createChild(103);
     const result = owner.spawnAndWait(() => child);
@@ -71,10 +73,14 @@ describe("TUI auth child owner", () => {
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledWith(103, "SIGTERM", {
       detached: false,
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_050);
+    vi.advanceTimersByTime(999);
+    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
+    expect(killTreeMocks.signalProcessTree).not.toHaveBeenCalledWith(103, "SIGKILL", {
+      detached: false,
     });
-    expect(killTreeMocks.signalProcessTree).toHaveBeenLastCalledWith(103, "SIGKILL", {
+    vi.advanceTimersByTime(1);
+    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(2);
+    expect(killTreeMocks.signalProcessTree).toHaveBeenNthCalledWith(2, 103, "SIGKILL", {
       detached: false,
     });
 
@@ -83,6 +89,7 @@ describe("TUI auth child owner", () => {
   });
 
   it("clears force escalation when the owned child exits", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const owner = createTuiAuthChildOwner();
     const child = createChild(104);
     const result = owner.spawnAndWait(() => child);
@@ -90,9 +97,10 @@ describe("TUI auth child owner", () => {
     emitExit(child, null, "SIGTERM");
 
     await expect(result).resolves.toEqual({ exitCode: null, signal: "SIGTERM" });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_050);
-    });
+    vi.advanceTimersByTime(1_001);
     expect(killTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
+    expect(killTreeMocks.signalProcessTree).toHaveBeenCalledWith(104, "SIGTERM", {
+      detached: false,
+    });
   });
 });
