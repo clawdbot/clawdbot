@@ -426,6 +426,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   const resolvedTarget = await resolveMessageTarget({
     cfg,
     channel,
+    channelPlugin,
     action,
     args: params,
     accountId,

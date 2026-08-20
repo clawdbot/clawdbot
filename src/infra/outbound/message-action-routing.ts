@@ -162,6 +162,7 @@ function resolveTargetBoundAccountId(params: {
 async function resolveActionTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  channelPlugin?: ChannelPlugin;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
@@ -174,6 +175,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: toRaw,
       accountId: params.accountId ?? undefined,
+      plugin: params.channelPlugin,
     });
     params.args.to = resolved.to;
     resolvedTarget = resolved;
@@ -185,6 +187,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: channelIdRaw,
       accountId: params.accountId ?? undefined,
+      plugin: params.channelPlugin,
       preferredKind: "group",
       validateResolvedTarget: (target) =>
         target.kind === "user"
@@ -205,6 +208,7 @@ async function resolveResolvedTargetOrThrow(params: {
   channel: ChannelId;
   input: string;
   accountId?: string;
+  plugin?: ChannelPlugin;
   preferredKind?: "group" | "user" | "channel";
   validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
 }): Promise<ResolvedMessagingTarget> {
@@ -213,6 +217,7 @@ async function resolveResolvedTargetOrThrow(params: {
     channel: params.channel,
     input: params.input,
     accountId: params.accountId,
+    plugin: params.plugin,
     preferredKind: params.preferredKind,
   });
   if (!resolved.ok) {
@@ -451,6 +456,7 @@ export async function prepareMessageRoute(params: {
 export async function resolveMessageTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  channelPlugin?: ChannelPlugin;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
@@ -463,6 +469,7 @@ export async function resolveMessageTarget(params: {
     : await resolveActionTarget({
         cfg: params.cfg,
         channel: params.channel,
+        channelPlugin: params.channelPlugin,
         action: params.action,
         args: params.args,
         accountId: params.accountId,
