@@ -4,48 +4,45 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-// Force the mocked module to load here: the factory below captures the real reader as a
-// side effect, and beforeEach needs that capture. Without this import the factory only ran
-// if some other module in the graph pulled it in first, which is not guaranteed once a
-// shard shares a worker (--isolate=false).
-import "../config/sessions/session-accessor.sqlite-read.js";
 import { rpcReq } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+vi.hoisted(() => {
+  // Earlier Gateway suites may have already loaded the unmocked accessor graph.
+  vi.resetModules();
+});
+
 type LoadTranscriptEvents =
   (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["loadTranscriptEvents"];
 
-const transcriptReads = vi.hoisted(() => {
-  // A prior Gateway suite may have already loaded the unmocked accessor graph.
-  vi.resetModules();
-  return { load: vi.fn<LoadTranscriptEvents>() };
-});
+const transcriptReads = vi.hoisted(() => ({
+  actual: undefined as LoadTranscriptEvents | undefined,
+  load: vi.fn<LoadTranscriptEvents>(),
+}));
 
 vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-read.js")>();
+  transcriptReads.actual = actual.loadTranscriptEvents;
+  transcriptReads.load.mockImplementation(actual.loadTranscriptEvents);
   return { ...actual, loadTranscriptEvents: transcriptReads.load };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-// Read the real implementation back here rather than capturing it inside the mock
-// factory: Vitest runs that factory on first import of the mocked module, and this
-// project is `isolate: false`, so on a warm module graph the factory can still be
-// unrun when the first `beforeEach` fires.
-async function actualTranscriptReader(): Promise<LoadTranscriptEvents> {
-  const actual = await vi.importActual<
-    typeof import("../config/sessions/session-accessor.sqlite-read.js")
-  >("../config/sessions/session-accessor.sqlite-read.js");
-  return actual.loadTranscriptEvents;
+function requireTranscriptReader(): LoadTranscriptEvents {
+  if (!transcriptReads.actual) {
+    throw new Error("transcript reader mock was not initialized");
+  }
+  return transcriptReads.actual;
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   transcriptReads.load.mockReset();
-  transcriptReads.load.mockImplementation(await actualTranscriptReader());
+  transcriptReads.load.mockImplementation(requireTranscriptReader());
 });
 
 async function seedCompactionSession(params: {
@@ -120,7 +117,7 @@ test("sessions.compact reports model compaction transcript re-read failures as u
     storePath,
     nativeHarness: true,
   });
-  const events = await (await actualTranscriptReader())(scope);
+  const events = await requireTranscriptReader()(scope);
   transcriptReads.load.mockResolvedValueOnce(events).mockRejectedValueOnce(transcriptReadError());
 
   const { ws } = await openClient();
