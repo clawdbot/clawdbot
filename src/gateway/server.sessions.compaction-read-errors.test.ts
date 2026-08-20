@@ -1,9 +1,14 @@
-import { beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+// Force the mocked module to load here: the factory below captures the real reader as a
+// side effect, and beforeEach needs that capture. Without this import the factory only ran
+// if some other module in the graph pulled it in first, which is not guaranteed once a
+// shard shares a worker (--isolate=false).
+import "../config/sessions/session-accessor.sqlite-read.js";
 import { rpcReq } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -13,31 +18,31 @@ import {
 type LoadTranscriptEvents =
   (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["loadTranscriptEvents"];
 
-const transcriptReads = vi.hoisted(() => ({ load: vi.fn<LoadTranscriptEvents>() }));
+const transcriptReads = vi.hoisted(() => ({
+  actual: undefined as LoadTranscriptEvents | undefined,
+  load: vi.fn<LoadTranscriptEvents>(),
+}));
 
 vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-read.js")>();
+  transcriptReads.actual = actual.loadTranscriptEvents;
+  transcriptReads.load.mockImplementation(actual.loadTranscriptEvents);
   return { ...actual, loadTranscriptEvents: transcriptReads.load };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-// Resolve the real reader explicitly: deriving it from the vi.mock factory made the
-// default implementation depend on whether that factory had run for this file yet,
-// which is not guaranteed once a shard shares a worker (--isolate=false).
-let loadTranscriptEventsActual: LoadTranscriptEvents;
-
-beforeAll(async () => {
-  const actual = await vi.importActual<
-    typeof import("../config/sessions/session-accessor.sqlite-read.js")
-  >("../config/sessions/session-accessor.sqlite-read.js");
-  loadTranscriptEventsActual = actual.loadTranscriptEvents;
-});
+function requireTranscriptReader(): LoadTranscriptEvents {
+  if (!transcriptReads.actual) {
+    throw new Error("transcript reader mock was not initialized");
+  }
+  return transcriptReads.actual;
+}
 
 beforeEach(() => {
   transcriptReads.load.mockReset();
-  transcriptReads.load.mockImplementation(loadTranscriptEventsActual);
+  transcriptReads.load.mockImplementation(requireTranscriptReader());
 });
 
 async function seedCompactionSession(params: {
@@ -112,7 +117,7 @@ test("sessions.compact reports model compaction transcript re-read failures as u
     storePath,
     nativeHarness: true,
   });
-  const events = await loadTranscriptEventsActual(scope);
+  const events = await requireTranscriptReader()(scope);
   transcriptReads.load.mockResolvedValueOnce(events).mockRejectedValueOnce(transcriptReadError());
 
   const { ws } = await openClient();
