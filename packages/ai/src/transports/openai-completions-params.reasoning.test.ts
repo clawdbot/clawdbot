@@ -349,7 +349,7 @@ describe("openai completions params", () => {
     expect(params.reasoning_effort).toBe("high");
   });
 
-  it("omits reasoning_effort when a thinking level is explicitly disabled", () => {
+  it("clamps null-mapped thinking levels before serializing reasoning_effort", () => {
     const model = {
       id: "custom-reasoning",
       name: "Custom Reasoning",
@@ -369,7 +369,7 @@ describe("openai completions params", () => {
       reasoning: "high",
     } as never) as { reasoning_effort?: unknown };
 
-    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params.reasoning_effort).toBe("medium");
   });
 
   it("maps qwen thinking format to top-level enable_thinking", () => {

@@ -359,13 +359,21 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
   });
 
-  it("returns undefined for a null thinking-level opt-out", () => {
-    const optOutModel = {
+  it("clamps a null-mapped thinking level before serializing Responses reasoning", () => {
+    const cappedModel = {
       ...nativeOpenAIModel,
       thinkingLevelMap: { high: null },
     } satisfies Model<"openai-responses">;
 
-    expect(resolveResponsesReasoningEffort(optOutModel, "high")).toBeUndefined();
+    expect(resolveResponsesReasoningEffort(cappedModel, "high")).toBe("medium");
+
+    const params = {} as ResponseCreateParamsStreaming;
+    applyCommonResponsesParams(params, cappedModel, { messages: [] }, { reasoningEffort: "high" });
+
+    expect(params).toMatchObject({
+      reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
   });
 
   it("preserves Grok 4.5 off-to-low clamping despite an off null map entry", () => {
@@ -497,7 +505,7 @@ describe("Responses reasoning effort", () => {
     expect(params).not.toHaveProperty("include");
   });
 
-  it("honors a thinkingLevelMap null opt-out over compat mapping", () => {
+  it("clamps a null-mapped extended level before applying compat mapping", () => {
     const params = {} as ResponseCreateParamsStreaming;
     const compatModel = {
       ...nativeOpenAIModel,
@@ -511,8 +519,10 @@ describe("Responses reasoning effort", () => {
 
     applyCommonResponsesParams(params, compatModel, { messages: [] }, { reasoningEffort: "xhigh" });
 
-    expect(params).not.toHaveProperty("reasoning");
-    expect(params).not.toHaveProperty("include");
+    expect(params).toMatchObject({
+      reasoning: { effort: "high", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
   });
 });
 

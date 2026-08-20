@@ -284,7 +284,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "high" });
   });
 
-  it("omits reasoning_effort for an explicitly disabled thinking level at the provider boundary", async () => {
+  it("clamps a null-mapped thinking level at the provider boundary", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
     const compatibleModel = {
       ...reasoningModel,
@@ -299,10 +299,10 @@ describe("OpenAI-compatible completions params", () => {
       reasoningEffort: "high",
     }).result();
 
-    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "medium" });
   });
 
-  it("preserves an explicit thinking-level null opt-out through simple completions", async () => {
+  it("clamps a null-mapped thinking level through simple completions", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
     const compatibleModel = {
       ...reasoningModel,
@@ -317,7 +317,7 @@ describe("OpenAI-compatible completions params", () => {
       reasoning: "high",
     }).result();
 
-    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: "medium" });
   });
 
   it("preserves Grok 4.5 off-to-low clamping through simple completions", async () => {

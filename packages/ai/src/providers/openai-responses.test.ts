@@ -103,7 +103,7 @@ describe("OpenAI Responses provider", () => {
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
-  it("omits reasoning serialization for a null thinking-level opt-out", async () => {
+  it("clamps a null-mapped thinking level through simple Responses", async () => {
     const result = await streamSimpleOpenAIResponses(
       model({
         provider: "proof-provider",
@@ -116,8 +116,10 @@ describe("OpenAI Responses provider", () => {
     ).result();
 
     expect(result.stopReason).toBe("error");
-    expect(openAiMockState.params[0]).not.toHaveProperty("reasoning");
-    expect(openAiMockState.params[0]).not.toHaveProperty("include");
+    expect(openAiMockState.params[0]).toMatchObject({
+      reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
   });
 
   it("preserves ordinary high reasoning serialization through simple completions", async () => {

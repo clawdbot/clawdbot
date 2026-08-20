@@ -177,26 +177,17 @@ function isResponsesReasoningEffortDisabled<TApi extends Api>(model: Model<TApi>
   );
 }
 
-function hasNullThinkingLevelOptOut<TApi extends Api>(
-  model: Model<TApi>,
-  reasoning: string | undefined,
-): boolean {
-  if (reasoning === undefined || model.thinkingLevelMap === undefined) {
-    return false;
-  }
-  return Object.entries(model.thinkingLevelMap).some(
-    ([level, value]) => level === reasoning && value === null,
-  );
-}
-
 export function shouldDisableResponsesReasoningSerialization<TApi extends Api>(
   model: Model<TApi>,
   reasoning: string | undefined,
 ): boolean {
-  if (!hasNullThinkingLevelOptOut(model, reasoning)) {
+  if (reasoning === undefined || !isModelThinkingLevel(reasoning)) {
     return false;
   }
-  return reasoning !== "off" || clampThinkingLevel(model, reasoning) === "off";
+  const clampedReasoning = clampThinkingLevel(model, reasoning);
+  return (
+    clampedReasoning === "off" && (reasoning !== "off" || model.thinkingLevelMap?.off === null)
+  );
 }
 
 function isModelThinkingLevel(value: string): value is ModelThinkingLevel {
@@ -211,8 +202,14 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
   if (isResponsesReasoningEffortDisabled(model)) {
     return undefined;
   }
-  const isCanonicalReasoning = isModelThinkingLevel(reasoning);
-  if (isCanonicalReasoning && hasNullThinkingLevelOptOut(model, reasoning)) {
+  if (!isModelThinkingLevel(reasoning)) {
+    return reasoning;
+  }
+  const effectiveReasoning = clampThinkingLevel(model, reasoning);
+  if (effectiveReasoning === "off" && reasoning !== "off") {
+    return undefined;
+  }
+  if (effectiveReasoning === "off" && reasoning === "off" && model.thinkingLevelMap?.off === null) {
     return undefined;
   }
   const compat =
@@ -221,15 +218,19 @@ function resolveResponsesApiReasoningEffort<TApi extends Api>(
       : undefined;
   const compatReasoningEffortMap: Record<string, string> | undefined =
     compat && "reasoningEffortMap" in compat ? compat.reasoningEffortMap : undefined;
-  const compatMapped = isCanonicalReasoning ? compatReasoningEffortMap?.[reasoning] : undefined;
+  const compatMapped = compatReasoningEffortMap?.[effectiveReasoning];
   if (compatMapped !== undefined) {
     return resolveOpenAIReasoningEffortForModel({
       model,
-      effort: reasoning,
+      effort: effectiveReasoning,
       fallbackMap: compatReasoningEffortMap,
     });
   }
-  return isCanonicalReasoning ? (model.thinkingLevelMap?.[reasoning] ?? fallback) : reasoning;
+  if (effectiveReasoning === "off") {
+    return model.thinkingLevelMap?.off ?? fallback;
+  }
+  const mappedThinkingLevel = model.thinkingLevelMap?.[effectiveReasoning];
+  return mappedThinkingLevel ?? effectiveReasoning;
 }
 
 export function resolveResponsesReasoningEffort(

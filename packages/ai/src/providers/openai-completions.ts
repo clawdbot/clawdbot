@@ -699,18 +699,9 @@ export const streamSimpleOpenAICompletions: StreamFunction<
 
   const base = buildBaseOptions(model, options, apiKey);
   const requestedReasoning = options?.reasoning;
-  const explicitlyDisabledByThinkingLevel =
-    requestedReasoning !== undefined &&
-    model.thinkingLevelMap !== undefined &&
-    Object.hasOwn(model.thinkingLevelMap, requestedReasoning) &&
-    model.thinkingLevelMap[requestedReasoning] === null;
   const clampedReasoning =
     requestedReasoning !== undefined ? clampThinkingLevel(model, requestedReasoning) : undefined;
-  const shouldDisableReasoning =
-    explicitlyDisabledByThinkingLevel &&
-    (requestedReasoning !== "off" || clampedReasoning === "off");
-  const reasoningEffort =
-    shouldDisableReasoning || clampedReasoning === "off" ? undefined : clampedReasoning;
+  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
@@ -916,23 +907,30 @@ function buildParams(
     ...reasoningEffortMap,
   };
   const requestedReasoningEffort = options?.reasoningEffort;
-  const explicitlyDisabledByThinkingLevel =
+  const requestedCanonicalReasoning =
     requestedReasoningEffort !== undefined &&
-    thinkingLevelMap !== undefined &&
-    Object.hasOwn(thinkingLevelMap, requestedReasoningEffort) &&
-    thinkingLevelMap[requestedReasoningEffort] === null;
+    (requestedReasoningEffort === "minimal" ||
+      requestedReasoningEffort === "low" ||
+      requestedReasoningEffort === "medium" ||
+      requestedReasoningEffort === "high" ||
+      requestedReasoningEffort === "xhigh" ||
+      requestedReasoningEffort === "max")
+      ? requestedReasoningEffort
+      : undefined;
+  const clampedReasoning = requestedCanonicalReasoning
+    ? clampThinkingLevel(model, requestedCanonicalReasoning)
+    : undefined;
+  const effectiveReasoningEffort = clampedReasoning ?? requestedReasoningEffort;
   const reasoningEffort =
-    requestedReasoningEffort === undefined || explicitlyDisabledByThinkingLevel
+    effectiveReasoningEffort === undefined
       ? undefined
       : resolveOpenAIReasoningEffortForModel({
           model,
-          effort: requestedReasoningEffort,
+          effort: effectiveReasoningEffort,
           fallbackMap: reasoningEffortFallbackMap,
         });
   const requestedThinkingEnabled =
-    requestedReasoningEffort !== undefined &&
-    requestedReasoningEffort !== "none" &&
-    !explicitlyDisabledByThinkingLevel;
+    requestedReasoningEffort !== undefined && requestedReasoningEffort !== "none";
   const resolvedReasoningEnabled =
     requestedThinkingEnabled && reasoningEffort !== undefined && reasoningEffort !== "none";
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
