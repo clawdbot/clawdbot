@@ -84,11 +84,10 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
-// THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
-// DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export function resolveSlackProgressStyle(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): "card" | "compact" {
+  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASH.
   const style = Reflect.get(resolveChannelProgressDraftConfig(entry), "style");
   return style === "compact" ? "compact" : "card";
 }
