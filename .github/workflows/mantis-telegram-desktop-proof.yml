@@ -1278,7 +1278,7 @@ jobs:
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-issues: write
+          permission-pull-requests: write
 
       - name: Comment that no visible proof applies
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

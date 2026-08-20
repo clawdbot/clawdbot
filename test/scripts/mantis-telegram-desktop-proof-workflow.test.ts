@@ -342,6 +342,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const noVisibleComment = noVisible?.steps?.find(
       (step) => step.name === "Comment that no visible proof applies",
     );
+    const noVisibleToken = noVisible?.steps?.find(
+      (step) => step.name === "Create Mantis GitHub App token",
+    );
+    expect(noVisibleToken?.with?.["permission-pull-requests"]).toBe("write");
     expect(noVisibleComment?.with?.script).toContain(
       "There was nothing visible to test in this PR at all.",
     );
