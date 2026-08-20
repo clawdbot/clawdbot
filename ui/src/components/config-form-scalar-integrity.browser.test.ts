@@ -438,6 +438,15 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
 
     onPatch.mockClear();
+    input = renderValue(1);
+    input.value = "1.0000000000000001";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.value).toBe("1.0000000000000001");
+
+    onPatch.mockClear();
     input = renderValue("42");
     input.value = "43";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -564,6 +573,33 @@ describe("config form scalar integrity", () => {
     expect(onPatch).not.toHaveBeenCalled();
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.value).toBe(raw);
+  });
+
+  it("accepts an exactly represented integer above the safe-integer range", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderNumberInput({
+        schema: { type: "integer" },
+        value: 0,
+        path: ["numeric"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "exact large number input",
+    );
+
+    input.value = "9007199254740992";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onPatch).toHaveBeenCalledWith(["numeric"], 9_007_199_254_740_992);
+    expect(input.getAttribute("aria-invalid")).toBe("false");
   });
 
   it("keeps restore disabled while a sensitive value is concealed", () => {

@@ -27,15 +27,16 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("9.007199254740991e15", true)).toBe(
       Number.MAX_SAFE_INTEGER,
     );
-    expect(coerceConfigFormNumberString("9007199254740992", true)).toBe("9007199254740992");
+    expect(coerceConfigFormNumberString("9007199254740992", true)).toBe(9_007_199_254_740_992);
     expect(coerceConfigFormNumberString("9007199254740993", true)).toBe("9007199254740993");
     expect(coerceConfigFormNumberString("-9007199254740993", false)).toBe("-9007199254740993");
-    expect(coerceConfigFormNumberString("9007199254740992.0", true)).toBe("9007199254740992.0");
+    expect(coerceConfigFormNumberString("9007199254740992.0", true)).toBe(9_007_199_254_740_992);
     expect(coerceConfigFormNumberString("9007199254740993.0", true)).toBe("9007199254740993.0");
     expect(coerceConfigFormNumberString("10481133113146081487e0", true)).toBe(
       "10481133113146081487e0",
     );
     expect(coerceConfigFormNumberString("9.007199254740993e15", true)).toBe("9.007199254740993e15");
+    expect(coerceConfigFormNumberString("9.007199254740992e15", true)).toBe(9_007_199_254_740_992);
     expect(coerceConfigFormNumberString("-9.007199254740993e15", true)).toBe(
       "-9.007199254740993e15",
     );
@@ -44,6 +45,8 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("1.0000000000000001", false)).toBe("1.0000000000000001");
     expect(coerceConfigFormNumberString("9007199254740991.1", false)).toBe("9007199254740991.1");
     expect(coerceConfigFormNumberString("1e-324", false)).toBe("1e-324");
+    expect(coerceConfigFormNumberString("0e-1025", false)).toBe(0);
+    expect(Object.is(coerceConfigFormNumberString("-0e2000", false), -0)).toBe(true);
 
     for (const spelling of [
       "0x10",

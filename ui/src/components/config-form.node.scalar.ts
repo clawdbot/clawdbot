@@ -21,7 +21,10 @@ import {
   wrapSensitiveControl,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
-import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
+import {
+  coerceConfigFormNumberString,
+  isConfigFormDecimalNumberString,
+} from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -99,7 +102,7 @@ function coerceTextInputValue(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
   currentValue?: unknown,
-): string | number | boolean {
+): string | number | boolean | undefined {
   const trimmed = value.trim();
   const variants = schema.anyOf ?? schema.oneOf ?? [];
   const stringCandidateValid = isSupportedConfigValueValid(schema, value);
@@ -139,8 +142,13 @@ function coerceTextInputValue(
       break;
     }
   }
-  if (typeof currentValue === "number" && numberCandidate !== undefined) {
-    return numberCandidate;
+  if (typeof currentValue === "number") {
+    if (numberCandidate !== undefined) {
+      return numberCandidate;
+    }
+    if (isConfigFormDecimalNumberString(value)) {
+      return undefined;
+    }
   }
   if (typeof currentValue === "string" && stringCandidateValid) {
     return value;
