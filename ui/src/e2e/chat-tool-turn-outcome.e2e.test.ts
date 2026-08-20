@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -41,8 +45,9 @@ type DisclosureFrame = {
 async function toggleDisclosureWithFrameTrace(
   page: import("playwright").Page,
   summary: import("playwright").Locator,
+  actionSelector?: string,
 ): Promise<DisclosureFrame[]> {
-  return await summary.evaluate((button) => {
+  return await summary.evaluate((button, selector) => {
     const row = button.closest<HTMLElement>(".chat-virtual-row");
     const thread = button.closest<HTMLElement>(".chat-thread");
     if (!row || !thread) {
@@ -60,7 +65,11 @@ async function toggleDisclosureWithFrameTrace(
       });
     };
     sample();
-    (button as HTMLElement).click();
+    const action = selector ? row.querySelector<HTMLElement>(selector) : (button as HTMLElement);
+    if (!action) {
+      throw new Error(`Expected disclosure action ${selector}`);
+    }
+    action.click();
     return new Promise<DisclosureFrame[]>((resolve) => {
       let remaining = 8;
       const next = () => {
@@ -74,7 +83,7 @@ async function toggleDisclosureWithFrameTrace(
       };
       requestAnimationFrame(next);
     });
-  });
+  }, actionSelector);
 }
 
 function expectStableDisclosureFrames(frames: DisclosureFrame[]) {
@@ -113,6 +122,23 @@ async function expandCompletedWorkGroups(page: import("playwright").Page) {
       await summary.click();
     }
   }
+}
+
+async function showSplitDashboard(page: import("playwright").Page, sessionKey: string) {
+  const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ key, settingsKey }) => {
+      const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      settings.boardSessionViews = { [key]: { activeTabId: "main" } };
+      localStorage.setItem(settingsKey, JSON.stringify(settings));
+    },
+    { key: sessionKey, settingsKey: storageKey },
+  );
+  await page.goto(`${suite.server.baseUrl}dashboard`);
+  await page.locator('.side-panel [data-panel-slot="chat"] .chat-thread').waitFor();
 }
 
 suite.define(() => {
@@ -286,12 +312,13 @@ suite.define(() => {
     const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.browser.newContext({
       reducedMotion: "reduce",
-      viewport: { height: 600, width: 900 },
+      viewport: { height: 800, width: 1400 },
       ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 600, width: 900 } } }
+        ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1400 } } }
         : {}),
     });
     const page = await context.newPage();
+    const sessionKey = "agent:main:dashboard:disclosure-geometry";
     const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
       {
         role: "user",
@@ -305,7 +332,16 @@ suite.define(() => {
       },
     ]).flat();
     await installMockGateway(page, {
-      sessionKey: "agent:main:dashboard:disclosure-geometry",
+      sessionKey,
+      featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
+      methodResponses: {
+        "board.get": {
+          sessionKey,
+          revision: 1,
+          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+          widgets: [],
+        },
+      },
       historyMessages: [
         ...transcriptPrefix,
         {
@@ -409,9 +445,7 @@ suite.define(() => {
       ],
     });
 
-    await page.goto(
-      controlUiSessionUrl(suite.server.baseUrl, "agent:main:dashboard:disclosure-geometry"),
-    );
+    await showSplitDashboard(page, sessionKey);
     const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
     await expect.poll(() => workSummaries.count()).toBe(2);
     const middleWorkSummary = workSummaries.first();
@@ -548,16 +582,30 @@ suite.define(() => {
     await toolSummary.waitFor();
     await waitForChatScrollIdle(page);
     expectStableDisclosureFrames(await toggleDisclosureWithFrameTrace(page, toolSummary));
-    const rawDetailsToggle = toolSummary.locator("..").locator(".chat-tool-card__raw-toggle");
-    await rawDetailsToggle.waitFor();
+    const widgetHost = page.locator(".chat-tool-card__widget-host");
+    const rawDetailsToggle = widgetHost.locator(".chat-tool-card__raw-toggle");
+    await rawDetailsToggle.waitFor({ state: "attached" });
+    const widgetActions = widgetHost.getByRole("button", { name: "Widget actions" });
+    const rawDetailsAction =
+      '.chat-tool-card__widget-actions wa-dropdown-item[value="raw-details"]';
     await page.locator(".chat-thread").evaluate((thread) => {
       thread.scrollTop = thread.scrollHeight;
     });
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
-    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
-    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    await widgetActions.click();
+    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(
+      page,
+      rawDetailsToggle,
+      rawDetailsAction,
+    );
+    await widgetActions.click();
+    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(
+      page,
+      rawDetailsToggle,
+      rawDetailsAction,
+    );
 
     await rawDetailsToggle.evaluate((button) => {
       const row = button.closest<HTMLElement>(".chat-virtual-row");
@@ -569,7 +617,12 @@ suite.define(() => {
       thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
     });
     await waitForChatScrollIdle(page);
-    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    await widgetActions.click();
+    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(
+      page,
+      rawDetailsToggle,
+      rawDetailsAction,
+    );
 
     if (artifactDir) {
       await fs.mkdir(artifactDir, { recursive: true });
@@ -588,7 +641,12 @@ suite.define(() => {
         path: path.join(artifactDir, "raw-details-geometry-dark.png"),
       });
     }
-    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    await widgetActions.click();
+    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(
+      page,
+      rawDetailsToggle,
+      rawDetailsAction,
+    );
     const video = page.video();
     await context.close();
     if (artifactDir) {

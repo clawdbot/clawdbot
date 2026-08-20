@@ -150,12 +150,13 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
           )
         : null;
     const row = disclosure?.closest<HTMLElement>(".chat-virtual-row") ?? null;
-    this.pendingDisclosureRow = row;
-    if (row) {
-      // Direct-DOM disclosures do not otherwise enter the Lit update cycle.
-      // Schedule the owner reconciliation after their click handler commits.
-      this.host.requestUpdate();
+    if (!row) {
+      return;
     }
+    this.pendingDisclosureRow = row;
+    // Direct-DOM disclosures do not otherwise enter the Lit update cycle.
+    // Schedule the owner reconciliation after their click handler commits.
+    this.host.requestUpdate();
   };
   private measureConnectedRows(): void {
     // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
@@ -168,7 +169,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       instance.resizeItem(index, size);
     }
   }
-  private readonly handleGeometryCommit = () => {
+  private readonly handleGeometryCommit = (event: Event) => {
+    this.reconcileDisclosureResize(event.target);
+    if (event instanceof CustomEvent && event.detail?.widthChanged === false) {
+      return;
+    }
     const rect = this.scrollElement?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) {
       return;
@@ -552,8 +557,15 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.focusedRowKey = this.rowKeyFromEvent(event, event.relatedTarget);
   }
 
-  private reconcileDisclosureResize(): void {
+  private reconcileDisclosureResize(sidebarCommitTarget?: EventTarget | null): void {
     const row = this.pendingDisclosureRow;
+    const sidebarRuntime = row?.closest(".sidebar-region__right-runtime");
+    if (
+      sidebarRuntime &&
+      !(sidebarCommitTarget instanceof Element && sidebarCommitTarget.contains(row))
+    ) {
+      return;
+    }
     this.pendingDisclosureRow = null;
     if (!row?.isConnected || !this.scrollElement?.contains(row)) {
       return;
