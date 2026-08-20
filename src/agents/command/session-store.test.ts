@@ -1641,6 +1641,79 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("keeps the goal cursor monotonic when finalizers complete out of order", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-goal-finalizer-order";
+      const sessionId = "test-cli-goal-finalizer-order-session";
+      const initial: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "Count concurrent CLI usage once",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 100,
+          tokenStartFresh: true,
+          tokenCursor: 100,
+          tokensUsed: 0,
+          tokenBudget: 30_000,
+          continuationTurns: 0,
+        },
+      };
+      await seedSessionStore(storePath, { [sessionKey]: initial });
+
+      const finalize = async (sessionStore: Record<string, SessionEntry>, promptTokens: number) => {
+        await updateSessionStoreAfterAgentRun({
+          cfg,
+          contextTokensOverride: 1_000_000,
+          sessionId,
+          sessionKey,
+          storePath,
+          sessionStore,
+          defaultProvider: "claude-cli",
+          defaultModel: "claude-opus-4-7",
+          result: {
+            meta: {
+              durationMs: 1,
+              executionTrace: { runner: "cli" },
+              agentMeta: {
+                sessionId,
+                provider: "claude-cli",
+                model: "claude-opus-4-7",
+                promptTokens,
+                usage: { input: promptTokens, output: 5 },
+                lastCallUsage: { input: promptTokens, output: 5 },
+              },
+            },
+          } as EmbeddedAgentRunResult,
+        });
+      };
+
+      await finalize({ [sessionKey]: structuredClone(initial) }, 150);
+      await finalize({ [sessionKey]: structuredClone(initial) }, 120);
+
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.goal).toMatchObject({
+        tokenCursor: 150,
+        tokensUsed: 50,
+      });
+    });
+  });
+
   it("adopts the final fresh CLI snapshot for a goal created during the active run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {

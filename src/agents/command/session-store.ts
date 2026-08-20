@@ -335,17 +335,26 @@ export async function updateSessionStoreAfterAgentRun(params: {
         typeof next.totalTokens === "number" &&
         next.totalTokensFresh === true
       ) {
+        const currentGoalCursor = currentEntry.goal.tokenCursor;
+        const isOlderFinalizerSnapshot =
+          compactionTokensAfter === undefined &&
+          typeof currentGoalCursor === "number" &&
+          Number.isSafeInteger(currentGoalCursor) &&
+          currentGoalCursor >= 0 &&
+          next.totalTokens < currentGoalCursor;
         snapshotPatch.goal =
           entry.goal?.id === currentEntry.goal.id
-            ? resolveSessionGoalDisplayState(
-                {
-                  goal: currentEntry.goal,
-                  totalTokens: next.totalTokens,
-                  totalTokensFresh: true,
-                  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-                },
-                now,
-              )
+            ? isOlderFinalizerSnapshot
+              ? currentEntry.goal
+              : resolveSessionGoalDisplayState(
+                  {
+                    goal: currentEntry.goal,
+                    totalTokens: next.totalTokens,
+                    totalTokensFresh: true,
+                    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+                  },
+                  now,
+                )
             : rebaseSessionGoalTokenCursor(currentEntry.goal, next.totalTokens, {
                 resetStart: true,
               });
