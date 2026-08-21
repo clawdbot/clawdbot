@@ -140,70 +140,9 @@ For the full list of available models and current pricing, see the [Agent API mo
 
 Perplexity also ships an [MCP server](https://docs.perplexity.ai/docs/getting-started/integrations/mcp-server) that exposes `perplexity_search`, `perplexity_ask`, `perplexity_research`, and `perplexity_reason` as MCP tools your agent can call. This is orthogonal to the model provider setup above: the Agent API drives the model, MCP gives the model access to Perplexity's search and research surfaces. You can run both together.
 
-The MCP tool names do not overlap with Perplexity's Agent API reserved tool names, so no additional configuration is required for MCP.
+The MCP tool names do not overlap with Perplexity's Agent API reserved tool names, so no additional configuration is required.
 
-<Tabs>
-  <Tab title="Remote (Streamable HTTP)">
-    ```bash
-    openclaw mcp add perplexity \
-      --url https://api.perplexity.ai/mcp \
-      --transport streamable-http \
-      --header "Authorization=Bearer $PERPLEXITY_API_KEY"
-    openclaw mcp doctor perplexity --probe
-    ```
-
-    Or write directly to `openclaw.json`:
-
-    ```json5
-    {
-      mcp: {
-        servers: {
-          perplexity: {
-            url: "https://api.perplexity.ai/mcp",
-            transport: "streamable-http",
-            headers: {
-              Authorization: "Bearer ${PERPLEXITY_API_KEY}",
-            },
-          },
-        },
-      },
-    }
-    ```
-  </Tab>
-  <Tab title="Local (stdio)">
-    ```bash
-    openclaw mcp add perplexity \
-      --command npx \
-      --arg "-y" \
-      --arg "@perplexity-ai/mcp-server" \
-      --env "PERPLEXITY_API_KEY=$PERPLEXITY_API_KEY"
-    openclaw mcp doctor perplexity --probe
-    ```
-
-    Or in config:
-
-    ```json5
-    {
-      mcp: {
-        servers: {
-          perplexity: {
-            command: "npx",
-            args: ["-y", "@perplexity-ai/mcp-server"],
-            transport: "stdio",
-            env: {
-              PERPLEXITY_API_KEY: "${PERPLEXITY_API_KEY}",
-            },
-          },
-        },
-      },
-    }
-    ```
-
-    Local stdio requires Node.js on the machine running OpenClaw. Prefer the remote transport unless you need to run offline of Perplexity's edge.
-  </Tab>
-</Tabs>
-
-MCP tools follow OpenClaw's normal tool policy. To limit which Perplexity tools your agent can call, use `toolFilter.include` on the server definition or pass `--include` to `openclaw mcp add`. See [Connect MCP servers](/tools/mcp) for the full field list.
+To register the Perplexity MCP server, follow OpenClaw's standard [Connect MCP servers](/tools/mcp) guide and use the endpoint and credentials from the [Perplexity MCP server docs](https://docs.perplexity.ai/docs/getting-started/integrations/mcp-server). The generic guide covers both remote (Streamable HTTP) and local (stdio) transports, and its config patterns keep your API key out of `openclaw.json`.
 
 ## Perplexity CLI (terminal companion)
 
