@@ -364,7 +364,6 @@ async function verifyCommittedResult(
   if (!parsedResult.success) {
     throw operationConflict("Committed final recovery-point result is invalid.");
   }
-  let manifest: RecoveryPointManifest;
   let snapshots: RecoveryPointSqliteSnapshot[];
   let verified: Awaited<ReturnType<typeof verifyRecoveryPoint>>;
   try {
@@ -375,10 +374,9 @@ async function verifyCommittedResult(
     ) {
       throw operationConflict("Committed final recovery-point manifest bytes changed.");
     }
-    manifest = manifestRead.parsed as RecoveryPointManifest;
     snapshots = await resolveCommittedSnapshots(recoveryPointPath, request.ownerInventory.agentIds);
     verified = await verifyRecoveryPoint({
-      manifest,
+      manifest: manifestRead.parsed,
       snapshots,
       ownerInventory: request.ownerInventory,
     });

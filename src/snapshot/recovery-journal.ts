@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
-import type { Insertable, Selectable } from "kysely";
+import type { Insertable } from "kysely";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
+import { isErrno } from "../infra/errno.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -48,7 +49,7 @@ export async function readRecoveryJournalRecord(
         .selectFrom("recovery_journal_records")
         .select(["record_type", "payload_json"])
         .where("record_type", "=", recordType),
-    ).rows[0] as Selectable<RecoveryJournalRecordTable> | undefined;
+    ).rows[0];
     if (!row) {
       return undefined;
     }
@@ -140,7 +141,7 @@ async function readTrustedRecoveryJournalIdentity(databasePath: string) {
       return stat;
     })
     .catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isErrno(error) && error.code === "ENOENT") {
         return undefined;
       }
       throw error;
