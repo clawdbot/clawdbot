@@ -4,7 +4,6 @@ export type DockPanelPlacement = DockPanelSide | "main";
 type DockPanelLayout<TDock extends DockPanelPlacement> = {
   open: boolean;
   dock: TDock;
-  previousDock?: TDock;
   height: number;
   width: number;
 };
@@ -68,9 +67,6 @@ export function createDockPanelLayout<TDock extends DockPanelPlacement>(
           dock: options.supportedDocks.includes(parsed.dock as TDock)
             ? (parsed.dock as TDock)
             : defaults.dock,
-          ...(options.supportedDocks.includes(parsed.previousDock as TDock)
-            ? { previousDock: parsed.previousDock as TDock }
-            : {}),
           height: clampSize(parsed.height, options.minHeight, maxHeight(), defaults.height),
           width: clampSize(parsed.width, options.minWidth, maxWidth(), defaults.width),
         };

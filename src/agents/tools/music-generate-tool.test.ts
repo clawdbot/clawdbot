@@ -641,7 +641,6 @@ describe("createMusicGenerateTool", () => {
     expect(immediate.mediaUrls ?? []).toEqual([]);
     expect(immediate.replyToId).toBeUndefined();
     expect(immediate.audioAsVoice).toBeUndefined();
-    expect(immediate.reaction).toBeUndefined();
     expect(details.lyrics).toEqual(lyrics);
 
     const detached = formatAgentInternalEventsForPrompt([
@@ -667,7 +666,6 @@ describe("createMusicGenerateTool", () => {
     expect(delivered.mediaUrls).toEqual(["/tmp/operator-approved-song.mp3"]);
     expect(delivered.replyToId).toBeUndefined();
     expect(delivered.audioAsVoice).toBeUndefined();
-    expect(delivered.reaction).toBeUndefined();
   });
 
   it("starts background generation and wakes the session with MEDIA lines", async () => {

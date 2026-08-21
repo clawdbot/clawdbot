@@ -7,6 +7,7 @@ export const STATE_SECRET_TABLE_NAMES = [
   "channel_ingress_events",
   "channel_pairing_requests",
   "clawhub_promotion_claims",
+  "config_revision_keys",
   "device_auth_tokens",
   "device_bootstrap_tokens",
   "device_identities",

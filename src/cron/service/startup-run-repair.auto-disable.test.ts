@@ -138,6 +138,76 @@ describe("startup run repair auto-disable", () => {
     expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      name: "required delivery failed",
+      completionStatus: "failed" as const,
+      deliveryStatus: "not-delivered" as const,
+    },
+    {
+      name: "completion evidence unknown",
+      completionStatus: "unknown" as const,
+      deliveryStatus: "unknown" as const,
+    },
+    {
+      name: "legacy row missing completion evidence",
+      completionStatus: undefined,
+      deliveryStatus: "not-delivered" as const,
+    },
+  ])("retains finalized one-shot after $name", ({ completionStatus, deliveryStatus }) => {
+    const runningAtMs = Date.parse("2026-08-01T17:00:00.000Z");
+    const state = createCronServiceState({
+      storePath: "/tmp/startup-run-repair-completion.json",
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => runningAtMs + 1_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const job: CronJob = {
+      id: "finalized-required-delivery",
+      name: "finalized required delivery",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: runningAtMs - 60_000,
+      updatedAtMs: runningAtMs,
+      schedule: { kind: "at", at: new Date(runningAtMs).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do not replay" },
+      // Current policy is intentionally mutable and must not decide replay.
+      delivery: { mode: "announce", bestEffort: true },
+      state: { runningAtMs },
+    };
+
+    const restored = restoreFinalizedStartupRun({
+      state,
+      job,
+      runningAtMs,
+      entry: {
+        ts: runningAtMs + 1_000,
+        jobId: job.id,
+        action: "finished",
+        status: "ok",
+        ...(completionStatus === undefined ? {} : { completionStatus }),
+        deliveryStatus,
+        runAtMs: runningAtMs,
+        durationMs: 1_000,
+      },
+    });
+
+    expect(restored?.shouldDelete).toBe(false);
+    expect(job).toMatchObject({
+      enabled: false,
+      state: {
+        lastRunStatus: "ok",
+        consecutiveErrors: 0,
+      },
+    });
+    expect(job.state.nextRunAtMs).toBeUndefined();
+  });
+
   it("buffers quiet-trigger repair notifications until the recovery commit", () => {
     const runningAtMs = Date.parse("2026-08-01T16:30:00.000Z");
     const enqueueSystemEvent = vi.fn();

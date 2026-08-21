@@ -15,6 +15,8 @@ function runApprovalScript(
     CHILD_WORKFLOW_SHA?: string;
     DIRECT_RELEASE_RECOVERY?: string;
     EXPECTED_WORKFLOW_BRANCH?: string;
+    EXPECTED_WORKFLOW_FULL_REF?: string;
+    EXPECTED_WORKFLOW_SHA?: string;
     EXPECTED_RUN_ATTEMPT?: string;
     APPROVAL_PATH?: string;
     GITHUB_REPOSITORY?: string;
@@ -34,6 +36,8 @@ function runApprovalScript(
       CHILD_WORKFLOW_SHA: env.CHILD_WORKFLOW_SHA ?? "b".repeat(40),
       DIRECT_RELEASE_RECOVERY: env.DIRECT_RELEASE_RECOVERY ?? "false",
       EXPECTED_WORKFLOW_BRANCH: env.EXPECTED_WORKFLOW_BRANCH ?? "release/2026.6.21",
+      EXPECTED_WORKFLOW_FULL_REF: env.EXPECTED_WORKFLOW_FULL_REF ?? "",
+      EXPECTED_WORKFLOW_SHA: env.EXPECTED_WORKFLOW_SHA ?? "",
       EXPECTED_RUN_ATTEMPT: env.EXPECTED_RUN_ATTEMPT ?? "",
       APPROVAL_PATH: env.APPROVAL_PATH ?? "",
       GITHUB_REPOSITORY: env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
@@ -71,6 +75,7 @@ function approvalRun(overrides: Record<string, unknown> = {}) {
     conclusion: null,
     event: "workflow_dispatch",
     headBranch: "release/2026.6.21",
+    repository: "openclaw/openclaw",
     status: "in_progress",
     url: "https://github.com/openclaw/openclaw/actions/runs/123",
     workflowName: "OpenClaw Release Publish",
@@ -121,6 +126,27 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       "Referenced release publish run 123 must have headBranch=release/2026.6.21, got main.",
     );
     expect(result.stdout).toBe("");
+  });
+
+  it("binds the parent repository, workflow path, full ref, SHA, and attempt", () => {
+    const workflowSha = "d".repeat(40);
+    const fullRef = "refs/tags/release-publish/aaaaaaaaaaaa-111";
+    const result = runApprovalScript(
+      approvalRun({
+        headBranch: "release-publish/aaaaaaaaaaaa-111",
+        headSha: workflowSha,
+        path: `.github/workflows/openclaw-release-publish.yml@${fullRef}`,
+        runAttempt: 7,
+      }),
+      {
+        EXPECTED_RUN_ATTEMPT: "7",
+        EXPECTED_WORKFLOW_BRANCH: "release-publish/aaaaaaaaaaaa-111",
+        EXPECTED_WORKFLOW_FULL_REF: fullRef,
+        EXPECTED_WORKFLOW_SHA: workflowSha,
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("rejects completed runs for normal approval handoff", () => {

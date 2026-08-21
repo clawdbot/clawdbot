@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 
 export type PanelRefreshStatus = Readonly<{
   error: string | null;
@@ -27,7 +28,7 @@ export function completePanelRefresh(): PanelRefreshStatus {
 
 export function failPanelRefresh(status: PanelRefreshStatus, error: string): PanelRefreshStatus {
   return {
-    error,
+    error: formatUiError(error),
     hasLoaded: status.hasLoaded,
     stale: status.hasLoaded,
   };
@@ -40,7 +41,8 @@ export function renderPanelRefreshStatus(params: {
   className?: string;
 }): TemplateResult | typeof nothing {
   const { status } = params;
-  const error = params.errorMessage ?? status.error;
+  const rawError = params.errorMessage ?? status.error;
+  const error = rawError ? formatUiError(rawError) : rawError;
   if (!error && !status.stale) {
     return nothing;
   }

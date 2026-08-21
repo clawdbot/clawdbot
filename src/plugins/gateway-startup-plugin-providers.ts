@@ -85,11 +85,21 @@ type ManifestModelProviderLookup = {
 function buildManifestModelProviderLookup(
   manifestRegistry: PluginManifestRegistry,
   config: OpenClawConfig,
+  modelIdsByProvider: ReadonlyMap<string, ReadonlySet<string>>,
 ): ManifestModelProviderLookup {
-  const modelApis = new Map(
-    planEffectiveModelCatalogRows({ registry: manifestRegistry, config }).rows.flatMap((row) =>
-      row.api ? [[row.mergeKey, row.api] as const] : [],
+  const providerFilters = [...modelIdsByProvider.keys()];
+  const mergeKeyFilter = new Set(
+    [...modelIdsByProvider].flatMap(([providerId, modelIds]) =>
+      [...modelIds].map((modelId) => buildModelCatalogMergeKey(providerId, modelId)),
     ),
+  );
+  const modelApis = new Map(
+    planEffectiveModelCatalogRows({
+      registry: manifestRegistry,
+      config,
+      providerFilters,
+      mergeKeyFilter,
+    }).rows.flatMap((row) => (row.api ? [[row.mergeKey, row.api] as const] : [])),
   );
   return {
     modelApis,
@@ -104,7 +114,6 @@ export function collectConfiguredAgentModelProviderIds(
   manifestRegistry: PluginManifestRegistry,
 ): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
-  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry, config);
   const addModelProviderRefs = (value: unknown) => {
     for (const { providerId, modelId } of listModelProviderRefParts(value)) {
       const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
@@ -134,6 +143,15 @@ export function collectConfiguredAgentModelProviderIds(
     addModelProviderRefs(agent.utilityModel);
     addModelMapProviderIds(agent.models);
   }
+
+  if (modelIdsByProvider.size === 0) {
+    return new Set();
+  }
+  const manifestModelProviders = buildManifestModelProviderLookup(
+    manifestRegistry,
+    config,
+    modelIdsByProvider,
+  );
 
   return new Set(
     [...modelIdsByProvider.entries()]
@@ -406,17 +424,13 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 }
 
 // Registered embedding provider ids the loaded runtime can actually serve: the live
-// registry's memory + general embedding providers plus the global/core embedding
-// registry. Shared by gateway boot (the startup "configured but unregistered" warning)
-// and the `/status plugins` drift line so both agree on what counts as "registered" and
-// never diverge. The `{ provider: entry.adapter }` wrap makes the core registry entries
-// match the registration shape so the id projection stays uniform across all three sources.
+// registry's embedding providers plus the global/core embedding registry. Shared by
+// gateway boot and `/status plugins` so both agree on what counts as registered.
 export function collectRegisteredEmbeddingProviderIds(
-  registry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>,
+  registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
   return new Set(
     [
-      ...(registry.memoryEmbeddingProviders ?? []),
       ...(registry.embeddingProviders ?? []),
       ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
     ].map((entry) => entry.provider.id),

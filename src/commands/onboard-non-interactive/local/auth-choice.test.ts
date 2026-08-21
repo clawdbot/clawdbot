@@ -79,7 +79,7 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
-      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key, oauth, setup-token, token, apiKey.',
+      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

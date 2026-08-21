@@ -50,7 +50,7 @@ export function registerBrowserAgentActDownloadRoutes(
       ctx,
       targetId,
       enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab }) => {
+      run: async ({ profileCtx, cdpUrl, tab, signal }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.waitUnsupported);
         }
@@ -77,6 +77,7 @@ export function registerBrowserAgentActDownloadRoutes(
           ...requestBase,
           path: downloadPath,
           rootDir: DEFAULT_DOWNLOAD_DIR,
+          signal,
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },
@@ -107,7 +108,7 @@ export function registerBrowserAgentActDownloadRoutes(
       ctx,
       targetId,
       enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab }) => {
+      run: async ({ profileCtx, cdpUrl, tab, signal }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           return jsonError(res, 501, EXISTING_SESSION_LIMITS.download.downloadUnsupported);
         }
@@ -131,6 +132,7 @@ export function registerBrowserAgentActDownloadRoutes(
           ref,
           path: downloadPath,
           rootDir: DEFAULT_DOWNLOAD_DIR,
+          signal,
         });
         res.json({ ok: true, targetId: tab.targetId, download: result });
       },

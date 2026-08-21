@@ -1,41 +1,41 @@
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import {
+import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import type {
   loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
-import { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
+import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import {
+import type {
   detectInferenceBackends,
-  type InferenceBackendKind,
+  InferenceBackendKind,
 } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
-import {
-  type ProviderAuthChoiceMetadata,
+import type { enablePluginInConfig } from "../plugins/enable.js";
+import type {
+  ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
-import { probeLocalCommand } from "./probes.js";
+import type { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
-import {
+import type {
   captureSystemAgentOwnerPluginArtifacts,
-  type createSystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
+  createSystemAgentVerifiedInferenceBinding,
+  SystemAgentVerifiedInferenceBinding,
+  SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
@@ -250,6 +250,7 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
+  refreshPreparedModelRuntimeSnapshots?: typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots;
   ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;

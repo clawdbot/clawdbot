@@ -1,49 +1,14 @@
+import {
+  BOUNDARY_GUARD_FIXTURE_ROOT,
+  CHAINED_ASSERTION_EXCLUDED_ROOTS,
+  TYPE_ASSERTION_PRODUCTION_ROOTS,
+  TYPE_ASSERTION_TEST_FILE_SUFFIXES,
+  isSkippedTypeAssertionTestPath,
+  pathMatchesTypeAssertionRoot,
+} from "./lib/type-assertion-guard-scope.mjs";
+
 const EXPRESSION_WRAPPER_RE =
   /^(?:ChainExpression|ParenthesizedExpression|TSAsExpression|TSNonNullExpression|TSTypeAssertion)$/;
-const BOUNDARY_GUARD_FIXTURE_ROOT = "test/fixtures/oxlint-boundary-guards";
-// Shared test-path policy for guards that intentionally exclude fixture, mock, and harness code.
-const TEST_FILE_SUFFIXES = [
-  ".test.ts",
-  ".test.tsx",
-  ".spec.ts",
-  ".spec.tsx",
-  ".test-utils.ts",
-  ".test-utils.tsx",
-  ".test-harness.ts",
-  ".test-harness.tsx",
-  ".e2e-harness.ts",
-  ".e2e-harness.tsx",
-];
-const TEST_PATH_MARKERS = [
-  "/test/",
-  "/tests/",
-  "__tests__",
-  "/e2e/",
-  "test-helpers",
-  "test-support",
-  "test-fixtures",
-  "test-mocks",
-  "test-utils",
-  "mock-http",
-  "-harness.",
-  ".test-utils.",
-  "/mocks/",
-];
-
-function pathMatchesRoot(repoPath, root) {
-  return repoPath === root || repoPath.startsWith(`${root}/`);
-}
-
-function isSkippedTestPath(repoPath) {
-  if (pathMatchesRoot(repoPath, BOUNDARY_GUARD_FIXTURE_ROOT)) {
-    return false;
-  }
-  const slashPrefixedPath = `/${repoPath}`;
-  return (
-    TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
-    TEST_PATH_MARKERS.some((marker) => slashPrefixedPath.includes(marker))
-  );
-}
 
 function unwrapExpression(node) {
   let current = node;
@@ -61,8 +26,8 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
       const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
       if (
         !filename.endsWith(".ts") ||
-        !roots.some((root) => pathMatchesRoot(repoPath, root)) ||
-        TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
       ) {
         return {};
@@ -147,9 +112,9 @@ function noChainedTypeAssertionsRule({ excludedRoots = [], roots }) {
       const cwd = context.cwd.replaceAll("\\", "/");
       const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
       if (
-        !roots.some((root) => pathMatchesRoot(repoPath, root)) ||
-        excludedRoots.some((root) => pathMatchesRoot(repoPath, root)) ||
-        isSkippedTestPath(repoPath)
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        excludedRoots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        isSkippedTypeAssertionTestPath(repoPath)
       ) {
         return {};
       }
@@ -625,63 +590,11 @@ export default {
         "Use registerHttpRoute({ path, auth, match, handler }) and registerPluginHttpRoute for dynamic webhook paths.",
     }),
     "no-widen-then-assert": noWidenThenAssertRule({
-      roots: ["src", "extensions", "packages", "ui/src", "test/fixtures/oxlint-boundary-guards"],
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
     }),
     "no-chained-type-assertions": noChainedTypeAssertionsRule({
-      roots: ["src", "extensions", "packages", "ui/src", BOUNDARY_GUARD_FIXTURE_ROOT],
-      // Burn-down ledger — shrink only; see PR #124060/#124073/#124079/#124082.
-      excludedRoots: [
-        "extensions/amazon-bedrock-mantle",
-        "extensions/anthropic-vertex",
-        "extensions/browser",
-        "extensions/codex",
-        "extensions/copilot",
-        "extensions/deepinfra",
-        "extensions/diagnostics-otel",
-        "extensions/diagnostics-prometheus",
-        "extensions/discord",
-        "extensions/github-copilot",
-        "extensions/google",
-        "extensions/googlechat",
-        "extensions/imessage",
-        "extensions/line",
-        "extensions/llm-task",
-        "extensions/longcat",
-        "extensions/matrix",
-        "extensions/microsoft-foundry",
-        "extensions/msteams",
-        "extensions/qa-lab",
-        "extensions/reef",
-        "extensions/signal",
-        "extensions/slack",
-        "extensions/sms",
-        "extensions/synology-chat",
-        "extensions/telegram",
-        "extensions/tlon",
-        "extensions/voice-call",
-        "extensions/whatsapp",
-        "extensions/workboard",
-        "extensions/zalo",
-        "extensions/zalouser",
-        "packages/ai",
-        "src/runtime.ts",
-        "src/acp",
-        "src/agents",
-        "src/channels",
-        "src/commands",
-        "src/config",
-        "src/gateway",
-        "src/infra",
-        "src/media",
-        "src/meeting-bot",
-        "src/plugin-sdk",
-        "src/plugins",
-        "src/process",
-        "src/proxy-capture",
-        "src/shared",
-        "src/trajectory",
-        "ui/src",
-      ],
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
+      excludedRoots: CHAINED_ASSERTION_EXCLUDED_ROOTS,
     }),
   },
 };

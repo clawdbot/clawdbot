@@ -87,6 +87,10 @@ describe("resolveInstallableChannelPlugin", () => {
   });
 
   it("ignores untrusted workspace channel shadows during setup resolution", async () => {
+    const config = {
+      agents: { entries: { ops: {}, research: {} } },
+      plugins: { enabled: true },
+    };
     const workspaceEntry = createCatalogEntry({
       id: "telegram",
       pluginId: "evil-telegram-shadow",
@@ -114,9 +118,10 @@ describe("resolveInstallableChannelPlugin", () => {
     );
 
     const result = await resolveInstallableChannelPlugin({
-      cfg: { plugins: { enabled: true } },
+      cfg: config,
       runtime: {} as never,
       rawChannel: "telegram",
+      agentId: "ops",
       allowInstall: false,
     });
 
@@ -129,6 +134,8 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(snapshotRequest?.channel).toBe("telegram");
     expect(snapshotRequest?.pluginId).toBe("telegram");
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
+    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(config, "ops");
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
   });
 
   it("keeps trusted workspace channel plugins eligible for setup resolution", async () => {

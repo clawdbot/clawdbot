@@ -6,6 +6,7 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -365,6 +366,7 @@ export function validateExplicitPluginConfig(params: {
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: effectiveConfig,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;

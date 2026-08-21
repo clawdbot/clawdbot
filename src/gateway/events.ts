@@ -6,6 +6,9 @@ import type {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
+/** Event name emitted when the paired-device projection changes. */
+export const GATEWAY_EVENT_DEVICE_PAIR_CHANGED = "device.pair.changed" as const;
+
 /** Event name emitted when a node's private runner declaration changes. */
 export const GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED = "node.runnerInventory.changed" as const;
 

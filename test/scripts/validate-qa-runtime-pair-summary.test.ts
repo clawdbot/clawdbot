@@ -52,6 +52,7 @@ function scenario(params: ScenarioParams) {
 function summary(scenarios: ReturnType<typeof scenario>[]) {
   return {
     run: {
+      status: "completed",
       runtimePair: ["openclaw", "codex"],
       scenarioIds: scenarios.map((entry) => entry.runtimeParity.scenarioId),
     },
@@ -125,6 +126,15 @@ function frozenCoreSummary() {
 }
 
 describe("frozen QA runtime-pair summary validation", () => {
+  it("rejects a nonterminal runtime-pair summary", () => {
+    const fixture = summary([scenario({ name: "running", status: "pass" })]);
+    fixture.run.status = "running";
+
+    expect(() => validateQaRuntimePairSummary(fixture)).toThrow(
+      "runtime-pair summary is not completed",
+    );
+  });
+
   it("accepts only passing scenarios and explicit one-sided Codex-native gaps", () => {
     const fixture = summary([
       scenario({ name: "passing", status: "pass" }),

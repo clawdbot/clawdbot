@@ -43,9 +43,14 @@ function prepare(root) {
   ensureDependencyIgnores(root);
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
+  packageJson.scripts = {
+    ...packageJson.scripts,
+    openclaw: "node openclaw.mjs",
+  };
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");
   const aiRuntimePackageJson = path.join(aiRuntimeSource, "package.json");
   if (!fs.existsSync(aiRuntimePackageJson)) {
+    writeJson(packageJsonPath, packageJson);
     return;
   }
 

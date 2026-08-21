@@ -38,8 +38,10 @@ import {
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
+  getGatewayContextResolver,
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
+  withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -169,6 +171,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       channelId: record.id,
       record,
       epoch,
+      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
       isLive: () =>
         ownsLiveRegistrySlot() && isPluginRecordLifecycleEpochActive(registry, record, epoch),
     });
@@ -791,6 +794,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             list: (params) => runWithPluginScope(() => nodes.list(params)),
             invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+            openDuplex: (params) =>
+              withPluginRuntimeRegistryScope(registry, () =>
+                runWithPluginScope(() => nodes.openDuplex(params)),
+              ),
           } satisfies PluginRuntime["nodes"];
         }
         if (prop === "agent") {
@@ -967,11 +974,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           ) as PluginRuntime["agent"];
           Object.defineProperties(scopedAgent, {
             runEmbeddedAgent: {
-              configurable: true,
-              enumerable: true,
-              value: runEmbeddedAgent,
-            },
-            runEmbeddedPiAgent: {
               configurable: true,
               enumerable: true,
               value: runEmbeddedAgent,

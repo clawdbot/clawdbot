@@ -26,6 +26,7 @@ export type DiscoveredChromeExtension = {
   extensionId: string;
   extensionPath: string;
 };
+export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "extensionPath">;
 export type ExtensionInstallDeps = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -310,12 +311,14 @@ async function approvedRealpaths(paths: readonly string[]): Promise<string[]> {
   return [...new Set(resolved.filter((value): value is string => value !== null))];
 }
 
-/** Discover unpacked OpenClaw IDs from exact Secure Preferences path records. */
+/** Discover exact Store identity separately from approved unpacked path records. */
 export async function discoverChromeExtensionIds(params: {
   approvedDirs: readonly string[];
+  storeExtensionId?: string;
   deps?: ExtensionInstallDeps;
 }): Promise<{
   discovered: DiscoveredChromeExtension[];
+  storeDiscovered: DiscoveredChromeStoreExtension[];
   issues: string[];
   identityMismatches: string[];
 }> {
@@ -325,6 +328,7 @@ export async function discoverChromeExtensionIds(params: {
     (await approvedRealpaths(params.approvedDirs)).map((value) => comparablePath(value, platform)),
   );
   const discovered: DiscoveredChromeExtension[] = [];
+  const storeDiscovered: DiscoveredChromeStoreExtension[] = [];
   const issues: string[] = [];
   const identityMismatches: string[] = [];
   for (const root of chromeProductRoots(deps)) {
@@ -374,7 +378,26 @@ export async function discoverChromeExtensionIds(params: {
           ) {
             continue;
           }
-          const entry = rawEntry as { location?: unknown; path?: unknown };
+          const entry = rawEntry as {
+            from_webstore?: unknown;
+            location?: unknown;
+            path?: unknown;
+          };
+          if (
+            extensionId === params.storeExtensionId &&
+            entry.from_webstore === true &&
+            entry.location !== UNPACKED_MANIFEST_LOCATION
+          ) {
+            storeDiscovered.push({
+              product: root.product,
+              browser: root.label,
+              userDataDir: root.userDataDir,
+              profile: profileEntry.name,
+              securePreferencesPath,
+              extensionId,
+            });
+            continue;
+          }
           if (entry.location !== UNPACKED_MANIFEST_LOCATION || typeof entry.path !== "string") {
             continue;
           }
@@ -415,8 +438,19 @@ export async function discoverChromeExtensionIds(params: {
       entry,
     ]),
   );
+  const uniqueStore = new Map(
+    storeDiscovered.map((entry) => [
+      `${entry.product}\0${entry.profile}\0${entry.extensionId}`,
+      entry,
+    ]),
+  );
   return {
     discovered: [...unique.values()].toSorted((a, b) =>
+      `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
+        `${b.product}/${b.profile}/${b.extensionId}`,
+      ),
+    ),
+    storeDiscovered: [...uniqueStore.values()].toSorted((a, b) =>
       `${a.product}/${a.profile}/${a.extensionId}`.localeCompare(
         `${b.product}/${b.profile}/${b.extensionId}`,
       ),

@@ -1,5 +1,6 @@
 // Shares web-provider plugin resolution helpers without eager runtime imports.
 import { resolveBundledCompatActivationInputs } from "./activation-context.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -68,12 +69,15 @@ function loadInstalledWebProviderManifestRecords(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): readonly PluginManifestRecord[] {
-  const records = loadManifestMetadataSnapshot({
-    config: params.config ?? {},
-    workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-  }).plugins;
+  const records =
+    params.manifestRecords ??
+    loadManifestMetadataSnapshot({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env ?? process.env,
+    }).plugins;
   const pluginIdSet = createPluginIdScopeSet(params.pluginIds);
   return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
@@ -88,6 +92,7 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
@@ -147,6 +152,7 @@ function resolveBundledWebProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] {
   return loadInstalledWebProviderManifestRecords(params)
     .filter(
@@ -163,27 +169,48 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): {
   config: PluginLoadOptions["config"];
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
+  manifestRecords?: readonly PluginManifestRecord[];
 } {
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  let manifestRecords = params.manifestRecords ?? currentSnapshot?.plugins;
   const activation = resolveBundledCompatActivationInputs({
     rawConfig: params.config,
     env: params.env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
-    resolveBundledPluginIds: (compatParams) =>
-      resolveBundledWebProviderCompatPluginIds({
+    ...(manifestRecords
+      ? { manifestRegistry: { plugins: [...manifestRecords], diagnostics: [] } }
+      : {}),
+    ...(currentSnapshot?.discovery ? { discovery: currentSnapshot.discovery } : {}),
+    resolveBundledPluginIds: (compatParams) => {
+      manifestRecords ??= loadInstalledWebProviderManifestRecords({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
+      return resolveBundledWebProviderCompatPluginIds({
         contract: params.contract,
         ...compatParams,
-      }),
+        manifestRecords,
+      });
+    },
   });
 
   return {
     config: activation.config,
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
+    manifestRecords,
   };
 }
 

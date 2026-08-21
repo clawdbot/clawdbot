@@ -8,6 +8,7 @@ import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
+import { formatUiExternalText } from "../../../lib/format-error.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   nextBooleanToolOverrides,
@@ -358,7 +359,7 @@ function renderToolAccessView(props: ChatComposerPlusMenuProps, serverName: stri
         </div>`
       : discoveryNotice
         ? html`<div class="agent-chat__capability-menu-state" role="status">
-            ${discoveryNotice.message}
+            ${formatUiExternalText(discoveryNotice.message)}
           </div>`
         : tools.length === 0
           ? html`<div class="agent-chat__capability-menu-state">

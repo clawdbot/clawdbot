@@ -3,6 +3,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  type CronRunLogEntry,
   validateCronAddParams,
   validateCronGetParams,
   validateCronListParams,
@@ -11,7 +12,7 @@ import {
   validateCronRunsParams,
   validateCronUpdateParams,
 } from "./index.js";
-import { CronJobSchema } from "./schema/cron.js";
+import { CronJobSchema, CronRunLogEntrySchema } from "./schema/cron.js";
 
 /**
  * Cron validator regressions for public scheduler RPC payloads.
@@ -75,6 +76,57 @@ describe("cron protocol validators", () => {
       }),
     ).toBe(false);
     expect(validateCronUpdateParams(update({ state: job.state }))).toBe(false);
+  });
+
+  it("models the delivery trace returned in cron run history", () => {
+    const entry = {
+      ts: 1,
+      jobId: "job-1",
+      action: "finished",
+      status: "ok",
+      delivery: {
+        intended: { channel: "telegram", to: "chat-1", source: "explicit" },
+        resolved: { channel: "telegram", to: "chat-1", ok: true },
+        messageToolSentTo: [{ channel: "telegram", to: "chat-1", threadId: "topic-1" }],
+        fallbackUsed: false,
+        delivered: true,
+      },
+    } as const satisfies CronRunLogEntry;
+
+    expect(Value.Check(CronRunLogEntrySchema, entry)).toBe(true);
+    expect(
+      Value.Check(CronRunLogEntrySchema, {
+        ...entry,
+        delivery: { ...entry.delivery, unsupported: true },
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["succeeded", "failed", "unknown"] as const)(
+    "accepts additive cron completion status %s",
+    (completionStatus) => {
+      expect(
+        Value.Check(CronRunLogEntrySchema, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          completionStatus,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown cron completion status values", () => {
+    expect(
+      Value.Check(CronRunLogEntrySchema, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        completionStatus: "partial",
+      }),
+    ).toBe(false);
   });
 
   it("rejects client-authored scheduled authority provenance", () => {
@@ -330,6 +382,7 @@ describe("cron protocol validators", () => {
     expectCases(validateCronRunParams, true, [
       { id: "job-1", mode: "force", expectedProcessInstanceId: "process-1" },
       { jobId: "job-2", mode: "due" },
+      { jobId: "job-3", mode: "if-enabled" },
     ]);
     expectCases(validateCronRunParams, false, [{ id: "job-1", expectedProcessInstanceId: "" }]);
   });
@@ -344,6 +397,7 @@ describe("cron protocol validators", () => {
         enabled: "all",
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
@@ -356,6 +410,7 @@ describe("cron protocol validators", () => {
       { agentId: "" },
       { scheduleKind: "yearly" },
       { lastRunStatus: "pending" },
+      { trigger: "configured" },
     ]);
   });
 

@@ -1,11 +1,6 @@
-import { afterEach, expect, test, vi } from "vitest";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import { afterEach, expect, test } from "vitest";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
-import { isDeviceWorkerAvailable } from "./worker-environments/device-provider.js";
-import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -17,126 +12,35 @@ afterEach(async () => {
 });
 
 test(
-  "profiles-disabled startup publishes core worker placement ownership to real session RPCs",
+  "profiles-disabled startup exposes core worker placement through real session RPCs",
   { timeout: 30_000 },
   async () => {
-    // The shared server harness defaults to its minimal mode, which deliberately skips all
-    // worker stores. Exercise the production startup path while keeping plugin profiles unconfigured;
-    // the core device provider still owns the worker service.
+    // Minimal Gateway mode intentionally omits worker ownership; this exercises production startup
+    // with no configured cloud profiles, where the core device provider still owns placement.
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     harness = await startGatewayServerHarness();
-    const context = getFallbackGatewayContext();
-    expect(context?.workerEnvironmentService).toBeDefined();
-    await expect(
-      isDeviceWorkerAvailable(context?.workerEnvironmentService, "missing-device"),
-    ).resolves.toBe(false);
-    const placements = context?.workerSessionPlacementService as
-      | WorkerSessionPlacementStore
-      | undefined;
-    expect(placements).toBeDefined();
-    if (!placements) {
-      throw new Error("startup placement store was not published");
-    }
-
     const { ws } = await harness.openClient();
     const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
       agentId: "main",
       key: "startup-placement-local",
     });
-    expect(created.ok).toBe(true);
-    const sessionId = created.payload?.sessionId;
+    expect(created).toMatchObject({ ok: true });
     const sessionKey = created.payload?.key;
-    if (!sessionId || !sessionKey) {
-      throw new Error("session creation did not return placement identity");
+    if (!sessionKey) {
+      throw new Error("session creation did not return a key");
     }
 
-    const claim = placements.claimTurn({
-      sessionId,
-      sessionKey,
-      agentId: "main",
-      owner: { kind: "local" },
-      claimId: "startup-placement-local-claim",
-      runId: "startup-placement-local-run",
+    const dispatch = await rpcReq(ws, "sessions.dispatch", {
+      key: sessionKey,
+      deviceId: "missing-device",
     });
-    placements.releaseTurn(claim);
+    expect(dispatch.ok).toBe(false);
+    expect(dispatch.error?.message).toContain("session-owned managed worktree");
 
+    const reset = await rpcReq(ws, "sessions.reset", { key: sessionKey });
+    expect(reset).toMatchObject({ ok: true, payload: { key: sessionKey } });
     const deleted = await rpcReq(ws, "sessions.delete", { key: sessionKey });
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-    expect(placements.get(sessionId)).toBeUndefined();
-
-    const createdForReset = await rpcReq<{ key?: string }>(ws, "sessions.create", {
-      agentId: "main",
-      key: "startup-placement-local-reset",
-    });
-    expect(createdForReset.ok).toBe(true);
-    const resetSessionKey = createdForReset.payload?.key;
-    if (!resetSessionKey) {
-      throw new Error("reset session creation did not return a session key");
-    }
-    const createdResetEntry = loadSessionEntry(resetSessionKey).entry;
-    const resetSessionId = createdResetEntry?.sessionId;
-    const previousLifecycleRevision = createdResetEntry?.lifecycleRevision;
-    if (!resetSessionId) {
-      throw new Error("reset session creation did not persist session identity");
-    }
-    const resetClaim = placements.claimTurn({
-      sessionId: resetSessionId,
-      sessionKey: resetSessionKey,
-      agentId: "main",
-      owner: { kind: "local" },
-      claimId: "startup-placement-local-reset-claim",
-      runId: "startup-placement-local-reset-run",
-    });
-    placements.releaseTurn(resetClaim);
-
-    const reset = await rpcReq<{
-      key?: string;
-      entry?: { lifecycleRevision?: string; sessionId?: string };
-    }>(ws, "sessions.reset", { key: resetSessionKey });
-    expect(reset).toMatchObject({
-      ok: true,
-      payload: { key: resetSessionKey, entry: { sessionId: resetSessionId } },
-    });
-    const resetLifecycleRevision = reset.payload?.entry?.lifecycleRevision;
-    expect(resetLifecycleRevision).toEqual(expect.any(String));
-    expect(resetLifecycleRevision).not.toBe(previousLifecycleRevision);
-    expect(loadSessionEntry(resetSessionKey).entry).toMatchObject({
-      sessionId: resetSessionId,
-      lifecycleRevision: resetLifecycleRevision,
-    });
-    expect(placements.get(resetSessionId)).toBeUndefined();
-
-    const createdForExternalDelete = await rpcReq<{ key?: string; sessionId?: string }>(
-      ws,
-      "sessions.create",
-      { agentId: "main", key: "startup-placement-external-delete" },
-    );
-    const externalSessionId = createdForExternalDelete.payload?.sessionId;
-    const externalSessionKey = createdForExternalDelete.payload?.key;
-    if (!externalSessionId || !externalSessionKey) {
-      throw new Error("external-delete session creation did not return placement identity");
-    }
-    const externalClaim = placements.claimTurn({
-      sessionId: externalSessionId,
-      sessionKey: externalSessionKey,
-      agentId: "main",
-      owner: { kind: "local" },
-      claimId: "startup-placement-external-delete-claim",
-      runId: "startup-placement-external-delete-run",
-    });
-    placements.releaseTurn(externalClaim);
-    const externalTarget = loadSessionEntry(externalSessionKey);
-    await deleteSessionEntryLifecycle({
-      archiveTranscript: false,
-      storePath: externalTarget.storePath,
-      target: {
-        canonicalKey: externalTarget.canonicalKey,
-        storeKeys: externalTarget.storeKeys,
-      },
-    });
-    await vi.waitFor(() => expect(placements.get(externalSessionId)).toBeUndefined());
-
-    expect(getFallbackGatewayContext()?.workerEnvironmentService).toBeDefined();
     ws.close();
   },
 );

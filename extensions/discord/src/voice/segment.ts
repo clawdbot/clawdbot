@@ -28,6 +28,7 @@ const logger = createSubsystemLogger("discord/voice");
 
 export async function processDiscordVoiceSegment(params: {
   entry: VoiceSessionEntry;
+  accountId: string;
   wavPath: string;
   userId: string;
   durationSeconds: number;
@@ -122,6 +123,7 @@ export async function processDiscordVoiceSegment(params: {
     const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
     const turn = await runDiscordVoiceAgentTurn({
       entry,
+      accountId: params.accountId,
       userId,
       message: prompt,
       cfg: params.cfg,
@@ -166,6 +168,13 @@ export async function processDiscordVoiceSegment(params: {
   if (voiceReplyAudio.status === "failed") {
     logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error ?? "unknown error"}`);
     return;
+  }
+  const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;
+  if (streamFailure && !entry.ttsStreamFallbackWarned) {
+    entry.ttsStreamFallbackWarned = true;
+    logger.warn(
+      `discord voice: streaming TTS failed provider=${streamFailure.provider} reasonCode=${streamFailure.reasonCode}; using file fallback`,
+    );
   }
   logVoiceVerbose(
     `tts ok (${voiceReplyAudio.speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
+import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
@@ -218,31 +219,34 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     return;
   }
 
-  for (const block of output.content) {
-    if (!isToolCall(block)) {
-      continue;
-    }
-    const toolCall = block as { name?: unknown; arguments?: unknown; partialArgs?: unknown };
-    let completeArguments: unknown;
-    try {
-      completeArguments =
-        typeof toolCall.partialArgs === "string" && toolCall.partialArgs.trim().length > 0
-          ? (JSON.parse(toolCall.partialArgs) as unknown)
-          : undefined;
-    } catch {
-      completeArguments = undefined;
-    }
-    if (
-      typeof toolCall.name !== "string" ||
-      toolCall.name.trim().length === 0 ||
-      !isRecord(completeArguments)
-    ) {
-      output.stopReason = "error";
-      output.errorMessage = "Provider returned an incomplete or malformed tool call";
-      output.content = output.content.filter((candidate) => !isToolCall(candidate));
-      return;
-    }
-    toolCall.arguments = completeArguments;
+  type FinalToolCall = TBlock & {
+    name?: unknown;
+    arguments: Record<string, unknown>;
+    partialArgs?: unknown;
+  };
+  const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
+  const rejectToolCalls = () => {
+    output.stopReason = "error";
+    output.errorMessage = "Provider returned an incomplete or malformed tool call";
+    output.content = output.content.filter((candidate) => !isToolCall(candidate));
+  };
+  if (
+    toolCalls.some(
+      (call) =>
+        typeof call.name !== "string" ||
+        call.name.trim().length === 0 ||
+        typeof call.partialArgs !== "string" ||
+        call.partialArgs.trim().length === 0,
+    )
+  ) {
+    rejectToolCalls();
+    return;
+  }
+  try {
+    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);
+  } catch {
+    rejectToolCalls();
+    return;
   }
 
   for (let contentIndex = 0; contentIndex < output.content.length; contentIndex += 1) {

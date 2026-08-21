@@ -1,3 +1,4 @@
+import { normalizeLegacyDmAliases } from "openclaw/plugin-sdk/channel-config-helpers";
 // Discord helper module supports config schema behavior.
 import {
   buildChannelAllowBotsSchema,
@@ -15,6 +16,7 @@ import {
   requireOpenAllowFrom,
   TtsConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   buildSecretInputSchema,
   registerSensitiveConfigSchema,
@@ -117,6 +119,7 @@ const DiscordVoiceAutoJoinSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
+    whenOccupied: z.boolean().optional(),
   })
   .strict();
 
@@ -196,7 +199,7 @@ const DiscordVoiceSchema = z
   .strict()
   .optional();
 
-const DiscordAccountSchema = z
+const DiscordAccountSchemaBase = z
   .object({
     ...buildCommonChannelAccountShape({
       omit: ["groupAllowFrom"],
@@ -372,7 +375,32 @@ const DiscordAccountSchema = z
     // can inherit top-level allowFrom via runtime shallow merge.
   });
 
-export const DiscordConfigSchema = DiscordAccountSchema.extend({
+function normalizeShippedDiscordDmAliases(value: unknown): unknown {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return value;
+  }
+
+  const updated = normalizeLegacyDmAliases({
+    entry,
+    pathPrefix: "channels.discord",
+    changes: [],
+  }).entry;
+  const dm = asObjectRecord(updated.dm);
+  if (!dm || (dm.policy === undefined && dm.allowFrom === undefined)) {
+    return updated;
+  }
+  const { policy: _policy, allowFrom: _allowFrom, ...retainedDm } = dm;
+  const { dm: _dm, ...rest } = updated;
+  return Object.keys(retainedDm).length > 0 ? { ...rest, dm: retainedDm } : rest;
+}
+
+const DiscordAccountSchema = z.preprocess(
+  normalizeShippedDiscordDmAliases,
+  DiscordAccountSchemaBase,
+);
+
+const DiscordConfigSchemaBase = DiscordAccountSchemaBase.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
@@ -421,6 +449,11 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
     });
   }
 });
+
+export const DiscordConfigSchema = z.preprocess(
+  normalizeShippedDiscordDmAliases,
+  DiscordConfigSchemaBase,
+);
 
 export const DiscordChannelConfigSchema = buildChannelConfigSchema(DiscordConfigSchema, {
   uiHints: discordChannelConfigUiHints,

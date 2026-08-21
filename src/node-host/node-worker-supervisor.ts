@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   appendCapturedOutput,
@@ -19,7 +20,6 @@ import type {
 } from "../worker/node-workspace-retain-protocol.js";
 import { formatWorkerConnectionFailure } from "../worker/worker-connection-contract.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
-import type { NodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { resolveNodeWorkerEntry } from "./node-worker-entry.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
@@ -90,10 +90,9 @@ type ActiveOwnership = RunningChild | ObservedTerminal;
 type NodeWorkerSupervisorOptions = {
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
-  localInstallation?: NodeWorkerInstallation;
   capacity?: number;
   capacityWaitMs?: number;
-  onAvailabilityChanged?: (available: boolean) => void;
+  onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   workspace?: NodeWorkerWorkspaceRuntime;
 };
 
@@ -126,7 +125,6 @@ class NodeWorkerSupervisor {
   private readonly bundleRoot: string;
   private readonly store: NodeWorkerLaunchStore;
   private readonly workerEnv: NodeJS.ProcessEnv;
-  private readonly localInstallation?: NodeWorkerInstallation;
   private readonly capacity: NodeWorkerCapacity;
   private readonly workspace: NodeWorkerWorkspaceRuntime;
   private supervisorIdentity?: NodeWorkerProcessIdentity;
@@ -141,7 +139,6 @@ class NodeWorkerSupervisor {
     );
     this.store = new NodeWorkerLaunchStore({ env });
     this.workerEnv = snapshotNodeWorkerEnv(env);
-    this.localInstallation = options.localInstallation;
     this.workspace =
       options.workspace ??
       new NodeWorkerWorkspaceRuntime({ root: this.bundleRoot, env: this.workerEnv });
@@ -474,22 +471,27 @@ class NodeWorkerSupervisor {
     supervisor: NodeWorkerProcessIdentity;
   }): Promise<NodeWorkerLaunchReceipt> {
     const credential = params.descriptor.admission.credential;
-    const scrubber = createNodeWorkerCredentialScrubber(credential);
+    const endpoint = params.descriptor.connectionEndpoint;
+    const cloudflareAccess = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
+    const sensitiveValues = cloudflareAccess
+      ? [credential, cloudflareAccess.clientId, cloudflareAccess.clientSecret]
+      : [credential];
+    const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
     // producer's latest cause so the durable terminal receipt does not become generic.
     const connectionFailure: { errorText?: string } = {};
-    registerSecretValueForRedaction(credential);
+    for (const value of sensitiveValues) {
+      registerSecretValueForRedaction(value);
+    }
     let adapter: ChildAdapter;
     try {
-      const entry = await resolveNodeWorkerEntry({
+      const entry = resolveNodeWorkerEntry({
         bundleRoot: this.bundleRoot,
-        installKind: params.input.installKind,
         expectedBundleHash: params.input.expectedBundleHash,
         gatewayNamespace: params.input.gatewayNamespace,
-        ...(this.localInstallation ? { localInstallation: this.localInstallation } : {}),
       });
       adapter = await createChildAdapter({
-        argv: [process.execPath, entry, "worker", "--internal-worker-ipc"],
+        argv: [process.execPath, entry, "--internal-worker-ipc"],
         env: this.workerEnv,
         exactEnv: true,
         ownedWorker: true,

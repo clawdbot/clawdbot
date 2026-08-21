@@ -18,6 +18,8 @@ export type DurableDeliveryCompletion =
       agentId: string;
       operationId: string;
       storePath?: string;
+      /** Present on Gateway-owned conversation intents created with route authorization. */
+      routeFingerprint?: string;
     }
   | {
       kind: "pending-final";
@@ -203,7 +205,7 @@ export async function completeDurableDelivery(
 }
 
 /** Finalizes a policy-suppressed send before its durable intent is acknowledged. */
-export async function suppressDurableDelivery(
+async function suppressDurableDelivery(
   completion: DurableDeliveryCompletion,
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
@@ -243,4 +245,21 @@ export async function failDurableDelivery(
     : conversationResult(
         markConversationDeliveryUnknown(scopeForCompletion(completion), completion.operationId),
       );
+}
+
+type DurableDeliveryTerminalEvidence =
+  | { result: OutboundDeliveryResult }
+  | { platformSendStarted: boolean };
+
+/** Settles the completion owner from the final evidence held by its lifecycle owner. */
+export async function settleDurableDelivery(
+  completion: DurableDeliveryCompletion,
+  evidence: DurableDeliveryTerminalEvidence,
+  stateDir?: string,
+): Promise<DurableDeliveryCompletionResult> {
+  return "result" in evidence
+    ? completeDurableDelivery(completion, evidence.result, stateDir)
+    : evidence.platformSendStarted
+      ? failDurableDelivery(completion, stateDir)
+      : suppressDurableDelivery(completion, stateDir);
 }

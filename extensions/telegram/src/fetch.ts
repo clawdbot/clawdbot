@@ -728,6 +728,7 @@ export function resolveTelegramTransport(
   };
 
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
@@ -753,6 +754,7 @@ export function resolveTelegramTransport(
     if (callerProvidedDispatcher) {
       try {
         const response = await sourceFetch(input, init);
+        signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -764,10 +766,13 @@ export function resolveTelegramTransport(
         });
         return response;
       } catch (caught) {
+        signal?.throwIfAborted();
         if (!shouldUseTelegramTransportFallback(caught)) {
           throw caught;
         }
-        return sourceFetch(input, init ?? {});
+        const response = await sourceFetch(input, init ?? {});
+        signal?.throwIfAborted();
+        return response;
       }
     }
 
@@ -793,6 +798,7 @@ export function resolveTelegramTransport(
           input,
           withDispatcherIfMissing(init, attempt.createDispatcher()),
         );
+        signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -808,6 +814,7 @@ export function resolveTelegramTransport(
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {
+        signal?.throwIfAborted();
         err = caught;
         if (!shouldUseTelegramTransportFallback(err)) {
           throw err;

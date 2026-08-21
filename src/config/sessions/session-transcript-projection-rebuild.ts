@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Generated } from "kysely";
+import type { ColumnType, Generated } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -23,8 +23,12 @@ type TranscriptProjectionDatabase = Pick<
   session_transcript_active_events: OpenClawAgentKyselyDatabase["session_transcript_active_events"] & {
     rowid: Generated<number>;
   };
-  session_transcript_fts: OpenClawAgentKyselyDatabase["session_transcript_fts"] & {
+  session_transcript_fts: Omit<
+    OpenClawAgentKyselyDatabase["session_transcript_fts"],
+    "timestamp"
+  > & {
     rowid: Generated<number>;
+    timestamp: ColumnType<string | null, number | string | null, number | string | null>;
   };
 };
 
@@ -419,7 +423,7 @@ export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
           role: row.role,
           session_id: params.sessionId,
           text: row.text,
-          timestamp: row.timestamp as unknown as string,
+          timestamp: row.timestamp,
         })),
       ),
     );

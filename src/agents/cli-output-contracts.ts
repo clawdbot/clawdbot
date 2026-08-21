@@ -54,7 +54,12 @@ export type CliOutput = {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  /** Trust-filtered explicit outbound media captured before CLI result normalization. */
+  toolMediaUrls?: string[];
+  toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
   yielded?: true;
+  yieldAcknowledgment?: string;
 };
 
 export type CliStreamingDelta = {

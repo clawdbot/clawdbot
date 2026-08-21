@@ -19,6 +19,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
 import { getChannelPlugin } from "../../registry.js";
@@ -28,7 +29,6 @@ import {
   type SessionBindingContractChannelId,
 } from "./manifest.js";
 import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
-import "../../registry.js";
 
 type SessionBindingContractEntry = {
   id: string;
@@ -83,6 +83,7 @@ function expectResolvedSessionBinding(params: {
   conversationId: string;
   parentConversationId?: string;
   targetSessionKey: string;
+  metadata?: Record<string, unknown>;
 }) {
   expect(
     getSessionBindingService().resolveByConversation({
@@ -93,6 +94,7 @@ function expectResolvedSessionBinding(params: {
     }),
   )?.toMatchObject({
     targetSessionKey: params.targetSessionKey,
+    ...(params.metadata ? { metadata: params.metadata } : {}),
   });
 }
 
@@ -162,6 +164,8 @@ type ChannelConversationBindingManager = Awaited<
   ReturnType<ChannelConversationBindingManagerFactory>
 >;
 let discordSessionBindingManager: ChannelConversationBindingManager | null = null;
+let feishuSessionBindingManager: ChannelConversationBindingManager | null = null;
+let imessageSessionBindingManager: ChannelConversationBindingManager | null = null;
 let matrixSessionBindingManager: ChannelConversationBindingManager | null = null;
 let telegramSessionBindingManager: ChannelConversationBindingManager | null = null;
 
@@ -173,17 +177,11 @@ type FeishuContractApi = {
   createFeishuThreadBindingManager: (params: {
     accountId?: string;
     cfg: OpenClawConfig;
-  }) => unknown;
-  feishuThreadBindingTesting: {
-    resetFeishuThreadBindingsForTests: () => void;
-  };
+  }) => ChannelConversationBindingManager;
 };
 
 type IMessageContractApi = {
-  createIMessageConversationBindingManager: ChannelConversationBindingManagerFactory;
-  imessageConversationBindingTesting: {
-    resetIMessageConversationBindingsForTests: () => void;
-  };
+  imessagePlugin: ChannelPlugin;
 };
 
 type MatrixContractApi = {
@@ -202,41 +200,12 @@ type TelegramContractApi = {
   telegramPlugin: ChannelPlugin;
 };
 
-function setRegistryBackedConversationBindingPlugin(params: {
-  id: SessionBindingContractChannelId;
-  createManager: ChannelConversationBindingManagerFactory;
-}) {
-  const plugin = {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.id,
-      selectionLabel: params.id,
-      blurb: "session binding contract fixture",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-    },
-    conversationBindings: {
-      supportsCurrentConversationBinding: true,
-      createManager: params.createManager,
-    },
-  } as unknown as ChannelPlugin;
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: params.id,
-        plugin,
-        source: "test",
-      },
-    ]),
-  );
-}
-
 async function getDiscordContractApi() {
   return await getContractApi<DiscordContractApi>("discord", "channel-plugin-api");
+}
+
+async function getIMessageContractApi() {
+  return await getContractApi<IMessageContractApi>("imessage", "channel-plugin-api");
 }
 
 async function getTelegramContractApi() {
@@ -249,6 +218,16 @@ async function getTelegramContractApi() {
 async function stopDiscordSessionBindingManager() {
   await discordSessionBindingManager?.stop();
   discordSessionBindingManager = null;
+}
+
+async function stopFeishuSessionBindingManager() {
+  await feishuSessionBindingManager?.stop();
+  feishuSessionBindingManager = null;
+}
+
+async function stopIMessageSessionBindingManager() {
+  await imessageSessionBindingManager?.stop();
+  imessageSessionBindingManager = null;
 }
 
 async function stopMatrixSessionBindingManager() {
@@ -276,17 +255,32 @@ async function prepareDiscordSessionBindingContract() {
 }
 
 async function prepareFeishuSessionBindingContract() {
-  const api = await getContractApi<FeishuContractApi>("feishu");
-  api.feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
+  await stopFeishuSessionBindingManager();
 }
 
 async function prepareIMessageSessionBindingContract() {
-  const api = await getContractApi<IMessageContractApi>("imessage");
-  api.imessageConversationBindingTesting.resetIMessageConversationBindingsForTests();
-  setRegistryBackedConversationBindingPlugin({
-    id: "imessage",
-    createManager: api.createIMessageConversationBindingManager,
+  await stopIMessageSessionBindingManager();
+  const { imessagePlugin } = await getIMessageContractApi();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "imessage",
+        plugin: imessagePlugin,
+        source: "test",
+      },
+    ]),
+  );
+}
+
+async function ensureIMessageSessionBindingManager() {
+  imessageSessionBindingManager ??= await createContractChannelConversationBindingManager({
+    channelId: "imessage",
+    cfg: baseSessionBindingCfg,
+    accountId: "default",
   });
+  if (!imessageSessionBindingManager) {
+    throw new Error("iMessage session binding manager is unavailable");
+  }
 }
 
 async function prepareMatrixSessionBindingContract() {
@@ -314,13 +308,16 @@ type SessionBindingContractFixture = {
   conversationId: string;
   parentConversationId?: string;
   targetSessionKey: string;
+  expectedBindingId?: string;
   targetKind: SessionBindingRecord["targetKind"];
   label: string;
+  metadata?: Record<string, unknown>;
   placements: SessionBindingCapabilities["placements"];
   preload: () => Promise<unknown>;
   beforeEach: () => Promise<void>;
   ensureManager: () => Promise<void>;
   stopManager?: () => Promise<void>;
+  restartBindingManager?: () => Promise<void>;
 };
 
 function createSessionBindingContractEntry(
@@ -358,12 +355,26 @@ function createSessionBindingContractEntry(
         targetKind: fixture.targetKind,
         conversation,
         placement: "current",
-        metadata: { agentId: fixture.id, label: fixture.label },
+        metadata: { agentId: fixture.id, label: fixture.label, ...fixture.metadata },
       });
+      if (fixture.expectedBindingId) {
+        expect(binding.bindingId).toBe(fixture.expectedBindingId);
+      }
+      if (fixture.metadata) {
+        expect(binding.metadata).toMatchObject(fixture.metadata);
+      }
       expectResolvedSessionBinding({
         ...conversation,
         targetSessionKey: fixture.targetSessionKey,
       });
+      if (fixture.restartBindingManager) {
+        await fixture.restartBindingManager();
+        expectResolvedSessionBinding({
+          ...conversation,
+          targetSessionKey: fixture.targetSessionKey,
+          metadata: fixture.metadata,
+        });
+      }
       return binding;
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
@@ -411,36 +422,31 @@ const sessionBindingContractEntries = {
     ensureManager: async () => {
       const { createFeishuThreadBindingManager } =
         await getContractApi<FeishuContractApi>("feishu");
-      createFeishuThreadBindingManager({
+      feishuSessionBindingManager ??= createFeishuThreadBindingManager({
         accountId: "default",
         cfg: baseSessionBindingCfg,
       });
     },
+    stopManager: stopFeishuSessionBindingManager,
   }),
   imessage: createSessionBindingContractEntry({
     id: "imessage",
     accountId: "default",
     conversationId: "+15555550124",
     targetSessionKey: "agent:imessage:current",
+    expectedBindingId: "default:+15555550124",
     targetKind: "session",
     label: "imessage-main",
+    metadata: { opaque: { ownerEpoch: 7, capabilities: ["approve", "resume"] } },
     placements: ["current"],
-    preload: () => getContractApi<IMessageContractApi>("imessage"),
+    preload: getIMessageContractApi,
     beforeEach: prepareIMessageSessionBindingContract,
-    ensureManager: async () => {
-      await createContractChannelConversationBindingManager({
-        channelId: "imessage",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
-      });
-    },
-    stopManager: async () => {
-      const manager = await createContractChannelConversationBindingManager({
-        channelId: "imessage",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
-      });
-      await manager?.stop();
+    ensureManager: ensureIMessageSessionBindingManager,
+    stopManager: stopIMessageSessionBindingManager,
+    restartBindingManager: async () => {
+      await stopIMessageSessionBindingManager();
+      closeOpenClawStateDatabaseForTest();
+      await ensureIMessageSessionBindingManager();
     },
   }),
   matrix: createSessionBindingContractEntry({

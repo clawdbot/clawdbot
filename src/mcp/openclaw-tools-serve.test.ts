@@ -47,7 +47,8 @@ describe("OpenClaw tools MCP server", () => {
     };
 
     expect(jobKeys({ cron: { triggers: { enabled: false } } })).not.toContain("trigger");
-    expect(jobKeys({ cron: {} })).not.toContain("trigger");
+    // Absent config means enabled; only an explicit false narrows the surface.
+    expect(jobKeys({ cron: {} })).toContain("trigger");
     expect(jobKeys({ cron: { triggers: { enabled: true } } })).toContain("trigger");
   });
 

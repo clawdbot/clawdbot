@@ -97,7 +97,6 @@ export function applyConfiguredContextWindows(params: {
         cache: params.cache,
         windowCache: params.windowCache,
         providerId,
-        provider,
         model,
       });
     }
@@ -108,22 +107,13 @@ function applyConfiguredContextWindow(params: {
   cache: Map<string, number>;
   windowCache: Map<string, number>;
   providerId: string;
-  provider: NonNullable<ConfiguredProvider>;
   model: ConfiguredModel;
 }): void {
   const modelId = typeof params.model?.id === "string" ? params.model.id : undefined;
   const contextTokens =
-    typeof params.model?.contextTokens === "number"
-      ? params.model.contextTokens
-      : typeof params.provider.contextTokens === "number"
-        ? params.provider.contextTokens
-        : undefined;
+    typeof params.model?.contextTokens === "number" ? params.model.contextTokens : undefined;
   const contextWindow =
-    typeof params.model?.contextWindow === "number"
-      ? params.model.contextWindow
-      : typeof params.provider.contextWindow === "number"
-        ? params.provider.contextWindow
-        : undefined;
+    typeof params.model?.contextWindow === "number" ? params.model.contextWindow : undefined;
   const configuredValue =
     contextTokens && contextTokens > 0
       ? { cache: params.cache, value: contextTokens }
@@ -211,7 +201,6 @@ export async function prepareContextWindowCaches(params: {
           cache: caches.configuredTokenCache,
           windowCache: caches.contextWindowCache,
           providerId,
-          provider,
           model,
         });
         processed.count += 1;

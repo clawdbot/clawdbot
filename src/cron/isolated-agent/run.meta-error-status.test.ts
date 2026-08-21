@@ -132,12 +132,25 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("marks a completed embedded run with no final payload as a cron error", async () => {
-    mockAgentRun();
+  it.each([
+    { label: "accidental", intentionalTerminalCompletion: undefined },
+    { label: "intentional terminal tool", intentionalTerminalCompletion: "tool-batch" as const },
+  ])("accounts for an $label embedded run with no final payload", async (testCase) => {
+    mockAgentRun({
+      meta: testCase.intentionalTerminalCompletion
+        ? { intentionalTerminalCompletion: testCase.intentionalTerminalCompletion }
+        : {},
+    });
     mockAnnounceOutcome();
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
+    if (testCase.intentionalTerminalCompletion) {
+      expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+      expect(result.status).toBe("ok");
+      expect(result.error).toBeUndefined();
+      return;
+    }
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron isolated run completed without a final assistant payload");

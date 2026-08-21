@@ -6,10 +6,19 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
   TranscriptSourceProvider,
+  TranscriptToolAction,
+  TranscriptToolCaller,
   TranscriptsStartResult,
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
+import { truncateUtf16Safe } from "../../utils.js";
+
+const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
+
+function formatAccountIdForToolText(accountId: string): string {
+  return JSON.stringify(truncateUtf16Safe(accountId, ACCOUNT_ID_OUTPUT_MAX_CHARS));
+}
 
 export type TranscriptsLogger = {
   warn: (message: string) => void;
@@ -17,6 +26,10 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
+  caller?: TranscriptToolCaller;
+  assertCallerActive?: () => void;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
@@ -25,6 +38,10 @@ export type TranscriptsRuntimeContext = {
 type ActiveTranscriptsSession = {
   session: TranscriptSessionDescriptor;
   providerId: string;
+  // Durable timestamps can collide; lifecycle cleanup must match this exact process-owned capture.
+  lifecycleToken?: symbol;
+  // Keep the capture reserved until provider and durable stop work both finish.
+  stopToken?: symbol;
   // Aborted starts stay active until a later stop confirms provider cleanup.
   cleanupPending?: true;
 };
@@ -110,6 +127,120 @@ export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntim
     : getTranscriptSourceProvider(providerId, ctx.config);
 }
 
+function bindSourceToTurnAccount(params: {
+  ctx: TranscriptsRuntimeContext;
+  operation: "import" | "start";
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+}): {
+  source: TranscriptSourceLocator;
+} {
+  const ownership = params.provider.accessControl;
+  if (!ownership) {
+    return { source: params.source };
+  }
+  if (params.ctx.caller?.kind === "operator") {
+    return { source: params.source };
+  }
+  const ownerChannel = ownership.channelId.trim().toLowerCase();
+  if (!ownerChannel) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} has an invalid account owner channel`,
+    );
+  }
+  const channel = params.ctx.caller?.channel?.trim().toLowerCase();
+  const accountId = params.ctx.caller?.accountId?.trim();
+  if (!channel) {
+    return { source: params.source };
+  }
+  if (channel !== ownerChannel) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} can only ${params.operation} from ${ownerChannel} or a channel-less local tool`,
+    );
+  }
+  if (!accountId) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} requires trusted account context from ${channel}`,
+    );
+  }
+  // Same-channel capture stays on the trusted inbound account; model input
+  // cannot redirect or later control another configured channel account.
+  return {
+    source: { ...params.source, accountId },
+  };
+}
+
+export async function authorizeTranscriptSource(params: {
+  action: TranscriptToolAction;
+  ctx: TranscriptsRuntimeContext;
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+}): Promise<void> {
+  params.ctx.assertCallerActive?.();
+  const ownership = params.provider.accessControl;
+  if (!ownership) {
+    return;
+  }
+  const caller = params.ctx.caller;
+  if (!caller) {
+    throw new Error("transcripts caller authorization is unavailable");
+  }
+  const authorization = await ownership.authorize({
+    action: params.action,
+    caller,
+    cfg: params.ctx.config,
+    source: params.source,
+  });
+  params.ctx.assertCallerActive?.();
+  if (!authorization.ok) {
+    throw new Error(authorization.error);
+  }
+}
+
+export function resolveTranscriptSourceOwnership(params: {
+  ctx: TranscriptsRuntimeContext;
+  operation: "import" | "start";
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+  configuredLifecycle?: boolean;
+}): {
+  source: TranscriptSourceLocator;
+} {
+  const boundSource = bindSourceToTurnAccount(params);
+  const ownership = params.provider.accessControl;
+  const trustedAccountId =
+    ownership && params.ctx.caller?.kind === "channel"
+      ? params.ctx.caller.accountId?.trim()
+      : undefined;
+  const sourceForResolution = trustedAccountId
+    ? { ...boundSource.source, accountId: trustedAccountId }
+    : boundSource.source;
+  const accountResolution = ownership?.resolveAccountId({
+    cfg: params.ctx.config,
+    source: sourceForResolution,
+  });
+  if (accountResolution && !accountResolution.ok) {
+    throw new Error(accountResolution.error);
+  }
+  const resolvedAccountId = accountResolution
+    ? accountResolution.value?.trim()
+    : sourceForResolution.accountId?.trim();
+  if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
+    );
+  }
+  const providerSource = ownership
+    ? { ...sourceForResolution, accountId: resolvedAccountId }
+    : sourceForResolution;
+  if (params.configuredLifecycle && ownership && !providerSource.accountId?.trim()) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
+    );
+  }
+  return { source: providerSource };
+}
+
 export function toolText(text: string, details?: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text }],
@@ -145,17 +276,35 @@ export async function startTranscripts(params: {
   rawParams: Record<string, unknown>;
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
+  configuredLifecycle?: true;
+  lifecycleToken?: symbol;
 }) {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
   }
-  const providerSource = {
+  const requestedSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
+  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
   if (!provider?.start) {
-    throw new Error(`transcripts provider ${providerSource.providerId} cannot start live capture`);
+    throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
+  }
+  const resolvedSource = resolveTranscriptSourceOwnership({
+    ctx: params.ctx,
+    operation: "start",
+    provider,
+    source: requestedSource,
+    configuredLifecycle: params.configuredLifecycle,
+  });
+  const providerSource = resolvedSource.source;
+  if (!params.configuredLifecycle) {
+    await authorizeTranscriptSource({
+      action: "start",
+      ctx: params.ctx,
+      provider,
+      source: providerSource,
+    });
   }
   const session: TranscriptSessionDescriptor = {
     sessionId:
@@ -164,7 +313,7 @@ export async function startTranscripts(params: {
     title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
+    metadata: params.ctx.agentId ? { agentId: params.ctx.agentId } : {},
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);
@@ -209,17 +358,28 @@ export async function startTranscripts(params: {
           session,
           providerId: provider.id,
           cleanupPending: true,
+          ...(params.lifecycleToken ? { lifecycleToken: params.lifecycleToken } : {}),
         });
         throw new Error(`transcripts start aborted; provider cleanup failed: ${cleanupError}`);
       }
       throw new Error("transcripts start aborted");
     }
     startupPending = false;
-    activeSessions.set(session.sessionId, { session, providerId: provider.id });
-    return toolText(`Transcripts started: ${session.sessionId}`, {
-      sessionId: session.sessionId,
+    activeSessions.set(session.sessionId, {
+      session,
       providerId: provider.id,
+      ...(params.lifecycleToken ? { lifecycleToken: params.lifecycleToken } : {}),
     });
+    const effectiveAccount = session.source.accountId;
+    return toolText(
+      `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${formatAccountIdForToolText(effectiveAccount)}` : ""}`,
+      {
+        sessionId: session.sessionId,
+        startedAt: session.startedAt,
+        providerId: provider.id,
+        ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
+      },
+    );
   } finally {
     startingSessionIds.delete(session.sessionId);
   }

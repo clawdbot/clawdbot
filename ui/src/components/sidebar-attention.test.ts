@@ -2,7 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
+import type {
+  CronJob,
+  CronJobsListResult,
+  ModelAuthStatusResult,
+  UpdateAvailable,
+} from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -57,6 +62,7 @@ type SidebarAttentionElement = HTMLElement & {
   cronJobs: CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
+  onSummaryChange?: (summary: { count: number; severity: "error" | "warning" | null }) => void;
 };
 
 function approval(id: string): ExecApprovalRequest {
@@ -74,6 +80,9 @@ function approvalItems(queue: readonly ExecApprovalRequest[]) {
     cronJobs: [],
     modelAuthStatus: null,
     approvalQueue: queue,
+    updateAvailable: null,
+    updateSchedule: null,
+    updateStatusBanner: null,
     now: 0,
   }).filter((item) => item.kind === "pendingApproval");
 }
@@ -83,8 +92,15 @@ function cronItems(cronJobs: readonly CronJob[], now = 0) {
     cronJobs,
     modelAuthStatus: null,
     approvalQueue: [],
+    updateAvailable: null,
+    updateSchedule: null,
+    updateStatusBanner: null,
     now,
   });
+}
+
+function itemFacts(item: ReturnType<typeof cronItems>[number] | undefined): string | undefined {
+  return item?.action.kind === "askCustodian" ? item.action.alert.facts.join("\n") : undefined;
 }
 
 function authItems(agentId: string) {
@@ -103,6 +119,9 @@ function authItems(agentId: string) {
     },
     modelAuthAgentId: agentId,
     approvalQueue: [],
+    updateAvailable: null,
+    updateSchedule: null,
+    updateStatusBanner: null,
     now: 0,
   }).filter((item) => item.kind === "modelAuthExpired");
 }
@@ -123,7 +142,7 @@ describe("cron attention details", () => {
 
     const failed = cronItems([primary, reason, unknown]).find((item) => item.kind === "cronFailed");
 
-    expect(failed?.detail).toBe(
+    expect(itemFacts(failed)).toBe(
       "Nightly backup: disk full\nreason-id: timeout\nunknown-id: Unknown error",
     );
   });
@@ -132,7 +151,7 @@ describe("cron attention details", () => {
     const job = cronJob("long-error");
     job.state = { lastRunStatus: "error", lastError: "x".repeat(201) };
 
-    const detail = cronItems([job]).find((item) => item.kind === "cronFailed")?.detail;
+    const detail = itemFacts(cronItems([job]).find((item) => item.kind === "cronFailed"));
     const errorText = detail?.slice("long-error: ".length);
 
     expect(errorText).toHaveLength(200);
@@ -151,7 +170,7 @@ describe("cron attention details", () => {
       (item) => item.kind === "cronOverdue",
     );
 
-    expect(overdue?.detail).toBe("Nightly backup\nunnamed-id");
+    expect(itemFacts(overdue)).toBe("Nightly backup: 5m late\nunnamed-id: 5m late");
   });
 
   it("does not flag an actively running job as overdue", () => {
@@ -167,7 +186,44 @@ describe("cron attention details", () => {
       (item) => item.kind === "cronOverdue",
     );
 
-    expect(overdue?.detail).toBe("stalled-id");
+    expect(itemFacts(overdue)).toBe("stalled-id: 5m late");
+  });
+
+  it("presents failed and overdue jobs to the custodian with raw facts", () => {
+    const failedJob = cronJob("failed");
+    failedJob.state = { lastRunStatus: "error", lastError: "disk full" };
+    const overdueJob = cronJob("overdue");
+    overdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+
+    const items = cronItems([failedJob, overdueJob], 300_002);
+
+    for (const kind of ["cronFailed", "cronOverdue"] as const) {
+      const action = items.find((item) => item.kind === kind)?.action;
+      expect(action).toMatchObject({ kind: "askCustodian" });
+      if (action?.kind !== "askCustodian") {
+        throw new Error(`expected ${kind} custodian action`);
+      }
+      expect(action.alert.facts.length).toBeGreaterThan(0);
+      expect(action.alert.question).toContain(kind === "cronFailed" ? "failed" : "not run");
+      expect(action.alert.question).toContain(action.alert.facts[0]);
+      expect(action.alert.action?.target).toEqual({ kind: "navigate", routeId: "cron" });
+    }
+  });
+
+  it("hard-caps the model question for a large incident set", () => {
+    const jobs = Array.from({ length: 100 }, (_, index) => {
+      const job = cronJob(`failed-${index}`);
+      job.name = `Automation ${index} ${"n".repeat(40)}`;
+      job.state = { lastRunStatus: "error", lastError: "e".repeat(200) };
+      return job;
+    });
+    const action = cronItems(jobs).find((item) => item.kind === "cronFailed")?.action;
+    if (action?.kind !== "askCustodian") {
+      throw new Error("expected failed cron custodian action");
+    }
+
+    expect(action.alert.question).toHaveLength(1_000);
+    expect(action.alert.question.endsWith("…")).toBe(true);
   });
 });
 
@@ -179,7 +235,7 @@ describe("pending approval attention", () => {
       {
         kind: "pendingApproval",
         severity: "warning",
-        icon: "shieldCheck",
+        icon: "shieldQuestion",
         action: { kind: "openApprovals" },
       },
     ]);
@@ -203,6 +259,133 @@ describe("model auth attention", () => {
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");
+  });
+
+  it("keeps a missing canonical route visible beside CLI OAuth", () => {
+    const items = buildSidebarAttentionItems({
+      cronJobs: [],
+      modelAuthStatus: {
+        ts: 1,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            status: "missing",
+            profiles: [],
+          },
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "expiring",
+            profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
+          },
+        ],
+      },
+      modelAuthAgentId: "main",
+      approvalQueue: [],
+      updateAvailable: null,
+      updateSchedule: null,
+      updateStatusBanner: null,
+      now: 0,
+    });
+
+    expect(items.some((item) => item.kind === "modelAuthExpired")).toBe(true);
+  });
+
+  it("presents expired providers to the custodian with raw status", () => {
+    const action = authItems("main")[0]?.action;
+    expect(action).toMatchObject({ kind: "askCustodian" });
+    if (action?.kind !== "askCustodian") {
+      throw new Error("expected model auth custodian action");
+    }
+    expect(action.alert.facts).toEqual(["OpenAI: missing"]);
+    expect(action.alert.question).toContain("OpenAI: missing");
+    expect(action.alert.action?.target).toEqual({
+      kind: "navigate",
+      routeId: "model-providers",
+    });
+  });
+});
+
+describe("update attention", () => {
+  const update: UpdateAvailable = {
+    channel: "dev",
+    currentVersion: "2026.8.1",
+    latestVersion: "2026.8.1",
+    upstreamSha: "a".repeat(40),
+    commitsBehind: 2,
+    commits: [{ sha: "abcdef123", subject: "Improve alerts" }],
+  };
+  const schedule = {
+    channel: "dev",
+    autoEnabled: false,
+    target: {
+      kind: "git" as const,
+      upstreamRef: "origin/main",
+      upstreamSha: "a".repeat(40),
+      commitsBehind: 2,
+    },
+  };
+  const build = (overrides: Record<string, unknown> = {}) =>
+    buildSidebarAttentionItems({
+      cronJobs: [],
+      modelAuthStatus: null,
+      approvalQueue: [],
+      updateAvailable: update,
+      updateSchedule: schedule,
+      updateStatusBanner: null,
+      now: 0,
+      ...overrides,
+    }).filter((item) => item.kind === "updateAvailable");
+
+  it("appears only for an available update outside loud card states", () => {
+    expect(build()).toMatchObject([
+      {
+        severity: "warning",
+        icon: "download",
+        label: "2 commits behind",
+        action: { kind: "askCustodian" },
+      },
+    ]);
+    expect(
+      build({ updateAvailable: { ...update, commitsBehind: 0 }, updateSchedule: null }),
+    ).toEqual([]);
+    expect(build({ updateSchedule: { ...schedule, campaign: { id: "campaign" } } })).toEqual([]);
+    expect(build({ updateStatusBanner: { tone: "danger", text: "failed" } })).toEqual([]);
+  });
+
+  it("changes its signature with upstream sha and carries commit facts", () => {
+    const first = build()[0];
+    const changed = build({
+      updateAvailable: { ...update, upstreamSha: "b".repeat(40) },
+      updateSchedule: {
+        ...schedule,
+        target: { ...schedule.target, upstreamSha: "b".repeat(40) },
+      },
+    })[0];
+    expect(first?.signature).not.toBe(changed?.signature);
+    if (first?.action.kind !== "askCustodian") {
+      throw new Error("expected update custodian action");
+    }
+    expect(first.action.alert.facts).toEqual(["abcdef1 Improve alerts"]);
+    expect(first.action.alert.question).toContain("abcdef1 Improve alerts");
+    expect(first.action.alert.action?.target).toEqual({ kind: "update" });
+  });
+
+  it("falls back to installed and available package versions", () => {
+    const item = build({
+      updateAvailable: {
+        channel: "stable",
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+      },
+      updateSchedule: null,
+    })[0];
+    if (item?.action.kind !== "askCustodian") {
+      throw new Error("expected package update custodian action");
+    }
+    expect(item.action.alert.facts).toEqual(["Installed v1.0.0 · Available v2.0.0"]);
+    expect(item.action.alert.question).toContain("Installed v1.0.0 · Available v2.0.0");
   });
 });
 
@@ -468,6 +651,85 @@ describe("sidebar attention refresh ownership", () => {
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
     await waitForFast(() => expect(element.textContent).not.toContain("automation(s) failed"));
+  });
+
+  it("renders icon-only accessible alerts and reports summary changes", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "cron.list") {
+        return Promise.resolve(cronListResponse([]));
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const gateway = {
+      snapshot: {
+        client: { request } as unknown as GatewayBrowserClient,
+        phase: "connected",
+        hello: null,
+        assistantAgentId: "main",
+        sessionKey: "agent:main:main",
+        lastError: null,
+        lastErrorCode: null,
+      },
+      connection: {
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const overlayListeners = new Set<() => void>();
+    const overlaySnapshot: {
+      approvalQueue: ExecApprovalRequest[];
+      updateAvailable: UpdateAvailable | null;
+      updateSchedule: null;
+      updateStatusBanner: null;
+    } = {
+      approvalQueue: [],
+      updateAvailable: {
+        channel: "stable",
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+      },
+      updateSchedule: null,
+      updateStatusBanner: null,
+    };
+    const overlays = {
+      snapshot: overlaySnapshot,
+      subscribe: (listener: () => void) => {
+        overlayListeners.add(listener);
+        return () => overlayListeners.delete(listener);
+      },
+    } as unknown as ApplicationContext["overlays"];
+    const provider = createApplicationContextProvider({
+      gateway,
+      overlays,
+      agentSelection: {
+        state: { selectedId: null },
+        subscribe: () => () => undefined,
+      },
+    } as unknown as ApplicationContext);
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const summary = vi.fn();
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.onSummaryChange = summary;
+    provider.append(element);
+    document.body.append(provider);
+
+    await waitForFast(() =>
+      expect(element.querySelector<HTMLButtonElement>(".sidebar-attention__open")).not.toBeNull(),
+    );
+    const button = element.querySelector<HTMLButtonElement>(".sidebar-attention__open");
+    expect(button?.getAttribute("aria-label")).toBe("v2.0.0");
+    expect(element.querySelector(".sidebar-attention__label")).toBeNull();
+    expect(summary).toHaveBeenLastCalledWith({ count: 1, severity: "warning" });
+
+    overlaySnapshot.updateAvailable = null;
+    for (const listener of overlayListeners) {
+      listener();
+    }
+    await waitForFast(() => expect(summary).toHaveBeenLastCalledWith({ count: 0, severity: null }));
   });
 });
 

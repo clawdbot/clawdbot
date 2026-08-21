@@ -484,13 +484,16 @@ function resolveImageModelFromAgentDefaults(params: {
       : (inferUniqueProviderFromConfiguredModels({
           cfg: params.cfg,
           model: ref,
+          agentId: params.agentId,
         }) ?? defaultProvider);
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: effectiveDefaultProvider,
+      agentId: params.agentId,
     });
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
+      agentId: params.agentId,
       raw: ref,
       defaultProvider: effectiveDefaultProvider,
       aliasIndex,

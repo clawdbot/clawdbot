@@ -1,8 +1,6 @@
 name: Mantis Discord Status Reactions
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       baseline_ref:
@@ -131,6 +129,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 

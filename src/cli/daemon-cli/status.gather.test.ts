@@ -442,6 +442,7 @@ describe("gatherDaemonStatus", () => {
       service: {
         label: "Scheduled Task",
         loaded: true,
+        loadState: { status: "loaded" as const },
         loadedText: "registered",
         notLoadedText: "not registered",
       },
@@ -734,6 +735,7 @@ describe("gatherDaemonStatus", () => {
     expect(
       serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
+    expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
@@ -760,7 +762,11 @@ describe("gatherDaemonStatus", () => {
 
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-    expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl is-enabled timed out",
+    });
+    expect(status.service.loaded).toBeNull();
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Error: systemctl show timed out",
@@ -776,7 +782,11 @@ describe("gatherDaemonStatus", () => {
       }
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
-          loaded: false,
+          loaded: null,
+          loadState: {
+            status: "unknown",
+            detail: "Error: systemctl is-enabled timed out",
+          },
           runtime: {
             status: "unknown",
             detail: "Error: systemctl show timed out",
@@ -792,12 +802,27 @@ describe("gatherDaemonStatus", () => {
     try {
       printDaemonStatus(status, { json: false, deep: true });
       const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Service: LaunchAgent (unknown)");
+      expect(output).not.toContain("Service: LaunchAgent (not loaded)");
       expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
     } finally {
       log.mockRestore();
       error.mockRestore();
     }
   }, 1_000);
+
+  it.each(["bogus", "0", "-1", "1.5"])(
+    "rejects invalid status timeout %s before reading service state",
+    async (timeout) => {
+      await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(
+        `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "${timeout}".`,
+      );
+
+      expect(serviceReadCommand).not.toHaveBeenCalled();
+      expect(serviceIsLoaded).not.toHaveBeenCalled();
+      expect(serviceReadRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);
@@ -811,6 +836,7 @@ describe("gatherDaemonStatus", () => {
 
     expect(status.service.command).toBeNull();
     expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({ status: "not-loaded" });
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Gateway service install not supported on aix",

@@ -1,9 +1,12 @@
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
+import { VERSION } from "../version.js";
+import { formatConfigIssueLines } from "./issue-format.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type { ConfigValidationIssue } from "./types.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
 import { isSecretRef } from "./types.secrets.js";
+import { shouldWarnOnTouchedVersion } from "./version.js";
 
 type ConfigIssuePathSegment = string | number;
 
@@ -336,7 +339,7 @@ type ConfigIssueDiagnostics = ConfigValidationIssue & {
   sourceFile?: string;
 };
 
-export function attachConfigIssueDiagnostics(
+function attachConfigIssueDiagnostics(
   issues: readonly ConfigValidationIssue[],
   params: AttachConfigIssueDiagnosticsParams,
 ): ConfigIssueDiagnostics[] {
@@ -367,4 +370,27 @@ export function attachConfigIssueDiagnostics(
       ...(line === undefined ? {} : { line, sourceFile }),
     };
   });
+}
+
+/** Render invalid config issues with source locations, received values, and version-skew advice. */
+export function renderConfigValidationIssueLines(
+  snapshot: Pick<ConfigFileSnapshot, "issues" | "raw" | "parsed" | "sourceConfig" | "path">,
+  marker = "-",
+): string[] {
+  const issues = attachConfigIssueDiagnostics(snapshot.issues, {
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    effective: snapshot.sourceConfig,
+    configPath: snapshot.path,
+    formatPathForDisplay: true,
+    includeReceivedValueHint: true,
+  });
+  const lines = formatConfigIssueLines(issues, marker, { normalizeRoot: true });
+  const touchedVersion = snapshot.sourceConfig.meta?.lastTouchedVersion;
+  return shouldWarnOnTouchedVersion(VERSION, touchedVersion)
+    ? [
+        ...lines,
+        `Config was last written by OpenClaw ${touchedVersion}, but you are running ${VERSION} — upgrade or re-run setup.`,
+      ]
+    : lines;
 }

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { trimLogTail } from "./restart-sentinel.js";
-import { DEV_BRANCH, resolveDevUpstreamRef } from "./update-channels.js";
+import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   managerInstallArgs,
@@ -210,11 +210,7 @@ async function resolveUpstreamCandidates(params: {
       );
     }
   }
-  const trackingRevision = resolveDevUpstreamRef(
-    params.needsCheckoutMain ? "HEAD" : DEV_BRANCH,
-    true,
-  );
-  const upstreamRefs = [...(trackingRevision ? [trackingRevision] : []), ...remoteBranchRefs];
+  const upstreamRefs = resolveDevUpstreamRefs(params.needsCheckoutMain, remoteBranchRefs);
   let upstreamSha: string | null = null;
   let selectedDevUpstream: string | null = null;
   let sawResolvableUpstreamRef = false;
@@ -379,31 +375,26 @@ async function testPreflightCandidates(params: {
         sawOtherFailure = true;
         continue;
       }
-      const buildStep = await runStep(
-        params.step(
-          `preflight build (${shortSha})`,
-          managerScriptArgs(manager.manager, "build"),
-          params.worktreeDir,
-          resolveBuildEnv(manager.env, path.join(params.gitRoot, ".artifacts", "build-all-cache")),
-        ),
+      const runCandidateCheck = async (name: string, argv: string[], env?: NodeJS.ProcessEnv) => {
+        const check = params.step(`preflight ${name} (${shortSha})`, argv, params.worktreeDir, env);
+        return (await runStep(check)).exitCode === 0;
+      };
+      const buildArgs = managerScriptArgs(manager.manager, "build");
+      const buildEnv = resolveBuildEnv(
+        manager.env,
+        path.join(params.gitRoot, ".artifacts", "build-all-cache"),
       );
-      if (buildStep.exitCode !== 0) {
+      const configCommand = ["config", "validate", "--json"];
+      const configArgs = managerScriptArgs(manager.manager, "openclaw", configCommand);
+      const lintArgs = managerScriptArgs(manager.manager, "lint");
+      if (
+        !(await runCandidateCheck("build", buildArgs, buildEnv)) ||
+        !(await runCandidateCheck("config validate", configArgs, manager.env)) ||
+        (shouldRunDevPreflightLint() &&
+          !(await runCandidateCheck("lint", lintArgs, resolveDevPreflightLintEnv(manager.env))))
+      ) {
         sawOtherFailure = true;
         continue;
-      }
-      if (shouldRunDevPreflightLint()) {
-        const lintStep = await runStep(
-          params.step(
-            `preflight lint (${shortSha})`,
-            managerScriptArgs(manager.manager, "lint"),
-            params.worktreeDir,
-            resolveDevPreflightLintEnv(manager.env),
-          ),
-        );
-        if (lintStep.exitCode !== 0) {
-          sawOtherFailure = true;
-          continue;
-        }
       }
       selectedSha = sha;
       break;

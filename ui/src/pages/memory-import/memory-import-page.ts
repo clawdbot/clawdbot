@@ -8,10 +8,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -36,11 +38,7 @@ type PendingMemoryImport = {
 };
 
 function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 function createIdempotencyKey(): string {
@@ -98,12 +96,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       const snapshot = this.context?.gateway.snapshot;
       return [
         this.isConnected && snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
+        snapshot ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : false,
         this.currentAgentId(),
         this.replaceExisting,
       ] as const;
     },
-    task: async ([client, agentId, overwrite], { signal }) => {
-      if (!client || !agentId) {
+    task: async ([client, canAdmin, agentId, overwrite], { signal }) => {
+      if (!client || !canAdmin || !agentId) {
         return initialState;
       }
       const plan = await client.request<MigrationsMemoryPlanResult>(
@@ -138,7 +137,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   });
 
   override disconnectedCallback() {
-    void this.planTask.run([null, null, this.replaceExisting]);
+    void this.planTask.run([null, false, null, this.replaceExisting]);
     this.applyEpoch += 1;
     this.backfillEpoch += 1;
     this.subscriptions.clear();
@@ -202,6 +201,10 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     return this.planTask.status === TaskStatus.ERROR ? toErrorMessage(this.planTask.error) : null;
   }
 
+  private get canAdmin(): boolean {
+    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+  }
+
   private resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
     // A disconnected apply has an unknown outcome. Keep its key so reconnect retries can
     // recover the cached server result instead of repeating side effects.
@@ -243,6 +246,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private requestImport(providerId: string) {
+    if (!this.canAdmin) {
+      return;
+    }
     const agentId = this.currentAgentId();
     const planFingerprint = this.plan?.providers.find(
       (provider) => provider.providerId === providerId,
@@ -276,6 +282,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   private async confirmImport() {
     if (
+      !this.canAdmin ||
       this.applyingProviderId !== null ||
       this.backfillBusy === "apply" ||
       this.backfillBusy === "rollback" ||
@@ -368,7 +375,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.client;
     const agentId = this.currentAgentId();
-    if (!client || !agentId || this.backfillBusy !== null || this.applyingProviderId !== null) {
+    if (
+      !this.canAdmin ||
+      !client ||
+      !agentId ||
+      this.backfillBusy !== null ||
+      this.applyingProviderId !== null
+    ) {
       return;
     }
     const epoch = ++this.backfillEpoch;
@@ -400,7 +413,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.client;
     const agentId = this.currentAgentId();
-    if (!client || !agentId || this.backfillBusy !== null || this.applyingProviderId !== null) {
+    if (
+      !this.canAdmin ||
+      !client ||
+      !agentId ||
+      this.backfillBusy !== null ||
+      this.applyingProviderId !== null
+    ) {
       return;
     }
     const epoch = ++this.backfillEpoch;
@@ -463,6 +482,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const client = snapshot.client;
     const agentId = this.currentAgentId();
     if (
+      !this.canAdmin ||
       !client ||
       !agentId ||
       this.backfillBusy !== null ||
@@ -502,6 +522,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const agentId = this.currentAgentId();
     const body = renderMemoryImport({
       connected: snapshot.phase === "connected",
+      canAdmin: this.canAdmin,
       agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,

@@ -15,6 +15,7 @@ export function validateSkillCollectionPlan(
     throw new Error(`A skill collection can contain at most ${maxDecisions} decisions.`);
   }
   const currentNames = new Set(current.map((skill) => skill.name));
+  const currentByName = new Map(current.map((skill) => [skill.name, skill]));
   const unread = current.map((skill) => skill.name).filter((name) => !readSkillHashes.has(name));
   if (unread.length > 0) {
     throw new Error(`Read every current skill before reconciling: ${unread.join(", ")}`);
@@ -37,6 +38,13 @@ export function validateSkillCollectionPlan(
     }
     if (entry.action === "write" && (!entry.description.trim() || !entry.content.trim())) {
       throw new Error(`Complete description and content required: ${entry.name}`);
+    }
+    if (
+      entry.action !== "keep" &&
+      currentByName.has(entry.name) &&
+      !currentByName.get(entry.name)!.workshopOwned
+    ) {
+      throw new Error(`Skill Workshop does not own this skill path: ${entry.name}`);
     }
   }
   const missing = current.map((skill) => skill.name).filter((name) => !seen.has(name));

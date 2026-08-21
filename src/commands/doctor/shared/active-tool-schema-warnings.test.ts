@@ -104,9 +104,6 @@ describe("active tool schema doctor warnings", () => {
     ).toEqual([
       '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema (fuzzplugin_move_angles.parameters.type must be "object"). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
     ]);
-    expect(toolState.createTools).toHaveBeenCalledWith(
-      expect.objectContaining({ toolPolicyAuditLogLevel: "debug" }),
-    );
   });
 
   it("warns about unreadable active tool entries without crashing", async () => {

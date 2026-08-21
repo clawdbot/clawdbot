@@ -1,12 +1,16 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // Capacity groups: a shared, hard aggregate budget across several command
 // lanes, with per-member reservations. Split out of command-queue.ts to keep
 // that file within its size budget; the queue supplies its own `drainLane` so
 // this module never has to import back into it.
-import { getQueueState, normalizeLane } from "./command-queue.state.js";
+import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.state.js";
 import { CommandLane } from "./lanes.js";
 
 /** Drains a single lane. Supplied by command-queue.ts to avoid a cycle. */
 type DrainLaneFn = (lane: string) => void;
+
+/** Internal bounded drain contract used by the group arbiter. */
+type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
 
 /** Why a lane cannot admit, from the narrowest cause outward. */
 export type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
@@ -34,6 +38,12 @@ export type LaneGroupState = {
   members: Set<string>;
   reservations: Map<string, number>;
 };
+
+/** Shared across fresh module instances so one group cannot re-enter its arbiter. */
+const DRAINING_GROUPS = resolveGlobalSingleton(
+  Symbol.for("openclaw.commandQueueDrainingGroups"),
+  () => new WeakSet<LaneGroupState>(),
+);
 
 /**
  * Lanes that must never join a group, because a group member can be made to
@@ -73,10 +83,10 @@ export function getGroupRegistry(): {
   groups: Map<string, LaneGroupState>;
   groupByLane: Map<string, string>;
 } {
-  const state = getQueueState() as unknown as {
+  const state: ReturnType<typeof getQueueState> & {
     laneGroups?: Map<string, LaneGroupState>;
     laneGroupByLane?: Map<string, string>;
-  };
+  } = getQueueState();
   // Migration: an older singleton (pre-upgrade, inherited via globalThis after
   // a SIGUSR1 in-process restart) has neither field. Active counts are derived,
   // so a late-initialized registry cannot desynchronize from lane state.
@@ -213,34 +223,66 @@ export function installCommandLaneGroup(next: LaneGroupState): void {
 }
 
 /**
- * Drain the given member lanes.
- *
- * Never creates a lane: `drainLane` calls `getLaneState`, which would resurrect
- * a scoped lane that `retireIdleScopedCommandLane` had just removed. A lane
- * whose width is 0 admits nothing when pumped, so no width check is needed
- * here — it would only skip a call that is already a no-op.
+ * Select the highest-priority, oldest currently admissible member head.
  */
-function drainMembers(lanes: Iterable<string>, drainLane: DrainLaneFn): void {
-  for (const lane of lanes) {
+function resolveNextGroupLane(group: LaneGroupState): string | undefined {
+  let selected:
+    | {
+        lane: string;
+        priority: number;
+        sequence: number;
+      }
+    | undefined;
+  for (const lane of group.members) {
     const state = getQueueState().lanes.get(lane);
-    if (state && state.queue.length > 0 && !state.draining) {
-      drainLane(lane);
+    const head = state ? peekLaneQueue(state.queue) : undefined;
+    if (!state || !head || state.draining || resolveLaneBlockReason(lane) !== null) {
+      continue;
     }
+    if (
+      !selected ||
+      head.priority > selected.priority ||
+      (head.priority === selected.priority &&
+        (head.sequence < selected.sequence ||
+          (head.sequence === selected.sequence && lane < selected.lane)))
+    ) {
+      selected = { lane, priority: head.priority, sequence: head.sequence };
+    }
+  }
+  return selected?.lane;
+}
+
+/**
+ * Drain a capacity group one admission at a time.
+ *
+ * Per-lane queues already order entries by priority and global sequence. The
+ * group applies the same order across member queue heads so a completing lane
+ * cannot synchronously reclaim shared capacity ahead of an older sibling.
+ */
+function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneFn): void {
+  const group = getLaneGroup(lane);
+  if (!group || DRAINING_GROUPS.has(group)) {
+    return;
+  }
+  DRAINING_GROUPS.add(group);
+  try {
+    while (getGroupRegistry().groups.get(group.group) === group) {
+      const selectedLane = resolveNextGroupLane(group);
+      if (!selectedLane || drainLane(selectedLane, 1) === 0) {
+        return;
+      }
+    }
+  } finally {
+    DRAINING_GROUPS.delete(group);
   }
 }
 
 /**
- * Re-drain every OTHER member of `lane`'s group. Capacity that a completion
- * frees belongs to the group, not to the lane that freed it, so a lane-local
- * pump would leave siblings queued behind capacity that is already available.
+ * Re-drain the owning capacity group after a member changes state.
+ *
+ * The legacy exported name and callback surface stay stable for internal SDK
+ * consumers; the supplied queue drain also supports the private bounded call.
  */
 export function drainGroupSiblings(lane: string, drainLane: DrainLaneFn): void {
-  const group = getLaneGroup(lane);
-  if (!group) {
-    return;
-  }
-  drainMembers(
-    [...group.members].filter((member) => member !== lane),
-    drainLane,
-  );
+  drainCommandLaneGroup(lane, drainLane);
 }

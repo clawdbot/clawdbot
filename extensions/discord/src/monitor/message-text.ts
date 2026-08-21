@@ -14,24 +14,22 @@ import {
 import { formatDiscordMediaText } from "./message-media.js";
 
 export function resolveDiscordEmbedText(
-  embed?: { title?: string | null; description?: string | null } | null,
+  embeds?: readonly { title?: string | null; description?: string | null }[] | null,
 ): string {
-  const title = normalizeOptionalString(embed?.title) ?? "";
-  const description = normalizeOptionalString(embed?.description) ?? "";
-  if (title && description) {
-    return `${title}\n${description}`;
-  }
-  return title || description || "";
+  return (embeds ?? [])
+    .flatMap(({ title, description }) => [
+      normalizeOptionalString(title),
+      normalizeOptionalString(description),
+    ])
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(
-    (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
-      null,
-  );
+  const embedText = resolveDiscordEmbedText(message.embeds);
   const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
   const rawText =
     normalizeOptionalString(message.content) ||
@@ -175,7 +173,7 @@ function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): st
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
+  const embedText = resolveDiscordEmbedText(snapshot.embeds);
   const componentText = extractDiscordComponentsV2Text(snapshot.components);
   const text = content || embedText || componentText;
   return [text, attachmentText].filter(Boolean).join("\n");

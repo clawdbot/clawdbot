@@ -4,13 +4,18 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
+import {
+  hasAgentRosterProperty,
+  listAgentEntries,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
 import {
@@ -35,7 +40,6 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -476,30 +480,6 @@ function collectGatewayConfigFindings(
     collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
     gatewayAuthOverride: options.gatewayAuthOverride,
   });
-}
-
-function collectControlUiDeviceAuthMigrationFindings(params: {
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): SecurityAuditFinding[] {
-  const migration = readControlUiDeviceAuthMigrationState({
-    env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-  });
-  if (migration?.status !== "pending") {
-    return [];
-  }
-  return [
-    {
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "Control UI device-auth migration is pending",
-      detail:
-        "The retired device-auth bypass was imported into pending migration state. " +
-        "Device-less Control UI sessions with valid shared auth can still connect for remediation until an operator browser completes pairing.",
-      remediation:
-        "Reopen the Control UI over HTTPS or localhost and click Secure this browser to complete pairing and end the compatibility window.",
-    },
-  ];
 }
 
 async function collectPluginSecurityAuditFindings(
@@ -955,8 +935,14 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     return [];
   }
   const defaultCount = agents.filter((agent) => agent?.default === true).length;
-  const expectedDefaultCount = cfg.agents?.ownership === "explicit" ? 0 : 1;
-  if (defaultCount === expectedDefaultCount) {
+  const explicitOwnership = cfg.agents?.ownership === "explicit";
+  // Mirror runtime default resolution: explicit fleets are ownerless by design,
+  // otherwise the roster is valid exactly when the canonical resolver finds an
+  // owner (sole agent, one legacy marker, or a retained migration owner).
+  const resolvable = explicitOwnership
+    ? defaultCount === 0
+    : tryResolveLegacyCompatibilityAgentId(cfg) !== undefined;
+  if (resolvable) {
     return [];
   }
   return [
@@ -964,10 +950,9 @@ function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       checkId: "config.agent_roster.invalid_default_count",
       severity: "warn",
       title: "Agent roster has an invalid default selection",
-      detail:
-        expectedDefaultCount === 0
-          ? `Expected no agents.entries default=true entries with agents.ownership=explicit, found ${defaultCount}.`
-          : `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      detail: explicitOwnership
+        ? `Expected no agents.entries default=true entries with agents.ownership=explicit, found ${defaultCount}.`
+        : `Expected a resolvable default agent (sole entry, one default=true marker, or agents.ownership=explicit); found ${defaultCount} default markers across ${agents.length} configured agents.`,
       remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
     },
   ];
@@ -1341,6 +1326,7 @@ export async function runSecurityAuditCore(
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;
+  copyConfigResolutionFacts(context.sourceConfig, cfg);
   const auditNonDeep = await loadAuditNonDeepModule();
 
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
@@ -1352,7 +1338,6 @@ export async function runSecurityAuditCore(
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
-  findings.push(...collectControlUiDeviceAuthMigrationFindings({ env, stateDir }));
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
@@ -1379,7 +1364,7 @@ export async function runSecurityAuditCore(
   findings.push(...auditNonDeep.collectNodeDenyCommandPatternFindings(cfg));
   findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
-  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  findings.push(...auditNonDeep.collectSecretsInConfigFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));

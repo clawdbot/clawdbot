@@ -13,15 +13,12 @@ import {
   readWorkerBundleArchiveManifest,
 } from "../../shared/worker-bundle-archive.js";
 import {
+  compareWorkerBundlePaths,
   hashWorkerBundleManifest,
   WORKER_BUNDLE_MANIFEST_VERSION,
 } from "../../shared/worker-bundle-hash.js";
 import { VERSION } from "../../version.js";
-import {
-  collectWorkerBundleManifest,
-  comparePaths,
-  type WorkerBundleManifestEntry,
-} from "./bundle-staging.js";
+import { collectWorkerBundleManifest, type WorkerBundleManifestEntry } from "./bundle-staging.js";
 
 export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -77,7 +74,7 @@ function normalizeProtocolFeatures(features: readonly string[]): string[] {
   if (normalized.some((feature) => feature.length === 0)) {
     throw new Error("Worker protocol features must be non-empty strings");
   }
-  return [...new Set(normalized)].toSorted(comparePaths);
+  return [...new Set(normalized)].toSorted(compareWorkerBundlePaths);
 }
 
 function resolveBundleCacheDir(cacheDir: string | undefined): string {
@@ -410,7 +407,9 @@ async function pruneWorkerBundleCache(params: {
     }
     return;
   }
-  for (const entry of entries.toSorted((left, right) => comparePaths(left.name, right.name))) {
+  for (const entry of entries.toSorted((left, right) =>
+    compareWorkerBundlePaths(left.name, right.name),
+  )) {
     const tarball = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name);
     const removableTarball = tarball && !retained.has(tarball[1]!);
     const removableStaging = BUNDLE_STAGING_NAME_PATTERN.test(entry.name);

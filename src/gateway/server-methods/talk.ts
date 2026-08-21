@@ -364,6 +364,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
           provider,
           providerConfig,
           cfg: config,
+          agentId: realtimeAgentId,
           surface: realtimeSurface,
         });
         const entry: Record<string, unknown> = {

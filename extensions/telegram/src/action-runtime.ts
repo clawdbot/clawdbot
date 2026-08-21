@@ -34,6 +34,7 @@ import {
 } from "./accounts.js";
 import { TELEGRAM_CALLBACK_DATA_MAX_BYTES } from "./approval-callback-data.js";
 import {
+  appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
   type TelegramButtonBuildOptions,
   type TelegramDroppedControl,
@@ -290,30 +291,6 @@ function readTelegramSendContent(params: {
   };
 }
 
-function renderTelegramDroppedControlFallback(controls: readonly TelegramDroppedControl[]): string {
-  return renderMessagePresentationFallbackText({
-    presentation: {
-      blocks: [
-        {
-          type: "buttons",
-          buttons: controls.map((control) => ({ label: control.label, value: "unavailable" })),
-        },
-      ],
-    },
-  });
-}
-
-function appendTelegramDroppedControlFallback(
-  text: string,
-  controls: readonly TelegramDroppedControl[],
-): string {
-  const fallback = renderTelegramDroppedControlFallback(controls);
-  if (!fallback || text === fallback || text.endsWith(`\n\n${fallback}`)) {
-    return text;
-  }
-  return [text, fallback].filter(Boolean).join("\n\n");
-}
-
 function buildTelegramControlDegradation(
   controls: readonly TelegramDroppedControl[],
   fallbackDelivered: boolean,
@@ -402,7 +379,7 @@ function getLastDurableTelegramActionResult(
       lastResult?.messageId ??
       receipt.primaryPlatformMessageId ??
       receipt.platformMessageIds.at(-1),
-    chatId: lastResult?.chatId,
+    chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
   };
 }
 
@@ -418,6 +395,7 @@ export async function handleTelegramAction(
     gatewayClientScopes?: readonly string[];
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
+    reply?: ChannelMessageActionContext["reply"];
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
@@ -564,8 +542,7 @@ export async function handleTelegramAction(
       droppedControls.length > 0 && resolvedContent.hasExplicitContent
         ? appendTelegramDroppedControlFallback(resolvedContent.content, droppedControls)
         : resolvedContent.content;
-    const droppedControlFallback =
-      droppedControls.length > 0 ? renderTelegramDroppedControlFallback(droppedControls) : "";
+    const droppedControlFallback = appendTelegramDroppedControlFallback("", droppedControls);
     const hasOnlyDroppedControlFallback =
       !resolvedContent.hasExplicitContent &&
       droppedControlFallback.length > 0 &&
@@ -661,7 +638,9 @@ export async function handleTelegramAction(
       to,
       accountId: accountId ?? undefined,
       payloads: [payload],
-      replyToId: replyToMessageId == null ? undefined : String(replyToMessageId),
+      ...(options?.reply
+        ? { reply: options.reply }
+        : { replyToId: replyToMessageId == null ? undefined : String(replyToMessageId) }),
       threadId: messageThreadId,
       forceDocument: sendOptions.forceDocument,
       silent: sendOptions.silent,
