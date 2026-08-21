@@ -39,7 +39,7 @@ export async function readRecoveryJournalRecord(
   databasePath: string,
   recordType: string,
 ): Promise<unknown> {
-  const database = await openRecoveryJournal(databasePath);
+  const { database } = await openRecoveryJournal(databasePath);
   try {
     const kysely = getNodeSqliteKysely<RecoveryJournalDatabase>(database);
     const row = executeSqliteQuerySync(
@@ -71,7 +71,7 @@ export async function writeRecoveryJournalRecord(
   recordType: string,
   value: unknown,
 ): Promise<void> {
-  const database = await openRecoveryJournal(databasePath);
+  const { database, expectedIdentity } = await openRecoveryJournal(databasePath);
   try {
     const kysely = getNodeSqliteKysely<RecoveryJournalDatabase>(database);
     const record: Insertable<RecoveryJournalRecordTable> = {
@@ -91,6 +91,9 @@ export async function writeRecoveryJournalRecord(
         `Recovery journal record already exists: ${recordType}.`,
       );
     }
+    await assertRecoveryJournalIdentity(databasePath, expectedIdentity, "during record commit");
+    requireDirectorySync(await syncDirectory(path.dirname(databasePath)), "Recovery journal");
+    await assertRecoveryJournalIdentity(databasePath, expectedIdentity, "during record commit");
   } finally {
     database.close();
   }
@@ -120,7 +123,7 @@ async function openRecoveryJournal(databasePath: string) {
     `);
     applyPrivateModeSync(databasePath, PRIVATE_FILE_MODE);
     requireDirectorySync(await syncDirectory(path.dirname(databasePath)), "Recovery journal");
-    return database;
+    return { database, expectedIdentity };
   } catch (error) {
     database.close();
     throw error;
@@ -155,5 +158,16 @@ async function createTrustedRecoveryJournalFile(databasePath: string) {
     return stat;
   } finally {
     await handle.close();
+  }
+}
+
+async function assertRecoveryJournalIdentity(
+  databasePath: string,
+  expectedIdentity: Awaited<ReturnType<typeof createTrustedRecoveryJournalFile>>,
+  phase: string,
+): Promise<void> {
+  const currentIdentity = await readTrustedRecoveryJournalIdentity(databasePath);
+  if (!currentIdentity || !sameFileIdentity(expectedIdentity, currentIdentity)) {
+    throw new RecoveryJournalError("corrupt", `Recovery journal identity changed ${phase}.`);
   }
 }
