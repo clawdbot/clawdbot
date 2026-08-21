@@ -808,14 +808,67 @@ the fallback catalog:
 }
 ```
 
+## Restricted turns
+
+The Codex harness evaluates the effective tool policy for every turn. It marks
+the turn policy-restricted when any explicit policy would otherwise leave a
+Codex-native capability outside the OpenClaw policy boundary.
+
+Restriction sources include global, provider, agent, group, sender, sandbox,
+subagent, inherited, scheduled/runtime, and per-run tool policies. A finite
+allowlist always restricts the native surface. A deny list restricts it when an
+expanded entry is unknown or absent from the audited safe-deny set; this includes
+wildcards and tool groups containing any unsafe entry. `disableTools` becomes an
+empty per-run allowlist and therefore also restricts the native surface. Default
+tool-profile narrowing is not an explicit restriction and does not activate this
+mode.
+
+The current audited safe-deny names are:
+
+```text
+automations, canvas, dashboard, gateway, heartbeat_respond, image_generate,
+memory_get, memory_search, message, music_generate, show_widget, skill_workshop,
+tts, video_generate, web_fetch, x_search
+```
+
+A policy containing only those denies stays on the normal Codex native surface;
+the harness applies the named OpenClaw denial directly. Any other deny fails
+closed into the restricted surface. For example, `tools.deny: ["nodes"]`
+restricts the native surface because `nodes` is not in the audited set.
+
+Policy-restricted turns have no Codex environment selection or native Code Mode.
+OpenClaw disables inherited and configured MCP servers, attests that they remain
+disabled, disables native hook relays, and applies the effective policy to its
+dynamic tools. A temporary restriction on an existing session uses a transient
+Codex thread and preserves the unrestricted binding for later resume.
+
+Ring zero is not a configurable policy profile. It is the host-scoped system
+agent path used by OpenClaw setup and repair flows. The host must activate the
+system-agent authority and provide the exact single-tool allowlist
+`["openclaw"]`. Ring zero applies the restricted tool surface plus host-authored
+base instructions and zero project-document budget. It also suppresses
+OpenClaw's `AGENTS.md` developer-instruction carrier, so ambient workspace
+instructions cannot enter the setup/repair turn.
+
+Message-only source replies also use the restricted tool surface. Lightweight
+bootstrap turns and tool-disabled internal turns additionally set the project-
+document budget to zero. These modes are separate inputs even when their final
+thread configuration overlaps.
+
 ## Workspace bootstrap files
 
-Codex handles `AGENTS.md` itself through native project-doc discovery.
+Codex normally handles `AGENTS.md` itself through native project-doc discovery.
 OpenClaw does not write synthetic Codex project-doc files or depend on Codex
 fallback filenames for persona files, because Codex fallbacks only apply when
-`AGENTS.md` is missing.
+`AGENTS.md` is missing. Ordinary policy-restricted turns have no native
+filesystem environment, so OpenClaw instead sends the bounded workspace
+`AGENTS.md` snapshot as thread-level developer instructions. Ring-zero,
+lightweight, message-only, and tool-disabled internal turns suppress that
+carrier.
 
-For OpenClaw workspace parity, local tool notes live in the `## Tools` section of `AGENTS.md` and ride Codex's native project-doc discovery. The Codex harness forwards the other bootstrap files as developer instructions:
+For OpenClaw workspace parity, local tool notes live in the `## Tools` section
+of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
+Codex harness forwards the other bootstrap files as developer instructions:
 
 - `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**
   collaboration instructions. Native Codex subagents do not inherit them,
