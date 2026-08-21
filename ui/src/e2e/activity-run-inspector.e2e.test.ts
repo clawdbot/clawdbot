@@ -10,7 +10,11 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { decisionDisplay, presentResult, receiptPage } from "./activity-run-inspector-fixtures.ts";
+import {
+  decisionDisplay,
+  presentResult,
+  receiptPage,
+} from "./activity-run-inspector.test-fixtures.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);

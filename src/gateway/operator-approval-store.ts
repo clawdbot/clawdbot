@@ -809,15 +809,16 @@ function operatorApprovalPayloadBytes() {
   `;
 }
 
-function boundedOperatorApprovalPayload(
-  column: keyof Pick<
-    OperatorApprovals,
-    "presentation_json" | "reviewer_device_ids_json" | "audience_session_keys_json"
-  >,
-) {
+const OPERATOR_APPROVAL_PAYLOAD_COLUMNS = {
+  presentation_json: sql`operator_approvals.presentation_json`,
+  reviewer_device_ids_json: sql`operator_approvals.reviewer_device_ids_json`,
+  audience_session_keys_json: sql`operator_approvals.audience_session_keys_json`,
+} as const;
+
+function boundedOperatorApprovalPayload(column: keyof typeof OPERATOR_APPROVAL_PAYLOAD_COLUMNS) {
   return /* kysely-allow-raw: the page statement must not materialize owner payload JSON above its audit bound. */ sql<
     string | null
-  >`CASE WHEN ${operatorApprovalPayloadBytes()} <= ${OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES} THEN ${sql.ref(`operator_approvals.${column}`)} ELSE NULL END`;
+  >`CASE WHEN ${operatorApprovalPayloadBytes()} <= ${OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES} THEN ${OPERATOR_APPROVAL_PAYLOAD_COLUMNS[column]} ELSE NULL END`;
 }
 
 function operatorApprovalReceiptSnapshotColumns(hasExecutionIdentityTable: boolean) {
@@ -935,6 +936,7 @@ function terminalApprovalReceiptPageRows(params: {
     params.db,
     stateDb
       .selectFrom(
+        /* kysely-allow-raw: this derived table preserves the single owner-snapshot statement while exposing its closed row shape to Kysely. */
         sql<OperatorApprovalReceiptSnapshotQueryRow>`(${pageStatement})`.as("approval_snapshot"),
       )
       .selectAll(),
