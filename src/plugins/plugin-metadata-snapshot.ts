@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveDiagnosticsTimelineSpan,
@@ -429,14 +430,13 @@ export function resolvePluginMetadataSnapshot(
 }
 
 function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
-  if (!value || typeof value !== "object") {
+  if (!isRecord(value)) {
     return false;
   }
-  const snapshot = value as Partial<PluginMetadataSnapshot>;
   return (
-    typeof snapshot.policyHash === "string" &&
-    snapshot.index !== undefined &&
-    snapshot.manifestRegistry !== undefined
+    typeof value.policyHash === "string" &&
+    value.index !== undefined &&
+    value.manifestRegistry !== undefined
   );
 }
 
