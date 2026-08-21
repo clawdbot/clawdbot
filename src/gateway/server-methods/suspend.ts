@@ -39,6 +39,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       pauseScheduling: () => context.cron.pauseScheduling(),
       resumeScheduling: () => context.cron.resumeScheduling(),
       inspect: createGatewayServerActiveWorkInspectors(context),
+      inspectWakeRequirement: () => context.cron.getSuspendWakeSnapshot(),
       warn: (message) => context.logGateway.warn(message),
     });
     if (result.status === "conflict") {

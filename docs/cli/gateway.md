@@ -532,8 +532,9 @@ openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30
 openclaw gateway suspend --port 18999 --json
 ```
 
-The ready output includes the suspension ID, lease expiry, and the matching
-resume command. Common RPC options such as `--url`, `--token`, `--password`,
+The ready JSON output includes the suspension ID, lease expiry, an atomic next
+wake requirement (or `external-event-only`), and the matching resume command.
+Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
 
 ### `gateway resume <suspensionId>`

@@ -98,6 +98,10 @@ export class CronService implements CronServiceContract {
     return await readOps.status(this.state);
   }
 
+  getSuspendWakeSnapshot() {
+    return readOps.getSuspendWakeSnapshot(this.state);
+  }
+
   async list(opts?: { includeDisabled?: boolean }) {
     return await readOps.list(this.state, opts);
   }

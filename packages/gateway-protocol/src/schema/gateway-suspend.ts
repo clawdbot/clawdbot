@@ -48,11 +48,20 @@ export const GatewaySuspendPrepareParamsSchema = closedObject({
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({
   status: Type.Literal("busy"),
-  reason: Type.Union([Type.Literal("active-work"), Type.Literal("gateway-draining")]),
+  reason: Type.Union([
+    Type.Literal("active-work"),
+    Type.Literal("gateway-draining"),
+    Type.Literal("lifecycle-incomplete"),
+  ]),
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
 });
+
+export const GatewaySuspendWakeRequirementSchema = Type.Union([
+  closedObject({ kind: Type.Literal("at"), atMs: CountSchema }),
+  closedObject({ kind: Type.Literal("external-event-only") }),
+]);
 
 export const GatewaySuspendPrepareReadyResultSchema = closedObject({
   status: Type.Literal("ready"),
@@ -60,6 +69,7 @@ export const GatewaySuspendPrepareReadyResultSchema = closedObject({
   expiresAtMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
+  wakeRequirement: GatewaySuspendWakeRequirementSchema,
 });
 
 export const GatewaySuspendPrepareResultSchema = Type.Union([
@@ -78,6 +88,7 @@ export const GatewaySuspendStatusRunningResultSchema = closedObject({
 export const GatewaySuspendStatusReadyResultSchema = closedObject({
   status: Type.Literal("ready"),
   expiresAtMs: CountSchema,
+  wakeRequirement: GatewaySuspendWakeRequirementSchema,
 });
 
 export const GatewaySuspendStatusResultSchema = Type.Union([
@@ -97,6 +108,7 @@ export const GatewaySuspendResumeResultSchema = closedObject({
 // pull in the ProtocolSchemas registry.
 export type GatewaySuspendTaskBlocker = Static<typeof GatewaySuspendTaskBlockerSchema>;
 export type GatewaySuspendBlocker = Static<typeof GatewaySuspendBlockerSchema>;
+export type GatewaySuspendWakeRequirement = Static<typeof GatewaySuspendWakeRequirementSchema>;
 export type GatewaySuspendPrepareParams = Static<typeof GatewaySuspendPrepareParamsSchema>;
 export type GatewaySuspendPrepareResult = Static<typeof GatewaySuspendPrepareResultSchema>;
 export type GatewaySuspendStatusParams = Static<typeof GatewaySuspendStatusParamsSchema>;

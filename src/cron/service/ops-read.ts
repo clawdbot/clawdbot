@@ -3,6 +3,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
+import type { CronSuspendWakeSnapshot } from "../service-contract.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -33,6 +34,17 @@ import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-st
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
+
+/** Read the time-based wake obligation while suspension holds scheduler admission. */
+export function getSuspendWakeSnapshot(state: CronServiceState): CronSuspendWakeSnapshot {
+  if (!state.store || !state.schedulerStarted || state.stopped) {
+    return { complete: false };
+  }
+  return {
+    complete: true,
+    nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+  };
+}
 
 /** Returns cron service status after a read-only maintenance pass. */
 export async function status(state: CronServiceState) {
