@@ -493,7 +493,7 @@ describe("Codex paired-device exec-server carrier", () => {
 
         const nodeConfig: OpenClawConfig = {
           gateway: { mode: "local" },
-          plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+          plugins: { allow: ["codex"], entries: { codex: { enabled: false } } },
           nodeHost: { workerRuns: { enabled: true }, skills: { enabled: false } },
         };
         await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig)}\n`, { mode: 0o600 });
@@ -533,7 +533,7 @@ describe("Codex paired-device exec-server carrier", () => {
             approvalState: "approved",
             sessionHost: true,
           });
-          expect(approved?.commands).toContain(COMMAND);
+          expect(approved?.commands).not.toContain(COMMAND);
         }, WAIT_OPTIONS);
 
         await gateway.call("sessions.create", {
@@ -546,10 +546,85 @@ describe("Codex paired-device exec-server carrier", () => {
           cwd: published.source,
         });
         const localSession = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: { execCwd?: string; spawnedCwd?: string };
+          session?: {
+            execCwd?: string;
+            spawnedCwd?: string;
+            placement?: Record<string, unknown>;
+          };
         };
         const localWorkspace = localSession.session?.execCwd ?? localSession.session?.spawnedCwd;
         expect(localWorkspace).toBeTruthy();
+
+        await vi.waitFor(async () => {
+          const inventory = await reviewer!.request<{
+            environments?: Array<{
+              id?: string;
+              status?: string;
+              sessionHost?: boolean;
+              workerSlots?: { total: number; available: number };
+              invocableCommands?: string[];
+            }>;
+          }>("environments.list", {});
+          const environment = inventory.environments?.find(
+            (entry) => entry.id === `node:${nodeId}`,
+          );
+          expect(environment).toMatchObject({ status: "available", sessionHost: true });
+          expect(environment?.workerSlots?.available).toBeGreaterThan(0);
+          expect(environment?.invocableCommands ?? []).not.toContain(COMMAND);
+        }, WAIT_OPTIONS);
+        const unapprovedNodePid = node.child.pid;
+        expect(unapprovedNodePid).toBeTruthy();
+        await expect(
+          gateway.call(
+            "sessions.dispatch",
+            { key: SESSION_KEY, deviceId: nodeId },
+            { timeoutMs: REQUEST_TIMEOUT_MS },
+          ),
+        ).rejects.toThrow(/codex\.exec-server\.stdio\.v1|enabled|approved|command/iu);
+        const rejectedSession = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
+          session?: { placement?: Record<string, unknown> };
+        };
+        expect(rejectedSession.session?.placement).toEqual(localSession.session?.placement);
+        expect(
+          (await reviewer.request<PendingPluginApproval[]>("plugin.approval.list", {})).filter(
+            (approval) => approval.request?.pluginId === "codex",
+          ),
+        ).toEqual([]);
+        expect(
+          (await nodeChildCommands(unapprovedNodePid!)).filter((command) =>
+            /(?:^|\s)(?:worker|codex(?:\s+exec-server)?)(?:\s|$)/iu.test(command),
+          ),
+        ).toEqual([]);
+        expect(provider.nativeExecCalls).toBe(0);
+
+        nodeConfig.plugins!.entries!.codex!.enabled = true;
+        await fs.writeFile(nodeConfigPath, `${JSON.stringify(nodeConfig)}\n`, { mode: 0o600 });
+        await stopChild(node);
+        node = startNodeProcess(gatewayPort, nodeEnv);
+        await approvePairing(gateway, "node", nodeId);
+        await vi.waitFor(async () => {
+          const approved = (await readNode(gateway!, nodeId)) as
+            | {
+                connected?: boolean;
+                approvalState?: string;
+                commands?: string[];
+                sessionHost?: boolean;
+              }
+            | undefined;
+          expect(approved).toMatchObject({
+            connected: true,
+            approvalState: "approved",
+            sessionHost: true,
+          });
+          expect(approved?.commands).toContain(COMMAND);
+          const inventory = await reviewer!.request<{
+            environments?: Array<{ id?: string; invocableCommands?: string[] }>;
+          }>("environments.list", {});
+          expect(
+            inventory.environments?.find((entry) => entry.id === `node:${nodeId}`)
+              ?.invocableCommands,
+          ).toContain(COMMAND);
+        }, WAIT_OPTIONS);
 
         const dispatched = (await gateway.call(
           "sessions.dispatch",
@@ -726,6 +801,8 @@ describe("Codex paired-device exec-server carrier", () => {
             realExecServer: true,
             httpHits: provider.httpHits,
             credentialCanaries: "absent",
+            missingCommandRejectedBeforeProvision: true,
+            workerSlotsDoNotGrantCommandAuthority: true,
             workspaceReconciled: true,
             disconnectTerminal: true,
             freshReconnect: true,

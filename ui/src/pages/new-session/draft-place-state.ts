@@ -165,25 +165,34 @@ export class DraftPlaceState {
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
   }
 
+  devicePlacementRequirement() {
+    return this.modelControl.resolveAgentRuntime({
+      agent: this.selectedAgent(),
+      context: this.read().context,
+    })?.devicePlacement;
+  }
+
   devices() {
-    return projectDevicePlacements(this.gateway.environments);
+    return projectDevicePlacements(this.gateway.environments, this.devicePlacementRequirement());
+  }
+
+  private findDevice(deviceId: string) {
+    return findDevicePlacement(
+      this.gateway.environments,
+      deviceId,
+      this.devicePlacementRequirement(),
+    );
   }
 
   devicePlacementReady(): boolean {
-    return (
-      !this.deviceIdValue ||
-      findDevicePlacement(this.gateway.environments, this.deviceIdValue)?.selectable === true
-    );
+    return !this.deviceIdValue || this.findDevice(this.deviceIdValue)?.selectable === true;
   }
 
   devicePlacementDisabledReason(): string | undefined {
     if (!this.deviceIdValue) {
       return undefined;
     }
-    return (
-      findDevicePlacement(this.gateway.environments, this.deviceIdValue)?.disabledReason ??
-      t("newSession.nodeUnavailable")
-    );
+    return this.findDevice(this.deviceIdValue)?.disabledReason ?? t("newSession.nodeUnavailable");
   }
 
   isAdmin(): boolean {
@@ -498,7 +507,7 @@ export class DraftPlaceState {
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
     }
-    if (deviceId && findDevicePlacement(this.gateway.environments, deviceId)?.selectable !== true) {
+    if (deviceId && this.findDevice(deviceId)?.selectable !== true) {
       return;
     }
     if (deviceId === this.deviceIdValue && !this.cloudProfileIdValue) {
@@ -604,7 +613,7 @@ export class DraftPlaceState {
     }
 
     if (preferredWhere?.kind === "device" && this.gateway.cloudProfilesReady) {
-      const device = findDevicePlacement(this.gateway.environments, preferredWhere.id);
+      const device = this.findDevice(preferredWhere.id);
       this.deviceIdValue = device?.selectable === true ? preferredWhere.id : "";
       this.cloudProfileIdValue = "";
       this.repositoryState.forceWorktree(Boolean(this.deviceIdValue));

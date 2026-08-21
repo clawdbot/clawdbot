@@ -43,7 +43,13 @@ describe("sessions.dispatch", () => {
       id: "codex",
       label: "Codex",
       autoSelection: { providerIds: ["codex", "openai"] },
-      cloudPlacement: { mode: "remote-exec", devicePlacement: true },
+      cloudPlacement: {
+        mode: "remote-exec",
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
+      },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
         throw new Error("not used");
@@ -432,67 +438,6 @@ describe("sessions.dispatch", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message:
           'runtime codex requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"',
-      }),
-    );
-  });
-
-  it.each([
-    { name: "dispatches an opted-in runtime", runtimeId: "codex", supported: true },
-    { name: "rejects a runtime without opt-in", runtimeId: "cloud-only", supported: false },
-  ])("$name to a paired device", async ({ runtimeId, supported }) => {
-    if (!supported) {
-      registerAgentHarness({
-        id: runtimeId,
-        label: "Cloud only",
-        cloudPlacement: { mode: "remote-exec" },
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("not used");
-        },
-      });
-    }
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        agentRuntimeOverride: runtimeId,
-        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-      }),
-    );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
-    const dispatch = vi.fn().mockRejectedValue(new Error("paired-device dispatch reached"));
-    const respond = await invoke(
-      makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-      { deviceId: "device-1" },
-    );
-
-    if (supported) {
-      expect(dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          executionMode: "remote-exec",
-          profileId: "device:device-1",
-          deviceId: "device-1",
-        }),
-        expect.any(Function),
-        undefined,
-      );
-    } else {
-      expect(dispatch).not.toHaveBeenCalled();
-    }
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: supported ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-        message: supported
-          ? "paired-device dispatch reached"
-          : "runtime cloud-only does not support paired-device placement; select a compatible runtime or cloud worker provider",
       }),
     );
   });

@@ -25,7 +25,16 @@ describe("node-hosting preconditions", () => {
       "default",
     );
     for (const [id, cloudPlacement] of [
-      ["codex", { mode: "remote-exec", devicePlacement: true }],
+      [
+        "codex",
+        {
+          mode: "remote-exec",
+          devicePlacement: {
+            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            consumesWorkerSlot: false,
+          },
+        },
+      ],
       ["cloud-only", { mode: "remote-exec" }],
       ["acpx", undefined],
     ] as const) {

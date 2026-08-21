@@ -28,6 +28,7 @@ import {
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
@@ -158,16 +159,24 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     }
   };
-  const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
-    releaseSharedClientLeaseOnce();
-    await retireSharedCodexClientForOneShotCleanup();
-  };
   const releaseSandboxExecEnvironment = async () => {
     if (state.sandboxExecEnvironment) {
       const environment = state.sandboxExecEnvironment;
       state.sandboxExecEnvironment = undefined;
       await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
     }
+  };
+  const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+      // Close the authorized node lease first; losing its socket first is a real disconnect.
+      await releaseSandboxExecEnvironment();
+      const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+      releaseSharedClientLeaseOnce();
+      await ownedClient?.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+      return;
+    }
+    releaseSharedClientLeaseOnce();
+    await retireSharedCodexClientForOneShotCleanup();
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
     runAgentCleanupStep({

@@ -182,7 +182,10 @@ While a placement is active, OpenClaw automatically samples available space on t
 - **OpenClaw** uses `worker-turn` placement. The restricted `openclaw worker` process runs each turn on the leased node and proxies inference through the Gateway.
 - **Codex** uses `remote-exec` placement on an eligible paired device, or with a cloud provider that advertises an SSH-backed execution carrier. The bundled Crabbox cloud profile supports only `worker-turn`, so selecting that profile for Codex still fails before allocation.
 
-The Control UI disables cloud destinations whose advertised mode does not match the selected runtime.
+The Control UI disables cloud destinations whose advertised mode does not match
+the selected runtime, including when moving an existing session. An
+incompatible move is rejected before the active source starts draining or
+changes its durable placement.
 
 Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec fails closed if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.
 
@@ -197,6 +200,10 @@ node that advertises `codex.exec-server`, and an explicit
 the node's updated pairing surface if needed. Before each exec-server launch,
 OpenClaw also requires the normal node invocation approval; denying that
 request does not start a process.
+
+Codex launches its exec-server directly, so paired-device placement does not
+consume an OpenClaw worker slot and remains eligible when those slots are full.
+OpenClaw `worker-turn` placement still requires an available worker slot.
 
 Approval permits process execution and filesystem access anywhere the node's
 operating system account allows. The exact placement workspace controls the
@@ -216,8 +223,12 @@ The Codex app-server, model connection, provider credentials, and transcript
 remain on the Gateway. The paired node runs the managed Codex exec-server in
 the transferred workspace and receives only sanitized process, filesystem,
 capability-discovery, and HTTP operations over the existing node channel. It
-does not launch an OpenClaw worker child. Completed changes return through the
-same placement workspace reconciliation as worker turns. See
+does not launch an OpenClaw worker child. Credential-bearing HTTP requests are
+rejected before they reach the paired device; run authenticated requests on the
+Gateway or use an intentionally credential-free endpoint. Normal Codex turns
+are supported, but `/btw` side questions are not yet placement-bound and fail
+visibly. Completed changes return through the same placement workspace
+reconciliation as worker turns. See
 [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
 for the exact allowlist configuration and lifecycle.
 
@@ -267,7 +278,9 @@ paired device allows a fresh attempt only; the disconnected stdio session is
 never resumed. **Continue on Gateway…** is explicitly destructive: after a
 data-loss confirmation, it abandons the exact offline device owner and resumes
 from the last Gateway-synced workspace without replay. Unsynced device files
-and in-flight work may be lost. If the device is already available, use the
+and in-flight work may be lost. This explicit abandonment also fences an active
+local Codex turn claim without waiting for an acknowledgment from the offline
+node. If the device is already available, use the
 ordinary reconcile-first move instead.
 
 When the work is complete and no turn is running, choose **Stop cloud worker…** from the same chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.

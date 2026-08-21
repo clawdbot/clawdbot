@@ -350,6 +350,90 @@ describe("chat pane placement", () => {
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 
+  it("disables incompatible cloud execution modes while preserving compatible machine selection", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return {
+          profiles: [
+            {
+              id: "worker-only",
+              providerId: "crabbox",
+              executionMode: "worker-turn",
+            },
+            {
+              id: "remote-exec",
+              providerId: "crabbox",
+              executionMode: "remote-exec",
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "beast", label: "Beast" },
+              ],
+            },
+          ],
+          environments: [],
+        };
+      }
+      return { ok: true };
+    });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        refreshReplacement: vi.fn(async () => undefined),
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+    } as never;
+    const session = {
+      ...activePlacementSession(),
+      agentRuntime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec",
+        source: "model",
+      },
+    } satisfies GatewaySessionRow;
+
+    const moving = pane.moveHeaderPlacement(session);
+    try {
+      await vi.waitFor(() => {
+        expect(document.body.querySelector('[data-value="cloud:worker-only"]')).not.toBeNull();
+      });
+      const incompatible = document.body.querySelector<HTMLButtonElement>(
+        '[data-value="cloud:worker-only"]',
+      );
+      expect(incompatible?.disabled).toBe(true);
+      expect(incompatible?.title).toMatch(/compatible cloud worker|cannot use/i);
+      const compatible = document.body.querySelector<HTMLButtonElement>(
+        '[data-value="cloud:remote-exec"]',
+      );
+      expect(compatible?.disabled).toBe(false);
+      compatible?.click();
+      document.body.querySelector<HTMLButtonElement>('[data-value="machine:beast"]')?.click();
+      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Move session")
+        ?.click();
+      await moving;
+
+      expect(request).toHaveBeenCalledWith(
+        "sessions.move",
+        expect.objectContaining({
+          target: {
+            kind: "profile",
+            profileId: "remote-exec",
+            machineClass: "beast",
+          },
+        }),
+      );
+    } finally {
+      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Cancel")
+        ?.click();
+      await moving;
+    }
+  });
+
   it("cancels offline-device continuation without opening a picker or sending an RPC", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
@@ -506,6 +590,7 @@ describe("chat pane placement", () => {
                 status: "available",
                 sessionHost: true,
                 workerSlots: { total: 1, available: 1 },
+                invocableCommands: ["codex.exec-server.stdio.v1"],
               },
             ],
           };
@@ -528,6 +613,13 @@ describe("chat pane placement", () => {
           cloudPlacementSupported: true,
           cloudPlacementExecutionMode: executionMode,
           devicePlacementSupported: true,
+          devicePlacement:
+            executionMode === "remote-exec"
+              ? {
+                  requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+                  consumesWorkerSlot: false,
+                }
+              : { requiredNodeCommands: [], consumesWorkerSlot: true },
           source: "model",
         },
       } satisfies GatewaySessionRow;
@@ -556,6 +648,110 @@ describe("chat pane placement", () => {
       expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
     },
   );
+
+  it.each([
+    {
+      name: "remote execution ignores saturated worker capacity when its command is enabled",
+      runtimeId: "codex",
+      executionMode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      availableSlots: 0,
+      invocableCommands: ["codex.exec-server.stdio.v1"],
+      disabled: false,
+    },
+    {
+      name: "worker execution remains disabled at capacity",
+      runtimeId: "openclaw",
+      executionMode: "worker-turn",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      availableSlots: 0,
+      invocableCommands: [],
+      disabled: true,
+      reason: /worker slots/i,
+    },
+    {
+      name: "declared remote execution remains disabled without Gateway command authority",
+      runtimeId: "codex",
+      executionMode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      availableSlots: 1,
+      invocableCommands: [],
+      disabled: true,
+      reason: /enable|approv/i,
+    },
+  ] as const)("$name in the Move Session picker", async (scenario) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "environments.list") {
+        return {
+          profiles: [],
+          environments: [
+            {
+              id: "node:build-mac",
+              type: "node",
+              label: "Build Mac",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: scenario.availableSlots },
+              capabilities: ["codex.exec-server.stdio.v1"],
+              invocableCommands: scenario.invocableCommands,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        refreshReplacement: vi.fn(async () => undefined),
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.admin", "operator.write"] },
+    } as never;
+    const session = {
+      ...activePlacementSession(),
+      agentRuntime: {
+        id: scenario.runtimeId,
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: scenario.executionMode,
+        devicePlacementSupported: true,
+        devicePlacement: {
+          requiredNodeCommands: [...scenario.devicePlacement.requiredNodeCommands],
+          consumesWorkerSlot: scenario.devicePlacement.consumesWorkerSlot,
+        },
+        source: "model",
+      },
+    } satisfies GatewaySessionRow;
+
+    const moving = pane.moveHeaderPlacement(session);
+    try {
+      await vi.waitFor(() => {
+        expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
+      });
+      const device = document.body.querySelector<HTMLButtonElement>(
+        '[data-value="device:build-mac"]',
+      );
+      expect(device?.disabled).toBe(scenario.disabled);
+      if (scenario.reason !== undefined) {
+        expect(device?.title).toMatch(scenario.reason);
+      }
+    } finally {
+      [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.trim() === "Cancel")
+        ?.click();
+      await moving;
+    }
+
+    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  });
 
   it("does not reclaim when the operator cancels", async () => {
     const request = vi.fn(async () => ({ ok: true }));

@@ -73,7 +73,7 @@ function lacksDeviceCapableRuntimeRoute(cfg: OpenClawConfig): boolean {
     }
     const harness = registry?.agentHarnesses.find((entry) => entry.harness.id === runtime)?.harness;
     // Config-only doctor must not activate plugins or mistake unknown runtime capability for denial.
-    return harness !== undefined && harness.cloudPlacement?.devicePlacement !== true;
+    return harness !== undefined && harness.cloudPlacement?.devicePlacement === undefined;
   });
 }
 

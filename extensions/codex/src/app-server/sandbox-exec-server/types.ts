@@ -120,6 +120,7 @@ export type CodexNodeExecServerLease = {
   channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
   claimed: boolean;
   closed: boolean;
+  closeRelay?: () => void;
   onDisconnected?: (error: Error) => void;
   onChannelClosed?: (result: { failed: boolean; error?: unknown }) => void;
 };

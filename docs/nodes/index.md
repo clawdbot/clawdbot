@@ -496,11 +496,15 @@ most two worker processes by default. A third launch waits up to 10 seconds for
 a durable slot; while both slots are occupied, the node remains available for
 status and cancellation but is not selected for a new session turn.
 
-The picker derives every device row from `environments.list`. A device is
-selectable only when current inventory reports status `available`,
-`sessionHost: true`, valid exact worker slots, and at least one available slot.
-Connected non-hosts, saturated hosts, hosts without current capacity,
-update-required or otherwise outdated hosts, and unavailable hosts remain
+The picker derives every device row from `environments.list`. Every selected
+runtime requires an available, connected paired session host. OpenClaw worker
+turns additionally require valid exact worker slots with at least one free
+slot. Codex paired-device execution launches its exec-server directly, so it
+does not consume or require a worker slot; instead, its required command must
+appear in the node's effective `invocableCommands`, not merely its declared
+capabilities. A declared command is usable only when the approved pairing and
+Gateway command allowlist both authorize it. Connected non-hosts, ineligible
+or saturated hosts, update-required devices, and unavailable hosts remain
 visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
 setting, then restart the node host. Update-required hosts must be upgraded and
@@ -520,8 +524,8 @@ process-current, not a terminal placement state. `sessions.list` and
 until that exact current-v6 node runner reconnects. Gateway restart therefore
 shows an active device placement as offline until reconnect; current inventory
 then changes the projection to `available` and emits a session refresh. Exact
-worker slots gate new placements only and do not affect availability of a
-session the device already owns.
+worker slots gate only new placements whose runtime consumes a worker slot;
+they do not affect Codex remote execution or an existing session's availability.
 
 Control UI shows **Device offline** and waits by default without giving up the
 placement, workspace, or authority. Retry the next turn after the device

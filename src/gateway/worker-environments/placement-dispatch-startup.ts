@@ -1,4 +1,8 @@
+import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type {
   PlacementFailureActions,
   WorkerActivationBarrier,
@@ -23,6 +27,13 @@ export type WorkerPlacementRecoveryBarrier = (params: {
   expectedGeneration: number;
   run: (localPath: string) => Promise<void>;
 }) => Promise<void>;
+
+export type WorkerDevicePlacementRequirementResolver = (
+  identity: Pick<
+    WorkerPlacementDispatchRequest,
+    "sessionId" | "sessionKey" | "agentId" | "executionMode"
+  >,
+) => Promise<DevicePlacementRequirement>;
 
 function isPendingProvisioningEnvironment(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -67,6 +78,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   runActivationBarrier: WorkerActivationBarrier;
   onActivated?: (request: WorkerPlacementDispatchRequest) => void;
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
+  resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   reportTransition: (
     observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
     placement: WorkerDispatchPlacement,
@@ -253,6 +265,27 @@ export function createWorkerPlacementDispatchStartup(options: {
             if (isPendingProvisioningEnvironment(environment, environmentId)) {
               return;
             }
+            let devicePlacement: DevicePlacementRequirement | undefined;
+            if (environment.providerId === DEVICE_WORKER_PROVIDER_ID && environment.nodeDeviceId) {
+              if (!options.resolveDevicePlacementRequirement) {
+                throw new Error("Paired-device recovery has no authoritative runtime requirement");
+              }
+              devicePlacement = await options.resolveDevicePlacementRequirement({
+                sessionId: placement.sessionId,
+                sessionKey: placement.sessionKey,
+                agentId: placement.agentId,
+                executionMode: placement.executionMode,
+              });
+              const eligibility = await resolveDevicePlacementEligibility({
+                environmentService: environments,
+                deviceId: environment.nodeDeviceId,
+                requirement: devicePlacement,
+                config: getRuntimeConfig(),
+              });
+              if (!eligibility.ok) {
+                throw new Error(eligibility.error);
+              }
+            }
             await continueProvisionedDispatch({
               request: {
                 sessionId: placement.sessionId,
@@ -260,7 +293,9 @@ export function createWorkerPlacementDispatchStartup(options: {
                 agentId: placement.agentId,
                 profileId: environment.profileId,
                 executionMode: placement.executionMode,
-                ...(environment.nodeDeviceId ? { deviceId: environment.nodeDeviceId } : {}),
+                ...(environment.providerId === DEVICE_WORKER_PROVIDER_ID && environment.nodeDeviceId
+                  ? { deviceId: environment.nodeDeviceId, devicePlacement }
+                  : {}),
               },
               placement: current,
               environment,

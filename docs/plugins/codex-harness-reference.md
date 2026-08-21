@@ -491,6 +491,14 @@ for `codex.exec-server.stdio.v1`, the approved pairing surface, and normal node
 invocation approval. The node receives a fresh private home and sanitized
 environments, never Gateway provider, cloud, or GitHub credentials. A lost
 node connection terminates the attempt and process instead of resuming it.
+Each paired-device attempt uses its own Gateway app-server client because
+Codex can register a remote environment but cannot remove one from a running
+app-server. The device exec-server does not consume an OpenClaw worker slot.
+HTTP requests containing authentication, cookies, API keys, or other
+credential-bearing headers are rejected before reaching the device; use a
+Gateway-owned authenticated request or a credential-free endpoint instead.
+Normal Codex turns are supported, but `/btw` side questions are unavailable
+until they can be bound to the active placement.
 The managed placement workspace is not an OS sandbox: approved processes and
 files have the node account's full access. Use a separate least-privilege node
 account when isolation is required.

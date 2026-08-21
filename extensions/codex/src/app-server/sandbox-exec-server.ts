@@ -174,6 +174,7 @@ async function acquireOpenClawExecServer(params: {
           sessionKey: sandbox.sessionKey,
           timeoutMs: 0,
           maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
+          maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
           signal,
         });
         if (
@@ -417,6 +418,7 @@ function closeCodexNodeExecServerLease(
   execServer.node.leases.delete(lease.id);
   if (!lease.closed) {
     lease.closed = true;
+    lease.closeRelay?.();
     lease.channel.close();
   }
 }

@@ -16,6 +16,7 @@ import { createGitHubPublicationRuntime } from "./github-publication-runtime.js"
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
+import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-reconcile-guard.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
@@ -25,9 +26,9 @@ import {
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
 import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
-import { resolveWorkerPlacementDestination } from "./worker-environments/placement-destination.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
+import type { WorkerDevicePlacementRequirementResolver } from "./worker-environments/placement-dispatch-startup.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
@@ -52,10 +53,10 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
   return {
     resolveWorkerPlacementExecutionMode:
       placementSessionRuntime.resolveWorkerPlacementExecutionMode,
+    resolveWorkerPlacementCapabilities: placementSessionRuntime.resolveWorkerPlacementCapabilities,
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
-    supportsWorkerPlacementOnDevice: placementSessionRuntime.supportsWorkerPlacementOnDevice,
     resolveCanonicalSessionEntryFromStoreKeys:
       sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetWithStore:
@@ -163,6 +164,31 @@ export function createGatewayWorkerPlacementRuntime(
     });
     return worktree.path;
   };
+  const resolveDevicePlacementRequirement: WorkerDevicePlacementRequirementResolver = async (
+    identity,
+  ) => {
+    const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
+    const { config, target, entry } = resolveWorkerPlacementSessionTarget({
+      sessionRuntime,
+      config: getRuntimeConfig(),
+      ...identity,
+      errorMessage: `Session ${identity.sessionKey} changed before paired-device recovery`,
+    });
+    const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
+      cfg: config,
+      entry,
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+    });
+    const { executionMode, devicePlacement } =
+      sessionRuntime.resolveWorkerPlacementCapabilities(runtime);
+    if (executionMode !== identity.executionMode || !devicePlacement) {
+      throw new Error(
+        `runtime ${runtime} no longer supports this paired-device placement; select a compatible runtime or continue on the Gateway`,
+      );
+    }
+    return devicePlacement;
+  };
   const resolveNodeWorkspaceBinding = async (binding: {
     environmentId: string;
     ownerEpoch: number;
@@ -194,6 +220,7 @@ export function createGatewayWorkerPlacementRuntime(
       placements: params.placements,
       environments: params.environments,
       runnerAvailability,
+      resolveDevicePlacementRequirement,
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({
@@ -360,48 +387,11 @@ export function createGatewayWorkerPlacementRuntime(
         }
       },
       runMoveBarrier,
-      resolveMoveDestination: async ({ sessionId, sessionKey, agentId }, moveTarget) => {
-        if (moveTarget.kind === "gateway") {
-          return undefined;
-        }
-        const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
-        const { config, target, entry } = resolveWorkerPlacementSessionTarget({
-          sessionRuntime,
-          config: getRuntimeConfig(),
-          sessionId,
-          sessionKey,
-          agentId,
-          errorMessage: `Session ${sessionKey} changed before placement move recovery.`,
-        });
-        const destination = resolveWorkerPlacementDestination({
-          cfg: config,
-          ...(moveTarget.kind === "profile"
-            ? { profileId: moveTarget.profileId, machineClass: moveTarget.machineClass }
-            : { deviceId: moveTarget.deviceId }),
-        });
-        if (!destination.ok || !destination.value) {
-          throw new Error(destination.ok ? "worker move target is missing" : destination.error);
-        }
-        const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
-          cfg: config,
-          entry,
-          agentId: target.agentId,
-          sessionKey: target.canonicalKey,
-        });
-        const executionMode = sessionRuntime.resolveWorkerPlacementExecutionMode(runtime);
-        if (!executionMode) {
-          throw new Error(`Runtime ${runtime} lacks cloud placement support`);
-        }
-        if (
-          moveTarget.kind === "device" &&
-          !sessionRuntime.supportsWorkerPlacementOnDevice(runtime)
-        ) {
-          throw new Error(
-            `runtime ${runtime} does not support paired-device placement; select a compatible runtime or cloud worker provider`,
-          );
-        }
-        return { executionMode, ...destination.value };
-      },
+      resolveMoveDestination: createGatewayWorkerPlacementMoveDestinationResolver({
+        environments: params.environments,
+        getConfig: getRuntimeConfig,
+        loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+      }),
       resolveWorkspacePath,
       workspaceOperations,
       prepareAcceptedWorkspacePublication,
@@ -437,6 +427,7 @@ export function createGatewayWorkerPlacementRuntime(
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,
+      resolveDevicePlacementRequirement,
     }),
     workspaceOperations,
     prepareAcceptedWorkspacePublication,

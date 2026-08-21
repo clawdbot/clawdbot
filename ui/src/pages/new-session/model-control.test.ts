@@ -65,20 +65,37 @@ describe("new-session model runtime", () => {
   });
 
   it.each([
-    { name: "allows opted-in remote execution", runtimeId: "codex", supported: true },
-    { name: "allows embedded execution", runtimeId: "openclaw", supported: true },
-    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only", supported: false },
-  ])("$name on paired devices", ({ runtimeId, supported }) => {
+    {
+      name: "allows opted-in remote execution",
+      runtimeId: "codex",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    {
+      name: "allows embedded execution",
+      runtimeId: "openclaw",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    },
+    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only" },
+    {
+      name: "rejects a stale support flag without an owner requirement",
+      runtimeId: "stale",
+      devicePlacementSupported: true,
+    },
+  ])("$name on paired devices", ({ runtimeId, devicePlacement, devicePlacementSupported }) => {
     const control = new NewSessionModelControl(() => undefined);
     vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
       id: runtimeId,
       cloudPlacementSupported: true,
-      devicePlacementSupported: supported,
+      devicePlacementSupported: devicePlacementSupported ?? Boolean(devicePlacement),
+      ...(devicePlacement ? { devicePlacement } : {}),
       source: "model",
     });
 
     expect(control.devicePlacementUnsupportedReason()).toBe(
-      supported ? undefined : "This runtime does not support paired devices",
+      devicePlacement ? undefined : "This runtime does not support paired devices",
     );
   });
 

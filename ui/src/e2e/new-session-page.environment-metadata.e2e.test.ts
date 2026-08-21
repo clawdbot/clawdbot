@@ -35,6 +35,7 @@ suite.define(() => {
             id: "openclaw",
             cloudPlacementSupported: true,
             devicePlacementSupported: true,
+            devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
             source: "model",
           },
         },
@@ -47,6 +48,10 @@ suite.define(() => {
             id: "codex",
             cloudPlacementSupported: true,
             devicePlacementSupported: true,
+            devicePlacement: {
+              requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+              consumesWorkerSlot: false,
+            },
             source: "model",
           },
         },
@@ -72,7 +77,19 @@ suite.define(() => {
               label: "Build Mac",
               status: "available",
               sessionHost: true,
-              workerSlots: { total: 2, available: 2 },
+              workerSlots: { total: 2, available: 0 },
+              capabilities: ["codex.exec-server.stdio.v1"],
+              invocableCommands: ["codex.exec-server.stdio.v1"],
+            },
+            {
+              id: "node:restricted-mac",
+              type: "node",
+              label: "Restricted Mac",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 2, available: 1 },
+              capabilities: ["codex.exec-server.stdio.v1"],
+              invocableCommands: [],
             },
           ],
           profiles: [],
@@ -87,15 +104,15 @@ suite.define(() => {
       const whereTrigger = page.locator("#new-session-where-trigger");
       const where = page.locator("wa-popover.new-session-page__where-popover");
       const device = where.locator('[data-value="device:build-mac"]');
+      const restrictedDevice = where.locator('[data-value="device:restricted-mac"]');
       const modelSelect = page.locator('[data-chat-model-select="true"]');
 
       await whereTrigger.click();
       await device.waitFor();
-      expect(await device.isEnabled()).toBe(true);
-      expect(await device.textContent()).not.toContain(
-        "This runtime does not support paired devices",
-      );
-      await captureDeviceRuntimeUiProof(page, "01-embedded-device-enabled.png");
+      expect(await device.isDisabled()).toBe(true);
+      expect(await device.textContent()).toContain("No worker slots are available");
+      expect(await restrictedDevice.isEnabled()).toBe(true);
+      await captureDeviceRuntimeUiProof(page, "01-embedded-device-capacity-gated.png");
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
@@ -103,10 +120,12 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
-      expect(await device.textContent()).not.toContain(
-        "This runtime does not support paired devices",
+      await expect.poll(() => restrictedDevice.isDisabled()).toBe(true);
+      expect(await restrictedDevice.getAttribute("title")).toMatch(/enable|approv/i);
+      await captureDeviceRuntimeUiProof(
+        page,
+        "02-codex-zero-slot-enabled-denied-command-disabled.png",
       );
-      await captureDeviceRuntimeUiProof(page, "02-codex-device-enabled.png");
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
@@ -126,10 +145,8 @@ suite.define(() => {
       await modelSelect.click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
       await whereTrigger.click();
-      await expect.poll(() => device.isEnabled()).toBe(true);
-      expect(await device.textContent()).not.toContain(
-        "This runtime does not support paired devices",
-      );
+      await expect.poll(() => device.isDisabled()).toBe(true);
+      await expect.poll(() => restrictedDevice.isEnabled()).toBe(true);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

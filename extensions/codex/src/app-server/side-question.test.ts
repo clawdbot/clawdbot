@@ -856,6 +856,42 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("rejects paired-device side questions before acquiring a client, channel, or approval", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const openDuplex = vi.fn(async () => {
+      throw new Error("paired-device side-question channel was opened");
+    });
+    const requestApproval = vi.fn(async () => undefined);
+    const sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec" as const,
+      placementNodeId: "paired-device-1",
+      placementEnvironmentId: "environment-1",
+      placementSessionId: "session-1",
+      placementOwnerEpoch: 1,
+      sessionKey: "agent:main:session-1",
+    };
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sandbox,
+          hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval },
+        }),
+        { runtime: { nodes: { openDuplex } } as never },
+      ),
+    ).rejects.toThrow(
+      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+    expect(openDuplex).not.toHaveBeenCalled();
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+  });
+
   it("rebinds side-question handlers when selection retry replaces the client", async () => {
     const initialClient = createFakeClient();
     const replacementClient = createFakeClient();

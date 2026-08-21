@@ -37,23 +37,39 @@ export function resolveWorkerPlacementExecutionMode(
   return resolveWorkerPlacementCapabilities(runtime).executionMode;
 }
 
-function resolveWorkerPlacementCapabilities(runtime: string): {
+export function resolveWorkerPlacementCapabilities(runtime: string): {
   executionMode?: WorkerPlacementExecutionMode;
-  devicePlacementSupported: boolean;
+  devicePlacement?: NonNullable<GatewayAgentRuntime["devicePlacement"]>;
 } {
   const runtimeId = runtime.trim();
   if (runtimeId === OPENCLAW_AGENT_RUNTIME_ID) {
-    return { executionMode: "worker-turn", devicePlacementSupported: true };
+    return {
+      executionMode: "worker-turn",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    };
   }
   const placement = getRegisteredAgentHarness(runtimeId)?.harness.cloudPlacement;
+  if (!placement) {
+    return {};
+  }
+  const requirement = placement.devicePlacement;
+  if (!requirement) {
+    return { executionMode: placement.mode };
+  }
+  const requiredNodeCommands = [...new Set(requirement.requiredNodeCommands)].toSorted();
+  // Dropping an oversized or malformed required command would silently grant incomplete authority.
+  if (
+    requiredNodeCommands.length > 32 ||
+    requiredNodeCommands.some(
+      (command) => command.length === 0 || command.length > 128 || command.trim() !== command,
+    )
+  ) {
+    return { executionMode: placement.mode };
+  }
   return {
-    ...(placement ? { executionMode: placement.mode } : {}),
-    devicePlacementSupported: placement?.devicePlacement === true,
+    executionMode: placement.mode,
+    devicePlacement: { requiredNodeCommands, consumesWorkerSlot: requirement.consumesWorkerSlot },
   };
-}
-
-export function supportsWorkerPlacementOnDevice(runtime: string): boolean {
-  return resolveWorkerPlacementCapabilities(runtime).devicePlacementSupported;
 }
 
 export function projectWorkerPlacementAgentRuntime(
@@ -61,17 +77,17 @@ export function projectWorkerPlacementAgentRuntime(
 ): GatewayAgentRuntime & {
   cloudPlacementSupported: boolean;
   cloudPlacementExecutionMode?: WorkerPlacementExecutionMode;
+  devicePlacement?: NonNullable<GatewayAgentRuntime["devicePlacement"]>;
   devicePlacementSupported: boolean;
 } {
   const { source, ...identity } = runtime;
-  const { executionMode, devicePlacementSupported } = resolveWorkerPlacementCapabilities(
-    runtime.id,
-  );
+  const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(runtime.id);
   return {
     ...identity,
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
-    devicePlacementSupported,
+    ...(devicePlacement ? { devicePlacement } : {}),
+    devicePlacementSupported: devicePlacement !== undefined,
     source,
   };
 }

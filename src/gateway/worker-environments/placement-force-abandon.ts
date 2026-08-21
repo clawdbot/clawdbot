@@ -156,6 +156,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
         expectedGeneration: current.generation,
+        forceLocalClaim: true,
       });
     }
     if (current && current.state !== "failed") {

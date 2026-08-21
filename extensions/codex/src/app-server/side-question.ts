@@ -40,6 +40,7 @@ import {
 } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
@@ -197,6 +198,11 @@ export async function runCodexAppServerSideQuestion(
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
+    );
+  }
+  if (isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)) {
+    throw new Error(
+      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);

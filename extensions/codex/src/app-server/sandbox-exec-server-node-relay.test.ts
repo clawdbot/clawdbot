@@ -14,6 +14,20 @@ import {
   waitForSocketClose,
 } from "./sandbox-exec-server.test-helpers.js";
 
+const customLoggingPattern = vi.hoisted(() => ({ value: "" }));
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
+  return {
+    ...actual,
+    redactToolPayloadText: (text: string) => {
+      const redacted = actual.redactToolPayloadText(text);
+      return customLoggingPattern.value
+        ? redacted.replaceAll(customLoggingPattern.value, "[redacted]")
+        : redacted;
+    },
+  };
+});
+
 const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
 
 type NodeChannel = Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
@@ -72,7 +86,70 @@ function createNodeRuntime(openDuplex: PluginRuntime["nodes"]["openDuplex"]): Pl
   return { nodes: { openDuplex } } as PluginRuntime;
 }
 
+async function expectPairedNodeHttpCredentialRejection(params: {
+  url?: string;
+  headers?: Array<{ name: string; value: string }>;
+  bodyBase64?: string;
+}): Promise<void> {
+  const transport = createNodeChannel();
+  const sandbox = createNodeSandbox();
+  const client = createClient();
+  const onExecutionDisconnect = vi.fn<(error: Error) => void>();
+  await ensureCodexSandboxExecServerEnvironment({
+    client: client as never,
+    sandbox,
+    runtime: createNodeRuntime(async () => transport.channel),
+    signal: new AbortController().signal,
+    onExecutionDisconnect,
+  });
+  const socket = await openSocket(execServerUrlFromClient(client));
+  let resolveForwarded: () => void = () => {};
+  const forwarded = new Promise<void>((resolve) => {
+    resolveForwarded = resolve;
+  });
+  transport.channel.send.mockImplementation(async () => resolveForwarded());
+  const outcome = Promise.race([
+    once(socket, "message").then(([message]) => ({
+      kind: "rejected" as const,
+      message: JSON.parse(Buffer.from(message as Buffer).toString()) as {
+        id: number;
+        error: { code: number; message: string };
+      },
+    })),
+    forwarded.then(() => ({ kind: "forwarded" as const })),
+  ]);
+
+  socket.send(
+    JSON.stringify({
+      id: 13,
+      method: "http/request",
+      params: {
+        method: "POST",
+        url: "https://example.test",
+        headers: [],
+        ...params,
+        requestId: "request-13",
+      },
+    }),
+  );
+
+  const result = await outcome;
+  expect(result.kind).toBe("rejected");
+  if (result.kind !== "rejected") {
+    return;
+  }
+  expect(result.message.id).toBe(13);
+  expect(result.message.error).toEqual({
+    code: -32602,
+    message: expect.stringMatching(/authenticated remote HTTP.*Gateway.*credential-free/i),
+  });
+  expect(JSON.stringify(result.message)).not.toContain("synthetic-canary");
+  expect(transport.channel.send).not.toHaveBeenCalled();
+  expect(onExecutionDisconnect).not.toHaveBeenCalled();
+}
+
 afterEach(async () => {
+  customLoggingPattern.value = "";
   await sandboxExecServerRegistry.closeAll();
 });
 
@@ -109,6 +186,7 @@ describe("Codex paired-device exec-server relay", () => {
       sessionKey: sandbox.sessionKey,
       timeoutMs: 0,
       maxMessageBytes: MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES,
+      maxOutstandingDeliveryBytes: MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES + 2 * 1024 * 1024,
       signal: attempt.signal,
     });
     expect(openDuplex.mock.invocationCallOrder[0]).toBeLessThan(
@@ -211,6 +289,214 @@ describe("Codex paired-device exec-server relay", () => {
     expect(transport.channel.close).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["bearer authorization", [{ name: "Authorization", value: "Bearer synthetic-canary" }]],
+    ["OAuth authorization", [{ name: "authorization", value: "OAuth synthetic-canary" }]],
+    [
+      "mixed-case proxy authorization",
+      [{ name: "pRoXy-AuThOrIzAtIoN", value: "Bearer synthetic-canary" }],
+    ],
+    ["request cookie", [{ name: "Cookie", value: "session=synthetic-canary" }]],
+    ["API key", [{ name: "X-Api-Key", value: "synthetic-canary" }]],
+    ["Google API key", [{ name: "x-goog-api-key", value: "synthetic-canary" }]],
+    ["Vault token", [{ name: "X-Vault-Token", value: "synthetic-canary" }]],
+    ["Cloudflare JWT assertion", [{ name: "Cf-Access-Jwt-Assertion", value: "synthetic-canary" }]],
+    ["request signature", [{ name: "X-Request-Signature", value: "synthetic-canary" }]],
+    ["one-time passcode", [{ name: "X-Provider-Otp", value: "synthetic-canary" }]],
+    ["plural credentials", [{ name: "X-Provider-Credentials", value: "synthetic-canary" }]],
+    ["mixed-case auth token", [{ name: "X-AuTh-ToKeN", value: "synthetic-canary" }]],
+    ["provider function key", [{ name: "x-functions-key", value: "synthetic-canary" }]],
+    [
+      "credential after repeated safe headers",
+      [
+        { name: "X-Trace", value: "first" },
+        { name: "x-trace", value: "second" },
+        { name: "aUtHoRiZaTiOn", value: "Bearer synthetic-canary" },
+      ],
+    ],
+  ])(
+    "rejects %s before forwarding any credential to the paired device",
+    async (_label, headers) => await expectPairedNodeHttpCredentialRejection({ headers }),
+  );
+
+  it.each([
+    [
+      "URL Basic credentials",
+      {
+        url: (() => {
+          const url = new URL("https://example.test/path");
+          url.username = "user";
+          url.password = "synthetic-canary";
+          return url.toString();
+        })(),
+      },
+    ],
+    ["OAuth URL access token", { url: "https://example.test/path?access_token=synthetic-canary" }],
+    ["session identity", { url: "https://example.test/path?sessionId=synthetic-canary" }],
+    ["SAML assertion", { url: "https://example.test/path?SAMLResponse=synthetic-canary" }],
+    ["OAuth device code", { url: "https://example.test/path?device_code=synthetic-canary" }],
+    [
+      "OAuth consumer key",
+      { url: "https://example.test/path?oauth_consumer_key=synthetic-canary" },
+    ],
+    [
+      "encoded canonical token",
+      {
+        url: `https://example.test/?safe=${["sk", "live", "x".repeat(30)].join("%255F")}`,
+      },
+    ],
+    [
+      "encoded nested form credential",
+      { url: "https://example.test/path?user%255Bpassword%255D=synthetic-canary" },
+    ],
+    [
+      "OAuth form body",
+      {
+        headers: [{ name: "Content-Type", value: "application/x-www-form-urlencoded" }],
+        bodyBase64: Buffer.from(
+          "grant_type=authorization_code&client_secret=synthetic-canary",
+        ).toString("base64"),
+      },
+    ],
+    [
+      "OAuth client assertion form body",
+      {
+        headers: [{ name: "Content-Type", value: "application/x-www-form-urlencoded" }],
+        bodyBase64: Buffer.from("client_assertion=synthetic-canary").toString("base64"),
+      },
+    ],
+    [
+      "OAuth PKCE verifier JSON body",
+      {
+        headers: [{ name: "Content-Type", value: "application/json" }],
+        bodyBase64: Buffer.from(JSON.stringify({ code_verifier: "synthetic-canary" })).toString(
+          "base64",
+        ),
+      },
+    ],
+    [
+      "duplicate escaped JSON credential",
+      {
+        headers: [{ name: "Content-Type", value: "application/json" }],
+        bodyBase64: Buffer.from(
+          '{"client_se\\u0063ret":"synthetic-canary","client_secret":"safe"}',
+        ).toString("base64"),
+      },
+    ],
+    [
+      "oversized JSON body",
+      {
+        headers: [{ name: "Content-Type", value: "application/json" }],
+        bodyBase64: Buffer.from(`{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`).toString("base64"),
+      },
+    ],
+    [
+      "oversized body without a declared content type",
+      { bodyBase64: Buffer.from("x".repeat(1024 * 1024 + 1)).toString("base64") },
+    ],
+    [
+      "invalid JSON body",
+      {
+        headers: [{ name: "Content-Type", value: "application/json" }],
+        bodyBase64: Buffer.from('{"client_assertion":"synthetic-canary"').toString("base64"),
+      },
+    ],
+    [
+      "unsupported XML body",
+      {
+        headers: [{ name: "Content-Type", value: "application/xml" }],
+        bodyBase64: Buffer.from("<credential>synthetic-canary</credential>").toString("base64"),
+      },
+    ],
+    [
+      "unsupported multipart body",
+      {
+        headers: [{ name: "Content-Type", value: "multipart/form-data; boundary=test" }],
+        bodyBase64: Buffer.from("--test\r\nsynthetic-canary\r\n--test--").toString("base64"),
+      },
+    ],
+    ["unsupported opaque body", { bodyBase64: Buffer.from("synthetic-canary").toString("base64") }],
+    [
+      "XML disguised as plain text",
+      {
+        headers: [{ name: "Content-Type", value: "text/plain" }],
+        bodyBase64: Buffer.from("<credential>synthetic-canary</credential>").toString("base64"),
+      },
+    ],
+    ["invalid UTF-8 body", { bodyBase64: Buffer.from([0xff, 0xfe]).toString("base64") }],
+    [
+      "canonical Slack webhook URL",
+      {
+        url: new URL(
+          ["services", `T${"1".repeat(10)}`, `B${"2".repeat(10)}`, "x".repeat(25)].join("%252F"),
+          "https://hooks.slack.com/",
+        ).toString(),
+      },
+    ],
+    [
+      "canonical Discord webhook URL",
+      {
+        url: new URL(
+          ["api", "webhooks", "1".repeat(18), "x".repeat(68)].join("/"),
+          "https://discord.com/",
+        ).toString(),
+      },
+    ],
+  ])(
+    "rejects %s before forwarding any credential to the paired device",
+    async (_label, params) => await expectPairedNodeHttpCredentialRejection(params),
+  );
+
+  it("honors operator-configured custom logging patterns in decoded values", async () => {
+    customLoggingPattern.value = "tenant-pattern-canary";
+    await expectPairedNodeHttpCredentialRejection({
+      url: `https://example.test/?safe=${customLoggingPattern.value.replaceAll("-", "%252D")}`,
+    });
+    await expectPairedNodeHttpCredentialRejection({
+      headers: [{ name: "Content-Type", value: "application/json" }],
+      bodyBase64: Buffer.from('{"safe":"tenant\\u002dpattern\\u002dcanary","safe":"ok"}').toString(
+        "base64",
+      ),
+    });
+  });
+
+  it("forwards credential-free repeated HTTP headers and streaming options byte-for-byte", async () => {
+    const transport = createNodeChannel();
+    const sandbox = createNodeSandbox();
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+      runtime: createNodeRuntime(async () => transport.channel),
+      signal: new AbortController().signal,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const request = JSON.stringify({
+      id: 14,
+      method: "http/request",
+      params: {
+        method: "POST",
+        url: "https://example.test/stream",
+        headers: [
+          { name: "X-Trace", value: "first" },
+          { name: "x-trace", value: "second" },
+          { name: "Content-Type", value: "application/json" },
+        ],
+        bodyBase64: Buffer.from(
+          JSON.stringify({ greeting: "hello", token_count: 2, status_code: 200 }),
+        ).toString("base64"),
+        redirectPolicy: "follow",
+        requestId: "request-14",
+        streamResponse: true,
+      },
+    });
+
+    socket.send(request);
+
+    await vi.waitFor(() => expect(transport.channel.send).toHaveBeenCalledOnce());
+    expect(Buffer.from(transport.channel.send.mock.calls[0]![0]).toString()).toBe(request);
+  });
+
   it("rejects replay of a claimed channel and binds simultaneous leases to fresh exact channels", async () => {
     const channels = [createNodeChannel(), createNodeChannel()];
     let nextChannel = 0;
@@ -220,18 +506,22 @@ describe("Codex paired-device exec-server relay", () => {
     const sandbox = createNodeSandbox();
     const firstClient = createClient();
     const secondClient = createClient();
+    const firstDisconnected = vi.fn<(error: Error) => void>();
+    const secondDisconnected = vi.fn<(error: Error) => void>();
     const runtime = createNodeRuntime(openDuplex);
     const first = await ensureCodexSandboxExecServerEnvironment({
       client: firstClient as never,
       sandbox,
       runtime,
       signal: new AbortController().signal,
+      onExecutionDisconnect: firstDisconnected,
     });
     const second = await ensureCodexSandboxExecServerEnvironment({
       client: secondClient as never,
       sandbox,
       runtime,
       signal: new AbortController().signal,
+      onExecutionDisconnect: secondDisconnected,
     });
     expect(first?.environmentId).not.toBe(second?.environmentId);
     expect(firstClient.request).toHaveBeenCalledWith(
@@ -255,11 +545,31 @@ describe("Codex paired-device exec-server relay", () => {
 
     const replay = await openSocket(execServerUrlFromClient(firstClient));
     await expect(waitForSocketClose(replay)).resolves.toEqual({ code: 1008 });
+    const firstSocketClosed = waitForSocketClose(firstSocket);
     await releaseCodexSandboxExecServerEnvironment(sandbox, first);
     expect(channels[0]!.channel.close).toHaveBeenCalledTimes(1);
     expect(channels[1]!.channel.close).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(firstSocket.readyState).toBe(firstSocket.CLOSED));
+    await expect(firstSocketClosed).resolves.toEqual({ code: 1001 });
+    expect(firstDisconnected).not.toHaveBeenCalled();
+    expect(secondDisconnected).not.toHaveBeenCalled();
+    secondSocket.send('{"id":3,"method":"environment/info"}');
+    await vi.waitFor(() => expect(channels[1]!.channel.send).toHaveBeenCalledTimes(2));
+    const secondReply = once(secondSocket, "message");
+    await channels[1]!.receive(Buffer.from('{"id":3,"result":{"ok":true}}'));
+    await expect(secondReply).resolves.toEqual([
+      Buffer.from('{"id":3,"result":{"ok":true}}'),
+      false,
+    ]);
+    const server = await sandboxExecServerRegistry.servers.get(sandbox.runtimeId);
+    expect(server?.cleanupTasks.size).toBe(1);
+    const secondSocketClosed = waitForSocketClose(secondSocket);
     await releaseCodexSandboxExecServerEnvironment(sandbox, second);
     expect(channels[1]!.channel.close).toHaveBeenCalledTimes(1);
+    await expect(secondSocketClosed).resolves.toEqual({ code: 1001 });
+    expect(server?.cleanupTasks.size).toBe(0);
+    expect(firstDisconnected).not.toHaveBeenCalled();
+    expect(secondDisconnected).not.toHaveBeenCalled();
   });
 
   it("makes a node disconnect terminal and closes its transport exactly once", async () => {
