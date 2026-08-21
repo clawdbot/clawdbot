@@ -8,6 +8,7 @@ import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import { gateMessageSending, MessageBlockedError } from "../../hooks/internal-hooks.js";
 import type {
   ChannelId,
   ChannelMessageActionContext,
@@ -350,6 +351,23 @@ export async function executeSendAction(params: {
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
+  // Pre-send gate: handlers can block with allow=false. Default-allow when
+  // no handlers are registered. Throws MessageBlockedError if any handler
+  // returns allow=false; the agent harness surfaces the reason to the model
+  // rather than silently dropping the message.
+  const gateDecision = await gateMessageSending({
+    to: params.to,
+    content: params.message,
+    channelId: params.ctx.channel ?? "",
+    accountId: params.ctx.accountId ?? undefined,
+    metadata: {
+      sessionKey: params.ctx.sessionKey,
+      toolContext: params.ctx.toolContext,
+    },
+  });
+  if (gateDecision.allow === false) {
+    throw new MessageBlockedError(gateDecision.reason, gateDecision.code);
+  }
   throwIfAborted(params.ctx.abortSignal);
   const defaultPayload: ReplyPayload = params.payload ?? {
     text: params.message,

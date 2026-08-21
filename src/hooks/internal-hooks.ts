@@ -117,6 +117,120 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+// ============================================================================
+// Message Gate Events (pre-send blocking decisions)
+//
+// `message:sending` is a pre-send gate. Handlers register with
+// `registerMessageSendingGate` and may return a blocking decision.
+// The outbound send site calls `gateMessageSending` before
+// dispatching; the first handler to block short-circuits the send
+// with a `MessageBlockedError`. Default-allow when no handlers are
+// registered.
+// ============================================================================
+
+export type MessageSendingGateContext = {
+  /** Recipient identifier */
+  to: string;
+  /** Message content (full text being sent) */
+  content: string;
+  /** Channel identifier */
+  channelId: string;
+  /** Provider account ID for multi-account setups */
+  accountId?: string;
+  /** Conversation/chat ID */
+  conversationId?: string;
+  /** Whether this message is being sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier, if applicable */
+  groupId?: string;
+  /** Optional caller-provided metadata for the gate decision (free-form) */
+  metadata?: Record<string, unknown>;
+};
+
+export type MessageSendingGateHandler = (
+  context: MessageSendingGateContext,
+) => Promise<MessageSendingGateDecision> | MessageSendingGateDecision;
+
+export type MessageSendingGateDecision =
+  | { allow: true }
+  | { allow: false; reason: string; code?: string };
+
+const MESSAGE_SENDING_GATE_HANDLERS_KEY = Symbol.for("openclaw.messageSendingGateHandlers");
+const messageSendingGateHandlers = resolveGlobalSingleton<MessageSendingGateHandler[]>(
+  MESSAGE_SENDING_GATE_HANDLERS_KEY,
+  () => [] as MessageSendingGateHandler[],
+);
+
+/** Register a pre-send gate handler. Handlers run in registration order;
+ *  the first handler that returns `allow: false` short-circuits the gate. */
+export function registerMessageSendingGate(handler: MessageSendingGateHandler): void {
+  messageSendingGateHandlers.push(handler);
+}
+
+/** Unregister a previously-registered pre-send gate handler. */
+export function unregisterMessageSendingGate(handler: MessageSendingGateHandler): void {
+  const index = messageSendingGateHandlers.indexOf(handler);
+  if (index !== -1) {
+    messageSendingGateHandlers.splice(index, 1);
+  }
+}
+
+/** Clear all registered pre-send gate handlers. Test-only. */
+export function clearMessageSendingGates(): void {
+  messageSendingGateHandlers.length = 0;
+}
+
+/** Returns the count of currently-registered gate handlers. Useful for
+ *  test assertions and for the outbound send site to decide whether to
+ *  invoke the gate at all. */
+export function getMessageSendingGateHandlerCount(): number {
+  return messageSendingGateHandlers.length;
+}
+
+/**
+ * Invoke the pre-send gate. Runs every registered handler in registration
+ * order. The first handler that returns `allow: false` short-circuits and
+ * the gate returns that decision. Default-allow when no handlers are
+ * registered or when all handlers return `allow: true`.
+ *
+ * Handler errors are caught and logged; they do not block the send. Only
+ * an explicit `{ allow: false }` decision blocks.
+ */
+export async function gateMessageSending(
+  context: MessageSendingGateContext,
+): Promise<MessageSendingGateDecision> {
+  if (messageSendingGateHandlers.length === 0) {
+    return { allow: true };
+  }
+  for (const handler of messageSendingGateHandlers) {
+    let decision: MessageSendingGateDecision;
+    try {
+      decision = await handler(context);
+    } catch (err) {
+      log.error(
+        `Message-sending gate handler error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
+    if (decision && decision.allow === false) {
+      return decision;
+    }
+  }
+  return { allow: true };
+}
+
+/** Error thrown when a pre-send gate blocks a message. Surfaces a
+ *  typed error so the agent harness can render the reason back to
+ *  the model rather than silently swallowing. */
+export class MessageBlockedError extends Error {
+  public readonly code: string | undefined;
+  constructor(reason: string, code?: string) {
+    super(reason);
+    this.name = "MessageBlockedError";
+    this.code = code;
+  }
+}
+
 type MessageEnrichedBodyHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;

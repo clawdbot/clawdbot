@@ -27,6 +27,7 @@ const KNOWN_INTERNAL_HOOK_EVENT_KEYS = [
   "gateway:startup",
   "message:preprocessed",
   "message:received",
+  "message:sending",
   "message:sent",
   "message:transcribed",
   "session:auto-reset",
