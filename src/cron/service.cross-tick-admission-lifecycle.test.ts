@@ -148,7 +148,11 @@ describe("cron service cross-tick admission lifecycle", () => {
       releaseDirectA.resolve({ status: "ok", summary: "direct a cleanup" });
       releaseDirectB.resolve({ status: "ok", summary: "direct b cleanup" });
       releasePending.resolve({ status: "ok", summary: "pending cleanup" });
-      await Promise.allSettled([timerRun, directRunA, directRunB].filter(Boolean));
+      await Promise.allSettled([
+        timerRun,
+        directRunA ?? Promise.resolve(),
+        directRunB ?? Promise.resolve(),
+      ]);
       stop(state);
     }
   });
