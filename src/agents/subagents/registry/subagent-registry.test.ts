@@ -2263,6 +2263,12 @@ describe("subagent registry seam flow", () => {
         completedRun?.execution.outcome,
         {
           status: "timeout",
+          // Regression (openclaw-kkv1): the stored run deadline is a clock
+          // comparison, not an observation. Completing on it wakes the parent,
+          // but nothing here saw the child stop, so the outcome must say so —
+          // a parent that reads this as death can spawn a successor onto the
+          // still-live child's working directory.
+          timeoutDisposition: "child-unconfirmed",
           startedAt,
           endedAt: startedAt + 1_000,
           elapsedMs: 1_000,
@@ -2272,6 +2278,35 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("marks a run timeout as an observed child stop when agent.wait carries a terminal snapshot", async () => {
+    let waitAttempts = 0;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        // stopReason/endedAt only come from a terminal snapshot, so unlike a
+        // bare wait expiry this really is the child's own run ending.
+        return { status: "timeout", stopReason: "run_timeout", startedAt: 111, endedAt: 222 };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(createSessionStore({ status: "running" }));
+
+    mod.registerSubagentRun({
+      runId: "run-observed-timeout",
+      task: "observed stop",
+    });
+
+    await waitForFast(() => {
+      const completedRun = findRequesterRun("run-observed-timeout");
+      expect(waitAttempts).toBeGreaterThanOrEqual(1);
+      expectRecordFields(
+        completedRun?.execution.outcome,
+        { status: "timeout", timeoutDisposition: "child-stopped" },
+        "observed run timeout outcome",
+      );
     });
   });
 

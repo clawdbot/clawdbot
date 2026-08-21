@@ -242,7 +242,12 @@ function requireAgentCall() {
 describe("subagent wait outcome timing", () => {
   it.each([
     { wait: { status: "ok" }, expected: { status: "ok" } },
-    { wait: { status: "timeout" }, expected: { status: "timeout" } },
+    // A bare timeout snapshot carries no evidence the child stopped, so the
+    // outcome records an unconfirmed stop rather than a terminal one.
+    {
+      wait: { status: "timeout" },
+      expected: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+    },
     {
       wait: { status: "error", error: "boom" },
       expected: { status: "error", error: "boom" },

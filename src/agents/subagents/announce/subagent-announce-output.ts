@@ -91,13 +91,42 @@ type AgentWaitResult = {
   providerStarted?: boolean;
 };
 
+/**
+ * Which of the two events a `timeout` outcome actually records.
+ *
+ * `child-stopped` — the gateway reported the child run itself settled, so the
+ * outcome is terminal and its timing describes the child.
+ * `child-unconfirmed` — only a deadline elapsed (this waiter's budget, or the
+ * stored run deadline). No stop was observed, so the child may still be
+ * running and the outcome describes the end of the WAIT, not of the run.
+ */
+export type SubagentTimeoutDisposition = "child-stopped" | "child-unconfirmed";
+
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  /** Only meaningful when `status` is `timeout`. */
+  timeoutDisposition?: SubagentTimeoutDisposition;
   startedAt?: number;
   endedAt?: number;
   elapsedMs?: number;
 };
+
+/**
+ * True when an `agent.wait` result carries evidence that the child run itself
+ * settled. The gateway attaches these fields only from a terminal snapshot; a
+ * plain wait expiry comes back as a bare `status: "timeout"`, which is why a
+ * timeout status alone can never be read as the child having stopped.
+ */
+export function waitObservedRunStop(
+  wait: Pick<AgentWaitResult, "endedAt" | "stopReason" | "livenessState"> | undefined,
+): boolean {
+  return (
+    typeof wait?.endedAt === "number" ||
+    typeof wait?.stopReason === "string" ||
+    typeof wait?.livenessState === "string"
+  );
+}
 
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
@@ -357,9 +386,20 @@ export function applySubagentWaitOutcome(params: {
   // of re-enumerating reason groups.
   if (terminalOutcome) {
     switch (classifyAgentRunTerminalOutcome(terminalOutcome)) {
-      case "timeout":
-        outcome = { status: "timeout" };
+      case "timeout": {
+        // A bare `status: "timeout"` snapshot is a wait expiry, not a stop, so
+        // classifying it as terminal here would lose the distinction a caller
+        // may already have established.
+        const priorDisposition =
+          params.outcome?.status === "timeout" ? params.outcome.timeoutDisposition : undefined;
+        outcome = {
+          status: "timeout",
+          timeoutDisposition: waitObservedRunStop(params.wait)
+            ? "child-stopped"
+            : (priorDisposition ?? "child-unconfirmed"),
+        };
         break;
+      }
       case "cancellation":
         outcome = { status: "error", error: "subagent run terminated" };
         break;
