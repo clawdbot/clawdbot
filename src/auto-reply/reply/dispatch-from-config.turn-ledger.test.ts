@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../reply-payload.js";
-import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  createReplyTurnLedger,
+  requireQueuedReplyDelivery,
+} from "./dispatch-from-config.turn-ledger.js";
+import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
+import { createReplyDispatcher, type ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): ReplyDispatcher {
@@ -16,6 +19,44 @@ function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): Re
     ...overrides,
   };
 }
+
+describe("requireQueuedReplyDelivery", () => {
+  it("rejects a branded delivery error with an invalid outcome", () => {
+    expect(
+      isReplyDispatchDeliveryError({
+        code: "REPLY_DISPATCH_DELIVERY_ERROR",
+        outcome: "invalid",
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["delivered", true],
+    ["delivered-not-visible", false],
+    ["cancelled", false],
+    ["failed-before-deliver", false],
+    ["failed-deliver", false],
+  ] satisfies Array<[ReplyDispatchDeliveryOutcome, boolean]>)(
+    "requires canonical %s delivery",
+    async (outcome, accepted) => {
+      const delivery = requireQueuedReplyDelivery({
+        delivery: { queued: true, outcome: Promise.resolve(outcome) },
+        dispatcher: { waitForIdle: async () => undefined },
+        abortSignal: undefined,
+      });
+
+      if (accepted) {
+        await expect(delivery).resolves.toBeUndefined();
+        return;
+      }
+      const error = await delivery.catch((caught: unknown) => caught);
+      expect(isReplyDispatchDeliveryError(error)).toBe(true);
+      if (isReplyDispatchDeliveryError(error)) {
+        expect(error.outcome).toBe(outcome);
+      }
+    },
+  );
+});
 
 describe("createReplyTurnLedger", () => {
   it("counts a delivered contentful payload as visible after settlement", async () => {
@@ -97,26 +138,21 @@ describe("createReplyTurnLedger", () => {
     }
   });
 
-  it("keeps admission as the visibility fact for untracked dispatchers", () => {
+  it("keeps legacy accepted sends visible when settlement has no receipt", async () => {
     const ledger = createReplyTurnLedger(createUntrackedDispatcher());
     const send = ledger.sendQueued("final", { text: "hello" });
     expect(send.outcome).toBeUndefined();
+    await ledger.settleQueued();
     expect(ledger.hasVisibleDelivery()).toBe(true);
   });
 
-  it("never counts contentless payloads as visible", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
-    const ledger = createReplyTurnLedger(dispatcher);
-    const payload: ReplyPayload = { text: "hi" };
-    // Metadata-only admissions on untracked dispatchers stay invisible too.
-    const untracked = createReplyTurnLedger(createUntrackedDispatcher());
-    untracked.sendQueued("final", { text: "   " });
-    expect(untracked.hasVisibleDelivery()).toBe(false);
-    ledger.sendQueued("final", payload);
+  it("does not fabricate visibility when a receipt-capable dispatcher omits its receipt", async () => {
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({ supportsSettledReceipt: true }),
+    );
+    ledger.sendQueued("final", { text: "hello" });
     await ledger.settleQueued();
-    expect(ledger.hasVisibleDelivery()).toBe(true);
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("records routed settlements only when delivered and contentful", () => {
@@ -126,15 +162,6 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.hasVisibleDelivery()).toBe(false);
     ledger.recordRoutedDelivery({ mediaUrl: "https://example.com/seatmap.png" }, true);
     expect(ledger.hasVisibleDelivery()).toBe(true);
-  });
-
-  it("reports foreign admissions the dispatch pipeline never sent", () => {
-    const dispatcher = createUntrackedDispatcher({
-      getQueuedCounts: () => ({ tool: 0, block: 1, final: 0 }),
-    });
-    const ledger = createReplyTurnLedger(dispatcher);
-    expect(ledger.hasForeignQueuedAdmissions()).toBe(true);
-    expect(ledger.hasVisibleDelivery()).toBe(false);
   });
 
   it("stops settling when the abort signal fires", async () => {
@@ -155,5 +182,28 @@ describe("createReplyTurnLedger", () => {
     releaseDeliver();
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
+  });
+
+  it("settles immediately when the abort signal already fired", async () => {
+    let releaseDeliver!: () => void;
+    const stalled = new Promise<void>((resolve) => {
+      releaseDeliver = resolve;
+    });
+    const dispatcher = createReplyDispatcher({ deliver: () => stalled });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("final", { text: "hello" });
+    const abortController = new AbortController();
+    abortController.abort();
+    const settled = ledger.settleQueued(abortController.signal);
+
+    try {
+      await expect(Promise.race([settled, Promise.resolve("pending")])).resolves.toBe("aborted");
+      expect(ledger.hasVisibleDelivery()).toBe(false);
+    } finally {
+      releaseDeliver();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      await settled;
+    }
   });
 });

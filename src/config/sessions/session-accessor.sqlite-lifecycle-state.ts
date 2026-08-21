@@ -22,12 +22,12 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
-  readExactSessionEntryJsonForCanonicalRepair,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryStore,
-  sqliteSessionEntriesEqual,
 } from "./session-accessor.sqlite-entry-store.js";
 import type {
   LifecycleArtifactCleanupPlan,
@@ -54,7 +54,7 @@ export function shouldRemoveSessionEntry(
   }
   if (
     removal.expectedEntry !== undefined &&
-    JSON.stringify(entry) !== JSON.stringify(removal.expectedEntry)
+    !sqliteSessionEntriesEqual(entry, removal.expectedEntry)
   ) {
     return false;
   }
@@ -328,7 +328,7 @@ export async function projectSessionEntryLifecycleMutation(
     const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
     let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
     if (removal.expectedRawEntryJson !== undefined) {
-      const currentRawEntryJson = readExactSessionEntryJsonForCanonicalRepair(database, sessionKey);
+      const currentRawEntryJson = readExactSessionEntryJson(database, sessionKey);
       if (currentRawEntryJson !== removal.expectedRawEntryJson) {
         throw new Error(
           `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
@@ -405,6 +405,7 @@ export async function projectSessionEntryLifecycleMutation(
       expectedEntry,
       sessionKey,
       entry: cloned,
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
       ...(resetBoundaryPlan ? { resetBoundaryPlan } : {}),
     });
   }
@@ -627,7 +628,7 @@ export function planSessionLifecycleArtifactCleanup(
     ) {
       continue;
     }
-    const entry = parseSessionEntryRow(row);
+    const entry = projectedStore[row.session_key];
     const sessionIds = uniqueStrings([
       row.current_session_id,
       ...(entry ? collectSessionStateIdsForEntry(entry) : []),

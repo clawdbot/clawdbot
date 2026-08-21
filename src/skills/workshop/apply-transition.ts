@@ -19,6 +19,7 @@ import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-ta
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
@@ -69,18 +70,12 @@ const SKILL_PROPOSAL_APPLY_TRANSITIONS: Readonly<
   stale: {},
 };
 
-type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
-
 export type SkillProposalApplyTransitionDependencies = {
   assertExpectedRevisionHash: (actual: string, expected?: string) => void;
   evaluateSkillProposal: (
     input: SkillProposalEvaluateInput,
   ) => Promise<SkillProposalEvaluateResult>;
   isCreateTargetConflict: (error: unknown) => boolean;
-  readProposalSupportFiles: (
-    record: SkillProposalRecord,
-    options?: SkillWorkshopStoreOptions,
-  ) => Promise<PreparedSkillProposalSupportFile[]>;
   readRequiredProposal: (
     proposalId: string,
     workspaceDir?: string,
@@ -212,10 +207,7 @@ export async function applySkillProposalTransition(
       if (hashSkillProposalContent(content) !== record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
-      const supportFiles = await dependencies.readProposalSupportFiles(
-        record,
-        storeOptions(input.env),
-      );
+      const supportFiles = read.supportFiles ?? [];
       if (!readProposalFrontmatter(content)) {
         throw new Error("Proposal draft must include proposal frontmatter.");
       }
@@ -226,6 +218,16 @@ export async function applySkillProposalTransition(
 
       assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
       assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+      if (
+        record.kind === "update" &&
+        !isWorkshopOwnedSkillDir(
+          input.workspaceDir,
+          record.target.skillDir,
+          storeOptions(input.env),
+        )
+      ) {
+        throw new Error(`Skill Workshop does not own this skill path: ${record.target.skillKey}`);
+      }
       const workshopConfig = resolveSkillWorkshopConfig(input.config);
       const symlinkPolicy = {
         allowWrites: workshopConfig.allowSymlinkTargetWrites,
@@ -365,7 +367,7 @@ export async function applySkillProposalTransition(
       });
       return {
         result: { record: applied, targetSkillFile: record.target.skillFile },
-        ...(commit.state === "committed" && commit.event ? { event: commit.event } : {}),
+        event: commit.event,
         skillChange: shouldDispatchSkillChange
           ? { before: beforeSkill, after: afterSkill }
           : undefined,
@@ -375,14 +377,12 @@ export async function applySkillProposalTransition(
   );
 
   const result = await withSkillProposalLifecycleDispatch(input, application);
-  if (result.event) {
-    await dispatchSkillProposalChanged({
-      event: result.event,
-      record: result.result.record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    });
-  }
+  await dispatchSkillProposalChanged({
+    event: result.event,
+    record: result.result.record,
+    workspaceDir: input.workspaceDir,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+  });
   if (result.skillChange) {
     await dispatchCommittedSkillChangeBestEffort({
       action: result.result.record.kind === "create" ? "created" : "updated",
@@ -474,7 +474,7 @@ export function transitionPendingSkillProposalToStale(params: {
     store: storeOptions(params.input.env),
     operationLabel: "skill-workshop.stale.commit",
   });
-  if (commit.state !== "committed" || !commit.event) {
+  if (commit.state !== "committed") {
     throw new Error("Failed to record stale Skill Workshop proposal.");
   }
   return { record: stale, event: commit.event };
@@ -542,7 +542,7 @@ async function quarantineSkillProposalAfterScan(params: {
     store: storeOptions(params.input.env),
     operationLabel: "skill-workshop.quarantine.commit",
   });
-  if (commit.state !== "committed" || !commit.event) {
+  if (commit.state !== "committed") {
     throw new Error("Failed to record quarantined Skill Workshop proposal.");
   }
   throw new SkillProposalLifecycleError(
@@ -627,7 +627,7 @@ async function recoverAfterApplyCommitFailure(params: {
     store: storeOptions(params.env),
   });
   if (committed) {
-    return committed.event ?? null;
+    return committed.event;
   }
   const authoritative = readStoredProposal(params.expected.id, storeOptions(params.env));
   if (authoritative?.record.status === "applied") {

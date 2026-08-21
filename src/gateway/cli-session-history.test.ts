@@ -1,9 +1,10 @@
 // CLI session history tests protect imported Claude CLI transcript lookup,
 // fallback seeding, reseed receipts, and merge ordering with local chat history.
+import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
@@ -12,6 +13,7 @@ import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   augmentChatHistoryWithCliSessionImports,
   readClaudeCliFallbackSeed,
+  readChatHistoryCliSessionImportSnapshot,
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
@@ -243,6 +245,125 @@ describe("cli session history", () => {
           tool_use_id: "toolu_123",
         },
       ]);
+    });
+  });
+
+  it("refreshes changed Claude snapshots and singleflights concurrent reads", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const params = {
+        entry: {
+          sessionId: "openclaw-session",
+          updatedAt: Date.now(),
+          cliSessionBindings: { "claude-cli": { sessionId } },
+        },
+        provider: "claude-cli",
+        localMessages: [],
+        homeDir,
+      };
+      const read = async () =>
+        resolveChatHistoryWithCliSessionImports({
+          ...params,
+          preparedImportedMessages: await readChatHistoryCliSessionImportSnapshot(params),
+        });
+      const streamSpy = vi.spyOn(rawFs, "createReadStream");
+      const transcriptRedact = await import("../agents/transcript-redact.js");
+      const redactSpy = vi.spyOn(transcriptRedact, "redactTranscriptMessage");
+      const initial = await (async () => {
+        try {
+          const [first, second] = await Promise.all([
+            readChatHistoryCliSessionImportSnapshot(params),
+            readChatHistoryCliSessionImportSnapshot(params),
+          ]);
+          expect(second).toEqual(first);
+          expect(streamSpy).toHaveBeenCalledTimes(1);
+          expect(redactSpy).toHaveBeenCalledTimes(first.length);
+          return resolveChatHistoryWithCliSessionImports({
+            ...params,
+            preparedImportedMessages: first,
+          });
+        } finally {
+          streamSpy.mockRestore();
+          redactSpy.mockRestore();
+        }
+      })();
+      expect(initial.messages).toHaveLength(3);
+
+      await fs.appendFile(
+        filePath,
+        `\n${createClaudeTextHistoryLines([
+          { role: "user", uuid: "appended-user", content: "appended" },
+        ])}`,
+        "utf8",
+      );
+      const appended = await read();
+      expect(appended.messages).toHaveLength(4);
+      expect(appended.messages.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
+        expect.objectContaining({ externalId: "appended-user" }),
+      );
+
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          { role: "assistant", uuid: "replacement-assistant", content: "replacement" },
+        ]),
+        "utf8",
+      );
+      const replaced = await read();
+      expect(replaced.messages).toHaveLength(1);
+      expectFields(readRecord(replaced.messages[0])["__openclaw"], {
+        externalId: "replacement-assistant",
+      });
+
+      await fs.rm(filePath);
+      const deleted = await read();
+      expect(deleted).toEqual({ messages: [], imported: false });
+    });
+  });
+
+  it("projects oversized Claude messages after off-thread parsing", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const oversizedRecord = JSON.stringify({
+        type: "user",
+        uuid: "oversized-user",
+        timestamp: "2026-03-26T16:29:54.700Z",
+        message: { role: "user", content: "q".repeat(2 * 1024 * 1024) },
+      });
+      await fs.writeFile(
+        filePath,
+        `${oversizedRecord}\n${createClaudeTextHistoryLines([
+          { role: "user", uuid: "visible-after-oversized", content: "visible" },
+        ])}`,
+        "utf8",
+      );
+      const parseSpy = vi.spyOn(JSON, "parse");
+      try {
+        const messages = await readChatHistoryCliSessionImportSnapshot({
+          entry: {
+            sessionId: "openclaw-session",
+            updatedAt: Date.now(),
+            cliSessionBindings: { "claude-cli": { sessionId } },
+          },
+          provider: "claude-cli",
+          localMessages: [],
+          homeDir,
+        });
+
+        expect(messages).toHaveLength(2);
+        expectFields(readRecord(messages[0])["__openclaw"], {
+          externalId: "oversized-user",
+        });
+        expect(readRecord(messages[0]).content).toContain("exceeded 1 MiB");
+        expectFields(readRecord(messages[1])["__openclaw"], {
+          externalId: "visible-after-oversized",
+        });
+        expect(
+          parseSpy.mock.calls.some(
+            ([source]) => typeof source === "string" && source.length === oversizedRecord.length,
+          ),
+        ).toBe(false);
+      } finally {
+        parseSpy.mockRestore();
+      }
     });
   });
 
@@ -853,6 +974,46 @@ describe("cli session history", () => {
     });
   });
 
+  it("reads comparable fields once while merging large identity-less histories", () => {
+    const rowCount = 200;
+    const reads = { role: 0, content: 0, timestamp: 0 };
+    const createMessage = (source: "imported" | "local", index: number) => {
+      const timestamp = Date.parse("2026-03-26T16:29:54.800Z") + index;
+      return {
+        get role() {
+          reads.role += 1;
+          return "user";
+        },
+        get content() {
+          reads.content += 1;
+          return `${source}-${index}`;
+        },
+        get timestamp() {
+          reads.timestamp += 1;
+          return timestamp;
+        },
+      };
+    };
+    const localMessages = Array.from({ length: rowCount }, (_, index) =>
+      createMessage("local", index),
+    );
+    const importedMessages = Array.from({ length: rowCount }, (_, index) =>
+      createMessage("imported", rowCount + index),
+    );
+
+    // The former growing scan made 59,900 failed comparisons for these unique rows.
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(reads).toEqual({
+      role: rowCount * 2,
+      content: rowCount * 2,
+      timestamp: rowCount * 2,
+    });
+    expect(merged).toHaveLength(rowCount * 2);
+    expect(merged[0]).toBe(localMessages[0]);
+    expect(merged.at(-1)).toBe(importedMessages.at(-1));
+  });
+
   it.each([
     ["deduplicates a local redacted copy against an imported full copy", false],
     ["deduplicates when both local and imported copies are already redacted", true],
@@ -888,6 +1049,24 @@ describe("cli session history", () => {
       });
 
       expect(messages).toBe(localMessages);
+      const streamSpy = vi.spyOn(rawFs, "createReadStream");
+      try {
+        await expect(
+          readChatHistoryCliSessionImportSnapshot({
+            entry: {
+              sessionId: "openclaw-session",
+              updatedAt: Date.now(),
+              cliSessionBindings: { "claude-cli": { sessionId } },
+            },
+            provider: "openai",
+            localMessages,
+            homeDir,
+          }),
+        ).resolves.toEqual([]);
+        expect(streamSpy).not.toHaveBeenCalled();
+      } finally {
+        streamSpy.mockRestore();
+      }
     });
   });
 
@@ -1006,6 +1185,35 @@ describe("cli session history", () => {
     const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
     expect(merged).toHaveLength(2);
   });
+
+  it.each([
+    ["at the five-minute boundary", 0, 5 * 60 * 1000, 1],
+    ["outside the five-minute boundary", 0, 5 * 60 * 1000 + 1, 2],
+    ["when the local timestamp is missing", undefined, 1, 1],
+    ["when the imported timestamp is missing", 1, undefined, 1],
+  ])(
+    "deduplicates matching identity-less text %s",
+    (_label, localTimestamp, importedTimestamp, expectedLength) => {
+      const localMessages = [
+        {
+          role: "user",
+          content: "same text",
+          ...(localTimestamp === undefined ? {} : { timestamp: localTimestamp }),
+        },
+      ];
+      const importedMessages = [
+        {
+          role: "user",
+          content: "same text",
+          ...(importedTimestamp === undefined ? {} : { timestamp: importedTimestamp }),
+        },
+      ];
+
+      expect(mergeImportedChatHistoryMessages({ localMessages, importedMessages })).toHaveLength(
+        expectedLength,
+      );
+    },
+  );
 
   it("keeps untimestamped local messages in place when importing timestamped history", () => {
     const localMessages = [{ role: "user", content: "local without timestamp" }];

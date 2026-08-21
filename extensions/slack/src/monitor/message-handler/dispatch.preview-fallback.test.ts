@@ -91,7 +91,6 @@ type TestDispatchSequenceEntry =
   | { kind: "item"; progressText: string };
 let mockedDispatchSequence: TestDispatchSequenceEntry[] = [];
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
-let mockedDispatcherCapturesDeliveryErrors = false;
 let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
 let mockedDispatchError: Error | undefined;
 
@@ -1098,14 +1097,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
           continue;
         }
         mockedQueuedDispatchCounts[entry.kind] += 1;
-        try {
-          await params.delivery.deliver(deliverPayload, { kind: entry.kind });
-        } catch (error) {
-          if (!mockedDispatcherCapturesDeliveryErrors) {
-            throw error;
-          }
-          mockedQueuedDispatchCounts[entry.kind] -= 1;
-        }
+        await params.delivery.deliver(deliverPayload, { kind: entry.kind });
       }
       return {
         admission: { kind: "dispatch" } as const,
@@ -1165,7 +1157,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedSlackIsThreadReply = true;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
-    mockedDispatcherCapturesDeliveryErrors = false;
     mockedAgentRunTerminalOutcome = undefined;
     mockedDispatchError = undefined;
     mockedProgressEvents = [];
@@ -2611,13 +2602,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       planUpdate("tool one"),
       taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
     ]);
+    // Rows already on the stream are not resent: Slack appends task text per
+    // update, so each append carries only the changed rows.
     expectNativeProgressAppend(0, [
       planUpdate("tool two"),
-      taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
       taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
     ]);
     expectNativeProgressAppend(2, [
-      planUpdate("tool three"),
       taskUpdate(contentTaskId("item"), "tool one", "complete"),
       taskUpdate(contentTaskId("item"), "tool two", "complete"),
       taskUpdate(contentTaskId("item"), "tool three", "complete"),
@@ -2638,10 +2629,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       planUpdate("slow tool"),
       taskUpdate(contentTaskId("item"), "slow tool", "in_progress"),
     ]);
-    expectNativeProgressAppend(0, [
-      planUpdate("slow tool"),
-      taskUpdate(contentTaskId("item"), "slow tool", "complete"),
-    ]);
+    expectNativeProgressAppend(0, [taskUpdate(contentTaskId("item"), "slow tool", "complete")]);
     expect(startSlackStreamMock.mock.invocationCallOrder[0]).toBeLessThan(
       appendSlackStreamMock.mock.invocationCallOrder[0] ?? 0,
     );
@@ -3010,80 +2998,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
   });
 
-  it("removes all failed buffered finals from production-style delivery counts", async () => {
-    mockedNativeStreaming = true;
-    mockedDispatcherCapturesDeliveryErrors = true;
-    mockedDispatchSequence = [
-      { kind: "final", payload: { text: "first buffered" } },
-      { kind: "final", payload: { text: "second buffered" } },
-    ];
-    const session = {
-      channel: "C123",
-      threadTs: THREAD_TS,
-      stopped: false,
-      delivered: false,
-      pendingText: "first buffered",
-    };
-    startSlackStreamMock.mockResolvedValueOnce(session);
-    appendSlackStreamMock.mockImplementationOnce(async () => {
-      session.pendingText += "\nsecond buffered";
-      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
-    });
-    stopSlackStreamMock.mockRejectedValueOnce(
-      new TestSlackStreamNotDeliveredError("first buffered\nsecond buffered", "user_not_found"),
-    );
-    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        cfg: { messages: { statusReactions: { enabled: true } } },
-        ackReactionMessageTs: "171234.111",
-        ackReactionPromise: Promise.resolve(true),
-      }),
-    );
-
-    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
-    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes all failed buffered tools from production-style delivery counts", async () => {
-    mockedNativeStreaming = true;
-    mockedDispatcherCapturesDeliveryErrors = true;
-    mockedDispatchSequence = [
-      { kind: "tool", payload: { text: "first tool" } },
-      { kind: "tool", payload: { text: "second tool" } },
-    ];
-    const session = {
-      channel: "C123",
-      threadTs: THREAD_TS,
-      stopped: false,
-      delivered: false,
-      pendingText: "first tool",
-    };
-    startSlackStreamMock.mockResolvedValueOnce(session);
-    appendSlackStreamMock.mockImplementationOnce(async () => {
-      session.pendingText += "\nsecond tool";
-      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
-    });
-    stopSlackStreamMock.mockRejectedValueOnce(
-      new TestSlackStreamNotDeliveredError("first tool\nsecond tool", "user_not_found"),
-    );
-    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
-
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        cfg: { messages: { statusReactions: { enabled: true } } },
-        ackReactionMessageTs: "171234.111",
-        ackReactionPromise: Promise.resolve(true),
-      }),
-    );
-
-    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
-    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
-    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps a buffered final acknowledged when a later block flushes the stream", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
@@ -3341,7 +3255,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
     expectNativeProgressStart([planUpdate("bash"), taskUpdate(taskId, "bash", "in_progress")]);
-    expectNativeProgressAppend(0, [planUpdate("bash"), taskUpdate(taskId, "bash", "complete")]);
+    expectNativeProgressAppend(0, [taskUpdate(taskId, "bash", "complete")]);
     expect(startSlackStreamMock.mock.invocationCallOrder[0]).toBeLessThan(
       appendSlackStreamMock.mock.invocationCallOrder[0] ?? 0,
     );
@@ -3402,9 +3316,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       expect.stringMatching(/^command_call_1_[a-f0-9]{8}$/),
     ]);
     expect(taskUpdates.at(0)?.id).toEqual(expect.stringMatching(/^command_call_1_[a-f0-9]{8}$/));
-    expect(taskUpdates).toContainEqual(
-      taskUpdate(taskUpdates.at(0)?.id, "bash", "complete", { details: "completed" }),
-    );
+    expect(taskUpdates).toContainEqual(taskUpdate(taskUpdates.at(0)?.id, "bash", "complete"));
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
@@ -3681,10 +3593,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       planUpdate("failing tool"),
       taskUpdate(contentTaskId("item"), "failing tool", "in_progress"),
     ]);
-    expectNativeProgressAppend(0, [
-      planUpdate("failing tool"),
-      taskUpdate(contentTaskId("item"), "failing tool", "error"),
-    ]);
+    expectNativeProgressAppend(0, [taskUpdate(contentTaskId("item"), "failing tool", "error")]);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
     const deliverParams = requireRecord(
@@ -3710,7 +3619,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expectMockCallArgFields(stopSlackStreamMock, 0, "native progress stream stop", {
       chunks: [
-        planUpdate("tool three"),
         taskUpdate(contentTaskId("item"), "tool one", "complete"),
         taskUpdate(contentTaskId("item"), "tool two", "complete"),
         taskUpdate(contentTaskId("item"), "tool three", "complete"),
@@ -3735,7 +3643,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
     ]);
     expectNativeProgressAppend(2, [
-      planUpdate("Shelling"),
       taskUpdate(contentTaskId("item"), "tool one", "complete"),
       taskUpdate(contentTaskId("item"), "tool two", "complete"),
       taskUpdate(contentTaskId("item"), "tool three", "complete"),
@@ -3766,10 +3673,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       planUpdate("Shelling"),
       taskUpdate(taskId, "bash", "in_progress", { details: "12345…uvwxyz" }),
     ]);
-    expectNativeProgressAppend(0, [
-      planUpdate("Shelling"),
-      taskUpdate(taskId, "bash", "complete", { details: "12345…uvwxyz" }),
-    ]);
+    // Slack appends `details` per task_update; the unchanged command is not resent.
+    expectNativeProgressAppend(0, [taskUpdate(taskId, "bash", "complete")]);
   });
 
   it("preserves patch item identity in native Slack progress task updates", async () => {
@@ -3793,10 +3698,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       planUpdate("updated Slack progress tests"),
       taskUpdate(taskId, "updated Slack progress tests", "in_progress"),
     ]);
-    expectNativeProgressAppend(0, [
-      planUpdate("updated Slack progress tests"),
-      taskUpdate(taskId, "updated Slack progress tests", "complete"),
-    ]);
+    expectNativeProgressAppend(0, [taskUpdate(taskId, "updated Slack progress tests", "complete")]);
   });
 
   it("preserves text Slack progress lines after a draft boundary status update", async () => {
@@ -3944,7 +3846,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("forces a new draft message on assistant boundaries in partial mode", async () => {
+  it("clears interrupted partial previews when the turn finishes silently", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "partial";
@@ -3959,8 +3861,28 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    // Detached-message cleanup is card-only: a rotated partial preview still
-    // holds streamed assistant text and must survive dispatch closeout.
+    expect(draftStream.clear).toHaveBeenCalledOnce();
+    expect(draftStream.dropDetachedMessages).toHaveBeenCalledOnce();
+    expect(draftStream.dropDetachedMessages.mock.invocationCallOrder[0]).toBeGreaterThan(
+      draftStream.clear.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("preserves interrupted partial previews when a final reply is delivered", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedReplyOptionEvents = [
+      { kind: "partial", text: "first chunk" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "second chunk" },
+    ];
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.dropDetachedMessages).not.toHaveBeenCalled();
   });
 
@@ -4223,6 +4145,123 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
     expect(draftUpdateTexts(draftStream).join("\n")).not.toMatch(/Working|💬|•|⏱️/u);
+  });
+
+  it("uses only compact commentary and replaces it with the final answer", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedNativeStreaming = true;
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the current Slack behavior.",
+      },
+      {
+        kind: "tool_start",
+        itemId: "tool-1",
+        name: "bash",
+        phase: "start",
+        args: { command: "pnpm test" },
+      },
+      {
+        kind: "command_output",
+        itemId: "tool-1",
+        name: "bash",
+        phase: "end",
+        title: "pnpm test",
+        exitCode: 0,
+      },
+      { kind: "reasoning", text: "Considering the transport choice." },
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Running the checklist.",
+        steps: [{ step: "Patch", status: "in_progress" }],
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              style: "compact",
+              nativeTaskCards: true,
+              label: false,
+              commentary: true,
+              toolProgress: false,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    expect(draftStream.update.mock.calls.every(([update]) => typeof update === "string")).toBe(
+      true,
+    );
+    expectLastDraftUpdateText(draftStream, "_Checking the current Slack behavior._");
+    expect(draftUpdateTexts(draftStream).join("\n")).not.toMatch(
+      /pnpm test|Considering the transport choice|Running the checklist|Patch/u,
+    );
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "compact progress final edit", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: FINAL_REPLY_TEXT,
+    });
+    const finalEdit = requireRecord(
+      requireMockCall(finalizeSlackPreviewEditMock, 0, "compact progress final edit")[0],
+      "compact progress final edit",
+    );
+    expect(finalEdit.blocks).toBeUndefined();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("falls back to normal delivery when a compact final edit fails", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking the current Slack behavior.",
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              style: "compact",
+              label: false,
+              commentary: true,
+              toolProgress: false,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
   it("uses the enterprise event client for Slack commentary drafts", async () => {
@@ -4674,6 +4713,23 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves normal final delivery when stale-preview cleanup fails", async () => {
+    const draftStream = createDraftStreamStub();
+    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "Photo", mediaUrl: "https://example.com/a.png" },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the preview and sends media-only for TTS supplement finals", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -4878,8 +4934,53 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     ]);
   });
 
-  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+  it.each([false, true])(
+    "falls back with visible text when TTS supplement preview finalization fails (already delivered: %s)",
+    async (visibleTextAlreadyDelivered) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedReplyThreadTsSequence = [undefined];
+      const ttsSupplement = {
+        spokenText: "Spoken answer",
+        ...(visibleTextAlreadyDelivered ? { visibleTextAlreadyDelivered: true } : {}),
+      };
+      mockedDispatchSequence = [
+        {
+          kind: "final",
+          payload: {
+            mediaUrl: "https://example.com/tts.mp3",
+            audioAsVoice: true,
+            spokenText: "Spoken answer",
+            ttsSupplement,
+          },
+        },
+      ];
+
+      await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+      expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+      expect(draftStream.discardPending).toHaveBeenCalled();
+      expect(draftStream.clear).toHaveBeenCalledTimes(1);
+      const delivered = requireRecord(
+        requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+        "deliver replies params",
+      );
+      expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+      expect(delivered.replies).toEqual([
+        {
+          text: "Spoken answer",
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement,
+        },
+      ]);
+    },
+  );
+
+  it("preserves TTS preview fallback delivery when its cleanup fails", async () => {
     const draftStream = createDraftStreamStub();
+    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedReplyThreadTsSequence = [undefined];
     mockedDispatchSequence = [
@@ -4896,8 +4997,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
-    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
-    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     const delivered = requireRecord(
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],

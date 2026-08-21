@@ -52,10 +52,17 @@ export type SkillWorkshopEvaluation = {
 
 export type SkillWorkshopProposal = {
   key: string;
+  kind: "create" | "update";
   slug: string;
   name: string;
   oneLine: string;
   body: string;
+  /**
+   * A proposal inspected through the gateway may legitimately have an empty
+   * body, so emptiness alone cannot mean "not fetched yet". Cold entries from
+   * the manifest carry `false`.
+   */
+  bodyLoaded: boolean;
   status: SkillWorkshopProposalStatus;
   origin?: {
     agentId?: string;
@@ -77,6 +84,7 @@ export type SkillWorkshopProposal = {
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
 export type SkillWorkshopAction = "apply" | "evaluate" | "revise" | "reject";
 export type SkillWorkshopMode = "board" | "today";
+export type SkillWorkshopAppliedDiffMode = "changes" | "full";
 
 export type SkillWorkshopActionBusy = {
   key: string;
@@ -89,21 +97,110 @@ export type SkillWorkshopActionNotice = {
   slug: string;
 };
 
+export type SkillWorkshopProposalDecision = {
+  proposalId: string;
+  expectedRevisionHash: string | null;
+};
+
+type SkillWorkshopAppliedRevision = {
+  proposal: SkillWorkshopProposal;
+  version: number;
+  operation: SkillWorkshopProposal["kind"];
+  previous: SkillWorkshopProposal | null;
+};
+
+export type SkillWorkshopAppliedSkill = {
+  slug: string;
+  latest: SkillWorkshopProposal;
+  revisions: SkillWorkshopAppliedRevision[];
+};
+
+function compareWorkshopProposals(
+  left: SkillWorkshopProposal,
+  right: SkillWorkshopProposal,
+): number {
+  const timeDifference = (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt);
+  if (timeDifference !== 0) {
+    return timeDifference;
+  }
+  if (left.key === right.key) {
+    return 0;
+  }
+  return left.key < right.key ? 1 : -1;
+}
+
+function matchesWorkshopQuery(proposal: SkillWorkshopProposal, query: string): boolean {
+  return `${proposal.name} ${proposal.oneLine} ${proposal.slug}`.toLowerCase().includes(query);
+}
+
+function groupSkillWorkshopAppliedSkills(
+  proposals: SkillWorkshopProposal[],
+): SkillWorkshopAppliedSkill[] {
+  const revisionsBySlug = new Map<string, [SkillWorkshopProposal, ...SkillWorkshopProposal[]]>();
+  const applied = proposals
+    .filter((proposal) => proposal.status === "applied")
+    .toSorted(compareWorkshopProposals);
+  for (const proposal of applied) {
+    const revisions = revisionsBySlug.get(proposal.slug);
+    if (revisions) {
+      revisions.push(proposal);
+    } else {
+      revisionsBySlug.set(proposal.slug, [proposal]);
+    }
+  }
+  return Array.from(revisionsBySlug, ([slug, proposalsForSkill]) => ({
+    slug,
+    latest: proposalsForSkill[0],
+    revisions: proposalsForSkill.map((proposal, index) => {
+      const version = proposalsForSkill.length - index;
+      return {
+        proposal,
+        version,
+        operation: proposal.kind,
+        previous: proposalsForSkill[index + 1] ?? null,
+      };
+    }),
+  }));
+}
+
+export function findSkillWorkshopAppliedPredecessor(
+  proposals: SkillWorkshopProposal[],
+  key: string,
+): SkillWorkshopProposal | null {
+  for (const skill of groupSkillWorkshopAppliedSkills(proposals)) {
+    const revision = skill.revisions.find(({ proposal }) => proposal.key === key);
+    if (revision) {
+      return revision.previous;
+    }
+  }
+  return null;
+}
+
+export function filterSkillWorkshopAppliedSkills(
+  proposals: SkillWorkshopProposal[],
+  query: string,
+): SkillWorkshopAppliedSkill[] {
+  const q = query.trim().toLowerCase();
+  return groupSkillWorkshopAppliedSkills(proposals).filter(
+    (skill) => !q || skill.revisions.some(({ proposal }) => matchesWorkshopQuery(proposal, q)),
+  );
+}
+
 export function filterSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
   statusFilter: SkillWorkshopStatusFilter,
   query: string,
 ): SkillWorkshopProposal[] {
   const q = query.trim().toLowerCase();
+  if (statusFilter === "applied") {
+    return filterSkillWorkshopAppliedSkills(proposals, query).map((skill) => skill.latest);
+  }
   return proposals.filter((p) => {
     if (statusFilter !== "all" && p.status !== statusFilter) {
       return false;
     }
-    if (q) {
-      const hay = `${p.name} ${p.oneLine} ${p.slug}`.toLowerCase();
-      if (!hay.includes(q)) {
-        return false;
-      }
+    if (q && !matchesWorkshopQuery(p, q)) {
+      return false;
     }
     return true;
   });

@@ -1,3 +1,4 @@
+import { inferControlUiFocusBasePath } from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
@@ -69,6 +70,7 @@ const APP_ROUTE_DEFINITIONS = {
   cron: { path: "/automations", aliases: ["/cron"] },
   tasks: { path: "/tasks" },
   devices: { path: "/settings/devices", aliases: ["/nodes"] },
+  "cloud-workers": { path: "/settings/cloud-workers" },
   plugin: { path: "/plugin" },
 } as const;
 
@@ -309,6 +311,10 @@ function isRouteOwnedBasePath(basePath: string): boolean {
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
+  const focusBasePath = inferControlUiFocusBasePath(pathname);
+  if (focusBasePath !== null) {
+    return focusBasePath;
+  }
   const isMountRoot = pathname.trim().endsWith("/");
   const normalizedPath = normalizePath(pathname);
   if (normalizedPath.toLowerCase().endsWith("/index.html")) {

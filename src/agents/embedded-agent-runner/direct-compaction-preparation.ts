@@ -17,6 +17,7 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
+import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import {
@@ -285,22 +286,7 @@ export async function prepareDirectCompactionAttempt(
     const reason = formatErrorMessage(err);
     return { ok: false as const, result: fail(reason, err) };
   }
-  const runtimeCompat =
-    runtimeModel.compat && typeof runtimeModel.compat === "object"
-      ? (runtimeModel.compat as Record<string, unknown>)
-      : undefined;
-  const thinkingFormat =
-    typeof runtimeCompat?.thinkingFormat === "string" ? runtimeCompat.thinkingFormat : undefined;
-  const supportedReasoningEfforts =
-    runtimeCompat?.supportedReasoningEfforts === null ||
-    (Array.isArray(runtimeCompat?.supportedReasoningEfforts) &&
-      runtimeCompat.supportedReasoningEfforts.every((effort) => typeof effort === "string"))
-      ? (runtimeCompat.supportedReasoningEfforts as readonly string[] | null)
-      : undefined;
-  const thinkingCompat =
-    thinkingFormat !== undefined || supportedReasoningEfforts !== undefined
-      ? { thinkingFormat, supportedReasoningEfforts }
-      : undefined;
+  const thinkingCompat = projectModelThinkingCompat(runtimeModel.compat);
   const thinkingCatalogEntry = {
     provider: runtimeModel.provider,
     id: runtimeModel.id,

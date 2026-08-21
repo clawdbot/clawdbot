@@ -140,6 +140,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     setFinalPromptText: (prompt: string) => void;
     markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
     markYieldAborted: () => void;
+    isRunBudgetTimeoutAbort: (error: unknown) => boolean;
     readYieldState: () => Pick<
       PromptErrorInput,
       "yieldAbortSettled" | "yieldDetected" | "yieldMessage"
@@ -312,7 +313,6 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       prompt: promptContext.promptSubmission.prompt,
       skipPromptSubmission,
     });
-
     const reserveTokens = input.getCompactionReserveTokens();
     let state: PromptPreflightInput["state"] = {
       ...input.lifecycle.readState(),
@@ -399,7 +399,12 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });
-    if (promptErrorOutcome.promptFailure) {
+    // The timeout owner records its terminal before aborting the prompt. That
+    // abort is not a provider failure and must leave timeout salvage eligible.
+    if (
+      promptErrorOutcome.promptFailure &&
+      !input.lifecycle.isRunBudgetTimeoutAbort(promptErrorOutcome.promptFailure.error)
+    ) {
       patchState({
         promptError: promptErrorOutcome.promptFailure.error,
         promptErrorSource: promptErrorOutcome.promptFailure.source,

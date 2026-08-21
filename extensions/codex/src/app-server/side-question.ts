@@ -70,7 +70,8 @@ import {
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
@@ -124,7 +125,7 @@ import {
   resolveCodexBindingModelProviderFallback,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
-import { filterToolsForVisionInputs } from "./vision-tools.js";
+import { filterCodexVisionTools } from "./vision-tools.js";
 import {
   resolveCodexWebSearchPlan,
   type CodexNativeWebSearchSupport,
@@ -171,6 +172,8 @@ export async function runCodexAppServerSideQuestion(
   options: {
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
+    /** Private app-server request identity; public side-run identity remains params.model. */
+    runtimeModelId?: string;
     nativeHookRelay?: {
       enabled?: boolean;
       events?: readonly NativeHookRelayEvent[];
@@ -245,7 +248,7 @@ export async function runCodexAppServerSideQuestion(
         bindingModelProvider: binding.modelProvider,
       }));
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: supervisionModelSelection?.model ?? params.model,
+    model: supervisionModelSelection?.model ?? options.runtimeModelId ?? params.model,
     modelProvider,
     authProfileId,
     authProfileStore: preparedRuntimeAuth.authProfileStore,
@@ -299,7 +302,7 @@ export async function runCodexAppServerSideQuestion(
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     sideRunParams,
     params.sandbox ?? undefined,
-    { sandboxExecServerEnabled },
+    { agentId: sideRunParams.agentId, sandboxExecServerEnabled },
   );
   const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
     sandbox: params.sandbox ?? undefined,
@@ -310,6 +313,7 @@ export async function runCodexAppServerSideQuestion(
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
     sessionId: sideRunParams.sessionId,
+    agentId: sideRunParams.agentId,
     sandbox: params.sandbox,
     sandboxEnvironmentSelected: sandboxEnvironmentRequired,
     surface: "/btw side-question mode",
@@ -500,7 +504,7 @@ export async function runCodexAppServerSideQuestion(
           return undefined;
         }
         if (request.method === "mcpServer/elicitation/request") {
-          return handleCodexAppServerElicitationRequest({
+          const approvalResult = await routeCodexAppServerElicitationRequest({
             requestParams: request.params,
             paramsForRun: sideRunParams,
             threadId: childThreadId,
@@ -508,6 +512,11 @@ export async function runCodexAppServerSideQuestion(
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
             signal: runAbortController.signal,
           });
+          return approvalResult.kind === "handled"
+            ? approvalResult.response
+            : createCodexElicitationResponse("decline", null, {
+                message: "OpenClaw Codex side questions do not support interactive MCP input.",
+              });
         }
         if (request.method === "item/tool/requestUserInput") {
           return isSideUserInputRequest(request.params, childThreadId, turnId)
@@ -647,7 +656,6 @@ export async function runCodexAppServerSideQuestion(
           events: nativeHookRelayEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
-          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
         })
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
@@ -983,6 +991,7 @@ function buildSideRunAttemptParams(
     authStorage: params.preparedRuntimeAuth.authStorage,
     authProfileStore: params.preparedRuntimeAuth.authProfileStore,
     modelRegistry: params.preparedRuntimeAuth.modelRegistry,
+    preparedModelRuntime: params.preparedModelRuntime,
     ...(params.preparedRuntimeAuth.resolvedApiKey
       ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
       : {}),
@@ -1016,6 +1025,7 @@ async function createCodexSideToolBridge(input: {
     ({ id: input.params.model, provider: input.params.provider } as never);
   const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
+  const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   if (supportsModelTools(runtimeModel)) {
     const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
       .createOpenClawCodingTools;
@@ -1049,6 +1059,7 @@ async function createCodexSideToolBridge(input: {
         resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
       }),
       config: input.params.cfg,
+      preparedModelRuntime: input.params.preparedModelRuntime,
       abortSignal: input.signal,
       modelProvider: runtimeModel.provider,
       modelId: input.params.model,
@@ -1062,6 +1073,7 @@ async function createCodexSideToolBridge(input: {
         workspaceDir: input.cwd,
       }),
       suppressManagedWebSearch: false,
+      webFetchHostnameAllowlistRef,
       ...(input.params.messageProvider || input.params.messageChannel
         ? {
             messageProvider: messageToolProvider,
@@ -1107,9 +1119,9 @@ async function createCodexSideToolBridge(input: {
       requireExplicitMessageTarget: true,
     });
     const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
-    tools = filterToolsForVisionInputs(codexFilteredTools, {
+    tools = filterCodexVisionTools(codexFilteredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
-      hasInboundImages: false,
+      nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled,
     });
   }
   const requestedWebSearchPlan = resolveCodexWebSearchPlan({
@@ -1118,6 +1130,7 @@ async function createCodexSideToolBridge(input: {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
     webSearchAllowed: tools.some((tool) => tool.name === "web_search"),
   });
+  webFetchHostnameAllowlistRef.value = requestedWebSearchPlan.webFetchHostnameAllowlist;
   // Codex forks do not accept dynamicTools, so managed web_search cannot be
   // registered on a side thread. Keep it only as the native-search policy signal.
   const webSearchPlan =

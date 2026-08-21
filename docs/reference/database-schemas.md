@@ -31,6 +31,19 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The placement-move table uses this same-version rule for its nullable bare
+`abandon_source INTEGER` column. The feature lazily ensures the column on first
+move use. `NULL` means ordinary reconcile-first movement; `1` records the
+operator's explicit offline-device abandonment decision so restart recovery
+cannot accidentally resume remote reconciliation. Older readers ignore the
+column and can reopen the same database safely.
+
+Conversation associations use the same rule for the nullable bare
+`route_context_json TEXT` column. The database-open repair ensures the column
+for updated binaries. Older readers ignore it and can reopen and update the
+same database safely; their association update invalidates context captured by
+a newer writer so it cannot be replayed after re-upgrade.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Preflight a target release
@@ -86,6 +99,12 @@ Version 3 was an unshipped development step folded into version 4.
 | 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))              | `v2026.7.2-beta.4`  |
 | 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473)) | `v2026.7.2-beta.5`  |
 | 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
+| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
+| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
+
+### State schema 9
+
+Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. During migration, a foreign default-layout row is re-anchored to the in-root counterpart when that file exists. It is deleted only when the same agent already holds its in-root registration, because dual default-layout registrations cannot produce a valid combined session list. Otherwise, the absolute row is preserved, so genuine external registrations are never deleted. This keeps a copied state directory self-contained without dropping supported external database paths.
 
 ## Integrity checks
 
@@ -137,6 +156,12 @@ The general procedure is:
 2. In one transaction, drop every table, index, trigger, and column introduced after the target version.
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
+
+### Example: state schema 9 to 8
+
+Schema 8 expects every `agent_databases.path` value to be absolute. Before lowering `user_version`, inspect each registry row on the same platform that wrote it. Leave absolute external paths unchanged; replace every relative path with its platform-native absolute form by resolving it against the state directory that owns `state/openclaw.sqlite`. Then set both `PRAGMA user_version` and `schema_meta.schema_version` to 8 in the same transaction.
+
+Do not lower the version while relative registry rows remain. A schema 8 build interprets them relative to its process working directory rather than the copied state directory.
 
 ### Example: state schema 7 to 6
 

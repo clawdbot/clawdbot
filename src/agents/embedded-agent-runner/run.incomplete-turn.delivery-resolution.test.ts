@@ -397,7 +397,7 @@ describe("incomplete-turn delivery resolution", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 
-  it("surfaces incomplete-turn text for token-limited partial answers", () => {
+  it("keeps token-limited partial answers deliverable", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText(
       makeIncompleteTurnParams(
         {
@@ -410,6 +410,25 @@ describe("incomplete-turn delivery resolution", () => {
           }),
         },
         { payloadCount: 1 },
+      ),
+    );
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("surfaces incomplete-turn text for token-limited turns with no visible text", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText(
+      makeIncompleteTurnParams(
+        {
+          assistantTexts: [],
+          lastAssistant: makeLastAssistant({
+            stopReason: "length",
+            provider: "ollama",
+            model: "qwen3.5",
+            content: [],
+          }),
+        },
+        { payloadCount: 0 },
       ),
     );
 

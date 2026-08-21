@@ -8,6 +8,7 @@ import { getShellConfig } from "../../agents/shell-utils.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { createRunRegistry } from "./registry.js";
 import type {
   ManagedRun,
@@ -34,7 +35,6 @@ type StartingScope = {
   replacement?: Promise<ManagedRun>;
 };
 
-const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
 const loadSupervisorLogRuntime = createLazyRuntimeModule(

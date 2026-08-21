@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
+import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+import { loadWebMediaRaw } from "./web-media.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
   getLoadedChannelPlugin: vi.fn<
@@ -20,6 +23,8 @@ const channelPluginMocks = vi.hoisted(() => ({
       | undefined
   >(() => undefined),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: () => undefined,
@@ -111,6 +116,156 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeUndefined();
     expect(result.localRoots).not.toContain("/Users/peter/Pictures");
+  });
+
+  it.each([
+    {
+      name: "global sender id",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "id:attacker": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat", requesterSenderId: "attacker" },
+    },
+    {
+      name: "agent sender username",
+      cfg: {
+        tools: { allow: ["read"] },
+        agents: {
+          list: [
+            {
+              id: "restricted",
+              workspace: "/tmp/restricted-workspace",
+              tools: {
+                toolsBySender: { "username:blocked-user": { deny: ["read"] } },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      identity: {
+        agentId: "restricted",
+        messageProvider: "requestchat",
+        requesterSenderUsername: "blocked-user",
+      },
+    },
+    {
+      name: "session-derived channel sender id",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "channel:requestchat:attacker": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: {
+        sessionKey: "agent:main:requestchat:group:ops",
+        requesterSenderId: "attacker",
+      },
+    },
+    {
+      name: "sender wildcard",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "*": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat", requesterSenderId: "attacker" },
+    },
+    {
+      name: "sender wildcard without identity",
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "*": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      identity: { messageProvider: "requestchat" },
+    },
+  ])("does not enable host reads for $name policy", ({ cfg, identity }) => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      ...identity,
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeUndefined();
+    expect(result.localRoots).not.toContain("/Users/peter/Pictures");
+  });
+
+  it("keeps host reads enabled when agent sender policy allows the requester", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+        toolsBySender: { "*": { deny: ["read"] } },
+      },
+      agents: {
+        list: [
+          {
+            id: "trusted",
+            workspace: "/tmp/trusted-workspace",
+            tools: { toolsBySender: { "id:trusted-user": {} } },
+          },
+        ],
+      },
+    };
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "trusted",
+      messageProvider: "requestchat",
+      requesterSenderId: "trusted-user",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeTypeOf("function");
+    expect(result.localRoots).toContain("/Users/peter/Pictures");
+  });
+
+  it("blocks denied workspace attachments while preserving managed artifacts", async () => {
+    const baseDir = tempDirs.make("openclaw-media-sender-policy-");
+    const stateDir = path.join(baseDir, "state");
+    const workspaceDir = path.join(baseDir, "workspace");
+    const workspaceFile = path.join(workspaceDir, "private.bin");
+    const managedFile = path.join(stateDir, "media", "tool-image-generation", "result.bin");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await fs.mkdir(path.dirname(managedFile), { recursive: true });
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(workspaceFile, "private");
+    await fs.writeFile(managedFile, "managed");
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+        toolsBySender: { "id:attacker": { deny: ["read"] } },
+      },
+      agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
+    };
+
+    const deniedAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "restricted",
+      messageProvider: "requestchat",
+      requesterSenderId: "attacker",
+      mediaSources: [workspaceFile],
+    });
+    await expect(
+      loadWebMediaRaw(workspaceFile, buildOutboundMediaLoadOptions({ mediaAccess: deniedAccess })),
+    ).rejects.toThrow(/not under an allowed directory/i);
+
+    const managedAccess = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: "restricted",
+      messageProvider: "requestchat",
+      requesterSenderId: "attacker",
+      mediaSources: [managedFile],
+    });
+    const loaded = await loadWebMediaRaw(
+      managedFile,
+      buildOutboundMediaLoadOptions({ mediaAccess: managedAccess }),
+    );
+    expect(loaded.buffer.toString()).toBe("managed");
   });
 
   it("honors plugin-owned group tool policy with channel metadata", () => {

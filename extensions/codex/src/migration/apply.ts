@@ -49,8 +49,8 @@ import {
 } from "../app-server/shared-client.js";
 import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
 import { applyCodexAuthItems, type CodexAuthSource } from "./auth.js";
-import { buildCodexMigrationPlan } from "./plan.js";
 import {
+  buildCodexMigrationPlan,
   buildCodexPluginsConfigValue,
   CODEX_PLUGIN_CONFIG_ITEM_ID,
   CODEX_PLUGIN_CONFIG_PATH,

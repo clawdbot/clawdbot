@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AcpElicitationHandler } from "@openclaw/acp-core/runtime/types";
 import { detectMime } from "@openclaw/media-core/mime";
 // Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -36,7 +37,11 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import {
+  createAcpSessionMeta,
+  createAcpTestConfig,
+  createAcpTestReplyDispatcherFixture as createDispatcher,
+} from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
@@ -310,23 +315,6 @@ function dispatcherCall(
     mockArg(fn as unknown as MockCallSource, index, 0, `dispatcher call ${index}`),
     "dispatcher call",
   );
-}
-
-function createDispatcher(): {
-  dispatcher: ReplyDispatcher;
-  counts: Record<"tool" | "block" | "final", number>;
-} {
-  const counts = { tool: 0, block: 0, final: 0 };
-  const dispatcher: ReplyDispatcher = {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => counts),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-  return { dispatcher, counts };
 }
 
 function setReadyAcpResolution() {
@@ -611,6 +599,34 @@ describe("tryDispatchAcpReplyCore", () => {
       clearSink();
       clearCollection();
     }
+  });
+
+  it("passes one turn-scoped elicitation handler and fences it after admission closes", async () => {
+    setReadyAcpResolution();
+    let onElicitation: AcpElicitationHandler | undefined;
+    managerMocks.runTurn.mockImplementationOnce(async (input: unknown) => {
+      const turn = input as {
+        onElicitation?: typeof onElicitation;
+        onEvent?: (event: unknown) => Promise<void>;
+      };
+      onElicitation = turn.onElicitation;
+      await turn.onEvent?.({ type: "done" });
+    });
+
+    await runDispatch({ bodyForAgent: "ask me" });
+
+    expect(onElicitation).toBeTypeOf("function");
+    const response = await onElicitation!(
+      {
+        mode: "url",
+        sessionId: "acp-session",
+        message: "Continue",
+        elicitationId: "url-1",
+        url: "https://example.com",
+      },
+      { requestId: "rpc-1", signal: new AbortController().signal },
+    );
+    expect(response.action).toBe("cancel");
   });
 
   it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {

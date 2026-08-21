@@ -10,104 +10,21 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  decisionDisplay,
+  presentResult,
+  receiptPage,
+} from "./activity-run-inspector.test-fixtures.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/activity-run-inspector");
-const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
+const proofDir = path.resolve(".artifacts/control-ui-e2e/activity-run-inspector-r6");
 
 let browser: Browser;
 let server: ControlUiE2eServer;
-
-function presentResult(runId: string, executionId = "execution-safe-ref"): AuditRunInspectResult {
-  return {
-    schemaVersion: 1,
-    run: { runId, executionId, status: "known" },
-    identity: {
-      state: "present",
-      context: {
-        schemaVersion: 1,
-        contextId: "context-safe-ref",
-        executionId,
-        runId,
-        createdAt: 1_786_000_000_000,
-        trustDomain: { kind: "gateway-cell", domainRef: hmacRef, state: "present" },
-        invoker: { state: "absent" },
-        ingress: {
-          kind: "gateway-client",
-          boundary: "agent-command.gateway",
-          sourceRef: hmacRef,
-          state: "present",
-        },
-        agentPrincipal: {
-          kind: "agent",
-          domainRef: hmacRef,
-          principalRef: "main",
-          displayLabel: "Primary agent",
-        },
-        agentDefinition: { definitionRef: "main", state: "unknown" },
-        runtimeInstance: { runtimeRef: hmacRef, kind: "gateway", state: "unsupported" },
-        representedSubject: {
-          principal: { kind: "person", domainRef: hmacRef, principalRef: hmacRef },
-          state: "unknown",
-        },
-        sponsor: {
-          principal: { kind: "service", domainRef: hmacRef, principalRef: hmacRef },
-          state: "unsupported",
-        },
-        applicableGrants: [{ grantRef: hmacRef, state: "absent" }],
-        assurance: [
-          { kind: "runtime-binding", evidenceRef: hmacRef, strength: "boundary-verified" },
-        ],
-        lineage: { parentRunId: "parent-safe-ref", depth: 1 },
-        coverageState: "unattributed",
-        missingEvidence: ["invoker.principal"],
-      },
-    },
-    decisions: [
-      {
-        schemaVersion: 1,
-        receiptId: "receipt-safe-ref",
-        contextId: "context-safe-ref",
-        executionId,
-        runId,
-        occurredAt: 1_786_000_000_000,
-        action: {
-          family: "run",
-          operation: "admission",
-          summary: "Run admission was recorded without identity-aware evaluation.",
-        },
-        decision: {
-          outcome: "not-applicable",
-          reasonCode: "run_admission_identity_not_evaluated",
-        },
-        enforcement: {
-          coverageState: "unattributed",
-          policyRefs: [],
-          grantRefs: [],
-          contextFieldsUsed: [],
-        },
-        source: {
-          owner: "agent-command",
-          recordRef: "context-safe-ref",
-          decisionBoundary: "agent-command.run-admission",
-        },
-        missingEvidence: ["invoker.principal"],
-        remediation: [
-          {
-            code: "no_identity_enforcement_claimed",
-            text: "Treat this receipt as attribution only; it does not prove authorization.",
-          },
-        ],
-      },
-    ],
-    coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
-    nextDecisionCursor: "1",
-  };
-}
 
 function unavailableResult(params: {
   state: "unknown" | "unsupported";
@@ -123,7 +40,7 @@ function unavailableResult(params: {
       missingEvidence: ["identity.context"],
       remediation: params.remediation ?? [],
     },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state: params.state, missingEvidence: ["identity.context"] },
   };
 }
@@ -150,7 +67,7 @@ function ambiguousResult(
         },
       ],
     },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
     ...(nextExecutionCursor ? { nextExecutionCursor } : {}),
   };
@@ -230,12 +147,13 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
-      const runTab = page.getByRole("tab", { name: "Run inspector" });
-      await expect.poll(() => runTab.getAttribute("aria-selected")).toBe("true");
-      const modePanel = page.getByRole("tabpanel");
-      await expect
-        .poll(() => modePanel.getAttribute("aria-labelledby"))
-        .toBe("activity-mode-tab-run");
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+      const modePanel = page.locator("#activity-mode-panel");
+      expect(await modePanel.getAttribute("role")).toBeNull();
+      expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
+      const backToSessions = page.getByRole("link", { name: "Back to sessions" });
+      await backToSessions.waitFor();
+      expect(await backToSessions.getAttribute("href")).toBe("/activity");
       await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
       for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
         await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
@@ -271,6 +189,10 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
+      await backToSessions.click();
+      await page.getByRole("tab", { name: "Sessions" }).waitFor();
+      expect(await page.getByRole("tab").count()).toBe(2);
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
       const liveTab = page.getByRole("tab", { name: "Live activity" });
       await liveTab.focus();
       await expect
@@ -281,11 +203,495 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
-      expect(new URL(page.url()).search).toBe("");
+      expect(new URL(page.url()).search).toBe("?view=live");
+      await page.goBack();
+      await expect
+        .poll(() => page.getByRole("tab", { name: "Sessions" }).getAttribute("aria-selected"))
+        .toBe("true");
       await page.goBack();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
     } finally {
       await context.close();
+    }
+  });
+
+  it("pages, deep-links, and safely explains approval and unsupported receipts", async () => {
+    const privateApprovalReceiptId = "U2_R6_BROWSER_APPROVAL_RECEIPT_ID_SECRET_315c";
+    const privateResolutionRef = "U2_R6_BROWSER_RESOLUTION_REF_SECRET_f907";
+    const privateMessageReceiptId = "U2_R6_BROWSER_MESSAGE_RECEIPT_ID_SECRET_761e";
+    const privateEventId = "U2_R6_BROWSER_EVENT_ID_SECRET_b442";
+    const allowed = decisionDisplay({
+      id: "approval-decision:101",
+      summary: "An exec approval allowed the requested action.",
+      outcome: "allowed",
+      reasonCode: "operator_approval_allowed_by_reviewer",
+      coverageState: "enforced",
+      remediation: "No follow-up is required.",
+    });
+    const denied = decisionDisplay({
+      id: "approval-decision:102",
+      summary: "An exec approval stopped the requested action.",
+      outcome: "denied",
+      reasonCode: "operator_approval_denied_by_reviewer",
+      coverageState: "enforced",
+      remediation: "Review the denial before requesting a new action.",
+    });
+    Object.assign(denied, {
+      receiptId: privateApprovalReceiptId,
+      resolutionRef: privateResolutionRef,
+      command: "rm -rf /private/operator-path",
+      arguments: { token: "credential-value" },
+      payload: "raw-payload",
+    });
+    const expired = decisionDisplay({
+      id: "approval-decision:103",
+      summary: "An exec approval expired before a decision arrived.",
+      outcome: "denied",
+      reasonCode: "operator_approval_expired",
+      coverageState: "enforced",
+      remediation: "Request the action again and resolve the new approval before its deadline.",
+    });
+    const cancelled = decisionDisplay({
+      id: "approval-decision:104",
+      summary: "An exec approval was cancelled when the run ended.",
+      outcome: "denied",
+      reasonCode: "operator_approval_cancelled_run_aborted",
+      coverageState: "enforced",
+      remediation: "Start a new run if the action is still needed.",
+    });
+    const unknown = decisionDisplay({
+      id: "approval-decision:105",
+      summary: "A retained approval could not be bound to this execution.",
+      outcome: "unknown",
+      reasonCode: "operator_approval_execution_link_missing",
+      coverageState: "unknown",
+      remediation: "Inspect the exact retained binding before trusting attribution.",
+    });
+    const unsupported = decisionDisplay({
+      id: "approval-decision:106",
+      summary: "This observation has no Phase 0 enforcement contract.",
+      outcome: "not-applicable",
+      reasonCode: "observation_enforcement_unsupported",
+      coverageState: "unsupported",
+      remediation: "Treat this as an observation, not an authorization decision.",
+    });
+    const delivered = decisionDisplay({
+      id: "message-decision:2000000000007",
+      summary: "An outbound message was delivered.",
+      outcome: "allowed",
+      reasonCode: "message_delivered",
+      coverageState: "attribution-only",
+      remediation: "No follow-up is required.",
+      producer: "message-delivery",
+      family: "message",
+      operation: "send",
+    });
+    Object.assign(delivered, {
+      receiptId: privateMessageReceiptId,
+      eventId: privateEventId,
+    });
+    const firstPage = receiptPage([allowed, denied], "a:10:2");
+    const secondPage = receiptPage([expired, cancelled, unknown, unsupported, delivered]);
+    const context = await newContext();
+    await context.addInitScript(() => {
+      const recordedUrls: string[] = [];
+      const instrument = (method: "pushState" | "replaceState") => {
+        const original = history[method].bind(history);
+        history[method] = ((data: unknown, unused: string, url?: string | URL | null) => {
+          if (url !== undefined && url !== null) {
+            recordedUrls.push(String(url));
+          }
+          original(data, unused, url);
+        }) as History[typeof method];
+      };
+      instrument("pushState");
+      instrument("replaceState");
+      Object.defineProperty(window, "activityHistoryUrls", { value: recordedUrls });
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["audit.run.inspect"],
+      methodResponses: {
+        "audit.run.inspect": {
+          cases: [
+            { match: { decisionCursor: "a:10:2" }, response: secondPage },
+            { match: { runId: "receipt-matrix" }, response: firstPage },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}activity?view=run&run=receipt-matrix`);
+      await page.getByRole("list", { name: "Decision receipt list" }).waitFor();
+      await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
+      await page.getByText("Allowed", { exact: true }).first().waitFor();
+      await page.getByText("Enforced", { exact: true }).first().waitFor();
+      await page.getByText("operator_approval_allowed_by_reviewer", { exact: true }).waitFor();
+      await page.getByText("Display provenance", { exact: true }).waitFor();
+      await page.getByText("Verified producer", { exact: true }).waitFor();
+      await page.getByText("operator-approval", { exact: true }).waitFor();
+      await page.getByText("No follow-up is required.", { exact: true }).waitFor();
+      expect(
+        await page
+          .getByText("Policy references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("1");
+      expect(
+        await page
+          .getByText("Grant references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("1");
+
+      const deniedLink = page.getByText(denied.action.summary!, { exact: true }).locator("..");
+      await deniedLink.focus();
+      await page.keyboard.press("Enter");
+      await page.getByText("operator_approval_denied_by_reviewer", { exact: true }).waitFor();
+      expect(new URL(page.url()).searchParams.get("receipt")).toBe("approval-decision:102");
+      await page.reload();
+      await page.getByText("operator_approval_denied_by_reviewer", { exact: true }).waitFor();
+
+      await page.getByRole("button", { name: "Load more receipts" }).click();
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
+        runId: "receipt-matrix",
+        decisionCursor: "a:10:2",
+        decisionLimit: 50,
+      });
+      await page.getByText(expired.action.summary!, { exact: true }).click();
+      await page.getByText("operator_approval_expired", { exact: true }).waitFor();
+      const selectedUrl = new URL(page.url());
+      expect(selectedUrl.searchParams.get("receipt")).toBe("approval-decision:103");
+      expect(selectedUrl.searchParams.get("decision")).toBe("a:10:2");
+      await page.reload();
+      await page.getByText("operator_approval_expired", { exact: true }).waitFor();
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
+        runId: "receipt-matrix",
+        decisionCursor: "a:10:2",
+        decisionLimit: 50,
+      });
+
+      for (const [receipt, reasonCode] of [
+        [cancelled, "operator_approval_cancelled_run_aborted"],
+        [unknown, "operator_approval_execution_link_missing"],
+        [unsupported, "observation_enforcement_unsupported"],
+      ] as const) {
+        await page.getByText(receipt.action.summary!, { exact: true }).click();
+        await page.getByText(reasonCode, { exact: true }).waitFor();
+      }
+      await page.getByText("Unknown", { exact: true }).first().waitFor();
+      await page.getByText("Unsupported", { exact: true }).first().waitFor();
+      await page.getByText(delivered.action.summary!, { exact: true }).click();
+      await page.getByText("message_delivered", { exact: true }).waitFor();
+      expect(new URL(page.url()).searchParams.get("receipt")).toBe(
+        "message-decision:2000000000007",
+      );
+      const surfaces = await page.locator("body").evaluate((body) => {
+        const elements = [body, ...body.querySelectorAll<HTMLElement>("*")];
+        const historyUrls = (window as typeof window & { activityHistoryUrls?: readonly string[] })
+          .activityHistoryUrls;
+        return {
+          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+          visibleText: body instanceof HTMLElement ? body.innerText : "",
+          textContent: body.textContent ?? "",
+          aria: elements
+            .flatMap((element) =>
+              ["aria-label", "aria-labelledby", "aria-describedby", "title", "alt"].map((name) =>
+                element.getAttribute(name),
+              ),
+            )
+            .filter((value): value is string => value !== null)
+            .join("\n"),
+          hrefs: elements
+            .filter((element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement)
+            .flatMap((link) => [link.getAttribute("href") ?? "", link.href])
+            .join("\n"),
+          location: location.href,
+          historyState: JSON.stringify(history.state),
+          historyUrls: [...(historyUrls ?? [])].join("\n"),
+        };
+      });
+      const accessibilityTree = await page.locator("body").ariaSnapshot();
+      for (const hidden of [
+        "hidden-action-id",
+        "hidden-resource-id",
+        "hidden-target-id",
+        "hidden-evaluator-id",
+        "hidden-policy-id",
+        "hidden-grant-id",
+        "hidden-record-id",
+        "rm -rf",
+        "/private/operator-path",
+        "credential-value",
+        "raw-payload",
+        privateApprovalReceiptId,
+        privateResolutionRef,
+        privateMessageReceiptId,
+        privateEventId,
+      ]) {
+        for (const surface of [...Object.values(surfaces), accessibilityTree]) {
+          expect(surface).not.toContain(hidden);
+        }
+      }
+      await screenshot(page, "16-receipt-detail-message.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps generic receipt prose out of every Activity presentation surface", async () => {
+    const secrets = [
+      "U2_R6_BROWSER_RECEIPT_ID_SECRET_5e3d70",
+      "U2_R6_BROWSER_ACTION_ID_SECRET_4d1ac2",
+      "U2_R6_BROWSER_CONTEXT_ID_SECRET_a11c42",
+      "U2_R6_BROWSER_EXECUTION_ID_SECRET_5d00be",
+      "U2_R6_BROWSER_RUN_ID_SECRET_808c3e",
+      "U2_R6_BROWSER_RESOURCE_REF_SECRET_0ad831",
+      "U2_R6_BROWSER_TARGET_REF_SECRET_04f9e0",
+      "U2_R6_BROWSER_RECORD_REF_SECRET_3ab89a",
+      "U2_R6_BROWSER_EVALUATOR_REF_SECRET_1b8d53",
+      "U2_R6_BROWSER_OWNER_SECRET_ec0ffe",
+      "U2_R6_BROWSER_SUMMARY_SECRET_9fe28a",
+      "U2_R6_BROWSER_CODE_SECRET_724ac1",
+      "U2_R6_BROWSER_TEXT_SECRET_31db80",
+      "U2_R6_BROWSER_POLICY_REF_SECRET_30f6ac",
+      "U2_R6_BROWSER_GRANT_REF_SECRET_79d4e1",
+      "U2_R6_BROWSER_REASON_SECRET_1114e6",
+      "U2_R6_BROWSER_COMMAND_PATH_TOOL_INPUT_PERMISSION_METADATA_SECRET_b7114d",
+    ];
+    const response = receiptPage([
+      {
+        schemaVersion: 1,
+        selectorId: "decision-fact:1",
+        occurredAt: 1_786_000_000_000,
+        action: { family: "decision", operation: "record" },
+        decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
+        enforcement: {
+          coverageState: "unknown",
+          policyCount: 0,
+          grantCount: 0,
+          contextFieldsUsed: [],
+        },
+        provenance: { state: "unverified" },
+        missingEvidence: ["decision.display_provenance"],
+        remediation: [],
+      },
+    ]);
+    expect(response).not.toHaveProperty("decisions");
+
+    const context = await newContext({ video: true });
+    await context.addInitScript(() => {
+      const recordedUrls: string[] = [];
+      const instrument = (method: "pushState" | "replaceState") => {
+        const original = history[method].bind(history);
+        history[method] = ((data: unknown, unused: string, url?: string | URL | null) => {
+          if (url !== undefined && url !== null) {
+            recordedUrls.push(String(url));
+          }
+          original(data, unused, url);
+        }) as History[typeof method];
+      };
+      instrument("pushState");
+      instrument("replaceState");
+      Object.defineProperty(window, "activityHistoryUrls", { value: recordedUrls });
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["audit.run.inspect"],
+      methodResponses: { "audit.run.inspect": response },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}activity?view=run&run=receipt-matrix`);
+      await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
+      await page.getByText("Unknown", { exact: true }).first().waitFor();
+      await page
+        .getByText("Receipt-controlled explanations and next steps are hidden", {
+          exact: false,
+        })
+        .waitFor();
+      expect(
+        await page
+          .getByText("Policy references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("0");
+      expect(
+        await page
+          .getByText("Grant references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("0");
+
+      const surfaces = await page.locator("body").evaluate((body) => {
+        const elements = [body, ...body.querySelectorAll<HTMLElement>("*")];
+        const aria = elements.flatMap((element) =>
+          ["aria-label", "aria-labelledby", "aria-describedby", "title", "alt"]
+            .map((name) => element.getAttribute(name))
+            .filter((value): value is string => value !== null),
+        );
+        const historyUrls = (window as typeof window & { activityHistoryUrls?: readonly string[] })
+          .activityHistoryUrls;
+        return {
+          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+          visibleText: body instanceof HTMLElement ? body.innerText : "",
+          textContent: body.textContent ?? "",
+          aria: aria.join("\n"),
+          hrefs: elements
+            .filter((element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement)
+            .flatMap((link) => [link.getAttribute("href") ?? "", link.href])
+            .join("\n"),
+          location: location.href,
+          historyState: JSON.stringify(history.state),
+          historyUrls: [...(historyUrls ?? [])].join("\n"),
+        };
+      });
+      const accessibilityTree = await page.locator("body").ariaSnapshot();
+      for (const secret of [...secrets, "operator_approvals"]) {
+        for (const surface of [...Object.values(surfaces), accessibilityTree]) {
+          expect(surface).not.toContain(secret);
+        }
+      }
+      await screenshot(page, "18-unverified-receipt-privacy.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps loaded receipts visible when later-page inspection fails", async () => {
+    const context = await newContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["audit.run.inspect"],
+      methodResponses: {
+        "audit.run.inspect": {
+          cases: [
+            {
+              match: { decisionCursor: "a:10:2" },
+              response: {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message: "decision cursor is no longer retained",
+                },
+              },
+            },
+            {
+              match: { runId: "receipt-page-error" },
+              response: {
+                ...receiptPage(
+                  [
+                    decisionDisplay({
+                      id: "approval-decision:107",
+                      summary: "A denied approval remains visible.",
+                      outcome: "denied",
+                      reasonCode: "operator_approval_denied_by_reviewer",
+                      coverageState: "enforced",
+                      remediation: "Review the recorded denial.",
+                    }),
+                  ],
+                  "a:10:2",
+                ),
+                run: {
+                  runId: "receipt-page-error",
+                  executionId: "execution-safe-ref",
+                  status: "known",
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}activity?view=run&run=receipt-page-error`);
+      await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
+      await page.getByRole("button", { name: "Load more receipts" }).click();
+      await page
+        .getByRole("alert")
+        .getByText("More receipts could not be loaded", { exact: false })
+        .waitFor();
+      await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("restarts stale receipt deep links on page one while preserving the exact selector", async () => {
+    for (const scenario of [
+      { kind: "run", id: "run:stale/deep-link" },
+      { kind: "execution", id: "execution:stale/deep-link" },
+    ] as const) {
+      const context = await newContext();
+      const page = await context.newPage();
+      const receiptId = `private-receipt-${scenario.kind}`;
+      const decisionCursor = `a:1786000000000:${scenario.kind === "run" ? "41" : "42"}`;
+      const firstPage = presentResult(
+        scenario.kind === "run" ? scenario.id : "run-for-exact-execution",
+        scenario.kind === "execution" ? scenario.id : "execution-for-run",
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["audit.run.inspect"],
+        methodResponses: {
+          "audit.run.inspect": {
+            cases: [
+              {
+                match: { decisionCursor },
+                response: {
+                  __mockError: {
+                    code: "INVALID_REQUEST",
+                    message: "decision cursor is no longer retained",
+                  },
+                },
+              },
+              { match: { [`${scenario.kind}Id`]: scenario.id }, response: firstPage },
+            ],
+          },
+        },
+      });
+
+      try {
+        const search = new URLSearchParams({
+          view: "run",
+          [scenario.kind]: scenario.id,
+          receipt: receiptId,
+          decision: decisionCursor,
+        });
+        await page.goto(`${server.baseUrl}activity?${search.toString()}`);
+        await page.getByRole("heading", { name: "Run inspection failed" }).waitFor();
+        const restart = page.getByRole("button", { name: "Restart inspection" });
+        await restart.waitFor();
+        expect(await page.getByRole("button", { name: "Retry inspection" }).count()).toBe(0);
+        const errorText = (await page.locator(".run-inspector__panel").textContent()) ?? "";
+        expect(errorText).not.toContain(receiptId);
+        expect(errorText).not.toContain(decisionCursor);
+
+        const requestCount = (await gateway.getRequests("audit.run.inspect")).length;
+        await restart.focus();
+        await expect
+          .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
+          .toBe("Restart inspection");
+        await page.keyboard.press("Enter");
+        await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+        const request = await gateway.waitForRequest("audit.run.inspect", { after: requestCount });
+        const expectedParams = {
+          [`${scenario.kind}Id`]: scenario.id,
+          decisionLimit: 50,
+          ...(scenario.kind === "run" ? { executionLimit: 50 } : {}),
+        };
+        expect(request.params).toEqual(expectedParams);
+        expect(request.params).not.toHaveProperty("decisionCursor");
+        const restartedUrl = new URL(page.url());
+        expect(restartedUrl.searchParams.get(scenario.kind)).toBe(scenario.id);
+        expect(restartedUrl.searchParams.get(scenario.kind === "run" ? "execution" : "run")).toBe(
+          null,
+        );
+        expect(restartedUrl.searchParams.get("receipt")).toBeNull();
+        expect(restartedUrl.searchParams.get("decision")).toBeNull();
+      } finally {
+        await context.close();
+      }
     }
   });
 
@@ -295,7 +701,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     const gateway = await installMockGateway(page, { sessionKey: "main" });
 
     try {
-      await page.goto(`${server.baseUrl}activity`);
+      await page.goto(`${server.baseUrl}activity?view=live`);
       await page.getByText("No activity yet.", { exact: true }).waitFor();
 
       for (let index = 0; index < 40; index += 1) {
@@ -393,9 +799,10 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     try {
       await page.goto(`${server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
       const inspector = page.locator(".run-inspector");
-      const finalReceiptContent = page.getByText("Additional decision receipts are available", {
-        exact: false,
-      });
+      const finalReceiptContent = page.getByText(
+        "Treat this receipt as attribution only; it does not prove authorization.",
+        { exact: true },
+      );
       await finalReceiptContent.waitFor({ state: "attached" });
 
       const desktopLayout = await inspector.evaluate((element) => ({

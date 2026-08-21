@@ -4,11 +4,13 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { formatErrorMessage } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
@@ -139,6 +141,7 @@ const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
+const log = createSubsystemLogger("media/playback");
 
 /** Hashes the immutable source identity used by playback cache file names. */
 function createPlaybackTranscodeCacheKey(source: PlaybackSourceIdentity): string {
@@ -662,7 +665,6 @@ export async function resolvePlaybackTranscode(
     if (Date.now() - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
       return { kind: "fallback" };
     }
-    playbackFailures.delete(operationKey);
   }
   if (playbackJobs.size >= MAX_PLAYBACK_TRANSCODE_JOBS) {
     return { kind: "preparing" };
@@ -689,8 +691,13 @@ export async function resolvePlaybackTranscode(
       playbackJobs.delete(operationKey);
       playbackFailures.delete(operationKey);
     },
-    () => {
+    (reason: unknown) => {
       playbackJobs.delete(operationKey);
+      if (!playbackFailures.has(operationKey)) {
+        log.warn(
+          `Playback transcode failed for ${params.sourcePath}: ${formatErrorMessage(reason)}`,
+        );
+      }
       playbackFailures.delete(operationKey);
       playbackFailures.set(operationKey, Date.now());
       pruneMapToMaxSize(playbackFailures, MAX_PLAYBACK_ENTRIES.failures);

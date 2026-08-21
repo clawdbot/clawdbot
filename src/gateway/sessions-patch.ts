@@ -11,6 +11,10 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -32,7 +36,10 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionToolOverrides,
+} from "../config/sessions.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -60,7 +67,6 @@ import {
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
-  normalizeSessionIconValue,
   resolveActiveSessionAgentStatus,
   sanitizeSessionAgentStatusNote,
   sessionAgentStatusExpiresAt,
@@ -291,7 +297,9 @@ export async function projectSessionsPatchEntry(params: {
     } else if (raw !== undefined) {
       const icon = normalizeSessionIconValue(raw);
       if (!icon) {
-        return invalid("icon must be a single emoji");
+        return invalid(
+          `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`,
+        );
       }
       next.icon = icon;
     }
@@ -560,6 +568,13 @@ export async function projectSessionsPatchEntry(params: {
       next.execNode = trimmed;
     }
   }
+  if ("permissionMode" in patch) {
+    if (patch.permissionMode === null) {
+      delete next.permissionMode;
+    } else if (patch.permissionMode !== undefined) {
+      next.permissionMode = patch.permissionMode;
+    }
+  }
   if ("model" in patch) {
     const agentModelFallback = isAgentSessionModelPatchOrigin()
       ? next.modelFallback?.source === "agent-patch"
@@ -641,15 +656,16 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
+  if ("thinkingLevel" in patch || "model" in patch) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+    let thinkingRuntime: string | undefined;
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+      thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
           provider: effectiveProvider,
@@ -683,9 +699,7 @@ export async function projectSessionsPatchEntry(params: {
     !("model" in patch) &&
     next.modelFallback?.source === "agent-patch"
   ) {
-    next.modelFallback = next.thinkingLevel
-      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
-      : { ...next.modelFallback, prevThinkingLevel: undefined };
+    next.modelFallback.prevThinkingLevel = next.thinkingLevel;
   }
 
   if ("sendPolicy" in patch) {

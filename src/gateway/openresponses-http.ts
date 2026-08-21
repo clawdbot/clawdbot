@@ -54,6 +54,7 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
   isAgentSelectionRequiredError,
@@ -643,6 +644,15 @@ export async function handleOpenResponsesHttpRequest(
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId: resolved.agentId,
+    sessionKey,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    return true;
+  }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
@@ -709,9 +719,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (meta?.error || meta?.stopReason === "error") {
+        throw new Error("agent run failed");
+      }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
@@ -1168,6 +1181,9 @@ export async function handleOpenResponsesHttpRequest(
         abortSignal: abortController.signal,
       });
 
+      if (closed) {
+        return;
+      }
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {

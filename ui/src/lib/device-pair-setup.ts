@@ -6,6 +6,7 @@ import type {
   DevicePairSetupDeliveryUncertainEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatUiError } from "./format-error.ts";
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -176,7 +177,7 @@ async function readGatewaySetupCompletion(
       ? { status: "found", completion }
       : { status: "unavailable", message: "Invalid setup status response" };
   } catch (err) {
-    return { status: "unavailable", message: String(err) };
+    return { status: "unavailable", message: formatUiError(err) };
   }
 }
 
@@ -381,7 +382,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
         phase: "error",
         source: "create",
         access,
-        message: String(err),
+        message: formatUiError(err),
       };
     }
   } finally {

@@ -15,6 +15,7 @@ import {
   resolveSecretInputRef,
   type SecretInput,
 } from "../config/types.secrets.js";
+import { provisionGatewayTokenStoreRef } from "../gateway/auth-token-store-ref.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_EXPOSURE_OPTIONS,
@@ -175,13 +176,8 @@ export async function configureGatewayForSetup(
     }
   }
 
-  let tailscaleResetOnExit = quickstartGateway.tailscaleResetOnExit;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(t("wizard.gatewayTailscale.docsNote"), "Tailscale");
-    tailscaleResetOnExit = await prompter.confirm({
-      message: t("wizard.gateway.tailscaleReset"),
-      initialValue: tailscaleResetOnExit,
-    });
   }
 
   // Safety + constraints:
@@ -224,6 +220,7 @@ export async function configureGatewayForSetup(
               refHint: t("wizard.gateway.refHint"),
             },
           });
+    const ambientToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
     if (tokenMode === "ref") {
       if (quickstartTokenRef) {
         gatewayTokenInput = quickstartTokenRef;
@@ -233,6 +230,17 @@ export async function configureGatewayForSetup(
           path: "gateway.auth.token",
           env: process.env,
         });
+      } else if (!quickstartTokenString && !ambientToken) {
+        // Nothing exists for an env/file/exec ref to point at, so asking where the
+        // token lives has no answerable option. Setup mints it into the shared
+        // secret store instead and config keeps only the reference.
+        const provisioned = provisionGatewayTokenStoreRef({ config: nextConfig });
+        gatewayTokenInput = provisioned.ref;
+        gatewayToken = provisioned.token;
+        await prompter.note(
+          t("wizard.gateway.tokenStoreProvisioned", { name: provisioned.ref.id }),
+          t("wizard.gateway.auth"),
+        );
       } else {
         const resolved = await promptSecretRefForSetup({
           provider: "gateway-auth-token",
@@ -248,13 +256,10 @@ export async function configureGatewayForSetup(
         gatewayToken = resolved.resolvedValue;
       }
     } else if (flow === "quickstart") {
-      gatewayToken =
-        (quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN)) ||
-        randomToken();
+      gatewayToken = (quickstartTokenString ?? ambientToken) || randomToken();
       gatewayTokenInput = gatewayToken;
     } else {
-      const existingToken =
-        quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
+      const existingToken = quickstartTokenString ?? ambientToken;
       let tokenInput: string | undefined;
       if (existingToken) {
         const keep = await prompter.confirm({
@@ -286,8 +291,15 @@ export async function configureGatewayForSetup(
       value: quickstartGateway.password,
       defaults: nextConfig.secrets?.defaults,
     }).ref;
+    const quickstartNeedsPasswordRef =
+      flow === "quickstart" &&
+      opts.secretInputMode === "ref" &&
+      !existingPasswordRef &&
+      quickstartGateway.password !== opts.baseConfig.gateway?.auth?.password;
     let password: SecretInput | undefined =
-      flow === "quickstart" ? quickstartGateway.password : (existingPasswordRef ?? undefined);
+      flow === "quickstart" && !quickstartNeedsPasswordRef
+        ? quickstartGateway.password
+        : (existingPasswordRef ?? undefined);
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
@@ -367,7 +379,6 @@ export async function configureGatewayForSetup(
       tailscale: {
         ...nextConfig.gateway?.tailscale,
         mode: tailscaleMode as GatewayTailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };
@@ -390,7 +401,6 @@ export async function configureGatewayForSetup(
       authMode,
       gatewayToken,
       tailscaleMode: tailscaleMode as GatewayTailscaleMode,
-      tailscaleResetOnExit,
     },
   };
 }

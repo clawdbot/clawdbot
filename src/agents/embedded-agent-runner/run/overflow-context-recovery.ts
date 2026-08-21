@@ -186,6 +186,7 @@ export async function recoverEmbeddedRunOverflow(
           runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: input.contextEngineAgentId,
         });
       }
     } catch (compactErr) {

@@ -3,6 +3,10 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
+import {
+  parseStoredConversationRouteContext,
+  type ConversationRouteContext,
+} from "./conversation-route-context.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { upsertConversationIdentity } from "./session-accessor.sqlite-conversation.js";
 import {
@@ -19,6 +23,7 @@ export type ConversationRecord = {
   channel: string;
   accountId: string;
   kind: ConversationKind;
+  peerId: string;
   target: string;
   parentConversationRef?: string;
   threadId?: string;
@@ -28,6 +33,12 @@ export type ConversationRecord = {
   sessionId?: string;
   sessionKey?: string;
   role?: "participant" | "primary" | "related";
+  /** True when this address has been linked to a session in this agent store. */
+  observedFromSession?: true;
+  /** Exact contextual facts from the authoritative inbound route. */
+  routeContext?: ConversationRouteContext;
+  /** True when authoritative ingress observed empty or populated route context. */
+  routeContextObserved?: true;
   firstSeenAt: number;
   lastSeenAt: number;
 };
@@ -59,8 +70,14 @@ function normalizeConversationRef(value: string): string {
   return normalized;
 }
 
+type MappedConversationRow = {
+  associationIsCurrent: boolean;
+  record: ConversationRecord;
+};
+
 function mapConversationRow(row: {
   account_id: string;
+  associated_session_id: string | null;
   channel: string;
   conversation_id: string;
   conversation_created_at: number;
@@ -75,11 +92,12 @@ function mapConversationRow(row: {
   parent_conversation_id: string | null;
   peer_id: string;
   role: string | null;
+  route_context_json: string | null;
   current_session_id: string | null;
   current_entry_json: string | null;
   current_session_key: string | null;
   thread_id: string | null;
-}): ConversationRecord | null {
+}): MappedConversationRow | null {
   if (row.kind !== "direct" && row.kind !== "group" && row.kind !== "channel") {
     return null;
   }
@@ -91,28 +109,41 @@ function mapConversationRow(row: {
     ? parseSessionEntryJson({ entry_json: row.current_entry_json })
     : null;
   const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
+  const associationIsCurrent =
+    hasCurrentBinding && row.associated_session_id === row.current_session_id;
+  const routeContext = parseStoredConversationRouteContext(
+    row.route_context_json,
+    row.last_seen_at,
+  );
   return {
-    conversationRef: row.conversation_id,
-    channel: row.channel,
-    accountId: row.account_id,
-    kind: row.kind,
-    target: row.delivery_target,
-    ...(row.parent_conversation_id ? { parentConversationRef: row.parent_conversation_id } : {}),
-    ...(row.thread_id ? { threadId: row.thread_id } : {}),
-    ...(row.native_channel_id ? { nativeChannelId: row.native_channel_id } : {}),
-    ...(row.native_direct_user_id ? { nativeDirectUserId: row.native_direct_user_id } : {}),
-    ...(row.label ? { label: row.label } : {}),
-    // Only the current session_nodes row can bind an address. The joined
-    // window row may be historical after reset, rebind, or deletion.
-    ...(role && hasCurrentBinding && row.current_session_id && row.current_session_key
-      ? {
-          sessionId: row.current_session_id,
-          sessionKey: row.current_session_key,
-          role,
-        }
-      : {}),
-    firstSeenAt: row.first_seen_at ?? row.conversation_created_at,
-    lastSeenAt: row.last_seen_at ?? row.conversation_updated_at,
+    associationIsCurrent,
+    record: {
+      conversationRef: row.conversation_id,
+      channel: row.channel,
+      accountId: row.account_id,
+      kind: row.kind,
+      peerId: row.peer_id,
+      target: row.delivery_target,
+      ...(row.parent_conversation_id ? { parentConversationRef: row.parent_conversation_id } : {}),
+      ...(row.thread_id ? { threadId: row.thread_id } : {}),
+      ...(row.native_channel_id ? { nativeChannelId: row.native_channel_id } : {}),
+      ...(row.native_direct_user_id ? { nativeDirectUserId: row.native_direct_user_id } : {}),
+      ...(row.label ? { label: row.label } : {}),
+      // Only the current session_nodes row can bind an address. The joined
+      // window row may be historical after reset, rebind, or deletion.
+      ...(role && hasCurrentBinding && row.current_session_id && row.current_session_key
+        ? {
+            sessionId: row.current_session_id,
+            sessionKey: row.current_session_key,
+            role,
+          }
+        : {}),
+      ...(role ? { observedFromSession: true as const } : {}),
+      ...(routeContext ? { routeContextObserved: true as const } : {}),
+      ...(routeContext?.context ? { routeContext: routeContext.context } : {}),
+      firstSeenAt: row.first_seen_at ?? row.conversation_created_at,
+      lastSeenAt: row.last_seen_at ?? row.conversation_updated_at,
+    },
   };
 }
 
@@ -149,8 +180,10 @@ function selectConversationRows(
       "c.created_at as conversation_created_at",
       "c.updated_at as conversation_updated_at",
       "sc.role",
+      "sc.route_context_json",
       "sc.first_seen_at",
       "sc.last_seen_at",
+      "s.session_id as associated_session_id",
       "sn.current_session_id as current_session_id",
       "sn.entry_json as current_entry_json",
       "sn.session_key as current_session_key",
@@ -172,29 +205,45 @@ function selectConversationRows(
       .orderBy((eb) => eb.fn.coalesce("sc.last_seen_at", "c.updated_at"), "desc")
       .orderBy("sn.updated_at", "desc"),
   ).rows;
-  const unique = new Map<string, ConversationRecord>();
+  const unique = new Map<string, MappedConversationRow>();
   for (const row of rows) {
     const mapped = mapConversationRow(row);
     if (!mapped) {
       continue;
     }
-    const existing = unique.get(mapped.conversationRef);
+    const existing = unique.get(mapped.record.conversationRef);
     if (!existing) {
-      unique.set(mapped.conversationRef, mapped);
+      unique.set(mapped.record.conversationRef, mapped);
       continue;
     }
-    if (!existing.sessionId && mapped.sessionId && mapped.sessionKey && mapped.role) {
+    if (
+      !existing.associationIsCurrent &&
+      mapped.associationIsCurrent &&
+      mapped.record.sessionId &&
+      mapped.record.sessionKey &&
+      mapped.record.role
+    ) {
       // Keep the newest address activity while carrying forward the live binding
       // when a newer historical association has no current session entry.
-      unique.set(mapped.conversationRef, {
-        ...existing,
-        sessionId: mapped.sessionId,
-        sessionKey: mapped.sessionKey,
-        role: mapped.role,
+      const {
+        routeContext: _staleRouteContext,
+        routeContextObserved: _staleRouteContextObserved,
+        ...existingRecord
+      } = existing.record;
+      unique.set(mapped.record.conversationRef, {
+        associationIsCurrent: true,
+        record: {
+          ...existingRecord,
+          sessionId: mapped.record.sessionId,
+          sessionKey: mapped.record.sessionKey,
+          role: mapped.record.role,
+          ...(mapped.record.routeContextObserved ? { routeContextObserved: true as const } : {}),
+          ...(mapped.record.routeContext ? { routeContext: mapped.record.routeContext } : {}),
+        },
       });
     }
   }
-  const values = [...unique.values()];
+  const values = [...unique.values()].map(({ record }) => record);
   return options.limit === undefined ? values : values.slice(0, options.limit);
 }
 

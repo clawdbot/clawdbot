@@ -87,7 +87,6 @@ export function createPluginRecord(params: {
     webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
     migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
     contextEngineIds: [],
-    memoryEmbeddingProviderIds: [...(params.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

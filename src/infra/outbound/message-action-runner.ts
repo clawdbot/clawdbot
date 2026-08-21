@@ -8,7 +8,7 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
@@ -28,6 +28,7 @@ import type {
   MessageActionResult,
   ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
@@ -45,6 +46,7 @@ import {
   enforceMessageActionAllowlist,
   resolveEffectiveMessageToolsConfig,
 } from "./outbound-policy.js";
+import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
@@ -94,7 +96,11 @@ async function handleBroadcastAction(
     resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
       ?.enabled !== false;
   if (!broadcastEnabled) {
-    throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
+    throw new MessageActionDeniedError(
+      "Broadcast is disabled. Set tools.message.broadcast.enabled to true.",
+      "message_broadcast_disabled",
+      "message-broadcast:enabled",
+    );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
   if (rawTargets.length === 0) {
@@ -109,26 +115,30 @@ async function handleBroadcastAction(
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
     throw new Error("Broadcast account plan does not match the requested account.");
   }
-  const targetChannels =
+  const targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }> =
     channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
       ? [
-          (
-            await resolveMessageChannelSelection({
-              cfg: input.cfg,
-              channel: channelHint,
-              fallbackChannel: input.toolContext?.currentChannelProvider,
-              agentId: input.agentId,
-            })
-          ).channel,
+          await resolveMessageChannelSelection({
+            cfg: input.cfg,
+            channel: channelHint,
+            fallbackChannel: input.toolContext?.currentChannelProvider,
+            agentId: input.agentId,
+          }),
         ]
       : input.broadcastAccountPlan
-        ? input.broadcastAccountPlan.candidateChannels
+        ? input.broadcastAccountPlan.candidateChannels.map((channel) => ({
+            channel,
+            plugin: getRuntimeVisibleChannelPlugin(channel),
+          }))
         : await (async () => {
             const configured = await listConfiguredMessageChannels(input.cfg);
             if (configured.length === 0) {
               throw new Error("Broadcast requires at least one configured channel.");
             }
-            return configured;
+            return configured.map((channel) => ({
+              channel,
+              plugin: getRuntimeVisibleChannelPlugin(channel),
+            }));
           })();
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
@@ -143,10 +153,12 @@ async function handleBroadcastAction(
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
-  for (const targetChannel of targetChannels) {
+  let attemptIndex = 0;
+  for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     throwIfAborted(input.abortSignal);
     for (const target of rawTargets) {
       throwIfAborted(input.abortSignal);
+      const receiptDiscriminator = `broadcast:${attemptIndex++}`;
       try {
         const targetAccountId = validateExplicitMessageAccountSelection({
           cfg: input.cfg,
@@ -160,6 +172,7 @@ async function handleBroadcastAction(
           action: "send",
           args: targetArgs,
           accountId: targetAccountId,
+          plugin: targetChannelPlugin,
         });
         if (!resolved) {
           throw new Error("Broadcast target resolution unexpectedly deferred.");
@@ -186,6 +199,11 @@ async function handleBroadcastAction(
         if (isAbortError(err)) {
           throw err;
         }
+        if (err instanceof MessageActionDeniedError) {
+          // Preserve the owner fact before broadcast converts the failure to result text;
+          // otherwise admitted-run audit would have to infer policy from presentation.
+          input.onActionDenied?.(err, targetChannel, receiptDiscriminator);
+        }
         results.push({
           channel: targetChannel,
           to: target,
@@ -202,7 +220,8 @@ async function handleBroadcastAction(
   }
   return {
     kind: "broadcast",
-    channel: targetChannels[0] ?? normalizeOptionalLowercaseString(channelHint) ?? "unknown",
+    channel:
+      targetChannels[0]?.channel ?? normalizeOptionalLowercaseString(channelHint) ?? "unknown",
     action: "broadcast",
     handledBy: input.dryRun ? "dry-run" : "core",
     payload: { results },
@@ -367,20 +386,22 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     structuredAttachments: structuredAttachmentMode,
   });
 
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg,
-    agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
-      structuredAttachments: structuredAttachmentMode,
-    }),
-    sessionKey: input.sessionKey,
-    messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-    requesterSenderId: input.requesterSenderId,
-    requesterSenderName: input.requesterSenderName,
-    requesterSenderUsername: input.requesterSenderUsername,
-    requesterSenderE164: input.requesterSenderE164,
-  });
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: resolvedAgentId,
+      mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
+        structuredAttachments: structuredAttachmentMode,
+      }),
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : channel,
+      accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaAccess,
@@ -420,6 +441,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
     toolContext: input.toolContext,
     agentId: resolvedAgentId,
     deferExternalTargetResolution: defersExternalTargetResolution,
+    plugin: channelPlugin,
   });
 
   if (action === "send") {

@@ -44,16 +44,11 @@ describe("forced worker environment abandonment", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
     store.markWorkspaceResultPending(claim);
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId,
-      ownerEpoch: 2,
-      runId: claim.runId,
-    };
+    const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
       store.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
         requestDigest: "forced-send-digest",
@@ -87,7 +82,7 @@ describe("forced worker environment abandonment", () => {
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
@@ -122,7 +117,7 @@ describe("forced worker environment abandonment", () => {
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });

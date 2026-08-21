@@ -13,7 +13,6 @@ import { SecretInputSchema } from "./zod-schema.core.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
-  TailscaleServiceNameSchema,
   validateHttpOrigin,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -67,12 +66,16 @@ export const GatewayConfigSchema = z
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),
+        github: z
+          .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
+          .optional(),
         toolTitles: z.boolean().optional(),
         sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
+        automaticallyFetchFavicons: z.boolean().optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })
@@ -138,8 +141,6 @@ export const GatewayConfigSchema = z
     tailscale: z
       .strictObject({
         mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
-        resetOnExit: z.boolean().optional(),
-        serviceName: TailscaleServiceNameSchema.optional(),
         preserveFunnel: z.boolean().optional(),
       })
       .optional(),

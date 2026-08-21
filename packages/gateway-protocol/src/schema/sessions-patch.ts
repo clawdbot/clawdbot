@@ -4,7 +4,7 @@ import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-agent-status.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionToolOverridesSchema } from "./sessions-row.js";
+import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
@@ -49,6 +49,7 @@ const SessionsPatchMutationProperties = {
   execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  permissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),

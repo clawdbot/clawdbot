@@ -11,8 +11,8 @@ import {
   type InboundEventKind,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  OpenClawConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
@@ -33,18 +33,13 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
-import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
-import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
-
-type TelegramMentionFacts = NonNullable<
-  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
->;
 import {
   buildGroupLabel,
   buildSenderLabel,
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
+  buildTelegramParentPeer,
   describeReplyTarget,
   getTelegramTextParts,
   normalizeForwardedContext,
@@ -53,7 +48,9 @@ import {
   type TelegramReplyTarget,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
+import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
 import {
   resolveTelegramDirectToolPolicy,
   resolveTelegramGroupPromptSettings,
@@ -66,6 +63,12 @@ import {
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH, type TelegramReplyChainEntry } from "./message-cache.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
+
+type TelegramMentionFacts = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
 
 type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
@@ -621,9 +624,7 @@ export async function buildTelegramInboundContextPayload(params: {
     replyHead?.body ??
     visibleReplyTarget?.body ??
     (replyTargetMedia ? formatMediaPlaceholderText([replyTargetMedia]) : undefined);
-  const telegramFrom = isGroup
-    ? buildTelegramGroupFrom(chatId, resolvedThreadId)
-    : `telegram:${chatId}`;
+  const telegramFrom = isGroup ? buildTelegramGroupFrom(chatId, threadSpec) : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const telegramUpdate = primaryCtx.update;
@@ -675,7 +676,18 @@ export async function buildTelegramInboundContextPayload(params: {
     conversation: {
       kind: conversationKind,
       id: String(chatId),
+      routePeer: {
+        kind: conversationKind,
+        id: isGroup
+          ? buildTelegramConversationId({ chatId, thread: threadSpec })
+          : resolveTelegramDirectPeerId({ chatId, senderId }),
+      },
       label: conversationLabel,
+      parentId: buildTelegramParentPeer({
+        isGroup,
+        resolvedThreadId: threadSpec.id,
+        chatId,
+      })?.id,
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
     },
     route: {

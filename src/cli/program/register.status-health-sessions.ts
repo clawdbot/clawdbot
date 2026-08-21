@@ -7,6 +7,7 @@ import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
+import { registerTasksCommand } from "./register.tasks.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -55,19 +56,11 @@ function rejectUnsupportedSessionsParentOptions(
   return true;
 }
 
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
-const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
-
 function addSessionsListOptions(command: Command): Command {
   return command
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--store <path>", "Path to physical .sqlite session store")
     .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
@@ -217,16 +210,6 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
   return parsed;
 }
 
-function parseTasksAuditLimit(limit: unknown): number | null | undefined {
-  const parsed = parseStrictPositiveInteger(limit);
-  if (limit !== undefined && parsed === undefined) {
-    defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
-    defaultRuntime.exit(1);
-    return null;
-  }
-  return parsed;
-}
-
 async function runWithVerboseAndTimeout(
   opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
   action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
@@ -332,9 +315,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
-          ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
+          ["openclaw sessions --store ./tmp/sessions.sqlite", "Use a specific session store."],
         ])}\n\n${theme.muted(
-          "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
+          "Shows token usage per session when the agent reports it; set the model entry's contextTokens to cap the window and show %.",
         )}`,
     )
     .addHelpText(
@@ -357,7 +340,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd
     .command("cleanup")
     .description("Run session-store maintenance now")
-    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--store <path>", "Path to physical .sqlite session store")
     .option("--agent <id>", "Agent id to maintain (required for multiple explicit agents)")
     .option("--all-agents", "Run maintenance across all configured agents", false)
     .option("--dry-run", "Preview maintenance actions without writing", false)
@@ -391,7 +374,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
           ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
           [
-            "openclaw sessions cleanup --enforce --store ./tmp/sessions.json",
+            "openclaw sessions cleanup --enforce --store ./tmp/sessions.sqlite",
             "Use a specific store.",
           ],
         ])}`,
@@ -433,7 +416,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
     .option("--tail <count>", "Number of existing trajectory events to show", "80")
     .option("--follow", "Continue following for new trajectory events", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--store <path>", "Path to physical .sqlite session store")
     .option("--agent <id>", "Agent id to inspect (required for multiple explicit agents)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .action(async (opts, command) => {
@@ -470,7 +453,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
-    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--store <path>", "Path to physical .sqlite session store")
     .option("--agent <id>", "Agent id for resolving the default session store")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
@@ -587,252 +570,5 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  const tasksCmd = program
-    .command("tasks")
-    .description("Inspect durable background tasks and TaskFlow state")
-    .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
-    .option(
-      "--status <name>",
-      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
-    )
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksListCommand } = await loadTasksCommands();
-        await tasksListCommand(
-          {
-            json: Boolean(opts.json),
-            runtime: opts.runtime as string | undefined,
-            status: opts.status as string | undefined,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-  tasksCmd.enablePositionalOptions();
-
-  tasksCmd
-    .command("list")
-    .description("List tracked background tasks")
-    .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
-    .option(
-      "--status <name>",
-      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
-    )
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | {
-            json?: boolean;
-            runtime?: string;
-            status?: string;
-          }
-        | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksListCommand } = await loadTasksCommands();
-        await tasksListCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
-            status: (opts.status as string | undefined) ?? parentOpts?.status,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("audit")
-    .description("Show stale or broken background tasks and TaskFlows")
-    .option("--json", "Output as JSON", false)
-    .option("--severity <level>", "Filter by severity (warn, error)")
-    .option(
-      "--code <name>",
-      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing)",
-    )
-    .option("--limit <n>", "Limit displayed findings")
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      const limit = parseTasksAuditLimit(opts.limit);
-      if (limit === null) {
-        return;
-      }
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksAuditCommand } = await loadTasksCommands();
-        await tasksAuditCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            severity: opts.severity as "warn" | "error" | undefined,
-            code: opts.code as
-              | "stale_queued"
-              | "stale_running"
-              | "lost"
-              | "delivery_failed"
-              | "missing_cleanup"
-              | "inconsistent_timestamps"
-              | "restore_failed"
-              | "stale_waiting"
-              | "stale_blocked"
-              | "cancel_stuck"
-              | "missing_linked_tasks"
-              | "blocked_task_missing"
-              | undefined,
-            limit,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("maintenance")
-    .description("Preview or apply tasks and TaskFlow maintenance")
-    .option("--json", "Output as JSON", false)
-    .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksMaintenanceCommand } = await loadTasksCommands();
-        await tasksMaintenanceCommand(
-          {
-            json: Boolean(opts.json || parentOpts?.json),
-            apply: Boolean(opts.apply),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("show")
-    .description("Show one background task by task id, run id, or session key")
-    .argument("<lookup>", "Task id, run id, or session key")
-    .option("--json", "Output as JSON", false)
-    .action(async (lookup, opts, command) => {
-      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksShowCommand } = await loadTasksCommands();
-        await tasksShowCommand(
-          {
-            lookup,
-            json: Boolean(opts.json || parentOpts?.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("notify")
-    .description("Set task notify policy")
-    .argument("<lookup>", "Task id, run id, or session key")
-    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
-    .action(async (lookup, notify) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksNotifyCommand } = await loadTasksCommands();
-        await tasksNotifyCommand(
-          {
-            lookup,
-            notify: notify as "done_only" | "state_changes" | "silent",
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("cancel")
-    .description("Cancel a running background task")
-    .argument("<lookup>", "Task id, run id, or session key")
-    .action(async (lookup) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksCancelCommand } = await loadTasksCommands();
-        await tasksCancelCommand(
-          {
-            lookup,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksCmd
-    .command("retry <lookups...>")
-    .description("Retry delivery for up to 10 blocked subagent completions")
-    .action(async (lookups: string[]) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksRetryCommand } = await loadTasksCommands();
-        await tasksRetryCommand({ lookups }, defaultRuntime);
-      });
-    });
-
-  tasksCmd
-    .command("dismiss <lookups...>")
-    .description("Dismiss delivery for up to 10 blocked subagent completions")
-    .action(async (lookups: string[]) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksDismissCommand } = await loadTasksCommands();
-        await tasksDismissCommand({ lookups }, defaultRuntime);
-      });
-    });
-
-  const tasksFlowCmd = tasksCmd
-    .command("flow")
-    .description("Inspect durable TaskFlow state under tasks");
-
-  tasksFlowCmd
-    .command("list")
-    .description("List tracked TaskFlows")
-    .option("--json", "Output as JSON", false)
-    .option(
-      "--status <name>",
-      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
-    )
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsListCommand } = await loadFlowsCommands();
-        await flowsListCommand(
-          {
-            json: Boolean(opts.json),
-            status: opts.status as string | undefined,
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksFlowCmd
-    .command("show")
-    .description("Show one TaskFlow by flow id or owner key")
-    .argument("<lookup>", "Flow id or owner key")
-    .option("--json", "Output as JSON", false)
-    .action(async (lookup, opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsShowCommand } = await loadFlowsCommands();
-        await flowsShowCommand(
-          {
-            lookup,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  tasksFlowCmd
-    .command("cancel")
-    .description("Cancel a running TaskFlow")
-    .argument("<lookup>", "Flow id or owner key")
-    .action(async (lookup) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsCancelCommand } = await loadFlowsCommands();
-        await flowsCancelCommand(
-          {
-            lookup,
-          },
-          defaultRuntime,
-        );
-      });
-    });
+  registerTasksCommand(program);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

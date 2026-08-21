@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { resolveTerminalAssistantTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import {
@@ -316,6 +317,7 @@ async function applyWorkerTranscriptCommit(params: {
   messages: readonly CommittedAgentMessage[];
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
+  runId: string | null;
   sessionId: string;
   target: ResolvedWorkerSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
@@ -412,10 +414,12 @@ async function applyWorkerTranscriptCommit(params: {
     if (!message.appended) {
       continue;
     }
+    const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     await publishTranscriptUpdate(params.target, {
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
+      ...(runId ? { runId } : {}),
     });
   }
   return applied;
@@ -477,6 +481,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
         messages,
         recoverPersistedBatch: started.kind === "recover",
         requestedBaseLeafId: params.request.baseLeafId,
+        runId: params.identity.runId,
         sessionId,
         target,
       });

@@ -1733,6 +1733,63 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("installs when a newer host satisfies a bare prerelease gateway minimum", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.8.1");
+    mockClawHubVersionMetadata({
+      version: "1.0.0-beta.3",
+      sha256hash: DEMO_ARCHIVE_SHA256,
+      compatibility: {
+        pluginApiRange: ">=2026.7.2-beta.2",
+        minGatewayVersion: "2026.7.2-beta.2",
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expectSuccessfulClawHubInstall(result);
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledTimes(1);
+    expect(installPluginFromArchiveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports invalid gateway metadata distinctly from host incompatibility", async () => {
+    mockClawHubVersionMetadata({
+      compatibility: {
+        pluginApiRange: ">=2026.3.22",
+        minGatewayVersion: "not-semver",
+      },
+    });
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.INVALID_GATEWAY_VERSION);
+    expect(failure.error).toBe(
+      'ClawHub package "demo" declares invalid minGatewayVersion metadata "not-semver"; report the package metadata to its publisher.',
+    );
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("reports an unknown host version distinctly from incompatibility", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("unknown");
+    mockClawHubVersionMetadata({
+      compatibility: {
+        minGatewayVersion: "2026.3.22",
+      },
+    });
+
+    const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
+
+    const failure = expectInstallFailure(result);
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.UNKNOWN_GATEWAY_VERSION);
+    expect(failure.error).toContain("this host version could not be determined");
+    expect(downloadClawHubPackageArchiveMock).not.toHaveBeenCalled();
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("does not let a wildcard plugin API range hide an invalid runtime version", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("invalid");
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({

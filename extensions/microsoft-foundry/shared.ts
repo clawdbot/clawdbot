@@ -743,7 +743,7 @@ export function buildFoundryAuthResult(params: {
               api: params.api,
               deployments: params.deployments,
             },
-          ) as unknown as ModelProviderConfig,
+          ),
         },
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),

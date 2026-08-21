@@ -43,7 +43,7 @@ import {
   createBackupLinkCache,
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, isErrno } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -165,16 +165,75 @@ async function resolveOutputPath(params: {
   return resolved;
 }
 
+type BackupOutputFailurePhase = "parent" | "publication" | "write";
+
+function formatBackupOutputFailure(
+  error: unknown,
+  outputPath: string,
+  phase: BackupOutputFailurePhase,
+  ownedRoot?: string,
+): unknown {
+  const cause = phase === "write" && error instanceof Error ? error.cause : undefined;
+  const filesystemError = isErrno(error) ? error : isErrno(cause) ? cause : null;
+  if (!filesystemError) {
+    return error;
+  }
+  if (ownedRoot) {
+    const failedPath = filesystemError.path;
+    if (typeof failedPath !== "string" || !isPathWithin(path.resolve(failedPath), ownedRoot)) {
+      return error;
+    }
+  }
+
+  const outputParent = path.dirname(outputPath);
+  const retry = "run `openclaw backup create --output <archive>` again.";
+  let detail: string;
+  switch (filesystemError.code) {
+    case "ENOENT":
+      detail = `Backup output directory could not be created: ${outputParent}. Check the path and ${retry}`;
+      break;
+    case "EACCES":
+    case "EPERM":
+    case "EROFS":
+      detail = `Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then ${retry}`;
+      break;
+    case "EEXIST":
+    case "ENOTDIR":
+      if (phase !== "parent") {
+        return error;
+      }
+      detail = `Backup output parent is not a directory: ${outputParent}. Choose a directory path and ${retry}`;
+      break;
+    case "ENOSPC":
+      detail = `The destination does not have enough free space: ${outputParent}. Free up disk space and ${retry}`;
+      break;
+    case "EDQUOT":
+      detail = `The destination storage quota is exhausted: ${outputParent}. Free up space or choose another path, then ${retry}`;
+      break;
+    default:
+      detail = `The output path could not be prepared: ${outputParent}. Check the path and filesystem, then ${retry}`;
+  }
+  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`, { cause: error });
+}
+
 async function assertOutputPathReady(outputPath: string): Promise<void> {
   try {
     await fs.access(outputPath);
     throw new Error(`Refusing to overwrite existing backup archive: ${outputPath}`);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT") {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return;
     }
-    throw err;
+    throw formatBackupOutputFailure(error, outputPath, "parent");
+  }
+}
+
+async function prepareBackupOutputParent(outputPath: string): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  } catch (error) {
+    throw formatBackupOutputFailure(error, outputPath, "parent");
   }
 }
 
@@ -770,7 +829,7 @@ export async function createBackupArchive(
     return result;
   }
 
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await prepareBackupOutputParent(outputPath);
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
@@ -780,7 +839,7 @@ export async function createBackupArchive(
     publication = await createBackupArchivePublication(outputPath);
   } catch (error) {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    throw formatBackupOutputFailure(error, outputPath, "publication");
   }
   const tempArchivePath = publication.tempArchivePath;
   const preservedStatePaths = [
@@ -992,6 +1051,8 @@ export async function createBackupArchive(
         }
         return prepared;
       },
+    }).catch((error: unknown) => {
+      throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
     result.skippedVolatileCount = skippedVolatileCount;
     if (pluginSkillsPath && skippedPluginSkills) {
@@ -1009,11 +1070,15 @@ export async function createBackupArchive(
         } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
-    await publishPreparedBackupArchive({
-      plan: publication,
-      prepared: completedArchive,
-      log: opts.log,
-    });
+    try {
+      await publishPreparedBackupArchive({
+        plan: publication,
+        prepared: completedArchive,
+        log: opts.log,
+      });
+    } catch (error) {
+      throw formatBackupOutputFailure(error, outputPath, "publication");
+    }
   } finally {
     await cleanupBackupArchivePublication(publication, opts.log);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);

@@ -60,7 +60,6 @@ function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
       defaults: {
         model: { primary: "test:opus" },
         models: { "test:opus": {} },
-        contextTokens: 32000,
       },
       list: [
         { id: "main", default: false },

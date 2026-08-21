@@ -68,6 +68,23 @@ describe("MemoryDB agent isolation", () => {
     reopened.close();
   });
 
+  test("rejects search when a persisted table is reopened with a different vector dimension", async () => {
+    const db = new MemoryDB(getDbPath(), 2);
+    await db.store("main", {
+      text: "fixed-size vector",
+      vector: [1, 0],
+      importance: 0.7,
+      category: "fact",
+    });
+    db.close();
+
+    const incompatible = new MemoryDB(getDbPath(), 3);
+    await expect(incompatible.search("main", [1, 0, 0], 5, 0)).rejects.toThrow(
+      "No vector column found to match with the query vector dimension: 3",
+    );
+    incompatible.close();
+  });
+
   test("refuses an unscoped legacy table until doctor migrates it", async () => {
     const connection = await lancedb.connect(getDbPath());
     const table = await connection.createTable("memories", [

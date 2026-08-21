@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
@@ -381,7 +382,7 @@ export function recordScheduleComputeError(params: {
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
-  const errText = String(err);
+  const errText = formatErrorMessageWithCode(err);
 
   job.state.scheduleErrorCount = errorCount;
   job.state.nextRunAtMs = undefined;

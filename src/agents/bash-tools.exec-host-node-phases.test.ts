@@ -179,8 +179,34 @@ describe("direct node run", () => {
     const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
     const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
 
-    expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}`);
+    expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}\n(Command exited with code 1)`);
     expect(result.details).toMatchObject({ aggregated: visibleText });
+  });
+
+  it("renders a nonzero exit code in the model-visible text", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: { success: false, stdout: "done", stderr: "", error: null, exitCode: 3 },
+    });
+
+    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    // Output alone must not read as success when the command failed.
+    expect(visibleText).toContain("done");
+    expect(visibleText).toContain("(Command exited with code 3)");
+    expect(result.details).toMatchObject({ status: "failed", exitCode: 3 });
+  });
+
+  it("renders a timeout marker and records timedOut in details", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: { success: false, stdout: "", stderr: "", error: null, timedOut: true },
+    });
+
+    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(visibleText).toContain("Command timed out.");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
   });
 
   it("never dispatches a direct node run after cancellation", async () => {

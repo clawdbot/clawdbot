@@ -1,11 +1,13 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMissingPathError } from "../infra/errno.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { clamp } from "../utils.js";
 import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
 import "./logger.js";
 import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
+import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
 // Tail reader for the active log file, with cursor reset and line redaction.
@@ -13,6 +15,13 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+
+function missingPathToNull(error: unknown): null {
+  if (!isMissingPathError(error)) {
+    throw error;
+  }
+  return null;
+}
 
 /** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
@@ -24,12 +33,14 @@ export type LogTailPayload = {
   reset: boolean;
 };
 
+/** Redacted configured log tail with only parseable structured records. */
+type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
+  lines: ParsedLogLine[];
+};
+
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-export async function resolveLogFile(
-  file: string,
-  options?: { rolling?: boolean },
-): Promise<string> {
-  const stat = await fs.stat(file).catch(() => null);
+async function resolveLogFile(file: string, options?: { rolling?: boolean }): Promise<string> {
+  const stat = await fs.stat(file).catch(missingPathToNull);
   if (stat) {
     return file;
   }
@@ -38,7 +49,7 @@ export async function resolveLogFile(
   }
 
   const dir = path.dirname(file);
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(missingPathToNull);
   if (!entries) {
     return file;
   }
@@ -48,7 +59,7 @@ export async function resolveLogFile(
       .filter((entry) => entry.isFile() && isSameRollingLogFileFamily(file, entry.name))
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
-        const fileStat = await fs.stat(fullPath).catch(() => null);
+        const fileStat = await fs.stat(fullPath).catch(missingPathToNull);
         return fileStat ? { path: fullPath, mtimeMs: fileStat.mtimeMs } : null;
       }),
   );
@@ -63,8 +74,9 @@ async function readLogSlice(params: {
   cursor?: number;
   limit: number;
   maxBytes: number;
+  filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
-  const stat = await fs.stat(params.file).catch(() => null);
+  const stat = await fs.stat(params.file).catch(missingPathToNull);
   if (!stat) {
     return {
       cursor: 0,
@@ -137,6 +149,10 @@ async function readLogSlice(params: {
     if (lines.length > 0 && lines[lines.length - 1] === "") {
       lines = lines.slice(0, -1);
     }
+    if (params.filter) {
+      // Sparse consumers inspect the full byte-bounded window before the shared line cap.
+      lines = lines.filter(params.filter);
+    }
     if (lines.length > limit) {
       truncated = true;
       lines = lines.slice(lines.length - limit);
@@ -157,11 +173,10 @@ async function readLogSlice(params: {
 }
 
 /** Reads and redacts the configured log tail with bounded bytes and line count. */
-export async function readConfiguredLogTail(params?: {
-  cursor?: number;
-  limit?: number;
-  maxBytes?: number;
-}): Promise<LogTailPayload> {
+export async function readConfiguredLogTail(
+  params?: { cursor?: number; limit?: number; maxBytes?: number },
+  filter?: (line: string) => boolean,
+): Promise<LogTailPayload> {
   const target = getResolvedLoggerFileTarget();
   const file = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
@@ -169,11 +184,32 @@ export async function readConfiguredLogTail(params?: {
     cursor: params?.cursor,
     limit: params?.limit ?? DEFAULT_LIMIT,
     maxBytes: params?.maxBytes ?? DEFAULT_MAX_BYTES,
+    filter,
   });
   const redaction = resolveRedactOptions();
   return {
     file,
     ...result,
     lines: redactSensitiveLines(result.lines, redaction),
+  };
+}
+
+/** Reads the canonical configured tail and parses its already-redacted lines. */
+export async function readConfiguredParsedLogTail(params?: {
+  cursor?: number;
+  limit?: number;
+  maxBytes?: number;
+  filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
+}): Promise<ParsedLogTailPayload> {
+  const tail = await readConfiguredLogTail(params, (raw) => {
+    const parsed = parseLogLine(raw);
+    return parsed !== null && (params?.filter?.(parsed) ?? true);
+  });
+  return {
+    ...tail,
+    lines: tail.lines.flatMap((line) => {
+      const parsed = parseLogLine(line);
+      return parsed ? [parsed] : [];
+    }),
   };
 }

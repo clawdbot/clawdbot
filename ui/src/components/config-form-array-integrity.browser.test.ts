@@ -134,6 +134,55 @@ describe("config form array integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["values"], []);
   });
 
+  it("preserves unquoted strings and decodes quoted strings in string-number arrays", async () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const identifier = "1048113311314608148";
+    renderArrayFixture(container, {
+      schema: {
+        type: "array",
+        items: {
+          oneOf: [{ enum: [identifier] }, { type: "number" }],
+        },
+      },
+      value: [],
+      path: ["allowFrom"],
+      onPatch,
+    });
+
+    const draftHost = expectElement(
+      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      "string-number array draft",
+    );
+    const addDraftValue = async (value: string) => {
+      expectElement(findAddButton(container), "string-number array add").click();
+      await draftHost.updateComplete;
+      const draftValue = expectElement(
+        draftHost.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+          "[data-collection-draft-value]",
+        ),
+        "string-number array draft value",
+      );
+      draftValue.value = value;
+      draftValue.dispatchEvent(new Event("input", { bubbles: true }));
+      await draftHost.updateComplete;
+      expectElement(findAddButton(draftHost), "string-number array draft commit").click();
+      await draftHost.updateComplete;
+    };
+
+    await addDraftValue(identifier);
+    expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
+    expect(onPatch.mock.calls[0]?.[1]?.[0]).not.toBe(Number(identifier));
+    onPatch.mockClear();
+    await addDraftValue(JSON.stringify(identifier));
+    expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
+    onPatch.mockClear();
+    await addDraftValue("1e5");
+    expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [100_000]);
+    container.remove();
+  });
+
   it("keeps large and unique array minimums incrementally editable", async () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

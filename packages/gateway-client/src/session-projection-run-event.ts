@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   reduceSessionProjection,
   type SessionProjectionEvent,
@@ -25,10 +26,7 @@ export function reduceSessionProjectionRunEventImpl(
     return null;
   }
   const message = event.message;
-  const messageStopReason =
-    message !== null && typeof message === "object" && !Array.isArray(message)
-      ? readNonemptyString((message as Record<string, unknown>).stopReason)
-      : null;
+  const messageStopReason = isRecord(message) ? readNonemptyString(message.stopReason) : null;
   const stopReason = readNonemptyString(event.stopReason) ?? messageStopReason;
   const errorKind = readNonemptyString(event.errorKind);
   const base = { runId, ...(message === undefined ? {} : { message }), scope };

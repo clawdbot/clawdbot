@@ -706,6 +706,8 @@ export function buildInboundUserContextPrefix(
 
   const rawReplyToBody = sanitizePromptBody(ctx.ReplyToBody);
   const replyToBody = rawReplyToBody ? truncateBodyHeadTail(rawReplyToBody) : rawReplyToBody;
+  const replyToSender = normalizePromptMetadataString(ctx.ReplyToSender);
+  const hasReplyTargetMetadata = Boolean(replyToId || replyToSender || replyToBody);
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatContextJsonBlock(
@@ -713,12 +715,13 @@ export function buildInboundUserContextPrefix(
         replyChainPayload,
       ),
     );
-  } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
+  } else if (hasReplyTargetMetadata && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatContextJsonBlock(markInboundContextLabel("Reply target of current user message:"), {
-        sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
+        message_id: replyToId,
+        sender_label: replyToSender,
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
-        body: replyToBody,
+        body: replyToBody || undefined,
       }),
     );
   }

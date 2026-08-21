@@ -19,6 +19,7 @@ export async function ensureCliCommandBootstrap(params: {
   commandPath: string[];
   suppressDoctorStdout?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
   allowInvalid?: boolean;
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
@@ -34,6 +35,7 @@ export async function ensureCliCommandBootstrap(params: {
         commandPath: params.commandPath,
         measure: (stage, run) => measureCliCommandStartup(stage, run),
         ...(params.allowInvalid ? { allowInvalid: true } : {}),
+        ...(params.validateConfigOnly ? { validateConfigOnly: true } : {}),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),

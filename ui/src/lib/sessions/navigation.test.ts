@@ -412,6 +412,18 @@ describe("visibleSessionMatches", () => {
 
 describe("isSystemCreatedSessionRow", () => {
   const base = { key: "agent:main:explicit:probe", kind: "direct", updatedAt: 1 } as const;
+  it("keeps a newly created operator-named CLI session visible", () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:incident-42",
+      kind: "direct",
+      updatedAt: 1,
+      createdVia: "run",
+      displayName: "incident-42",
+    };
+
+    expect(isSystemCreatedSessionRow(row)).toBe(false);
+  });
+
   it.each([
     ["run + no actor + unnamed is system", { createdVia: "run" }, true],
     ["internal + no actor + unnamed is system", { createdVia: "internal" }, true],
@@ -422,11 +434,6 @@ describe("isSystemCreatedSessionRow", () => {
       false,
     ],
     ["run + label stays visible", { createdVia: "run", label: "My batch job" }, false],
-    [
-      "run + displayName stays visible",
-      { createdVia: "run", displayName: "Nightly digest" },
-      false,
-    ],
     ["operator creation stays visible", { createdVia: "operator" }, false],
     ["legacy row without provenance stays visible", {}, false],
     [

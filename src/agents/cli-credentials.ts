@@ -176,11 +176,11 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexHomePath(codexHome?: string) {
-  const configured = codexHome ?? process.env.CODEX_HOME;
+export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessEnv = process.env) {
+  const configured = codexHome ?? env.CODEX_HOME;
   // External CLI state belongs to the OS user, not OpenClaw's relocatable
   // home. Otherwise an isolated OPENCLAW_HOME hides an already logged-in CLI.
-  const home = resolveOsHomeRelativePath(configured || "~/.codex");
+  const home = resolveOsHomeRelativePath(configured || "~/.codex", { env });
   try {
     return fs.realpathSync.native(home);
   } catch {
@@ -274,7 +274,7 @@ function resolveCodexKeychainParams(options?: {
   return {
     platform: options?.platform ?? process.platform,
     execSyncImpl: options?.execSync ?? execSync,
-    codexHome: resolveCodexHomePath(options?.codexHome),
+    codexHome: resolveCodexCliHomePath(options?.codexHome),
   };
 }
 
@@ -703,7 +703,7 @@ function readCodexCliCredentials(options?: {
     }
   }
 
-  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const authPath = path.join(resolveCodexCliHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFileThroughSymlink(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -727,7 +727,7 @@ export function readCodexCliCredentialsCached(options?: {
 }): CodexCliCredential | null {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
-  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const authPath = path.join(resolveCodexCliHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({

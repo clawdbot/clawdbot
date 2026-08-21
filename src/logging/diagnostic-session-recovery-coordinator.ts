@@ -11,8 +11,6 @@ import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js"
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   recoveryOutcomeClearsQueuedSessionState,
-  recoveryOutcomeMutatesSessionState,
-  recoveryOutcomeReleasedCount,
   resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
@@ -70,7 +68,7 @@ function emitSessionRecoveryCompleted(params: {
     status: params.outcome.status,
     action: params.outcome.action,
     outcomeReason: "reason" in params.outcome ? params.outcome.reason : undefined,
-    released: recoveryOutcomeReleasedCount(params.outcome) || undefined,
+    released: "released" in params.outcome ? params.outcome.released || undefined : undefined,
     stale: params.stale,
   });
 }
@@ -100,7 +98,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   if (!params.outcome) {
     return;
   }
-  if (!recoveryOutcomeMutatesSessionState(params.outcome)) {
+  if (params.outcome.status !== "aborted" && params.outcome.status !== "released") {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
   }

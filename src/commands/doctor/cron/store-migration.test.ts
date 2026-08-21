@@ -3,7 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
-import { LEGACY_TASK_SUGGESTION_TOOL_NAME } from "../shared/legacy-tool-name-migration.js";
+import {
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+} from "../shared/legacy-tool-name-migration.js";
 import {
   planCronCodexRefRewriteAgainstPersistedConfig,
   repairCronCodexRuntimePolicies,
@@ -122,7 +125,7 @@ describe("normalizeStoredCronJobs", () => {
         payload: {
           kind: "agentTurn",
           message: "ping",
-          toolsAllow: ["read", LEGACY_TASK_SUGGESTION_TOOL_NAME],
+          toolsAllow: ["read", TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName],
         },
       }),
     );
@@ -131,6 +134,42 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyTaskSuggestionToolName).toBe(1);
     const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
     expect(payload.toolsAllow).toEqual(["read", "suggest_task"]);
+  });
+
+  it("rewrites the legacy image inspection tool in persisted tool allowlists", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          toolsAllow: ["read", IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName],
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyImageInspectionToolName).toBe(1);
+    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
+    expect(payload.toolsAllow).toEqual(["read", "view_image"]);
+  });
+
+  it.each([
+    { name: "image*", entries: ["image*"], expected: ["image*", "view_image"], issue: 1 },
+    { name: "i*e", entries: ["i*e"], expected: ["i*e", "view_image"], issue: 1 },
+    { name: "*", entries: ["*"], expected: ["*"], issue: undefined },
+    { name: "*image*", entries: ["*image*"], expected: ["*image*"], issue: undefined },
+  ])("migrates legacy image inspection pattern $name", ({ entries, expected, issue }) => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "ping", toolsAllow: entries },
+      }),
+    );
+
+    expect(result.issues.legacyImageInspectionToolName).toBe(issue);
+    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
+    expect(payload.toolsAllow).toEqual(expected);
   });
 
   it("rewrites legacy OpenAI Codex model refs in cron payloads", () => {

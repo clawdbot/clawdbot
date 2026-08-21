@@ -31,6 +31,8 @@ describe("worker bundle archive", () => {
     await fs.chmod(path.join(source, "openclaw.mjs"), 0o700);
     await fs.writeFile(path.join(source, "dist", "worker.js"), "export const worker = true;\n");
     await fs.chmod(path.join(source, "dist", "worker.js"), 0o600);
+    await fs.writeFile(path.join(source, "dist", "Upper.js"), "export const upper = true;\n");
+    await fs.chmod(path.join(source, "dist", "Upper.js"), 0o600);
     const sourceManifest = await readWorkerBundleDirectoryManifest({
       root: source,
       limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -39,6 +41,7 @@ describe("worker bundle archive", () => {
     await tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, [
       "openclaw.mjs",
       "dist/worker.js",
+      "dist/Upper.js",
     ]);
 
     await extractWorkerBundleArchive({

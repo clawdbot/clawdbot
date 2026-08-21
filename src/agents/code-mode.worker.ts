@@ -34,6 +34,9 @@ type VmRun = {
   didTimeout: () => boolean;
 };
 
+// Each worker handles exactly one exec/resume payload, so cancellations are run-scoped.
+const canceledBridgeRequestIds: string[] = [];
+
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
 // dropped the actual cause, surfacing failures to the model as a bare location
@@ -79,7 +82,6 @@ function createHostRequestHandler(params: {
     if (
       method !== "search" &&
       method !== "describe" &&
-      method !== "call" &&
       method !== "callValue" &&
       method !== "nodes" &&
       method !== "yield" &&
@@ -88,6 +90,7 @@ function createHostRequestHandler(params: {
       method !== "agentWait" &&
       method !== "skillsList" &&
       method !== "skillsRead" &&
+      method !== "sleep" &&
       method !== "swarmNote"
     ) {
       throw new Error("unsupported code mode bridge method");
@@ -115,6 +118,23 @@ function createHostRequestHandler(params: {
       args: Array.isArray(args) ? args : [],
     });
     return params.vm.newString(id);
+  };
+}
+
+function createHostCancelRequestHandler(params: {
+  vm: QuickJS;
+  pendingRequests: PendingBridgeRequest[];
+}): (this: JSValueHandle, id: JSValueHandle) => JSValueHandle {
+  return (idHandle) => {
+    const id = idHandle.toString();
+    const index = params.pendingRequests.findIndex((request) => request.id === id);
+    if (index >= 0) {
+      // Return the cancellation to the parent owner as well as removing it
+      // locally; restored requests may already have a live host operation.
+      params.pendingRequests.splice(index, 1);
+      canceledBridgeRequestIds.push(id);
+    }
+    return params.vm.undefined;
   };
 }
 
@@ -159,6 +179,12 @@ async function createVm(params: {
       config: params.config,
     }),
   ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
+  vm.newFunction(
+    "__openclawHostCancelRequest",
+    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
+  ).consume((hostCancelRequest) =>
+    vm.global.setProp("__openclawHostCancelRequest", hostCancelRequest),
+  );
   vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -189,6 +215,10 @@ async function restoreVm(params: {
       pendingRequests: params.pendingRequests,
       config: params.config,
     }),
+  );
+  vm.registerHostCallback(
+    "__openclawHostCancelRequest",
+    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
   );
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -262,7 +292,7 @@ function workerFailureResult(params: {
 
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
   if (!resultHandle.isPromise) {
-    return toJsonSafe(vm.dump(resultHandle));
+    return serializeCompletedCatalogHandles(vm, resultHandle);
   }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
@@ -288,7 +318,17 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       throw new Error(text);
     });
   }
-  return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
+  return settled.value.consume((value) => serializeCompletedCatalogHandles(vm, value));
+}
+
+function serializeCompletedCatalogHandles(vm: QuickJS, value: JSValueHandle): unknown {
+  return vm.global
+    .getProp("__openclawSerializeCatalogHandles")
+    .consume((serialize) =>
+      vm
+        .callFunction(serialize, vm.undefined, value)
+        .consume((serialized) => toJsonSafe(vm.dump(serialized))),
+    );
 }
 
 function waitingResult(params: {
@@ -306,6 +346,7 @@ function waitingResult(params: {
     status: "waiting",
     snapshotBytes,
     pendingRequests: params.pendingRequests,
+    canceledRequestIds: canceledBridgeRequestIds,
     settlementMode: params.settlementMode,
     output: params.output,
   };

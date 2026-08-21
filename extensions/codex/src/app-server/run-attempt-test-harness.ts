@@ -1,6 +1,7 @@
 // Codex plugin module implements run attempt test harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAndDrainAgentHarnessRun,
   nativeHookRelayTesting,
@@ -60,6 +61,7 @@ function createHarnessHostCapabilities(
     version: 1,
     assertActive: () => {},
     bindToolSurface: (tools) => tools,
+    createToolSurface: (options) => createOpenClawCodingTools(options),
     runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
       await runBeforeToolCallHook({
         ...request,

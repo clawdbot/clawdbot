@@ -17,7 +17,7 @@ import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
 import {
   hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 import { runPreparedChannelTurn } from "./execution.js";

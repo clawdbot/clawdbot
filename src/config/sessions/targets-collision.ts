@@ -126,14 +126,19 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const byAgentId = new Map(
       group.map(({ target }) => [normalizeAgentId(target.agentId), target] as const),
     );
-    const registeredOwners = [
-      ...new Set(
-        registeredDatabases
-          .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
-          .map((entry) => normalizeAgentId(entry.agentId)),
-      ),
-    ];
     const pathOwners = [...new Set(group.flatMap((entry) => entry.databaseOwnerAgentId ?? []))];
+    // A unique path owner outranks registry owners, so identity matching cannot change the result.
+    // Registry loading above still preserves unreadable-registry semantics.
+    const registeredOwners =
+      pathOwners.length === 1
+        ? []
+        : [
+            ...new Set(
+              registeredDatabases
+                .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
+                .map((entry) => normalizeAgentId(entry.agentId)),
+            ),
+          ];
     const collision = byAgentId.size > 1;
     if (pathOwners.length !== 1 && registeredOwners.length > 1) {
       const diagnostic: SessionStoreTargetCollisionDiagnostic = {

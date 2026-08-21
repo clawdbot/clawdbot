@@ -135,6 +135,9 @@ interface FinishedSession {
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
 let finishedSessionsByProcess = new WeakMap<ProcessSession, FinishedSession>();
+// Keep start chronology private while snapshots retain their completion-order eviction contract.
+let processSessionStartOrders = new WeakMap<object, number>();
+let nextProcessSessionStartOrder = 0;
 const activeBackgroundExecSessionIds = new Set<string>();
 let finishedSessionOutputChars = 0;
 
@@ -149,8 +152,20 @@ export function isProcessSessionIdTaken(id: string): boolean {
 
 /** Adds a running session and starts retention sweeping if needed. */
 export function addSession(session: ProcessSession) {
+  processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   runningSessions.set(session.id, session);
   startSweeper();
+}
+
+/** Sorts registered process records newest-first, including same-millisecond starts. */
+export function compareProcessSessionStartOrder(
+  left: { startedAt: number },
+  right: { startedAt: number },
+): number {
+  return (
+    right.startedAt - left.startedAt ||
+    processSessionStartOrders.get(right)! - processSessionStartOrders.get(left)!
+  );
 }
 
 /** Returns a running session by id. */
@@ -368,6 +383,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     ...(session.terminalPollObserved ? { terminalPollObserved: true } : {}),
     ...(session.notifyOnExitRemoval ? { notifyOnExitRemoval: session.notifyOnExitRemoval } : {}),
   };
+  processSessionStartOrders.set(finished, processSessionStartOrders.get(session)!);
   finishedSessionsByProcess.set(session, finished);
   finishedSessions.set(session.id, finished);
   finishedSessionOutputChars += session.aggregated.length;
@@ -440,6 +456,8 @@ function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
   finishedSessionsByProcess = new WeakMap();
+  processSessionStartOrders = new WeakMap();
+  nextProcessSessionStartOrder = 0;
   finishedSessionOutputChars = 0;
   activeBackgroundExecSessionIds.clear();
   stopSweeper();

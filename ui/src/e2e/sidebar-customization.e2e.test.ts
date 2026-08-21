@@ -669,36 +669,6 @@ suite.define(() => {
     }
   });
 
-  it("shows the Workboard route when the plugin is enabled in config", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config: { plugins: { entries: { workboard: { enabled: true } } } },
-            },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-nav__head-action").click();
-        await expect
-          .poll(() =>
-            trimmedTextContents(
-              sidebar.locator("wa-dropdown.sidebar-more-menu").getByRole("menuitem"),
-            ),
-          )
-          .toContain("Workboard");
-      },
-    );
-  });
-
   it("opens the start screen from the sidebar action without carrying the active session", async () => {
     await suite.withPage(
       {
@@ -717,6 +687,107 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
         await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
         await captureUiProof(page, "07-sidebar-start-screen.png");
+      },
+    );
+  });
+
+  it("keeps mobile attention in the drawer while desktop remains unchanged", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "cron.list": {
+              jobs: [
+                {
+                  id: "release-digest",
+                  name: "Release digest",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "isolated",
+                  wakeMode: "now",
+                  payload: { kind: "agentTurn", message: "test" },
+                  state: {
+                    lastRunStatus: "error",
+                    lastError: "Provider request failed",
+                  },
+                },
+              ],
+              snapshotRevision: "sidebar-mobile-attention",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            },
+            "models.authStatus": { providers: [], ts: 1 },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("cron.list");
+        await gateway.emitGatewayEvent("update.available", {
+          schedule: {
+            autoEnabled: false,
+            channel: "dev",
+            install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
+            target: {
+              kind: "git",
+              commitsBehind: 246,
+              upstreamRef: "origin/main",
+              upstreamSha: "9f3c21a0000000000000000000000000000000aa",
+            },
+          },
+          updateAvailable: {
+            channel: "dev",
+            commitsBehind: 246,
+            currentSha: "1111111111111111111111111111111111111111",
+            currentVersion: "2026.8.1",
+            latestVersion: "2026.8.1",
+            upstreamRef: "origin/main",
+            upstreamSha: "9f3c21a0000000000000000000000000000000aa",
+          },
+        });
+
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const sidebarUpdate = sidebar.locator('[data-attention-kind="updateAvailable"]');
+        const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
+        await expect.poll(() => sidebarUpdate.count()).toBe(1);
+        await expect.poll(() => sidebarAutomation.count()).toBe(1);
+        await captureUiProof(page, "08-desktop-attention-unchanged.png");
+
+        await page.setViewportSize({ height: 852, width: 393 });
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        const floatingKinds = await page
+          .locator(".sidebar-attention--floating [data-attention-kind]")
+          .evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("data-attention-kind")),
+          );
+        await captureUiProof(page, "09-mobile-attention-closed.png");
+
+        await visibleDrawerButton(page).click();
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--nav-drawer-open");
+        await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
+        await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
+        await captureUiProof(page, "10-mobile-attention-drawer.png");
+
+        expect(floatingKinds).toEqual([]);
       },
     );
   });

@@ -32,6 +32,14 @@ import {
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
+type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  mediaImageLayout?: {
+    slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
+    suppressedFactIndexes: number[];
+  };
+};
+
 installQueueRuntimeErrorSilencer();
 
 function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
@@ -53,7 +61,7 @@ function enqueueTestRun(
 }
 
 function createDrainRecorder(expectedCalls = 1) {
-  const calls: FollowupRun[] = [];
+  const calls: Array<FollowupRun & { currentTurnImagesPrepared?: true }> = [];
   const done = createDeferred();
   const runFollowup = async (run: FollowupRun) => {
     calls.push(run);
@@ -749,7 +757,6 @@ describe("followup queue collect routing", () => {
 
     const queue = getExistingFollowupQueue(key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
-    expect(queue?.summaryElisions).toHaveLength(2);
     expect(queue?.summaryElisions.map((entry) => entry.sources.at(-1)?.originatingTo)).toEqual([
       "channel:B",
       "channel:A",
@@ -852,7 +859,6 @@ describe("followup queue collect routing", () => {
 
     await drainRecordedQueue(key, runFollowup, done);
 
-    expect(calls).toHaveLength(3);
     expect(calls.map((call) => call.originatingTo)).toEqual([
       "channel:B",
       "channel:C",
@@ -1806,6 +1812,27 @@ describe("followup queue collect routing", () => {
     }
   });
 
+  it("drains a bound Skill Workshop revision individually", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-skill-workshop-revision-${Date.now()}`,
+      {},
+      2,
+    );
+    const revisionRun = createRun({ prompt: "revise proposal" });
+    revisionRun.run.skillWorkshopProposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "normal" }), settings);
+    enqueueFollowupRun(key, revisionRun, settings);
+    await drainRecordedQueue(key, runFollowup, done);
+
+    expect(calls.map((call) => call.prompt)).toEqual(["normal", "revise proposal"]);
+  });
+
   it("can prepend priority followups before already queued items", () => {
     const key = `test-priority-followup-front-${Date.now()}`;
     const settings = createQueueSettings({ mode: "followup" });
@@ -2017,6 +2044,82 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.images).toEqual([firstImage, secondImage]);
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
+  });
+
+  it("preserves prepared empty image state across collected batches", async () => {
+    const key = `test-collect-prepared-empty-images-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+    const missingMedia = {
+      path: "/openclaw-test-missing/current.png",
+      contentType: "image/png",
+      hydrationSuppressed: true,
+    };
+
+    for (const prompt of ["one", "two"]) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [],
+        imageOrder: [],
+        media: [missingMedia],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.currentTurnImagesPrepared).toBe(true);
+    expect(collected?.images).toEqual([]);
+    expect(collected?.imageOrder).toEqual([]);
+    expect(collected?.media).toEqual([missingMedia, missingMedia]);
+    expect(collected?.mediaImageLayout).toEqual({
+      slots: [],
+      suppressedFactIndexes: [0, 1],
+    });
+  });
+
+  it("offsets prepared media layout fact indexes across collected batches", async () => {
+    const key = `test-collect-prepared-image-layout-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+
+    for (const [index, prompt] of ["one", "two"].entries()) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [],
+        imageOrder: ["offloaded"],
+        media: [{ path: `/tmp/offloaded-${index}.png`, contentType: "image/png" }],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }],
+          suppressedFactIndexes: [],
+        },
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect((calls[0] as InternalFollowupRun | undefined)?.mediaImageLayout).toEqual({
+      slots: [
+        { kind: "offloaded", factIndex: 0 },
+        { kind: "offloaded", factIndex: 1 },
+      ],
+      suppressedFactIndexes: [],
+    });
   });
 
   it("splits collect batches when sender authorization changes", async () => {

@@ -4,8 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
@@ -1033,8 +1032,8 @@ describe("collectGatewayHealthSnapshot", () => {
     await getHealthSnapshot({ timeoutMs: 10, probe: false });
 
     expect(listHealthSessionEntriesCalls).toEqual([
-      { agentId: "main", storePath: "/tmp/sessions.json" },
-      { agentId: "ops", storePath: "/tmp/sessions.json" },
+      { agentId: "main", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
+      { agentId: "ops", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
     ]);
   });
 });

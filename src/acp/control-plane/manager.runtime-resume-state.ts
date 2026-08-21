@@ -41,19 +41,20 @@ function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeErro
   return false;
 }
 
-/** Prepares a one-time fresh-handle retry for recoverable pre-output runtime failures. */
+/** Prepares a one-time fresh-handle retry only before authoritative prompt submission. */
 export async function prepareFreshManagerRuntimeHandleRetry(params: {
   attempt: number;
   cfg: OpenClawConfig;
   sessionKey: string;
   error: AcpRuntimeError;
+  promptStarted: boolean;
   sawTurnOutput: boolean;
   runtime?: AcpRuntime;
   meta?: SessionAcpMeta;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<boolean> {
-  if (params.attempt > 0 || params.sawTurnOutput) {
+  if (params.attempt > 0 || params.promptStarted || params.sawTurnOutput) {
     return false;
   }
   if (isRecoverableManagerAcpxExitError(params.error.message)) {
@@ -191,6 +192,12 @@ export async function discardPersistedManagerRuntimeState(params: {
   });
 }
 
+/**
+ * Best-effort fresh-session preparation against a maybe-missing backend.
+ * Every non-applied path records why it was skipped: a reset that silently
+ * skips this step looks successful while the backend keeps resuming the old
+ * conversation, which is the worst failure mode for session resets.
+ */
 export async function tryPrepareFreshManagerRuntimeSession(params: {
   deps: Pick<AcpSessionManagerDeps, "getRuntimeBackend">;
   cfg: OpenClawConfig;
@@ -206,9 +213,18 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
       if (params.missingBackendError) {
         throw toErrorObject(params.missingBackendError, "Non-Error thrown");
       }
+      logVerbose(
+        `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${configuredBackend || "(default)"}" is not registered`,
+      );
       return;
     }
-    await backend.runtime.prepareFreshSession?.({
+    if (!backend.runtime.prepareFreshSession) {
+      logVerbose(
+        `${params.logPrefix}: fresh-session preparation skipped for ${params.sessionKey}: ACP backend "${backend.id}" does not support prepareFreshSession`,
+      );
+      return;
+    }
+    await backend.runtime.prepareFreshSession({
       sessionKey: params.sessionKey,
     });
   } catch (error) {
