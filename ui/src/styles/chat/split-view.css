@@ -49,13 +49,15 @@ openclaw-chat-pane {
   filter: saturate(0.68);
 }
 
-.chat-split-view--split .chat-split-view__cell:not(.chat-split-view__cell--active)
+.chat-split-view--split
+  .chat-split-view__cell:not(.chat-split-view__cell--active)
   .agent-chat__composer-shell {
   opacity: 0.94;
   filter: saturate(0.88);
 }
 
-.chat-split-view--split .chat-split-view__cell:not(.chat-split-view__cell--active)
+.chat-split-view--split
+  .chat-split-view__cell:not(.chat-split-view__cell--active)
   .chat-pane__header
   :is(
     .chat-pane__incognito,
