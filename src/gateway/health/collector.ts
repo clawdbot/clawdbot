@@ -113,6 +113,8 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
   try {
     listed = listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
+      clone: false,
+      projection: "list",
       storePath,
     });
   } catch (error) {
