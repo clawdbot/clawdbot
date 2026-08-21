@@ -3,7 +3,6 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { backupCaptureFinalCommand } from "../../commands/backup-capture-final.js";
-import { backupRestoreAcceptedCommand } from "../../commands/backup-restore-accepted.js";
 import {
   backupGitCreateCommand,
   backupGitInitCommand,
@@ -11,6 +10,7 @@ import {
   backupGitRestoreCommand,
   backupGitVerifyCommand,
 } from "../../commands/backup-git.js";
+import { backupRestoreAcceptedCommand } from "../../commands/backup-restore-accepted.js";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
 import { backupDisableCommand, backupEnableCommand } from "../../commands/backup-schedule.js";
 import {
