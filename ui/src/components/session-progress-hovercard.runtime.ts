@@ -423,17 +423,30 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (this.hovercard.card?.dataset.revision === revision) {
       return;
     }
-    nextHovercardId += 1;
-    const card = createPortaledHovercard(
-      `openclaw-session-progress-hovercard-${nextHovercardId}`,
-      "session-progress-hovercard",
-    );
-    const animateEntry = this.animateNextOpen;
-    this.animateNextOpen = false;
-    if (animateEntry) {
-      card.dataset.open = "false";
-    } else {
-      card.dataset.instant = "true";
+    const mountedCard = this.hovercard.card;
+    const focusedCardElement =
+      mountedCard?.contains(document.activeElement) && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const focusedCardIndex = focusedCardElement
+      ? this.cardFocusables().indexOf(focusedCardElement)
+      : -1;
+    const focusedHref =
+      focusedCardElement instanceof HTMLAnchorElement ? focusedCardElement.href : null;
+    const animateEntry = !mountedCard && this.animateNextOpen;
+    let card = mountedCard;
+    if (!card) {
+      nextHovercardId += 1;
+      card = createPortaledHovercard(
+        `openclaw-session-progress-hovercard-${nextHovercardId}`,
+        "session-progress-hovercard",
+      );
+      this.animateNextOpen = false;
+      if (animateEntry) {
+        card.dataset.open = "false";
+      } else {
+        card.dataset.instant = "true";
+      }
     }
     card.dataset.revision = revision;
     card.setAttribute("aria-label", t("sessionHovercard.ariaLabel"));
@@ -451,6 +464,20 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.hovercard.clearCard();
       this.hovercard.pointerOverCard = false;
       this.hovercard.cardFocusInside = false;
+      return;
+    }
+    if (mountedCard) {
+      if (focusedCardElement && !card.contains(document.activeElement)) {
+        const focusables = this.cardFocusables();
+        const nextFocused =
+          (focusedHref
+            ? focusables.find(
+                (element) => element instanceof HTMLAnchorElement && element.href === focusedHref,
+              )
+            : undefined) ?? focusables[focusedCardIndex];
+        nextFocused?.focus({ preventScroll: true });
+      }
+      this.hovercard.position();
       return;
     }
     card.addEventListener("pointerenter", this.handleCardPointerEnter);
