@@ -189,9 +189,6 @@ function createFixtureRepo(
   writeFixture(root, "package.json", JSON.stringify({ name: "openclaw", version: "2099.1.1" }));
   const toolingSha = commit(root, "tooling");
   const toolingFullRef = `refs/tags/release-publish/${toolingSha.slice(0, 12)}-1`;
-  execFileSync("git", ["tag", toolingFullRef.slice("refs/tags/".length), toolingSha], {
-    cwd: root,
-  });
   return { candidateRef, candidateSha, root, toolingFullRef, toolingSha };
 }
 
@@ -268,6 +265,12 @@ describe("release plan producer", () => {
         { cwd: fixture.root, stdio: "ignore" },
       ),
     ).toBeNull();
+    expect(() =>
+      execFileSync("git", ["cat-file", "-e", fixture.toolingFullRef], {
+        cwd: fixture.root,
+        stdio: "ignore",
+      }),
+    ).toThrow();
 
     const plan = produceReleasePlan(sourceParams(fixture));
     expect(plan).toMatchObject({
@@ -328,20 +331,14 @@ describe("release plan producer", () => {
     expect(() =>
       produceReleasePlan({ ...sourceParams(fixture), candidateSha: "f".repeat(40) }),
     ).toThrow("candidate SHA does not resolve");
-    const mismatchedToolingRef = `refs/tags/release-publish/${fixture.candidateSha.slice(0, 12)}-9`;
-    execFileSync(
-      "git",
-      ["tag", mismatchedToolingRef.slice("refs/tags/".length), fixture.toolingSha],
-      { cwd: fixture.root },
-    );
     expect(() =>
       produceReleasePlan({
         ...sourceParams(fixture),
-        toolingSha: fixture.candidateSha,
-        toolingFullRef: mismatchedToolingRef,
-        runGh: trustedToolingGh(mismatchedToolingRef, fixture.candidateSha),
+        runGh: trustedToolingGh(fixture.toolingFullRef, fixture.candidateSha),
       }),
-    ).toThrow("tooling full ref does not resolve");
+    ).toThrow(
+      "protected release tooling tag is missing, moved, annotated, or bound to the wrong SHA",
+    );
     expect(() =>
       produceReleasePlan({ ...sourceParams(fixture), candidateRef: "refs/heads/tooling" }),
     ).toThrow("candidate ref must be");
@@ -370,9 +367,6 @@ describe("release plan producer", () => {
     writeFixture(fixture.root, "scripts/release-plan-producer.mts", "// placeholder producer\n");
     const toolingSha = commit(fixture.root, "different producer");
     const toolingFullRef = `refs/tags/release-publish/${toolingSha.slice(0, 12)}-2`;
-    execFileSync("git", ["tag", toolingFullRef.slice("refs/tags/".length), toolingSha], {
-      cwd: fixture.root,
-    });
 
     expect(() =>
       produceReleasePlan({

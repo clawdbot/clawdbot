@@ -476,9 +476,6 @@ function resolveSource(params: ReleasePlanSource) {
   if (params.intent !== "main-qualification" && verifiedTooling.route !== "protected-tag") {
     throw new Error(`${params.intent} tooling must use a release-publish tag bound to its SHA`);
   }
-  if (resolveCommit(repoRoot, toolingFullRef, "tooling full ref") !== toolingSha) {
-    throw new Error("tooling full ref does not resolve to the requested tooling SHA");
-  }
   return { candidateSha, repoRoot, toolingFullRef, toolingSha };
 }
 
