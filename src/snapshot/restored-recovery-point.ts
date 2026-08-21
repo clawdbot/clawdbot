@@ -478,8 +478,19 @@ function assertResultMatchesIntent(
     acceptanceSetId: intent.acceptanceSetId,
     startupDescriptorPath: descriptorPath,
   };
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    if (result[key as keyof typeof expected] !== expectedValue) {
+  const expectedKeys = [
+    "runtimeLineage",
+    "lifecycleOwnerGeneration",
+    "destinationRuntimeGeneration",
+    "restoreOperationId",
+    "destinationOwner",
+    "admissionIdentity",
+    "recoveryPointId",
+    "acceptanceSetId",
+    "startupDescriptorPath",
+  ] as const;
+  for (const key of expectedKeys) {
+    if (result[key] !== expected[key]) {
       throw conflict("Restored-admission descriptor is not bound to committed restore intent.");
     }
   }
