@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from "node:fs";
 import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
@@ -81,7 +90,10 @@ const TOOLING_LOCKFILE_PATH = "pnpm-lock.yaml";
 const YAML_PACKAGE_VERSION = "2.9.0";
 const YAML_PACKAGE_INTEGRITY =
   "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
-const YAML_PACKAGE_JSON_SHA256 = "20b8b197cbd10dad245d45e463dfe58e4c8c25a47e24bc4256ad9ab58bf35683";
+const YAML_PACKAGE_TREE_SHA256 = "610ccacfe592d226ac1eb04842d1f591c5381f2a68b9f785643101d10db52c27";
+const YAML_PACKAGE_MAX_FILES = 512;
+const YAML_PACKAGE_MAX_ENTRIES = 1024;
+const YAML_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
 const BUILTIN_IMPORTS = new Set([
   ...builtinModules,
   ...builtinModules.map((specifier) => `node:${specifier}`),
@@ -313,6 +325,87 @@ function verifyYamlLockfile(lockfileText: string) {
   }
 }
 
+function assertYamlPackagePath(path: string) {
+  if (
+    !path ||
+    !/^[\x20-\x7e]+$/u.test(path) ||
+    path.includes("\\") ||
+    posix.isAbsolute(path) ||
+    path.split("/").some((component) => component === "." || component === "..")
+  ) {
+    throw new Error(`installed yaml package contains an unsafe path: ${JSON.stringify(path)}`);
+  }
+}
+
+function verifyInstalledYamlPackageTree(packageRoot: string) {
+  const rootStat = lstatSync(packageRoot);
+  if (!rootStat.isDirectory()) {
+    throw new Error("installed yaml package root must be a directory");
+  }
+
+  const records: string[] = [];
+  let entryCount = 0;
+  let fileCount = 0;
+  let totalBytes = 0;
+  const walk = (directory: string, relativeDirectory = "") => {
+    for (const name of readdirSync(directory).toSorted(compareAscii)) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${name}` : name;
+      assertYamlPackagePath(relativePath);
+      entryCount += 1;
+      if (entryCount > YAML_PACKAGE_MAX_ENTRIES) {
+        throw new Error(
+          `installed yaml package exceeds ${YAML_PACKAGE_MAX_ENTRIES} filesystem entries`,
+        );
+      }
+
+      const absolutePath = join(directory, name);
+      const stat = lstatSync(absolutePath);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`installed yaml package must not contain symbolic links: ${relativePath}`);
+      }
+      if (stat.isDirectory()) {
+        records.push(JSON.stringify(["directory", relativePath]));
+        walk(absolutePath, relativePath);
+        continue;
+      }
+      if (!stat.isFile()) {
+        throw new Error(`installed yaml package must contain only directories and files`);
+      }
+      if (stat.nlink !== 1) {
+        throw new Error(`installed yaml package files must have one link: ${relativePath}`);
+      }
+
+      fileCount += 1;
+      if (fileCount > YAML_PACKAGE_MAX_FILES) {
+        throw new Error(`installed yaml package exceeds ${YAML_PACKAGE_MAX_FILES} files`);
+      }
+      totalBytes += stat.size;
+      if (totalBytes > YAML_PACKAGE_MAX_BYTES) {
+        throw new Error(`installed yaml package exceeds ${YAML_PACKAGE_MAX_BYTES} bytes`);
+      }
+      const bytes = readFileSync(absolutePath);
+      if (bytes.byteLength !== stat.size) {
+        throw new Error(`installed yaml package file changed while being read: ${relativePath}`);
+      }
+      records.push(
+        JSON.stringify([
+          "file",
+          relativePath,
+          bytes.byteLength,
+          createHash("sha256").update(bytes).digest("hex"),
+        ]),
+      );
+    }
+  };
+  walk(packageRoot);
+
+  const manifest = `${records.toSorted(compareAscii).join("\n")}\n`;
+  const digest = createHash("sha256").update(manifest, "ascii").digest("hex");
+  if (digest !== YAML_PACKAGE_TREE_SHA256) {
+    throw new Error(`installed yaml package tree must match yaml@${YAML_PACKAGE_VERSION}`);
+  }
+}
+
 function loadVerifiedYamlParser(repoRoot: string, toolingSha: string): ParseYaml {
   const packageJsonBytes = readVerifiedToolingRootBytes(
     repoRoot,
@@ -335,7 +428,7 @@ function loadVerifiedYamlParser(repoRoot: string, toolingSha: string): ParseYaml
 
   const toolingRequire = createRequire(resolve(EXECUTION_ROOT, TOOLING_PACKAGE_JSON_PATH));
   const packageJsonPath = realpathSync(toolingRequire.resolve("yaml/package.json"));
-  const packageRoot = dirname(packageJsonPath);
+  const packageRoot = realpathSync(dirname(packageJsonPath));
   const modulePath = realpathSync(toolingRequire.resolve("yaml"));
   const moduleRelativePath = relative(packageRoot, modulePath);
   if (
@@ -345,13 +438,17 @@ function loadVerifiedYamlParser(repoRoot: string, toolingSha: string): ParseYaml
   ) {
     throw new Error("resolved yaml module must be owned by its installed package");
   }
-  const installedPackageJsonBytes = readFileSync(packageJsonPath);
-  const installedPackageJsonSha = createHash("sha256")
-    .update(installedPackageJsonBytes)
-    .digest("hex");
-  if (installedPackageJsonSha !== YAML_PACKAGE_JSON_SHA256) {
-    throw new Error(`installed yaml package.json must match yaml@${YAML_PACKAGE_VERSION}`);
+  const packageJsonRelativePath = relative(packageRoot, packageJsonPath);
+  if (
+    packageJsonRelativePath === ".." ||
+    packageJsonRelativePath.startsWith(`..${sep}`) ||
+    isAbsolute(packageJsonRelativePath)
+  ) {
+    throw new Error("resolved yaml package.json must be owned by its installed package");
   }
+  verifyInstalledYamlPackageTree(packageRoot);
+
+  const installedPackageJsonBytes = readFileSync(packageJsonPath);
   const installedPackageJson = JSON.parse(installedPackageJsonBytes.toString("utf8")) as {
     name?: unknown;
     version?: unknown;

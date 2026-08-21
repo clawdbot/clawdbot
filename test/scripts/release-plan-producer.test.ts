@@ -1,5 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -263,6 +273,50 @@ function trustedToolingGh(toolingFullRef: string, toolingSha: string) {
       });
     }
     throw new Error(`unexpected GitHub API request: ${args.join(" ")}`);
+  };
+}
+
+function runYamlPackageSubprocess(
+  mutate?: (params: { packageRoot: string; sentinelPath: string }) => void,
+) {
+  const fixture = createFixtureRepo();
+  const packageRoot = join(fixture.root, "node_modules/yaml");
+  cpSync(realpathSync(resolve("node_modules/yaml")), packageRoot, { recursive: true });
+  const sentinelPath = join(fixture.root, "yaml-executed");
+  mutate?.({ packageRoot, sentinelPath });
+  writeFixture(
+    fixture.root,
+    "yaml-package-harness.mts",
+    `
+import { produceReleasePlan } from "./scripts/release-plan-producer.mts";
+
+const toolingFullRef = ${JSON.stringify(fixture.toolingFullRef)};
+const toolingSha = ${JSON.stringify(fixture.toolingSha)};
+produceReleasePlan({
+  repoRoot: ${JSON.stringify(fixture.root)},
+  intent: "publish",
+  candidateSha: ${JSON.stringify(fixture.candidateSha)},
+  candidateRef: ${JSON.stringify(fixture.candidateRef)},
+  toolingSha,
+  toolingFullRef,
+  runGh: () => JSON.stringify({
+    ref: toolingFullRef,
+    object: { type: "commit", sha: toolingSha },
+  }),
+});
+`,
+  );
+  const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+  return {
+    result: spawnSync(
+      process.execPath,
+      ["--import", tsxImport, join(fixture.root, "yaml-package-harness.mts")],
+      {
+        cwd: fixture.root,
+        encoding: "utf8",
+      },
+    ),
+    sentinelPath,
   };
 }
 
@@ -603,7 +657,66 @@ produceReleasePlan({
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("installed yaml package.json must match yaml@2.9.0");
+    expect(result.stderr).toContain("installed yaml package tree must match yaml@2.9.0");
+  });
+
+  it("accepts the complete installed yaml package tree", () => {
+    const { result } = runYamlPackageSubprocess();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects a changed yaml entry before executing it", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess(({ packageRoot, sentinelPath }) => {
+      const entryPath = join(packageRoot, "dist/index.js");
+      writeFileSync(
+        entryPath,
+        `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n${readFileSync(entryPath, "utf8")}`,
+      );
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed yaml package tree must match yaml@2.9.0");
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("rejects a changed yaml transitive module before execution", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess(({ packageRoot, sentinelPath }) => {
+      const transitivePath = join(packageRoot, "dist/public-api.js");
+      writeFileSync(
+        transitivePath,
+        `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n${readFileSync(transitivePath, "utf8")}`,
+      );
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed yaml package tree must match yaml@2.9.0");
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("rejects internal yaml package symlinks", () => {
+    const { result } = runYamlPackageSubprocess(({ packageRoot }) => {
+      const transitivePath = join(packageRoot, "dist/public-api.js");
+      unlinkSync(transitivePath);
+      symlinkSync("index.js", transitivePath);
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed yaml package must not contain symbolic links");
+  });
+
+  it("rejects extra yaml package files", () => {
+    const { result } = runYamlPackageSubprocess(({ packageRoot }) => {
+      writeFileSync(join(packageRoot, "unexpected.js"), "module.exports = {};\n");
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed yaml package tree must match yaml@2.9.0");
+  });
+
+  it("rejects missing yaml transitive files through tree attestation", () => {
+    const { result } = runYamlPackageSubprocess(({ packageRoot }) => {
+      rmSync(join(packageRoot, "dist/public-api.js"));
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed yaml package tree must match yaml@2.9.0");
+    expect(result.stderr).not.toContain("MODULE_NOT_FOUND");
   });
 
   it("rejects malformed publishable plugins while producing the plan", () => {
