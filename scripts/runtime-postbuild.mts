@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
-import { copyHookMetadata } from "./copy-hook-metadata.ts";
+import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -332,6 +332,7 @@ export function listCoreRuntimePostBuildOutputs(
   params: RuntimeFsParams & { chunks?: LegacyCliExitCompatChunk[] } = {},
 ) {
   return [
+    ...listHookMetadataOutputs(params),
     ...listOfficialChannelCatalogOutputs(),
     ...listExportHtmlTemplateOutputs(params),
     ...listStableRootRuntimeAliasOutputs(params),
