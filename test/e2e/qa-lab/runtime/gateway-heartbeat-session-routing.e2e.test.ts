@@ -22,10 +22,7 @@ import {
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-openai-responses-model.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
-import {
-  peekSystemEvents,
-  resetSystemEventsForTest,
-} from "../../../../src/infra/system-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../../../src/utils/delivery-context.shared.js";
