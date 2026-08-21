@@ -880,7 +880,7 @@ jobs:
 
       - name: Attest ClawHub bootstrap approval
         if: ${{ steps.clawhub_plan.outputs.bootstrap_should_dispatch == 'true' }}
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
 
@@ -943,7 +943,7 @@ jobs:
 
       - name: Attest Android release approval
         if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/android-release-approval/approval.json
 
