@@ -35,7 +35,7 @@ Use `himalaya` for IMAP/SMTP email from shell.
 
 ```bash
 himalaya --version
-himalaya account configure
+himalaya configure
 ```
 
 Config path: `~/.config/himalaya/config.toml`.
@@ -45,18 +45,21 @@ Prefer password managers/keyrings for credentials; do not paste secrets into cha
 ## Read/search
 
 ```bash
-himalaya folder list
+himalaya mailbox list
 himalaya envelope list
 himalaya message read <id>
-himalaya envelope list from alice@example.com subject invoice
+himalaya envelope search "from alice and subject invoice"
 ```
+
+`envelope list` takes no query; all filtering goes through `envelope search`
+(pass the whole query as one argument). `--json` is the global flag for
+machine-readable output.
 
 ## Write
 
 ```bash
 himalaya message write
-himalaya template write
-himalaya template send < /tmp/message.txt
+himalaya message send < /tmp/message.eml
 himalaya message reply <id>
 himalaya message forward <id>
 ```
@@ -66,12 +69,16 @@ Use MML for attachments and rich messages; read `references/message-composition.
 ## Organize
 
 ```bash
-himalaya message copy <id> <folder>
-himalaya message move <id> <folder>
+himalaya message copy --to <folder> <id>
+himalaya message move --to <folder> <id>
 himalaya message delete <id>
 himalaya flag add <id> --flag seen
 himalaya flag remove <id> --flag seen
 ```
+
+`--to` is mandatory on copy/move; `--from` is optional and defaults to the
+inbox alias. To dump a message's raw RFC 5322 bytes (full headers), use
+`himalaya message read --raw <id>`.
 
 ## Safety
 
