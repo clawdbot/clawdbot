@@ -21,7 +21,9 @@ describe("skill_workshop collection restore", () => {
       prefix: "openclaw-skill-collection-restore-state-",
     });
     cleanups.push(async () => await testState.cleanup());
-    const workspaceDir = await tempDirs.make("openclaw-skill-collection-restore-");
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-skill-collection-restore-"),
+    );
     const proposal = await proposeCreateSkill({
       workspaceDir,
       env: testState.env,
