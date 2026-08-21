@@ -88,18 +88,21 @@ export async function dispatchCronDelivery(
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let directCronSessionCleanupAttempted = false;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
-  const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
-    ...(result ? { result } : {}),
-    delivered,
-    deliveryAttempted,
-    ...(deliveryError ? { deliveryError } : {}),
-    ...(deliverySuppressionReason ? { deliverySuppressionReason } : {}),
-    cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
-    summary,
-    outputText,
-    synthesizedText,
-    deliveryPayloads,
-  });
+  const buildDeliveryState = async (result?: RunCronAgentTurnResult) => {
+    await params.queueSourceSessionMessageToolAwareness?.();
+    return {
+      ...(result ? { result } : {}),
+      delivered,
+      deliveryAttempted,
+      ...(deliveryError ? { deliveryError } : {}),
+      ...(deliverySuppressionReason ? { deliverySuppressionReason } : {}),
+      cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryPayloads,
+    };
+  };
   const formatDeliveryTargetError = (error: string) =>
     params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
@@ -677,7 +680,7 @@ export async function dispatchCronDelivery(
       if (!completion.ok) {
         return await failCurrentSessionCompletion(completion.reason);
       }
-      params.removeSourceSessionMessageToolAwareness?.();
+      params.queueSourceSessionMessageToolAwareness = undefined;
       if (!completion.requiresExternalDelivery) {
         delivered = true;
         await cleanupDirectCronSessionIfNeeded();

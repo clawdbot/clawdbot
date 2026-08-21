@@ -1274,9 +1274,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("passes same-source awareness removal ownership to current-session dispatch", async () => {
+  it("passes deferred same-source awareness to current-session dispatch", async () => {
     const sourceSessionKey = "agent:default:messagechat:direct:123";
-    const removeSourceAwareness = vi.fn();
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
     resolveCronSessionMock.mockReturnValue(
@@ -1294,7 +1294,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         },
       ]),
     );
-    queueCronMessageToolDeliveryAwarenessMock.mockResolvedValueOnce(removeSourceAwareness);
+    queueCronMessageToolDeliveryAwarenessMock.mockResolvedValueOnce(queueSourceAwareness);
     const job = makeAnnounceMessageToolJob() as unknown as Record<string, unknown>;
     job.sessionTarget = "current";
     job.sessionKey = sourceSessionKey;
@@ -1305,11 +1305,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceSessionKey }),
+      expect.objectContaining({ deferredTargetSessionKey: sourceSessionKey }),
     );
     expectDispatchFields({
       sourceSessionKey,
-      removeSourceSessionMessageToolAwareness: removeSourceAwareness,
+      queueSourceSessionMessageToolAwareness: queueSourceAwareness,
     });
   });
 

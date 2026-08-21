@@ -31,8 +31,8 @@ export type DispatchCronDeliveryParams = {
   skipHeartbeatDelivery: boolean;
   spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
-  /** Removes only awareness superseded by a successful durable source-session commit. */
-  removeSourceSessionMessageToolAwareness?: () => void;
+  /** Queues same-source fallback awareness only after a durable completion commit fails. */
+  queueSourceSessionMessageToolAwareness?: () => Promise<void>;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];

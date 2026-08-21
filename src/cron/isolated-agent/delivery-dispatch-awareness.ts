@@ -170,11 +170,9 @@ export async function queueCronAwarenessSystemEvent(params: {
   targetSessionKey?: string;
   text: string;
   targetText?: string;
-  receiptTargetSessionKey?: string;
-}): Promise<(() => boolean) | undefined> {
+}): Promise<void> {
   try {
-    const { enqueueSystemEvent, enqueueSystemEventWithReceipt } =
-      await deliveryOutboundRuntimeLoader.load();
+    const { enqueueSystemEvent } = await deliveryOutboundRuntimeLoader.load();
     const mainSessionKey = resolveCronAwarenessMainSessionKey({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -198,9 +196,6 @@ export async function queueCronAwarenessSystemEvent(params: {
         { sessionKey: targetSessionKey, contextKey: params.deliveryIdempotencyKey },
         params.agentId,
       );
-      if (isSameSessionKey(targetSessionKey, params.receiptTargetSessionKey)) {
-        return enqueueSystemEventWithReceipt(text, options) ?? undefined;
-      }
       enqueueSystemEvent(text, options);
     }
   } catch (err) {
@@ -208,7 +203,6 @@ export async function queueCronAwarenessSystemEvent(params: {
       `[cron:${params.jobId}] failed to queue isolated cron awareness: ${formatErrorMessage(err)}`,
     );
   }
-  return undefined;
 }
 
 function isCustomCronSessionTarget(sessionTarget: CronJob["sessionTarget"]): boolean {
@@ -469,13 +463,13 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
-  sourceSessionKey?: string;
+  deferredTargetSessionKey?: string;
   runStartedAt: number;
   resolvedDelivery: DeliveryTargetResolution;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
-}): Promise<(() => void) | undefined> {
+}): Promise<(() => Promise<void>) | undefined> {
   const seen = new Set<string>();
-  const sourceAwarenessReceipts: Array<() => boolean> = [];
+  const deferredAwareness: Array<() => Promise<void>> = [];
   for (const delivery of params.sourceDeliveryOutcome.visibleDeliveries) {
     const target = resolveCronMessageToolAwarenessTarget({
       delivery,
@@ -508,7 +502,7 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       runStartedAt: params.runStartedAt,
       delivery: target,
     });
-    const sourceAwarenessReceipt = await queueCronAwarenessSystemEvent({
+    const awarenessParams = {
       cfg: params.cfg,
       jobId: params.job.id,
       agentId: params.agentId,
@@ -516,20 +510,21 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       queueMainSession: false,
       targetSessionKey,
       text: target.text,
-      receiptTargetSessionKey: params.sourceSessionKey,
-    });
-    if (sourceAwarenessReceipt) {
-      sourceAwarenessReceipts.push(sourceAwarenessReceipt);
+    };
+    if (isSameSessionKey(targetSessionKey, params.deferredTargetSessionKey)) {
+      // A current-session completion owns this target durably. Keep awareness
+      // unavailable until that commit fails so reply admission cannot race it.
+      deferredAwareness.push(() => queueCronAwarenessSystemEvent(awarenessParams));
+      continue;
     }
+    await queueCronAwarenessSystemEvent(awarenessParams);
   }
-  if (sourceAwarenessReceipts.length === 0) {
+  if (deferredAwareness.length === 0) {
     return undefined;
   }
-  return () => {
-    // The durable source-session commit replaces only this ephemeral copy.
-    // Off-target awareness retains its independent queue ownership.
-    for (const remove of sourceAwarenessReceipts) {
-      remove();
+  return async () => {
+    for (const queue of deferredAwareness) {
+      await queue();
     }
   };
 }

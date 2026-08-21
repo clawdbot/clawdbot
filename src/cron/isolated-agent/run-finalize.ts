@@ -415,15 +415,16 @@ export async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
-  let removeSourceSessionMessageToolAwareness: (() => void) | undefined;
+  let queueSourceSessionMessageToolAwareness: (() => Promise<void>) | undefined;
   if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
-    removeSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
+    queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
       cfg: prepared.cfgWithAgentDefaults,
       job: prepared.input.job,
       agentId: prepared.agentId,
       agentSessionKey: prepared.agentSessionKey,
-      sourceSessionKey: prepared.sourceSessionKey,
+      deferredTargetSessionKey:
+        prepared.input.job.sessionTarget === "current" ? prepared.sourceSessionKey : undefined,
       runStartedAt: execution.runStartedAt,
       resolvedDelivery: prepared.resolvedDelivery,
       sourceDeliveryOutcome,
@@ -448,6 +449,7 @@ export async function finalizeCronRun(params: {
     deliveryPayloads.length === 0 &&
     normalizeOptionalString(synthesizedText) === undefined
   ) {
+    await queueSourceSessionMessageToolAwareness?.();
     const error = "cron isolated run completed without a final assistant payload";
     return prepared.withRunSession({
       status: "error",
@@ -474,6 +476,7 @@ export async function finalizeCronRun(params: {
       fallbackUsed: false,
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
     });
+    await queueSourceSessionMessageToolAwareness?.();
     return resolveRunOutcome({
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
       deliveryAttempted: sourceDeliveryOutcome.verifiedMessageToolDelivery,
@@ -502,7 +505,7 @@ export async function finalizeCronRun(params: {
     skipHeartbeatDelivery,
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
-    removeSourceSessionMessageToolAwareness,
+    queueSourceSessionMessageToolAwareness,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

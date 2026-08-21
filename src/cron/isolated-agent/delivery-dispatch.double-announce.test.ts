@@ -26,7 +26,6 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
-  cancelSourceAwarenessMock,
   commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
@@ -41,7 +40,6 @@ const {
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
   }),
-  cancelSourceAwarenessMock: vi.fn(),
   commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
     ok: true,
     messageId: "current-completion-message",
@@ -161,7 +159,6 @@ vi.mock("../../logger.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
-  enqueueSystemEventWithReceipt: vi.fn(() => cancelSourceAwarenessMock),
 }));
 
 vi.mock("../../tts/tts.runtime.js", () => ({
@@ -190,7 +187,7 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { enqueueSystemEvent, enqueueSystemEventWithReceipt } from "../../infra/system-events.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -356,8 +353,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
     vi.mocked(ensureOutboundSessionEntry).mockResolvedValue(undefined);
     vi.mocked(enqueueSystemEvent).mockReset();
-    vi.mocked(enqueueSystemEventWithReceipt).mockReset().mockReturnValue(cancelSourceAwarenessMock);
-    cancelSourceAwarenessMock.mockReset();
     vi.mocked(appendAssistantMessageToSessionTranscript).mockResolvedValue({
       ok: true,
       target: {
@@ -914,7 +909,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("returns removal ownership for same-source message-tool awareness", async () => {
+  it("defers same-source message-tool awareness until requested", async () => {
     mockResolvedOutboundRoute({
       sessionKey: "agent:main:webchat:direct:owner",
       baseSessionKey: "agent:main:webchat:direct:owner",
@@ -922,8 +917,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 1_000 });
 
-    const removeSourceAwareness = await queueCronMessageToolDeliveryAwareness({
+    const queueSourceAwareness = await queueCronMessageToolDeliveryAwareness({
       ...params,
+      deferredTargetSessionKey: params.sourceSessionKey,
       resolvedDelivery: makeResolvedDelivery({ channel: "webchat", to: "owner" }),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -945,9 +941,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(enqueueSystemEventWithReceipt).toHaveBeenCalledOnce();
-    removeSourceAwareness?.();
-    expect(cancelSourceAwarenessMock).toHaveBeenCalledOnce();
+
+    await queueSourceAwareness?.();
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled automation delivered this message to this channel:\nCurrent-session completion.",
+      {
+        sessionKey: "agent:main:webchat:direct:owner",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:webchat::owner:",
+      },
+    );
   });
 
   it("queues message-tool awareness when the target route resolves to the main session", async () => {
@@ -3194,6 +3197,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("does not mark or send a current-target delivery when its session commit fails", async () => {
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
     commitBackgroundResultToSessionMock.mockResolvedValueOnce({
       ok: false,
       reason: "source session was archived",
@@ -3202,7 +3206,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       synthesizedText: "must not escape before commit",
       sessionTarget: "current",
     });
-    params.removeSourceSessionMessageToolAwareness = cancelSourceAwarenessMock;
+    params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
 
     const state = await dispatchCronDelivery(params);
 
@@ -3211,11 +3215,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryAttempted: true,
       deliveryError: "source session was archived",
     });
-    expect(cancelSourceAwarenessMock).not.toHaveBeenCalled();
+    expect(queueSourceAwareness).toHaveBeenCalledOnce();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("commits current-target output after a verified message-tool send without next-turn awareness", async () => {
+  it("keeps same-source awareness unavailable while the durable commit is in flight", async () => {
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(async () => {
+      expect(queueSourceAwareness).not.toHaveBeenCalled();
+      return { ok: true, messageId: "current-completion-message" };
+    });
     const params = makeBaseParams({
       synthesizedText: "message-tool completion",
       sessionTarget: "current",
@@ -3237,13 +3246,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       satisfiesSourceDelivery: true,
       unverifiedMessageToolDelivery: false,
     };
-    params.removeSourceSessionMessageToolAwareness = cancelSourceAwarenessMock;
+    params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
 
     const state = await dispatchCronDelivery(params);
 
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
-    expect(cancelSourceAwarenessMock).toHaveBeenCalledOnce();
+    expect(queueSourceAwareness).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
