@@ -137,7 +137,9 @@ describe("cron view list pane", () => {
     expect(rows[0]?.textContent).toContain("Cron 0 9 * * *");
     expect(rows[1]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[1]?.textContent).toContain("Paused");
-    expect(rows[2]?.querySelector(".cron-table__dot--error")).not.toBeNull();
+    expect(rows[2]?.querySelector(".cron-table__state--error")?.getAttribute("aria-label")).toBe(
+      "Error",
+    );
     expect(rows[2]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
     expect(rows[2]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
       "Error",
