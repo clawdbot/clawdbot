@@ -388,6 +388,7 @@ describe("qa suite runtime flow", () => {
   });
 
   it("bounds preparation and actions with one aborting scenario deadline", async () => {
+    vi.useFakeTimers();
     let preparationSignal: AbortSignal | undefined;
     let actionSignal: AbortSignal | undefined;
     const prepareFlow = vi.fn(async (input: { signal?: AbortSignal }) => {
@@ -424,27 +425,60 @@ describe("qa suite runtime flow", () => {
       ]);
     });
 
-    let boundedTimer: ReturnType<typeof setTimeout> | undefined;
-    const result = await Promise.race([
-      runQaSuiteScenarioDefinition({
-        env,
-        scenario,
-        runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: (raw) => parseModelRef(raw, "openai"),
-        formatErrorMessage: (error) => String(error),
-        liveTurnTimeoutMs: () => 60_000,
-        resolveQaLiveTurnTimeoutMs: () => 60_000,
-        constants: qaSuiteRuntimeFlowTestConstants,
-      }),
-      new Promise<"bounded-window-expired">((resolve) => {
-        boundedTimer = setTimeout(() => resolve("bounded-window-expired"), 250);
-      }),
-    ]);
-    clearTimeout(boundedTimer);
+    const pending = runQaSuiteScenarioDefinition({
+      env,
+      scenario,
+      runScenario: runQaSuiteScenarioSteps,
+      splitModelRef: (raw) => parseModelRef(raw, "openai"),
+      formatErrorMessage: (error) => String(error),
+      liveTurnTimeoutMs: () => 60_000,
+      resolveQaLiveTurnTimeoutMs: () => 60_000,
+      constants: qaSuiteRuntimeFlowTestConstants,
+    });
+    await vi.advanceTimersByTimeAsync(5_030);
+    const result = await pending;
+    vi.useRealTimers();
 
-    expect(result).not.toBe("bounded-window-expired");
     expect(result).toMatchObject({ status: "fail", details: expect.stringContaining("30ms") });
     expect(preparationSignal).toBe(actionSignal);
     expect(actionSignal?.aborted).toBe(true);
+  });
+
+  it("lets a scenario-owned timeout settle before the lifecycle watchdog", async () => {
+    const env = createQaSuiteRuntimeFlowTestEnv();
+    const scenario = makeQaSuiteTestScenario("flow-owned-timeout", { config: {} });
+    if (scenario.execution.kind !== "flow") {
+      throw new Error("expected flow scenario");
+    }
+    scenario.execution.timeoutMs = 20;
+    createQaScenarioRuntimeApi.mockImplementationOnce(
+      (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+        runScenario: params.deps.runScenario,
+      }),
+    );
+    runScenarioFlow.mockImplementationOnce(async (params) => {
+      const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+      return await api.runScenario("Scenario-owned timeout", [
+        {
+          name: "Complete the observation window",
+          run: async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 30));
+          },
+        },
+      ]);
+    });
+
+    const result = await runQaSuiteScenarioDefinition({
+      env,
+      scenario,
+      runScenario: runQaSuiteScenarioSteps,
+      splitModelRef: (raw) => parseModelRef(raw, "openai"),
+      formatErrorMessage: (error) => String(error),
+      liveTurnTimeoutMs: () => 60_000,
+      resolveQaLiveTurnTimeoutMs: () => 60_000,
+      constants: qaSuiteRuntimeFlowTestConstants,
+    });
+
+    expect(result.status).toBe("pass");
   });
 });

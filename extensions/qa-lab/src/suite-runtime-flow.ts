@@ -255,6 +255,8 @@ function createQaSuiteScenarioFlowApi(
   };
 }
 
+const QA_SCENARIO_LIFECYCLE_GRACE_MS = 5_000;
+
 function createQaScenarioDeadline(timeoutMs?: number) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -263,10 +265,12 @@ function createQaScenarioDeadline(timeoutMs?: number) {
       ? undefined
       : new Promise<never>((_resolve, reject) => {
           const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
+          // Scenario-owned polls may consume the full declared timeout. Keep the outer
+          // lifecycle fence later so their terminal result and cleanup stay authoritative.
           timer = setTimeout(() => {
             controller.abort(timeoutError);
             reject(timeoutError);
-          }, timeoutMs);
+          }, timeoutMs + QA_SCENARIO_LIFECYCLE_GRACE_MS);
         });
   return {
     signal: controller.signal,
