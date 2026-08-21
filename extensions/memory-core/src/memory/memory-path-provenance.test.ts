@@ -92,5 +92,4 @@ describe("memory path provenance", () => {
       resolveMemoryPathClassification({ absolutePath, source: "memory", workspaceDir }),
     ).resolves.toEqual({ curatedRoot: true, originClass: "untrusted" });
   });
-
 });

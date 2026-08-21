@@ -6,6 +6,7 @@ import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   type MemorySessionSyncTarget,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -17,10 +18,6 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
-} from "../dreaming-state.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
@@ -318,16 +315,17 @@ describe("memory index", () => {
       path.join(fixture.paths.workspace, "MEMORY.md"),
       `- Quarantined release instruction. <!-- trigger: release instruction --> <!-- project: ${projectKey} -->\n`,
     );
-    await writeMemoryCoreWorkspaceEntry({
-      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
-      workspaceDir: fixture.paths.workspace,
-      key: "MEMORY.md",
-      value: { originClass: "untrusted" },
-    });
-
     const manager = await getFreshManager(createCfg({ provider: "none" }));
     try {
       await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      db.prepare(
+        `UPDATE ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}
+         SET origin_class = 'untrusted'
+         WHERE chunk_id IN (
+           SELECT id FROM memory_index_chunks WHERE path = 'MEMORY.md' AND source = 'memory'
+         )`,
+      ).run();
       if (!manager.listCuratedProjectCandidates || !manager.listTriggerCandidates) {
         throw new Error("expected curated project and trigger candidate listing");
       }
@@ -353,6 +351,98 @@ describe("memory index", () => {
       );
     } finally {
       await manager.close?.();
+    }
+  });
+
+  it("reindexes legacy curated provenance before the first automatic candidate read", async () => {
+    const projectKey = "github.com/openclaw/openclaw";
+    await fs.writeFile(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+      `- Preserve legacy preference. <!-- trigger: legacy preference --> <!-- project: ${projectKey} -->\n`,
+    );
+    const cfg = createCfg({ provider: "none" });
+    const initialManager = await getFreshManager(cfg);
+    await initialManager.sync({ reason: "test", force: true });
+    const initialDb = Reflect.get(initialManager, "db") as DatabaseSync;
+    initialDb.exec(`DELETE FROM ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}`);
+    await initialManager.close();
+
+    const upgradedManager = await getFreshManager(cfg);
+    try {
+      expect(upgradedManager.status().dirty).toBe(true);
+      const upgradedDb = Reflect.get(upgradedManager, "db") as DatabaseSync;
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT hash FROM memory_index_sources WHERE path = 'MEMORY.md' AND source = 'memory'`,
+          )
+          .get(),
+      ).toEqual({ hash: "" });
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT DISTINCT origin_class AS originClass
+             FROM ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}`,
+          )
+          .all(),
+      ).toEqual([{ originClass: "untrusted" }]);
+      if (!upgradedManager.listCuratedProjectCandidates || !upgradedManager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      const syncAdmitted = vi
+        .spyOn(
+          upgradedManager as unknown as {
+            syncAdmitted: (
+              params?: MemorySyncParams,
+              options?: { allowEmbeddingBootstrapFallback?: boolean },
+            ) => Promise<void>;
+          },
+          "syncAdmitted",
+        )
+        .mockRejectedValueOnce(new Error("legacy provenance repair unavailable"));
+      await expect(
+        upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+      ).resolves.toEqual([]);
+      expect(syncAdmitted).toHaveBeenCalledWith(
+        { reason: "search" },
+        { allowEmbeddingBootstrapFallback: true },
+      );
+      expect(upgradedManager.status().dirty).toBe(true);
+      syncAdmitted.mockRestore();
+
+      const runSync = vi.spyOn(
+        upgradedManager as unknown as { runSync: (params?: MemorySyncParams) => Promise<void> },
+        "runSync",
+      );
+      const [projectCandidates, triggerCandidates] = await Promise.all([
+        upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+        upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+      ]);
+      expect(projectCandidates).toMatchObject([
+        {
+          projectKey,
+          triggers: "legacy preference",
+          provenance: { originClass: "agent" },
+        },
+      ]);
+      expect(triggerCandidates).toMatchObject([
+        {
+          projectKey,
+          triggers: "legacy preference",
+          provenance: { originClass: "agent" },
+        },
+      ]);
+      expect(runSync).toHaveBeenCalledTimes(1);
+      expect(upgradedManager.status().dirty).toBe(false);
+      expect(
+        upgradedDb
+          .prepare(
+            `SELECT hash FROM memory_index_sources WHERE path = 'MEMORY.md' AND source = 'memory'`,
+          )
+          .get(),
+      ).toMatchObject({ hash: expect.not.stringMatching(/^$/u) });
+    } finally {
+      await upgradedManager.close();
     }
   });
 
