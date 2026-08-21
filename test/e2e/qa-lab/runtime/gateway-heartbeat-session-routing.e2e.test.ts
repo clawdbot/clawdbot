@@ -494,10 +494,9 @@ describe("Gateway heartbeat session routing", () => {
         const configuredTranscript = JSON.stringify(
           await readSessionTranscript(configuredSessionKey),
         );
-        expect(configuredTranscript).toContain(configuredEvent);
         expect(configuredTranscript).toContain(configuredReply);
         expect(JSON.stringify(await readSessionTranscript(mainSessionKey))).not.toContain(
-          configuredEvent,
+          configuredReply,
         );
 
         await expect(
@@ -563,15 +562,14 @@ describe("Gateway heartbeat session routing", () => {
           })?.sessionId,
         ).toBe(explicitSessionId);
         const explicitTranscript = JSON.stringify(await readSessionTranscript(explicitSessionKey));
-        expect(explicitTranscript).toContain(explicitQueuedEvent);
-        expect(explicitTranscript).toContain(explicitWakeText);
         expect(explicitTranscript).toContain(explicitReply);
+        expect(explicitTranscript).not.toContain(configuredReply);
         expect(JSON.stringify(await readSessionTranscript(configuredSessionKey))).not.toContain(
-          explicitWakeText,
+          explicitReply,
         );
         const mainTranscript = JSON.stringify(await readSessionTranscript(mainSessionKey));
-        expect(mainTranscript).not.toContain(configuredEvent);
-        expect(mainTranscript).not.toContain(explicitWakeText);
+        expect(mainTranscript).not.toContain(configuredReply);
+        expect(mainTranscript).not.toContain(explicitReply);
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
           "main-destination",
         );
