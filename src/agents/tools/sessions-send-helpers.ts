@@ -3,6 +3,7 @@
  *
  * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
@@ -10,6 +11,7 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
+import { sanitizeAgentIdentityLine } from "../identity-file.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -19,6 +21,8 @@ export {
 
 const DEFAULT_AGENTNG_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 20;
+const MAX_A2A_REQUESTER_NAME_PROMPT_CHARS = 120;
+const TRUNCATED_REQUESTER_NAME_MARKER = "...";
 
 export type AnnounceTarget = {
   channel: string;
@@ -77,12 +81,17 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
 }
 
 function buildAgentSessionLines(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
+  const requesterName = params.requesterName
+    ? boundRequesterNameForPrompt(sanitizeAgentIdentityLine(params.requesterName))
+    : undefined;
   return [
+    requesterName ? `Agent 1 (requester) name: ${requesterName}.` : undefined,
     // Session keys are high-cardinality (thread/run ids), so concrete values churn the
     // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
     // low-cardinality and inform reply formatting, so they stay concrete.
@@ -95,8 +104,19 @@ function buildAgentSessionLines(params: {
   ].filter((line): line is string => Boolean(line));
 }
 
+function boundRequesterNameForPrompt(value: string): string {
+  if (value.length <= MAX_A2A_REQUESTER_NAME_PROMPT_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(
+    value,
+    MAX_A2A_REQUESTER_NAME_PROMPT_CHARS - TRUNCATED_REQUESTER_NAME_MARKER.length,
+  ).trimEnd()}${TRUNCATED_REQUESTER_NAME_MARKER}`;
+}
+
 /** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -109,6 +129,7 @@ export function buildAgentToAgentMessageContext(params: {
 
 /** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -131,6 +152,7 @@ export function buildAgentToAgentReplyContext(params: {
 
 /** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;

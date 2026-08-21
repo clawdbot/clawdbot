@@ -143,6 +143,7 @@ function installMessagingTestRegistry() {
 }
 
 function createOpenClawTools(options?: {
+  requesterAgentIdOverride?: string;
   agentSessionKey?: string;
   agentChannel?: string;
   sandboxed?: boolean;
@@ -171,6 +172,7 @@ function createOpenClawTools(options?: {
       callGateway: gatewayCall,
     }),
     createSessionsSendTool({
+      agentId: options?.requesterAgentIdOverride,
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel as never,
       sandboxed: options?.sandboxed,
@@ -1321,6 +1323,7 @@ describe("sessions tools", () => {
 
   it("sessions_send runs ping-pong then announces", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    const inProcessPrompts: string[] = [];
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -1385,15 +1388,28 @@ describe("sessions tools", () => {
       return {};
     });
     agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "announce now", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+      agentCommandFromIngress: async (params) => {
+        inProcessPrompts.push(params.extraSystemPrompt ?? "");
+        return {
+          payloads: [{ text: "announce now", mediaUrl: null }],
+          meta: { durationMs: 1 },
+        };
+      },
     });
 
     const tool = getSessionTool("sessions_send", {
+      requesterAgentIdOverride: "stevo",
       agentSessionKey: requesterKey,
       agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        agents: {
+          list: [
+            { id: "main", default: true, identity: { name: "Wrong Main" } },
+            { id: "stevo", identity: { name: "Stevo" } },
+          ],
+        },
+      },
     });
 
     const waited = await tool.execute("call7", {
@@ -1415,6 +1431,8 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
       const params = agentParams(call);
+      expect(params.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
+      expect(params.extraSystemPrompt).not.toContain("Wrong Main");
       expect(params.lane).toMatch(/^nested(?::|$)/);
       expect(params.channel).toBe("webchat");
       expect(params.inputProvenance?.kind).toBe("inter_session");
@@ -1429,6 +1447,10 @@ describe("sessions tools", () => {
         ),
     );
     expect(replySteps).toHaveLength(5);
+    expect(inProcessPrompts).toHaveLength(1);
+    expect(inProcessPrompts[0]).toContain("Agent-to-agent announce step");
+    expect(inProcessPrompts[0]).toContain("Agent 1 (requester) name: Stevo.");
+    expect(inProcessPrompts[0]).not.toContain("Wrong Main");
     expect(sendParams.to).toBe("group:target");
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.message).toBe("announce now");
