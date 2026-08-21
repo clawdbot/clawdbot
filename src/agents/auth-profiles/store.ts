@@ -862,7 +862,7 @@ function mergeRuntimeExternalProfileState(params: {
   return merged;
 }
 
-/** Apply an auth store update inside the SQLite write lock. */
+/** Apply an auth store update inside the SQLite write lock; null on write failure, rethrows credential-boundary errors. */
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   sharedStoreWrite?: boolean;
@@ -896,6 +896,14 @@ export async function updateAuthProfileStoreWithLock(params: {
       { sharedStoreWrite: params.sharedStoreWrite, stateDir: params.stateDir },
     );
   } catch (error) {
+    // Credential-boundary failures name their own remediation; collapsing them
+    // into `null` makes callers report a lock-contention retry that never clears.
+    const isCredentialBoundaryFailure =
+      error instanceof AuthProfileMigrationRequiredError ||
+      error instanceof AuthProfileStoreUnreadableError;
+    if (isCredentialBoundaryFailure) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     authProfilesLog.warn(`auth profile store update failed: ${message}`, {
       agentDir,
