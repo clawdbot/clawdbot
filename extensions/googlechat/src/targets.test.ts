@@ -413,15 +413,23 @@ describe("downloadGoogleChatMedia", () => {
     const chunk = Buffer.alloc(ONE_MIB);
     let bytesSent = 0;
     let responseClosed = false;
-    let resolveResponseClosed: () => void = () => {};
-    const responseClosedPromise = new Promise<void>((resolve) => {
-      resolveResponseClosed = resolve;
+    let closeObserved = false;
+    let resolveCloseObserved: () => void = () => {};
+    const closeObservedPromise = new Promise<void>((resolve) => {
+      resolveCloseObserved = resolve;
     });
     const server = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/octet-stream" });
       res.on("close", () => {
         responseClosed = true;
-        resolveResponseClosed();
+        // Defer the observable close fact past the old 100ms grace window
+        // without blocking the event loop: the legacy fixed-window race must
+        // expire before the close becomes visible, so this regression goes
+        // red under the old assertion and green under the close-event wait.
+        setTimeout(() => {
+          closeObserved = true;
+          resolveCloseObserved();
+        }, 150);
       });
       const writeNext = () => {
         if (responseClosed) {
@@ -464,17 +472,14 @@ describe("downloadGoogleChatMedia", () => {
       await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
         "Google Chat media exceeds max bytes (20971520)",
       );
-      // Stall longer than the old 100ms grace window: observing the response
-      // close must synchronize on the close event, not on wall-clock.
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
-      await responseClosedPromise;
+      await closeObservedPromise;
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
     }
     expect(release).toHaveBeenCalledOnce();
-    expect(responseClosed).toBe(true);
+    expect(closeObserved).toBe(true);
     expect(bytesSent).toBeLessThan(totalBytes);
   });
 
