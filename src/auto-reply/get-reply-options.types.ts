@@ -70,6 +70,10 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
+  /** Queue-owned proof that a deferred turn is still durably tracked. */
+  onDeferredHeartbeat?: () => void;
+  /** Requested cadence for queue-owned deferred heartbeats. */
+  deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */

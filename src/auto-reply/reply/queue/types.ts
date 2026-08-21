@@ -262,8 +262,53 @@ const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promi
 const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
+const deferredHeartbeatTimers = new WeakMap<
+  TurnAdoptionLifecycle,
+  ReturnType<typeof setInterval>
+>();
 
 type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+
+function stopFollowupRunDeferredHeartbeat(lifecycle: TurnAdoptionLifecycle | undefined): void {
+  if (!lifecycle) {
+    return;
+  }
+  const timer = deferredHeartbeatTimers.get(lifecycle);
+  if (timer) {
+    clearInterval(timer);
+    deferredHeartbeatTimers.delete(lifecycle);
+  }
+}
+
+export function startFollowupRunDeferredHeartbeat(
+  run: FollowupLifecycleRun,
+  isQueueOwner: () => boolean,
+): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (
+    !lifecycle?.onDeferredHeartbeat ||
+    deferredHeartbeatTimers.has(lifecycle) ||
+    lifecycle.deferredHeartbeatIntervalMs === undefined
+  ) {
+    return;
+  }
+  const intervalMs = Math.max(1, Math.floor(lifecycle.deferredHeartbeatIntervalMs));
+  const timer = setInterval(() => {
+    if (!isQueueOwner()) {
+      stopFollowupRunDeferredHeartbeat(lifecycle);
+      return;
+    }
+    try {
+      lifecycle.onDeferredHeartbeat?.();
+    } catch {
+      // A broken progress callback cannot take down the gateway. Stop renewing
+      // so the ingress watchdog can recover the orphaned claim.
+      stopFollowupRunDeferredHeartbeat(lifecycle);
+    }
+  }, intervalMs);
+  timer.unref?.();
+  deferredHeartbeatTimers.set(lifecycle, timer);
+}
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -301,6 +346,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 
   const admission = Promise.resolve().then(async () => {
     if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      stopFollowupRunDeferredHeartbeat(lifecycle);
       await lifecycle.onAdopted();
       admittedTurnAdoptionLifecycles.add(lifecycle);
     }
@@ -317,6 +363,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
   run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
+  stopFollowupRunDeferredHeartbeat(lifecycle);
 
   const finish = () => {
     if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {

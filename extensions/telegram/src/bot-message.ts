@@ -271,6 +271,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         admission?: "exclusive" | "cancel-only";
         onAdopted: () => void | Promise<void>;
         onDeferred?: () => void;
+        onDeferredHeartbeat?: () => void;
+        deferredHeartbeatIntervalMs?: number;
         onAbandoned?: () => void;
         abortSignal?: AbortSignal;
       };
@@ -431,6 +433,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               deferred = true;
               drainLifecycle?.onDeferred();
             },
+            onDeferredHeartbeat: () => drainLifecycle?.onDeferredHeartbeat?.(),
+            deferredHeartbeatIntervalMs: drainLifecycle?.deferredHeartbeatIntervalMs,
             onAbandoned: () => {
               if (!adopted) {
                 void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");

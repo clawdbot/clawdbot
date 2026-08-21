@@ -147,6 +147,9 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   admission: turn.turnAdoptionLifecycle.admission ?? "exclusive",
                   onAdopted: turn.turnAdoptionLifecycle.onAdopted,
                   onDeferred: turn.turnAdoptionLifecycle.onDeferred,
+                  onDeferredHeartbeat: turn.turnAdoptionLifecycle.onDeferredHeartbeat,
+                  deferredHeartbeatIntervalMs:
+                    turn.turnAdoptionLifecycle.deferredHeartbeatIntervalMs,
                   onAbandoned: turn.turnAdoptionLifecycle.onAbandoned,
                   abortSignal: turn.turnAdoptionLifecycle.abortSignal,
                 }

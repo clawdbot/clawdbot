@@ -19,6 +19,7 @@ describe("followup queue in-flight ownership", () => {
       clearFollowupQueue(key);
     }
     keys.clear();
+    vi.useRealTimers();
   });
 
   const createKey = (suffix: string) => {
@@ -158,6 +159,41 @@ describe("followup queue in-flight ownership", () => {
     }
 
     await expect.poll(() => getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
+  it("heartbeats a deferred lifecycle only while the queue owns it", async () => {
+    vi.useFakeTimers();
+    const key = createKey("deferred-heartbeat");
+    const onDeferred = vi.fn();
+    const onDeferredHeartbeat = vi.fn();
+    const onAbandoned = vi.fn();
+    const run: FollowupRun = {
+      ...createRun({ prompt: "pending" }),
+      turnAdoptionLifecycle: {
+        onAdopted: async () => {},
+        onDeferred,
+        onDeferredHeartbeat,
+        deferredHeartbeatIntervalMs: 1_000,
+        onAbandoned,
+      },
+    };
+
+    expect(enqueueFollowupRun(key, run, createSettings("old"), "none", undefined, false)).toBe(
+      true,
+    );
+
+    expect(onDeferred).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(3);
+
+    const queue = getExistingFollowupQueue(key);
+    expect(queue?.items).toEqual([run]);
+    queue?.items.splice(0, 1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onDeferredHeartbeat).toHaveBeenCalledTimes(3);
+
+    completeFollowupRunLifecycle(run);
+    expect(onAbandoned).toHaveBeenCalledOnce();
   });
 
   it("protects a collect group and counts only active identities still present", async () => {

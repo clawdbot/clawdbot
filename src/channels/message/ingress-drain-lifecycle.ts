@@ -9,9 +9,14 @@ export type ChannelIngressDispatchLifecycle = {
   onAdopted: () => void | Promise<void>;
   /**
    * Turn ownership deferred to reply-lane admission (queued followup).
-   * Claim remains held until adopted or abandoned.
+   * Claim remains held and leased until adopted or abandoned. The reply queue
+   * must heartbeat while it owns the deferred lifecycle.
    */
   onDeferred: () => void;
+  /** Renews the deferred adoption watchdog while the reply queue owns this turn. */
+  onDeferredHeartbeat?: () => void;
+  /** Requested cadence for queue-owned deferred heartbeats. */
+  deferredHeartbeatIntervalMs?: number;
   /**
    * Durable adoption finalization is in progress (e.g. settlement hold while
    * committing dedupe). Clears the pre-adoption stall watchdog so a timeout
@@ -36,6 +41,8 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     admission: "exclusive";
     onAdopted: () => void | Promise<void>;
     onDeferred: () => void;
+    onDeferredHeartbeat?: () => void;
+    deferredHeartbeatIntervalMs?: number;
     onAbandoned: () => void | Promise<void>;
     abortSignal: AbortSignal;
   };
@@ -45,6 +52,8 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       admission: "exclusive",
       onAdopted: lifecycle.onAdopted,
       onDeferred: lifecycle.onDeferred,
+      onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
+      deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
       onAbandoned: lifecycle.onAbandoned,
       abortSignal: lifecycle.abortSignal,
     },

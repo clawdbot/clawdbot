@@ -32,6 +32,7 @@ import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
+  startFollowupRunDeferredHeartbeat,
   type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
@@ -110,6 +111,19 @@ function appendQueueItem(params: {
   params.queue.lastRun = params.run.run;
   params.run.queueAbortSignal = params.queue.abortController.signal;
   params.queue.items[params.front ? "unshift" : "push"](params.run);
+  const lifecycle = params.run.turnAdoptionLifecycle;
+  startFollowupRunDeferredHeartbeat(params.run, () => {
+    if (!lifecycle || FOLLOWUP_QUEUES.get(params.key) !== params.queue) {
+      return false;
+    }
+    const ownsLifecycle = (run: FollowupRun) => run.turnAdoptionLifecycle === lifecycle;
+    return (
+      params.queue.items.some(ownsLifecycle) ||
+      [...params.queue.inFlight].some(ownsLifecycle) ||
+      params.queue.summarySources.some(ownsLifecycle) ||
+      params.queue.summaryElisions.some((entry) => entry.sources.some(ownsLifecycle))
+    );
+  });
   if (params.recentMessageIdKey) {
     recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
   }
