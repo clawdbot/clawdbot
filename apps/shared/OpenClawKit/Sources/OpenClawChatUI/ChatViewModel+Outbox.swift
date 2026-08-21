@@ -906,7 +906,7 @@ extension OpenClawChatViewModel {
         } catch is OpenClawChatTransportSendError {
             // The transport proved this payload never reached its request
             // channel, so it is safe to retry automatically.
-            await outbox.markCommandQueued(
+            _ = await outbox.markCommandQueued(
                 id: command.id,
                 attemptVersion: command.attemptVersion,
                 retryCount: command.retryCount,

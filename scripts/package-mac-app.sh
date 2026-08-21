@@ -129,6 +129,49 @@ PY
   printf '%s' "$revision"
 }
 
+stage_elevation_node_host_worker() {
+  local build_root="$ROOT_DIR/apps/macos/.build/node-host-worker"
+  local built_worker="$build_root/node-host-worker.mjs"
+  local resource_root="$APP_ROOT/Contents/Resources/OpenClawNodeHostWorker"
+  local metadata worker_sha
+
+  echo "🧩 Building source-bound elevation node-host worker"
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/tsdown-build.mts" \
+    --config "$ROOT_DIR/tsdown.mac-node-host-worker.config.ts")
+  [[ -f "$built_worker" && ! -L "$built_worker" ]] || {
+    echo "ERROR: source-bound node-host worker build is missing or symlinked" >&2
+    return 1
+  }
+  if ! metadata="$(node "$built_worker" --build-metadata)"; then
+    echo "ERROR: source-bound node-host worker metadata probe failed" >&2
+    return 1
+  fi
+  jq -e --arg sourceCommit "$BUILD_GIT_COMMIT" '
+    type == "object" and
+    keys == ["kind","schemaVersion","sourceCommit","version"] and
+    .schemaVersion == 1 and
+    .kind == "openclaw-macos-node-host-worker" and
+    .sourceCommit == $sourceCommit and
+    (.version | type == "string" and length > 0)
+  ' <<<"$metadata" >/dev/null || {
+    echo "ERROR: source-bound node-host worker does not match the packaged OpenClaw commit" >&2
+    return 1
+  }
+
+  worker_sha="$(shasum -a 256 "$built_worker" | awk '{print $1}')"
+  rm -rf "$resource_root"
+  mkdir -p "$resource_root"
+  cp "$built_worker" "$resource_root/node-host-worker.mjs"
+  jq -n \
+    --argjson schemaVersion 1 \
+    --arg kind "openclaw-macos-node-host-worker" \
+    --arg sourceCommit "$BUILD_GIT_COMMIT" \
+    --arg sha256 "$worker_sha" \
+    '{schemaVersion:$schemaVersion,kind:$kind,sourceCommit:$sourceCommit,sha256:$sha256}' \
+    >"$resource_root/manifest.json"
+  chmod 0444 "$resource_root/node-host-worker.mjs" "$resource_root/manifest.json"
+}
+
 sparkle_canonical_build_from_version() {
   (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
@@ -896,6 +939,7 @@ cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
 
 if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
   echo "🖥  Omitting embedded CUA driver from elevation-host package"
+  stage_elevation_node_host_worker
 else
   echo "🖥  Staging embedded CUA driver"
   "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"

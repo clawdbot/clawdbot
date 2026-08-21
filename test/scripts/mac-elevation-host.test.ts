@@ -216,6 +216,20 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(launchAgentsDir, { recursive: true });
   writeFileSync(path.join(appPath, "Contents", "Info.plist"), "fixture", "utf8");
+  const workerRoot = path.join(appPath, "Contents", "Resources", "OpenClawNodeHostWorker");
+  const workerContents = "export {};\n";
+  mkdirSync(workerRoot, { recursive: true });
+  writeFileSync(path.join(workerRoot, "node-host-worker.mjs"), workerContents, "utf8");
+  writeFileSync(
+    path.join(workerRoot, "manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: "openclaw-macos-node-host-worker",
+      sourceCommit: "0".repeat(40),
+      sha256: sha256(workerContents),
+    }),
+    "utf8",
+  );
   writeFileSync(configPath, "{}\n", "utf8");
   writeFileSync(
     path.join(launchAgentsDir, "ai.openclaw.mac.elevation-host.plist"),
@@ -735,6 +749,11 @@ function createArtifactVerificationHarness() {
       "APP_HELPER",
       'printf helper >"$app/Contents/MacOS/openclaw-mlx-tts"',
       'chmod 755 "$app/Contents/MacOS/OpenClaw" "$app/Contents/MacOS/openclaw-mlx-tts"',
+      'worker_root="$app/Contents/Resources/OpenClawNodeHostWorker"',
+      'mkdir -p "$worker_root"',
+      'printf "%s\\n" "export {};" >"$worker_root/node-host-worker.mjs"',
+      'worker_sha="$(shasum -a 256 "$worker_root/node-host-worker.mjs" | awk \'{print $1}\')"',
+      `printf '{"schemaVersion":1,"kind":"openclaw-macos-node-host-worker","sourceCommit":"${sourceCommit}","sha256":"%s"}\n' "$worker_sha" >"$worker_root/manifest.json"`,
       'case "${TEST_CUA_DRIVER_KIND:-none}" in',
       '  file) mkdir -p "$app/Contents/Resources"; printf driver >"$app/Contents/Resources/cua-driver"; chmod 755 "$app/Contents/Resources/cua-driver" ;;',
       '  symlink) mkdir -p "$app/Contents/Resources"; ln -s /missing/cua-driver "$app/Contents/Resources/cua-driver" ;;',
@@ -771,6 +790,9 @@ function createArtifactVerificationHarness() {
       "  exit 0",
       "fi",
       'if [[ "$*" == *"-dv"* ]]; then',
+      '  if [[ -e "$target/Contents/old-fixture" && -n "${TEST_FAIL_ROLLBACK_CDHASH_ARCH:-}" && "$*" == *"--arch $TEST_FAIL_ROLLBACK_CDHASH_ARCH"* ]]; then',
+      "    exit 7",
+      "  fi",
       "  cdhash=FIXTURECDHASH",
       '  if [[ -e "$target/Contents/old-fixture" ]]; then',
       "    cdhash=OLDFIXTURECDHASH",
@@ -810,7 +832,22 @@ function createArtifactVerificationHarness() {
       "",
     ].join("\n"),
   );
-  writeCommandFixture(binDir, "lipo", "#!/bin/sh\nprintf '%s\\n' 'x86_64 arm64'\n");
+  writeCommandFixture(
+    binDir,
+    "lipo",
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'target="${!#}"',
+      'app="${target%/Contents/MacOS/OpenClaw}"',
+      'if [[ -e "$app/Contents/old-fixture" ]]; then',
+      '  printf "%s\\n" "${TEST_ROLLBACK_ARCHITECTURES:-arm64 x86_64}"',
+      "else",
+      "  printf '%s\\n' 'x86_64 arm64'",
+      "fi",
+      "",
+    ].join("\n"),
+  );
   writeCommandFixture(binDir, "spctl", "#!/bin/sh\nexit 0\n");
   writeCommandFixture(binDir, "xcrun", "#!/bin/sh\nexit 0\n");
   const receipt = {
@@ -890,6 +927,8 @@ function createInstallRollbackHarness(
     replaceMigrationSourceSameContentBeforeInitialCustody?: boolean;
     restartAppDuringBootout?: boolean;
     rollbackNonNativeSignatureInvalid?: boolean;
+    rollbackArchitectures?: "arm64" | "x86_64" | "arm64 x86_64";
+    failRollbackCDHashArch?: "arm64" | "x86_64";
     rollbackCuaDriverKind?: "file" | "symlink";
     removeCuaDriverAfterUnsafeEntryMove?: boolean;
     signalDuringCustody?: boolean;
@@ -1336,6 +1375,8 @@ function createInstallRollbackHarness(
       TEST_ROLLBACK_NON_NATIVE_SIGNATURE_INVALID: options.rollbackNonNativeSignatureInvalid
         ? "1"
         : "0",
+      TEST_ROLLBACK_ARCHITECTURES: options.rollbackArchitectures ?? "arm64 x86_64",
+      TEST_FAIL_ROLLBACK_CDHASH_ARCH: options.failRollbackCDHashArch ?? "",
       TEST_SIGNAL_DURING_CUSTODY:
         options.signalDuringCustody || options.hupDuringCustody ? "1" : "0",
       TEST_SIGNAL_DURING_RECOVERY_APP_MOVE: options.signalDuringRecoveryAppMove ? "1" : "0",
@@ -2480,6 +2521,121 @@ describe("mac elevation host command contract", () => {
       expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
       expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
       expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "reports CDHash inspection failure before mutating the existing app",
+    () => {
+      const harness = createInstallRollbackHarness({ failRollbackCDHashArch: "arm64" });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("could not inspect installed OpenClaw app arm64 CDHash");
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.pending.json"))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rolls back an arm64-only existing app without inventing an x86 CDHash",
+    () => {
+      const harness = createInstallRollbackHarness({ rollbackArchitectures: "arm64" });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("could not bootstrap elevation host");
+      expect(result.stderr).not.toContain("x86_64 CDHash");
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rejects a receipt that claims a missing rollback architecture",
+    () => {
+      const harness = createInstallRollbackHarness({
+        launchdBootstrapFails: false,
+        rollbackArchitectures: "arm64",
+      });
+      const installed = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+      const receiptPath = path.join(harness.stateDir, "elevation-host-install.json");
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as {
+        backupArchitectures: string[];
+        backupCDHashes: Record<string, string>;
+      };
+      expect(receipt.backupArchitectures).toEqual(["arm64"]);
+      expect(receipt.backupCDHashes).toEqual({ arm64: "OLDFIXTURECDHASHARM64" });
+      receipt.backupArchitectures = ["arm64", "x86_64"];
+      receipt.backupCDHashes.x86_64 = "CLAIMEDBUTMISSING";
+      writeFileSync(receiptPath, JSON.stringify(receipt), "utf8");
+
+      const recovered = runInstaller(
+        harness.installerPath,
+        ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
+        harness.env,
+      );
+      expect(recovered.status).toBe(1);
+      expect(recovered.stderr).toContain(
+        "receipt app backup does not pass strict signature and identity validation",
+      );
     },
   );
 
@@ -4428,13 +4584,15 @@ describe("mac elevation host command contract", () => {
       const receipt = JSON.parse(
         readFileSync(path.join(harness.stateDir, "elevation-host-install.json"), "utf8"),
       ) as {
-        backupCDHashes: { arm64: string; x86_64: string };
+        backupArchitectures: string[];
+        backupCDHashes: Partial<Record<"arm64" | "x86_64", string>>;
         cdhashes: { arm64: string; x86_64: string };
         schemaVersion: number;
       };
       expect(receipt).toMatchObject({
-        schemaVersion: 3,
+        schemaVersion: 4,
         transactionState: "installed",
+        backupArchitectures: ["arm64", "x86_64"],
         backupCDHashes: {
           arm64: "OLDFIXTURECDHASHARM64",
           x86_64: "OLDFIXTURECDHASHX8664",
@@ -4521,12 +4679,14 @@ describe("mac elevation host command contract", () => {
       expect(installed.status, installed.stderr).toBe(0);
       const installReceiptPath = path.join(harness.stateDir, "elevation-host-install.json");
       const receipt = JSON.parse(readFileSync(installReceiptPath, "utf8")) as {
-        backupCDHashes: { arm64: string; x86_64: string };
+        backupArchitectures: string[];
+        backupCDHashes: Partial<Record<"arm64" | "x86_64", string>>;
         backupPath: string;
       };
       rmSync(receipt.backupPath, { recursive: true });
       receipt.backupPath = "";
-      receipt.backupCDHashes = { arm64: "", x86_64: "" };
+      receipt.backupArchitectures = [];
+      receipt.backupCDHashes = {};
       writeFileSync(installReceiptPath, JSON.stringify(receipt), "utf8");
 
       const recovered = runInstaller(

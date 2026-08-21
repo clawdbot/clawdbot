@@ -60,6 +60,7 @@ CUTOVER_ADOPTION_STOPPED=0
 CUTOVER_ADOPTION_TERMINATION_SENT=0
 CUTOVER_RECOVERY_ATTEMPTED=0
 ROLLBACK_APP_PATH=""
+ROLLBACK_APP_ARCHITECTURES=""
 ROLLBACK_APP_CDHASH_ARM64=""
 ROLLBACK_APP_CDHASH_X86_64=""
 ROLLBACK_ELEVATION_PLIST=""
@@ -95,6 +96,7 @@ UPGRADE_EXPECTED_NODE_ID=""
 UPGRADE_EXPECTED_NODE_PROFILE=""
 RECOVERY_CURRENT_APP_CDHASH_ARM64=""
 RECOVERY_CURRENT_APP_CDHASH_X86_64=""
+RECOVERY_CURRENT_APP_ARCHITECTURES=""
 RECOVERY_CURRENT_APP_IDENTITY=""
 RECOVERY_CURRENT_APP_STATE=""
 RECOVERY_CURRENT_PLIST=""
@@ -408,7 +410,8 @@ elevation_receipt_binds_app() {
       .appPath == $appPath and
       .plistPath == $plistPath and
       (
-        (.schemaVersion == 3 and .kind == "openclaw-elevation-install") or
+        ((.schemaVersion == 3 or .schemaVersion == 4) and
+          .kind == "openclaw-elevation-install") or
         (
           (has("schemaVersion") | not) and (has("kind") | not) and
           keys == ["appPath","archiveSha256","backupPath","peekabooCommit","plistPath","previousPlist","sourceCommit"]
@@ -568,6 +571,7 @@ verify_elevation_app() {
   [[ "$peekaboo_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'elevation app has invalid PeekabooSourceCommit'
   verify_signed_app_identity "$app" ||
     fail "elevation app must be signed for every architecture by $EXPECTED_AUTHORITY"
+  verify_elevation_node_host_worker "$app"
   codesign --verify --strict --test-requirement='=notarized' "$app"
   xcrun stapler validate "$app" >/dev/null
   spctl --assess --type execute "$app"
@@ -575,32 +579,111 @@ verify_elevation_app() {
   verify_universal_machos "$app"
 }
 
+verify_elevation_node_host_worker() {
+  local app="$1"
+  local resource_root="$app/Contents/Resources/OpenClawNodeHostWorker"
+  local worker="$resource_root/node-host-worker.mjs"
+  local manifest="$resource_root/manifest.json"
+  [[ -d "$resource_root" && ! -L "$resource_root" ]] ||
+    fail 'elevation app has no source-bound node-host worker directory'
+  [[ -f "$worker" && ! -L "$worker" && -f "$manifest" && ! -L "$manifest" ]] ||
+    fail 'elevation app node-host worker resources are missing or symlinked'
+  [[ "$(find "$resource_root" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" == "2" ]] ||
+    fail 'elevation app node-host worker directory contains unexpected entries'
+  jq -e --arg sourceCommit "$(plist_value "$app" OpenClawGitCommit)" '
+    type == "object" and
+    keys == ["kind","schemaVersion","sha256","sourceCommit"] and
+    .schemaVersion == 1 and
+    .kind == "openclaw-macos-node-host-worker" and
+    .sourceCommit == $sourceCommit and
+    (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+  ' "$manifest" >/dev/null 2>&1 || fail 'elevation app node-host worker manifest is invalid'
+  [[ "$(jq -r '.sha256' "$manifest")" == "$(shasum -a 256 "$worker" | awk '{print $1}')" ]] ||
+    fail 'elevation app node-host worker digest mismatch'
+}
+
 verify_signed_app_identity() {
-  local app="$1" arch
+  local app="$1"
+  [[ "$(canonical_app_architectures "$app")" == "arm64 x86_64" ]] || return 1
+  verify_signed_app_identity_for_architectures "$app" "arm64 x86_64"
+}
+
+canonical_app_architectures() {
+  local app="$1" raw arch has_arm64=0 has_x86_64=0
+  if ! raw="$(lipo -archs "$app/Contents/MacOS/OpenClaw" 2>/dev/null)"; then
+    printf 'ERROR: could not inspect OpenClaw app architectures at %s\n' "$app" >&2
+    return 1
+  fi
+  for arch in $raw; do
+    case "$arch" in
+      arm64) [[ "$has_arm64" == "0" ]] || return 1; has_arm64=1 ;;
+      x86_64) [[ "$has_x86_64" == "0" ]] || return 1; has_x86_64=1 ;;
+      *) printf 'ERROR: unsupported OpenClaw app architecture: %s\n' "$arch" >&2; return 1 ;;
+    esac
+  done
+  [[ "$has_arm64" == "1" || "$has_x86_64" == "1" ]] || return 1
+  local canonical=()
+  [[ "$has_arm64" == "1" ]] && canonical+=(arm64)
+  [[ "$has_x86_64" == "1" ]] && canonical+=(x86_64)
+  printf '%s' "${canonical[*]}"
+}
+
+capture_app_cdhash() {
+  local app="$1" arch="$2" description="$3" output_variable="$4" value
+  if ! value="$(codesign_value_for_arch "$app" CDHash "$arch")"; then
+    printf 'ERROR: could not inspect %s %s CDHash\n' "$description" "$arch" >&2
+    return 1
+  fi
+  if [[ -z "$value" ]]; then
+    printf 'ERROR: %s has no %s CDHash\n' "$description" "$arch" >&2
+    return 1
+  fi
+  printf -v "$output_variable" '%s' "$value"
+}
+
+verify_signed_app_identity_for_architectures() {
+  local app="$1" architectures="$2" arch
   codesign --verify --deep --strict --all-architectures "$app" >/dev/null 2>&1 || return 1
-  for arch in arm64 x86_64; do
+  for arch in $architectures; do
     [[ "$(codesign_value_for_arch "$app" TeamIdentifier "$arch")" == "$EXPECTED_TEAM_ID" ]] || return 1
     [[ "$(codesign_value_for_arch "$app" Authority "$arch")" == "$EXPECTED_AUTHORITY" ]] || return 1
   done
 }
 
 verify_rollback_app() {
-  local app="$1" expected_arm64_cdhash="$2" expected_x86_64_cdhash="$3"
+  local app="$1" expected_architectures="$2" expected_arm64_cdhash="$3" expected_x86_64_cdhash="$4"
+  local actual_architectures
   [[ -d "$app" && ! -L "$app" ]] || return 1
   [[ "$(plist_value "$app" CFBundleIdentifier)" == "$EXPECTED_BUNDLE_ID" ]] || return 1
   [[ "$(plist_value "$app" OpenClawGitCommit)" =~ ^[0-9a-f]{40}$ ]] || return 1
-  verify_signed_app_identity "$app" || return 1
-  [[ -n "$expected_arm64_cdhash" && -n "$expected_x86_64_cdhash" ]] || return 1
-  [[ "$(codesign_value_for_arch "$app" CDHash arm64)" == "$expected_arm64_cdhash" ]] || return 1
-  [[ "$(codesign_value_for_arch "$app" CDHash x86_64)" == "$expected_x86_64_cdhash" ]]
+  [[ "$expected_architectures" == "arm64" || "$expected_architectures" == "x86_64" ||
+    "$expected_architectures" == "arm64 x86_64" ]] || return 1
+  actual_architectures="$(canonical_app_architectures "$app")" || return 1
+  [[ "$actual_architectures" == "$expected_architectures" ]] || return 1
+  verify_signed_app_identity_for_architectures "$app" "$expected_architectures" || return 1
+  if [[ " $expected_architectures " == *" arm64 "* ]]; then
+    [[ -n "$expected_arm64_cdhash" ]] || return 1
+    [[ "$(codesign_value_for_arch "$app" CDHash arm64)" == "$expected_arm64_cdhash" ]] || return 1
+  else
+    [[ -z "$expected_arm64_cdhash" ]] || return 1
+  fi
+  if [[ " $expected_architectures " == *" x86_64 "* ]]; then
+    [[ -n "$expected_x86_64_cdhash" ]] || return 1
+    [[ "$(codesign_value_for_arch "$app" CDHash x86_64)" == "$expected_x86_64_cdhash" ]] || return 1
+  else
+    [[ -z "$expected_x86_64_cdhash" ]] || return 1
+  fi
 }
 
 verify_recorded_rollback_app() {
-  verify_rollback_app "$1" "$ROLLBACK_APP_CDHASH_ARM64" "$ROLLBACK_APP_CDHASH_X86_64"
+  verify_rollback_app \
+    "$1" "$ROLLBACK_APP_ARCHITECTURES" "$ROLLBACK_APP_CDHASH_ARM64" "$ROLLBACK_APP_CDHASH_X86_64"
 }
 
 verify_recorded_current_app() {
-  verify_rollback_app "$1" "$RECOVERY_CURRENT_APP_CDHASH_ARM64" "$RECOVERY_CURRENT_APP_CDHASH_X86_64"
+  verify_rollback_app \
+    "$1" "$RECOVERY_CURRENT_APP_ARCHITECTURES" \
+    "$RECOVERY_CURRENT_APP_CDHASH_ARM64" "$RECOVERY_CURRENT_APP_CDHASH_X86_64"
 }
 
 backup_file_matches() {
@@ -1756,7 +1839,7 @@ write_install_receipt() {
   mkdir -p "$STATE_DIR"
   local tmp="${target}.tmp.$$"
   jq -n \
-    --argjson schemaVersion 3 \
+    --argjson schemaVersion 4 \
     --arg kind 'openclaw-elevation-install' \
     --arg transactionState "$transaction_state" \
     --arg transactionId "$INSTALL_TRANSACTION_ID" \
@@ -1766,6 +1849,7 @@ write_install_receipt() {
     --arg stateDir "$STATE_DIR" \
     --arg configPath "$CONFIG_PATH" \
     --arg backupPath "$ROLLBACK_APP_PATH" \
+    --arg backupArchitectures "$ROLLBACK_APP_ARCHITECTURES" \
     --arg backupArm64CDHash "$ROLLBACK_APP_CDHASH_ARM64" \
     --arg backupX8664CDHash "$ROLLBACK_APP_CDHASH_X86_64" \
     --arg plistPath "$PLIST_PATH" \
@@ -1797,7 +1881,7 @@ write_install_receipt() {
     --argjson migrationWasLoaded "$ROLLBACK_MIGRATION_WAS_LOADED" \
     --argjson adoptedAppWasRunning "$ROLLBACK_ADOPTED_APP_WAS_RUNNING" \
     --argjson adoptedAppAttachOnly "$ROLLBACK_ADOPTED_APP_ATTACH_ONLY" \
-    '{schemaVersion:$schemaVersion,kind:$kind,transactionState:$transactionState,transactionId:$transactionId,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,archiveSha256:$archiveSha256,artifactReceiptSha256:$artifactReceiptSha256,installerSha256:$installerSha256,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},nodeId:$nodeId,nodeProfile:$nodeProfile,appPath:$appPath,stateDir:$stateDir,configPath:$configPath,backupPath:$backupPath,backupCDHashes:{arm64:$backupArm64CDHash,x86_64:$backupX8664CDHash},plistPath:$plistPath,previousPlist:$previousPlist,previousPlistSha256:$previousPlistSha256,previousPlistWasLoaded:($previousPlistWasLoaded == 1),previousReceipt:$previousReceipt,previousReceiptSha256:$previousReceiptSha256,migration:(if $migrationSource == "" then null else {kind:$migrationKind,sourcePlist:$migrationSource,sourceIdentity:$migrationSourceIdentity,custodyPath:$migrationCustodyPath,backupPlist:$migrationBackup,backupSha256:$migrationBackupSha256,label:$migrationLabel,wasLoaded:($migrationWasLoaded == 1),nodeEnvPath:$migrationNodeEnvPath,nodeEnvSha256:$migrationNodeEnvSha256,nodeEnvIdentity:$migrationNodeEnvIdentity,nodeWrapperPath:$migrationNodeWrapperPath,nodeWrapperSha256:$migrationNodeWrapperSha256,nodeWrapperIdentity:$migrationNodeWrapperIdentity} end),adoptedApp:{wasRunning:($adoptedAppWasRunning == 1),attachOnly:($adoptedAppAttachOnly == 1)}}' >"$tmp"
+    '{schemaVersion:$schemaVersion,kind:$kind,transactionState:$transactionState,transactionId:$transactionId,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,archiveSha256:$archiveSha256,artifactReceiptSha256:$artifactReceiptSha256,installerSha256:$installerSha256,cdhashes:{arm64:$arm64CDHash,x86_64:$x8664CDHash},nodeId:$nodeId,nodeProfile:$nodeProfile,appPath:$appPath,stateDir:$stateDir,configPath:$configPath,backupPath:$backupPath,backupArchitectures:(if $backupArchitectures == "" then [] else ($backupArchitectures | split(" ")) end),backupCDHashes:({} + (if $backupArm64CDHash == "" then {} else {arm64:$backupArm64CDHash} end) + (if $backupX8664CDHash == "" then {} else {x86_64:$backupX8664CDHash} end)),plistPath:$plistPath,previousPlist:$previousPlist,previousPlistSha256:$previousPlistSha256,previousPlistWasLoaded:($previousPlistWasLoaded == 1),previousReceipt:$previousReceipt,previousReceiptSha256:$previousReceiptSha256,migration:(if $migrationSource == "" then null else {kind:$migrationKind,sourcePlist:$migrationSource,sourceIdentity:$migrationSourceIdentity,custodyPath:$migrationCustodyPath,backupPlist:$migrationBackup,backupSha256:$migrationBackupSha256,label:$migrationLabel,wasLoaded:($migrationWasLoaded == 1),nodeEnvPath:$migrationNodeEnvPath,nodeEnvSha256:$migrationNodeEnvSha256,nodeEnvIdentity:$migrationNodeEnvIdentity,nodeWrapperPath:$migrationNodeWrapperPath,nodeWrapperSha256:$migrationNodeWrapperSha256,nodeWrapperIdentity:$migrationNodeWrapperIdentity} end),adoptedApp:{wasRunning:($adoptedAppWasRunning == 1),attachOnly:($adoptedAppAttachOnly == 1)}}' >"$tmp"
   chmod 600 "$tmp"
   if ! fsync_file_and_parent "$tmp"; then
     rm -f "$tmp"
@@ -1856,13 +1940,18 @@ verify_install_receipt() {
   then
     INSTALL_RECEIPT_SCHEMA="legacy"
     INSTALL_RECEIPT_TRANSACTION_STATE="installed"
-  # Schema 3 first ships with the exact migration-sidecar binding below. Earlier
+  # Schema 3 first shipped with the exact migration-sidecar binding below. Schema 4
+  # adds architecture-aware rollback receipts. Earlier
   # five-key migration objects existed only on this unmerged branch and cannot
   # safely authorize recovery, so they are intentionally not compatibility input.
   elif jq -e '
     type == "object" and
-    keys == ["adoptedApp","appPath","archiveSha256","artifactReceiptSha256","backupCDHashes","backupPath","cdhashes","configPath","installerSha256","kind","migration","nodeId","nodeProfile","peekabooCommit","plistPath","previousPlist","previousPlistSha256","previousPlistWasLoaded","previousReceipt","previousReceiptSha256","schemaVersion","sourceCommit","stateDir","transactionId","transactionState"] and
-    .schemaVersion == 3 and
+    (
+      (.schemaVersion == 3 and
+        keys == ["adoptedApp","appPath","archiveSha256","artifactReceiptSha256","backupCDHashes","backupPath","cdhashes","configPath","installerSha256","kind","migration","nodeId","nodeProfile","peekabooCommit","plistPath","previousPlist","previousPlistSha256","previousPlistWasLoaded","previousReceipt","previousReceiptSha256","schemaVersion","sourceCommit","stateDir","transactionId","transactionState"]) or
+      (.schemaVersion == 4 and
+        keys == ["adoptedApp","appPath","archiveSha256","artifactReceiptSha256","backupArchitectures","backupCDHashes","backupPath","cdhashes","configPath","installerSha256","kind","migration","nodeId","nodeProfile","peekabooCommit","plistPath","previousPlist","previousPlistSha256","previousPlistWasLoaded","previousReceipt","previousReceiptSha256","schemaVersion","sourceCommit","stateDir","transactionId","transactionState"])
+    ) and
     .kind == "openclaw-elevation-install" and
     (.transactionState == "installing" or .transactionState == "installed") and
     (.transactionId | type == "string" and test("^[0-9A-F-]{36}$")) and
@@ -1874,10 +1963,24 @@ verify_install_receipt() {
     (.cdhashes | type == "object" and keys == ["arm64","x86_64"] and all(.[]; type == "string" and length > 0)) and
     (.nodeId | type == "string" and length > 0) and
     (.nodeProfile == "primary" or .nodeProfile == "node") and
-    (.backupCDHashes | type == "object" and keys == ["arm64","x86_64"] and all(.[]; type == "string")) and
     (
-      (.backupPath == "" and all(.backupCDHashes[]; . == "")) or
-      ((.backupPath | type == "string" and startswith("/")) and all(.backupCDHashes[]; length > 0))
+      (.schemaVersion == 3 and
+        (.backupCDHashes | type == "object" and keys == ["arm64","x86_64"] and all(.[]; type == "string")) and
+        (
+          (.backupPath == "" and all(.backupCDHashes[]; . == "")) or
+          ((.backupPath | type == "string" and startswith("/")) and all(.backupCDHashes[]; length > 0))
+        )) or
+      (.schemaVersion == 4 and
+        (.backupArchitectures | type == "array") and
+        (.backupArchitectures == [] or .backupArchitectures == ["arm64"] or
+          .backupArchitectures == ["x86_64"] or .backupArchitectures == ["arm64","x86_64"]) and
+        (.backupCDHashes | type == "object") and
+        (.backupCDHashes | keys) == (.backupArchitectures | sort) and
+        all(.backupCDHashes[]; type == "string" and length > 0) and
+        (
+          (.backupPath == "" and .backupArchitectures == [] and .backupCDHashes == {}) or
+          ((.backupPath | type == "string" and startswith("/")) and (.backupArchitectures | length) > 0)
+        ))
     ) and
     (.previousPlistSha256 | type == "string") and
     (.previousReceipt | type == "string") and
@@ -1907,7 +2010,7 @@ verify_install_receipt() {
     (.adoptedApp | type == "object" and (.wasRunning | type == "boolean") and (.attachOnly | type == "boolean"))
   ' "$RECEIPT_PATH" >/dev/null 2>&1
   then
-    INSTALL_RECEIPT_SCHEMA="3"
+    INSTALL_RECEIPT_SCHEMA="$(jq -r '.schemaVersion' "$RECEIPT_PATH")"
     INSTALL_RECEIPT_TRANSACTION_STATE="$(jq -r '.transactionState' "$RECEIPT_PATH")"
     INSTALL_TRANSACTION_ID="$(jq -r '.transactionId' "$RECEIPT_PATH")"
   else
@@ -2079,6 +2182,7 @@ install_host() {
   fi
 
   ROLLBACK_APP_PATH=""
+  ROLLBACK_APP_ARCHITECTURES=""
   ROLLBACK_APP_CDHASH_ARM64=""
   ROLLBACK_APP_CDHASH_X86_64=""
   if [[ -e "$APP_PATH" || -L "$APP_PATH" ]]; then
@@ -2092,10 +2196,17 @@ install_host() {
     # appears before custody atomically refuses without nesting or overwrite.
     [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
       fail "could not reserve a unique elevation backup path: $ROLLBACK_APP_PATH"
-    ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
-    ROLLBACK_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
-    [[ -n "$ROLLBACK_APP_CDHASH_ARM64" && -n "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
-      fail 'installed OpenClaw app has no signed per-architecture CDHashes'
+    if ! ROLLBACK_APP_ARCHITECTURES="$(canonical_app_architectures "$APP_PATH")"; then
+      fail 'installed OpenClaw app architecture inventory could not be recorded before mutation'
+    fi
+    if [[ " $ROLLBACK_APP_ARCHITECTURES " == *" arm64 "* ]]; then
+      capture_app_cdhash "$APP_PATH" arm64 'installed OpenClaw app' ROLLBACK_APP_CDHASH_ARM64 ||
+        fail 'installed OpenClaw app CDHash inventory could not be recorded before mutation'
+    fi
+    if [[ " $ROLLBACK_APP_ARCHITECTURES " == *" x86_64 "* ]]; then
+      capture_app_cdhash "$APP_PATH" x86_64 'installed OpenClaw app' ROLLBACK_APP_CDHASH_X86_64 ||
+        fail 'installed OpenClaw app CDHash inventory could not be recorded before mutation'
+    fi
     verify_recorded_rollback_app "$APP_PATH" ||
       fail 'installed OpenClaw app does not pass strict signature and identity validation'
   fi
@@ -2414,7 +2525,7 @@ recover_install() {
   wait_for_app_binary_exit || return 1
   [[ "$(job_loaded_state "$job_domain")" == "absent" ]] || return 1
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -d "$APP_PATH" &&
-    -n "$ROLLBACK_APP_CDHASH_ARM64" && -n "$ROLLBACK_APP_CDHASH_X86_64" &&
+    -n "$ROLLBACK_APP_ARCHITECTURES" &&
     ! -d "$ROLLBACK_APP_PATH" ]] &&
     verify_recorded_rollback_app "$APP_PATH"
   then
@@ -2916,6 +3027,13 @@ recover_host() {
   ROLLBACK_APP_PATH="$(jq -r '.backupPath // empty' "$RECEIPT_PATH")"
   ROLLBACK_APP_CDHASH_ARM64="$(jq -r '.backupCDHashes.arm64 // empty' "$RECEIPT_PATH")"
   ROLLBACK_APP_CDHASH_X86_64="$(jq -r '.backupCDHashes.x86_64 // empty' "$RECEIPT_PATH")"
+  if [[ "$INSTALL_RECEIPT_SCHEMA" == "4" ]]; then
+    ROLLBACK_APP_ARCHITECTURES="$(jq -r '.backupArchitectures | join(" ")' "$RECEIPT_PATH")"
+  elif [[ -n "$ROLLBACK_APP_PATH" && "$INSTALL_RECEIPT_SCHEMA" == "3" ]]; then
+    ROLLBACK_APP_ARCHITECTURES="arm64 x86_64"
+  else
+    ROLLBACK_APP_ARCHITECTURES=""
+  fi
   ROLLBACK_ELEVATION_PLIST="$(jq -r '.previousPlist // empty' "$RECEIPT_PATH")"
   ROLLBACK_ELEVATION_PLIST_SHA="$(jq -r '.previousPlistSha256 // empty' "$RECEIPT_PATH")"
   ROLLBACK_ELEVATION_WAS_LOADED="$(jq -r 'if .previousPlistWasLoaded then 1 else 0 end' "$RECEIPT_PATH")"
@@ -3001,6 +3119,7 @@ recover_host() {
     RECOVERY_RESTORED_MIGRATION_IDENTITY="$migration_identity"
   fi
   if [[ "$INSTALL_RECEIPT_SCHEMA" != "legacy" ]]; then
+    RECOVERY_CURRENT_APP_ARCHITECTURES="arm64 x86_64"
     RECOVERY_CURRENT_APP_CDHASH_ARM64="$(jq -r '.cdhashes.arm64' "$RECEIPT_PATH")"
     RECOVERY_CURRENT_APP_CDHASH_X86_64="$(jq -r '.cdhashes.x86_64' "$RECEIPT_PATH")"
   fi
@@ -3024,8 +3143,18 @@ recover_host() {
     if [[ "$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_valid" == "1" &&
       "$current_app_matches_receipt" != "1" ]]
     then
-      RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
-      RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
+      RECOVERY_CURRENT_APP_ARCHITECTURES="$(canonical_app_architectures "$APP_PATH")" ||
+        fail 'could not inspect current app architectures during recovery'
+      RECOVERY_CURRENT_APP_CDHASH_ARM64=""
+      RECOVERY_CURRENT_APP_CDHASH_X86_64=""
+      if [[ " $RECOVERY_CURRENT_APP_ARCHITECTURES " == *" arm64 "* ]]; then
+        capture_app_cdhash "$APP_PATH" arm64 'current recovery app' RECOVERY_CURRENT_APP_CDHASH_ARM64 ||
+          fail 'could not inspect current app CDHashes during recovery'
+      fi
+      if [[ " $RECOVERY_CURRENT_APP_ARCHITECTURES " == *" x86_64 "* ]]; then
+        capture_app_cdhash "$APP_PATH" x86_64 'current recovery app' RECOVERY_CURRENT_APP_CDHASH_X86_64 ||
+          fail 'could not inspect current app CDHashes during recovery'
+      fi
     fi
   else
     [[ -z "$ARCHIVE" && -z "$ARTIFACT_RECEIPT" && -z "$EXPECTED_ARTIFACT_RECEIPT_SHA256" ]] ||
@@ -3056,18 +3185,28 @@ recover_host() {
     if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
       [[ -d "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
         fail 'legacy recovery cannot resume after its unauthenticated backup path moved'
-      ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$ROLLBACK_APP_PATH" CDHash arm64)"
-      ROLLBACK_APP_CDHASH_X86_64="$(codesign_value_for_arch "$ROLLBACK_APP_PATH" CDHash x86_64)"
+      ROLLBACK_APP_ARCHITECTURES="$(canonical_app_architectures "$ROLLBACK_APP_PATH")" ||
+        fail 'legacy recovery could not inspect rollback app architectures'
+      ROLLBACK_APP_CDHASH_ARM64=""
+      ROLLBACK_APP_CDHASH_X86_64=""
+      if [[ " $ROLLBACK_APP_ARCHITECTURES " == *" arm64 "* ]]; then
+        capture_app_cdhash "$ROLLBACK_APP_PATH" arm64 'legacy rollback app' ROLLBACK_APP_CDHASH_ARM64 ||
+          fail 'legacy recovery could not inspect rollback app CDHashes'
+      fi
+      if [[ " $ROLLBACK_APP_ARCHITECTURES " == *" x86_64 "* ]]; then
+        capture_app_cdhash "$ROLLBACK_APP_PATH" x86_64 'legacy rollback app' ROLLBACK_APP_CDHASH_X86_64 ||
+          fail 'legacy recovery could not inspect rollback app CDHashes'
+      fi
     fi
-    [[ -n "$ROLLBACK_APP_CDHASH_ARM64" && -n "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
-      fail 'receipt has no recoverable per-architecture app CDHashes'
+    [[ -n "$ROLLBACK_APP_ARCHITECTURES" ]] ||
+      fail 'receipt has no recoverable app architecture inventory'
     if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
       if [[ ! -d "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]] ||
         ! verify_recorded_rollback_app "$ROLLBACK_APP_PATH"
       then
         fail 'receipt app backup does not pass strict signature and identity validation'
       fi
-    elif [[ "$RECOVERY_PENDING_INSTALL" == "1" && "$current_app_valid" == "1" ]] &&
+    elif [[ "$RECOVERY_PENDING_INSTALL" == "1" ]] &&
       verify_recorded_rollback_app "$APP_PATH"
     then
       : # The install transaction was persisted before the prior app moved into custody.
@@ -3078,7 +3217,8 @@ recover_host() {
       fail 'receipt app backup is missing, symlinked, or not a bundle directory'
     fi
   else
-    [[ -z "$ROLLBACK_APP_CDHASH_ARM64" && -z "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
+    [[ -z "$ROLLBACK_APP_ARCHITECTURES" &&
+      -z "$ROLLBACK_APP_CDHASH_ARM64" && -z "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
       fail 'receipt has per-architecture CDHashes without an app backup'
   fi
   if [[ -n "$ROLLBACK_ELEVATION_PLIST" ]]; then
@@ -3161,9 +3301,22 @@ recover_host() {
     local recovery_current_app_candidate="$APP_PATH"
     [[ -z "$RECOVERED_FAILED_APP_PATH" ]] ||
       recovery_current_app_candidate="$RECOVERED_FAILED_APP_PATH"
-    RECOVERY_CURRENT_APP_CDHASH_ARM64="$(codesign_value_for_arch "$recovery_current_app_candidate" CDHash arm64)"
-    RECOVERY_CURRENT_APP_CDHASH_X86_64="$(codesign_value_for_arch "$recovery_current_app_candidate" CDHash x86_64)"
+    RECOVERY_CURRENT_APP_ARCHITECTURES="$(canonical_app_architectures "$recovery_current_app_candidate")" ||
+      fail 'legacy recovery could not inspect current app architectures'
+    RECOVERY_CURRENT_APP_CDHASH_ARM64=""
+    RECOVERY_CURRENT_APP_CDHASH_X86_64=""
+    if [[ " $RECOVERY_CURRENT_APP_ARCHITECTURES " == *" arm64 "* ]]; then
+      capture_app_cdhash \
+        "$recovery_current_app_candidate" arm64 'legacy current app' RECOVERY_CURRENT_APP_CDHASH_ARM64 ||
+        fail 'legacy recovery could not inspect current app CDHashes'
+    fi
+    if [[ " $RECOVERY_CURRENT_APP_ARCHITECTURES " == *" x86_64 "* ]]; then
+      capture_app_cdhash \
+        "$recovery_current_app_candidate" x86_64 'legacy current app' RECOVERY_CURRENT_APP_CDHASH_X86_64 ||
+        fail 'legacy recovery could not inspect current app CDHashes'
+    fi
   elif [[ "$INSTALL_RECEIPT_SCHEMA" == "legacy" ]]; then
+    RECOVERY_CURRENT_APP_ARCHITECTURES=""
     RECOVERY_CURRENT_APP_CDHASH_ARM64=""
     RECOVERY_CURRENT_APP_CDHASH_X86_64=""
   fi

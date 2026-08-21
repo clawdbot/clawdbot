@@ -1,5 +1,8 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { VERSION } from "../version.js";
 import { loadNodeHostConfig } from "./config.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
@@ -22,13 +25,23 @@ function emitInventory(inventory: NodeHostInventory): void {
   writeMessage({ type: "inventory", inventory });
 }
 
-export async function runNodeHostWorker(): Promise<void> {
+export async function runNodeHostWorker(
+  options: {
+    sourceCommit?: string;
+    createPluginRegistry?: (config: OpenClawConfig) => PluginRegistry;
+  } = {},
+): Promise<void> {
   // Operator-approved startup is a second authorized entry point for Doctor-owned
   // state migrators. Runtime invokes those owners here and never migrates inline.
   await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
   const nodeConfig = await loadNodeHostConfig();
+  const config = getRuntimeConfig();
   const prepared = await prepareNodeHostRuntime({
+    config,
     enableDuplexPluginCommands: true,
+    ...(options.createPluginRegistry
+      ? { pluginRegistry: options.createPluginRegistry(config) }
+      : {}),
     installedAppsSharingEnabled: nodeConfig?.installedAppsSharing === true,
   });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
@@ -56,6 +69,7 @@ export async function runNodeHostWorker(): Promise<void> {
   writeMessage({
     type: "ready",
     version: VERSION,
+    ...(options.sourceCommit ? { sourceCommit: options.sourceCommit } : {}),
     manifest: prepared.manifest,
     inventory: prepared.initialInventory,
   });

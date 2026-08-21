@@ -38,17 +38,20 @@ struct MacNodeHostWorkerLaunch: Equatable, Sendable {
     let currentDirectoryURL: URL?
     let environment: [String: String]
     let configurationGeneration: UInt64
+    let expectedSourceCommit: String?
 
     init(
         command: [String],
         currentDirectoryURL: URL? = nil,
         environment: [String: String] = [:],
-        configurationGeneration: UInt64 = 0)
+        configurationGeneration: UInt64 = 0,
+        expectedSourceCommit: String? = nil)
     {
         self.command = command
         self.currentDirectoryURL = currentDirectoryURL
         self.environment = environment
         self.configurationGeneration = configurationGeneration
+        self.expectedSourceCommit = expectedSourceCommit
     }
 }
 
@@ -494,6 +497,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                   let pathEnv = rawManifest["pathEnv"] as? String
             else {
                 self.stopLocked(reason: "worker returned invalid manifest")
+                return
+            }
+            if let expectedSourceCommit = self.launchedWorker?.expectedSourceCommit,
+               message["sourceCommit"] as? String != expectedSourceCommit
+            {
+                self.stopLocked(reason: "worker source identity does not match the elevation app")
                 return
             }
             let computerUse: AnyCodable?

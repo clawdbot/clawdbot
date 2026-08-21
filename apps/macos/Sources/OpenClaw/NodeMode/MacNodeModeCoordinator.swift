@@ -946,7 +946,9 @@ extension MacNodeModeCoordinator {
         }
         let launch: MacNodeHostWorkerLaunch
         do {
-            if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
+            if AppLaunchRuntimePlan.current.isElevationHost {
+                launch = try await CommandResolver.elevationNodeHostWorkerLaunch()
+            } else if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
                 launch = projectLaunch
             } else {
                 switch await CLIInstaller.status() {
@@ -968,7 +970,8 @@ extension MacNodeModeCoordinator {
             command: launch.command,
             currentDirectoryURL: launch.currentDirectoryURL,
             environment: workerEnvironment,
-            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+            configurationGeneration: self.nodeHostWorkerConfigurationGeneration,
+            expectedSourceCommit: launch.expectedSourceCommit)
         let input = MacNodeHostWorkerRetryPolicy.Input(launch: effectiveLaunch)
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input

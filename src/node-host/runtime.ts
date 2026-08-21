@@ -34,6 +34,7 @@ import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
   ensureNodeHostPluginRegistry,
+  installNodeHostPluginRegistry,
   isRegisteredNodeHostCommandDuplex,
   listRegisteredNodeHostCapsAndCommands,
   notifyRegisteredNodeHostCommandDisconnect,
@@ -257,13 +258,19 @@ export async function prepareNodeHostRuntime(params?: {
   forceWorkerRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
+  /** Signed hosts may provide an in-bundle registry instead of filesystem discovery. */
+  pluginRegistry?: import("../plugins/registry-types.js").PluginRegistry;
   installedAppsSharingEnabled?: boolean;
   platform?: NodeJS.Platform;
 }): Promise<PreparedNodeHostRuntime> {
   void ensureTerminalUploadCleanup();
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
-  await ensureNodeHostPluginRegistry({ config, env });
+  if (params?.pluginRegistry) {
+    installNodeHostPluginRegistry(params.pluginRegistry);
+  } else {
+    await ensureNodeHostPluginRegistry({ config, env });
+  }
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
   const duplexEnabled =

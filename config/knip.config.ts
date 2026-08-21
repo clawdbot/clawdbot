@@ -192,6 +192,9 @@ const rootEntries = [
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
   // Imported by scripts/tsdown-build.mts as the AI package build configuration.
   "tsdown.ai.config.ts!",
+  // Invoked by the macOS app packager to build the source-bound node-host worker.
+  "tsdown.mac-node-host-worker.config.ts!",
+  "src/node-host/mac-node-host-worker-entry.ts!",
   // Maintainer-owned compatibility data referenced by release/docs workflows.
   "src/commands/doctor/shared/deprecation-compat.ts!",
   // Compiled as the package-boundary failure canary by the extension checker.

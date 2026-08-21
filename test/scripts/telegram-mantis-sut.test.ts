@@ -10,6 +10,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const linuxIt = process.platform === "linux" ? it : it.skip;
 
 describe("Telegram Mantis SUT", () => {
   it("keeps stderr when a container action is terminated", () => {
@@ -40,7 +41,7 @@ describe("Telegram Mantis SUT", () => {
     );
   }, 40_000);
 
-  it("releases the runtime claim before deadline-exposed removal", () => {
+  linuxIt("releases the runtime claim before deadline-exposed removal", () => {
     const root = tempDirs.make("telegram-mantis-cleanup-");
     const binDir = path.join(root, "bin");
     const runtimeParent = path.join(root, "runtime");
@@ -115,7 +116,7 @@ describe("Telegram Mantis SUT", () => {
     }
   });
 
-  it("waits for the claimed runtime owner before returning from stop", () => {
+  linuxIt("waits for the claimed runtime owner before returning from stop", () => {
     const root = tempDirs.make("telegram-mantis-stop-sync-");
     const binDir = path.join(root, "bin");
     const runtimeParent = path.join(root, "runtime");

@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
@@ -294,6 +295,52 @@ enum CommandResolver {
         #else
         return nil
         #endif
+    }
+
+    static func elevationNodeHostWorkerLaunch(
+        bundle: Bundle = .main,
+        searchPaths: [String]? = nil,
+        requireValidBundleSignature: Bool = true) async throws -> MacNodeHostWorkerLaunch
+    {
+        let build = ArtifactBuildInfo(infoDictionary: bundle.infoDictionary ?? [:])
+        guard let sourceCommit = build.gitCommit, let resourceRoot = bundle.resourceURL else {
+            throw MacNodeHostWorker.WorkerError.unavailable(
+                "elevation app has no source-bound node-host worker metadata")
+        }
+        if requireValidBundleSignature,
+           !MacNodeHostWorkerArtifact.validateSignedBundle(at: bundle.bundleURL)
+        {
+            throw MacNodeHostWorker.WorkerError.unavailable(
+                "elevation app signature does not cover its node-host worker")
+        }
+        return try await self.elevationNodeHostWorkerLaunch(
+            resourceRoot: resourceRoot,
+            expectedSourceCommit: sourceCommit,
+            searchPaths: searchPaths)
+    }
+
+    static func elevationNodeHostWorkerLaunch(
+        resourceRoot: URL,
+        expectedSourceCommit: String,
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch
+    {
+        let worker: URL
+        do {
+            worker = try MacNodeHostWorkerArtifact.resolve(
+                resourceRoot: resourceRoot,
+                expectedSourceCommit: expectedSourceCommit)
+        } catch {
+            throw MacNodeHostWorker.WorkerError.unavailable(error.localizedDescription)
+        }
+        switch await self.runtimeResolution(searchPaths: searchPaths) {
+        case let .success(runtime):
+            return MacNodeHostWorkerLaunch(
+                command: [runtime.path, worker.path],
+                currentDirectoryURL: resourceRoot,
+                expectedSourceCommit: expectedSourceCommit)
+        case let .failure(error):
+            throw MacNodeHostWorker.WorkerError.unavailable(RuntimeLocator.describeFailure(error))
+        }
     }
 
     static func nodeHostWorkerCommand(

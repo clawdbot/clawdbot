@@ -95,7 +95,10 @@ shasum -a 256 -c "$PREFIX-installer.sh.sha256"
 
 The elevation package is ZIP-only, notarized and stapled, contains exactly
 `OpenClaw.app`, omits Apple Events entitlements, records an immutable receipt,
-and verifies a freshly extracted copy. The same source-addressed artifact set
+and verifies a freshly extracted copy. It also embeds a CUA-free node-host
+worker whose signed manifest, file digest, and startup identity must match the
+app's exact OpenClaw source commit; elevation mode never selects an unrelated
+installed CLI for that runtime. The same source-addressed artifact set
 includes a portable installer copied from that exact Git commit plus separate
 archive and installer checksum files. Transfer the archive, receipt, portable
 installer, and both checksums; the target Mac does not need a source checkout.

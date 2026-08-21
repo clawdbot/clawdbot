@@ -129,6 +129,21 @@ struct MacNodeHostWorkerTests {
         await worker.stop()
     }
 
+    @Test func `source-bound worker refuses a mismatched ready identity`() async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
+        let script = """
+        printf '%s\n' '{"type":"ready","version":"test","sourceCommit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"}}'
+        while IFS= read -r line; do :; done
+        """
+
+        await #expect(throws: (any Error).self) {
+            _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
+                command: ["/bin/sh", "-c", script],
+                expectedSourceCommit: String(repeating: "a", count: 40)))
+        }
+        await worker.stop()
+    }
+
     @Test(arguments: [
         OpenClawSystemCommand.run.rawValue,
         "mcp.tools.call.v1",

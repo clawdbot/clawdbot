@@ -3,7 +3,11 @@ import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
-import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+import {
+  ensureNodeHostPluginRegistry,
+  installNodeHostPluginRegistry,
+  listRegisteredNodeHostCapsAndCommands,
+} from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
@@ -59,6 +63,7 @@ vi.mock("./node-worker-workspace.js", () => ({
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  installNodeHostPluginRegistry: vi.fn(),
   isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: ["terminal"],
@@ -127,6 +132,21 @@ function holdInvoke() {
 }
 
 describe("node-host worker manifest", () => {
+  it("uses a signed in-bundle registry without filesystem plugin discovery", async () => {
+    const registry = { nodeHostCommands: [] } as never;
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false } } },
+      env: { PATH: "/usr/bin" },
+      enableDuplexPluginCommands: true,
+      pluginRegistry: registry,
+    });
+
+    expect(ensureNodeHostPluginRegistry).not.toHaveBeenCalled();
+    expect(installNodeHostPluginRegistry).toHaveBeenCalledWith(registry);
+    expect(listRegisteredNodeHostCapsAndCommands).toHaveBeenCalled();
+    expect(prepared.manifest.commands).toContain("test.duplex");
+  });
+
   it("allows environment-managed processes to force worker hosting without durable config", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },

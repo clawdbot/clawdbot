@@ -508,6 +508,9 @@ describe("resolveTsdownBuildInvocation", () => {
       "packages/ai/dist",
     ]);
     expect(
+      resolveTsdownCleanOutputRoots(["--config", "tsdown.mac-node-host-worker.config.ts"]),
+    ).toEqual(["apps/macos/.build/node-host-worker"]);
+    expect(
       resolveTsdownCleanOutputRoots([
         "--config",
         "tsdown.config.ts",

@@ -54,6 +54,8 @@ const TERMINATION_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 250;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const MAC_NODE_HOST_WORKER_CONFIG_PATH = path.resolve("tsdown.mac-node-host-worker.config.ts");
+const MAC_NODE_HOST_WORKER_OUTPUT_ROOT = "apps/macos/.build/node-host-worker";
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
 const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
@@ -324,6 +326,9 @@ export function resolveTsdownCleanOutputRoots(args: string[] = []) {
 
   if (configPath === aiConfigPath) {
     return [aiRoot];
+  }
+  if (configPath === MAC_NODE_HOST_WORKER_CONFIG_PATH) {
+    return [MAC_NODE_HOST_WORKER_OUTPUT_ROOT];
   }
   if (configPath === mainConfigPath) {
     if (filter === TSDOWN_PACKAGE_CONFIG_GROUP) {

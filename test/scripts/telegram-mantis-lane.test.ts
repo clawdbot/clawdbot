@@ -13,6 +13,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const laneScript = path.resolve("scripts/e2e/telegram-mantis-lane.ts");
+const linuxIt = process.platform === "linux" ? it : it.skip;
 
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -343,7 +344,7 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
-  it("updates provider behavior through a private data file", async () => {
+  linuxIt("updates provider behavior through a private data file", async () => {
     const harness = await setupHarness();
     const responseFile = path.join(harness.outputRoot, "response.txt");
     fs.writeFileSync(responseFile, "stream this response");
@@ -375,7 +376,7 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
-  it("serializes commands across both lanes on the shared user session", async () => {
+  linuxIt("serializes commands across both lanes on the shared user session", async () => {
     const harness = await setupHarness();
     fs.writeFileSync(path.join(harness.sessionRoot, "harness.lock"), `${process.pid}\n`);
     try {

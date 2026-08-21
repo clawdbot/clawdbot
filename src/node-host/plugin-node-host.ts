@@ -48,6 +48,11 @@ export async function ensureNodeHostPluginRegistry(params: {
   });
 }
 
+/** Installs a composition-root-owned registry without filesystem plugin discovery. */
+export function installNodeHostPluginRegistry(registry: PluginRegistry): void {
+  nodeHostPluginRegistry = registry;
+}
+
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,

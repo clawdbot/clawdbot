@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -68,6 +69,68 @@ import Testing
         #expect(!launch.command.contains(sourceEntrypoint.path))
         #expect(!launch.command.contains(distEntrypoint.path))
         #expect(!launch.command.contains(projectExecutable.path))
+    }
+
+    @Test func `elevation worker is source bound and wins over a stale external CLI`() async throws {
+        let root = try makeTempDirForTests()
+        let resources = root.appendingPathComponent("Resources", isDirectory: true)
+        let artifact = resources.appendingPathComponent("OpenClawNodeHostWorker", isDirectory: true)
+        let worker = artifact.appendingPathComponent("node-host-worker.mjs")
+        let manifest = artifact.appendingPathComponent("manifest.json")
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let node = bin.appendingPathComponent("node")
+        let staleCLI = bin.appendingPathComponent("openclaw")
+        let sourceCommit = String(repeating: "a", count: 40)
+        try FileManager().createDirectory(at: artifact, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: bin, withIntermediateDirectories: true)
+        let workerData = Data("export {};\n".utf8)
+        try workerData.write(to: worker)
+        let workerSHA = SHA256.hash(data: workerData).map { String(format: "%02x", $0) }.joined()
+        let manifestData = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "kind": "openclaw-macos-node-host-worker",
+            "sourceCommit": sourceCommit,
+            "sha256": workerSHA,
+        ])
+        try manifestData.write(to: manifest)
+        try "#!/bin/sh\necho v22.22.3\n".write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nexit 99\n".write(to: staleCLI, atomically: true, encoding: .utf8)
+        for executable in [node, staleCLI] {
+            try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        }
+
+        let launch = try await CommandResolver.elevationNodeHostWorkerLaunch(
+            resourceRoot: resources,
+            expectedSourceCommit: sourceCommit,
+            searchPaths: [bin.path])
+
+        #expect(launch.command == [node.path, worker.path])
+        #expect(launch.expectedSourceCommit == sourceCommit)
+        #expect(!launch.command.contains(staleCLI.path))
+    }
+
+    @Test func `elevation worker rejects source and digest substitution`() throws {
+        let resources = try makeTempDirForTests()
+        let artifact = resources.appendingPathComponent("OpenClawNodeHostWorker", isDirectory: true)
+        let worker = artifact.appendingPathComponent("node-host-worker.mjs")
+        let manifest = artifact.appendingPathComponent("manifest.json")
+        try FileManager().createDirectory(at: artifact, withIntermediateDirectories: true)
+        try Data("export {};\n".utf8).write(to: worker)
+        let expectedCommit = String(repeating: "b", count: 40)
+        let wrongCommit = String(repeating: "c", count: 40)
+        let payload: [String: Any] = [
+            "schemaVersion": 1,
+            "kind": "openclaw-macos-node-host-worker",
+            "sourceCommit": wrongCommit,
+            "sha256": String(repeating: "0", count: 64),
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: manifest)
+
+        #expect(throws: (any Error).self) {
+            try MacNodeHostWorkerArtifact.resolve(
+                resourceRoot: resources,
+                expectedSourceCommit: expectedCommit)
+        }
     }
 
     @Test func `falls back to node and script`() async throws {
