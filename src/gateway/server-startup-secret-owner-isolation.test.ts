@@ -314,11 +314,11 @@ describe("Gateway startup SecretRef owner isolation", () => {
               reason: "credential file is unavailable",
             }),
           );
+          expect(brokenStart.error).toMatchObject({ code: "UNAVAILABLE" });
           const publicDiagnostics = JSON.stringify({
             error: brokenStart.error,
             accounts: initialAccounts,
           });
-          expect(publicDiagnostics).toContain("credential file is unavailable");
           expect(publicDiagnostics).not.toContain(credentialPath);
           expect(publicDiagnostics).not.toContain(repairedToken);
 
