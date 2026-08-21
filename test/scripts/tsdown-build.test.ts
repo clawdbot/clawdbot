@@ -696,6 +696,7 @@ describe("resolveTsdownBuildInvocation", () => {
         "/proc/self/mountinfo",
         "30 25 0:26 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
       ],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.use_hierarchy`, "1\n"],
       [`/sys/fs/cgroup/memory${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
@@ -848,6 +849,7 @@ describe("resolveTsdownBuildInvocation", () => {
         "/proc/self/mountinfo",
         "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory,cpu,cpuacct\n",
       ],
+      [`/sys/fs/cgroup${slicePath}/memory.use_hierarchy`, "1\n"],
       [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
     ]);
 
@@ -877,6 +879,7 @@ describe("resolveTsdownBuildInvocation", () => {
         "/proc/self/mountinfo",
         "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory,cpu\n",
       ],
+      [`/sys/fs/cgroup${slicePath}/memory.use_hierarchy`, "1\n"],
       [`/sys/fs/cgroup${slicePath}/memory.soft_limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
       [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
     ]);
@@ -897,6 +900,37 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
+  it("ignores a cgroup-v1 parent limit when hierarchy accounting is disabled", () => {
+    const leafPath = "/parent/leaf";
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `2:memory:${leafPath}\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      [`/sys/fs/cgroup/memory${leafPath}/memory.limit_in_bytes`, `${8 * 1024 * 1024 * 1024}\n`],
+      ["/sys/fs/cgroup/memory/parent/memory.use_hierarchy", "0\n"],
+      ["/sys/fs/cgroup/memory/parent/memory.limit_in_bytes", `${4 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=7424");
   });
 
   it("caps the tsdown heap when the cgroup mount exposes only a subtree", () => {

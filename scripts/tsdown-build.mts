@@ -596,7 +596,12 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   }
 
   const paths: string[] = [];
-  const addHierarchy = (mounts: CgroupMount[], limitFiles: string[], cgroupPath: string) => {
+  const addHierarchy = (
+    mounts: CgroupMount[],
+    limitFiles: string[],
+    cgroupPath: string,
+    hierarchyFile?: string,
+  ) => {
     for (const mount of mounts) {
       const relative = relativeCgroupPath(mount.root, cgroupPath ?? mount.root);
       if (relative === null) {
@@ -604,6 +609,20 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
       }
       const segments = relative.split("/").filter(Boolean);
       for (let depth = segments.length; depth >= 0; depth -= 1) {
+        if (hierarchyFile && depth < segments.length) {
+          try {
+            const hierarchyPath = path.join(
+              mount.mountPoint,
+              ...segments.slice(0, depth),
+              hierarchyFile,
+            );
+            if (fsImpl.readFileSync(hierarchyPath, "utf8").trim() !== "1") {
+              continue;
+            }
+          } catch {
+            continue;
+          }
+        }
         for (const limitFile of limitFiles) {
           paths.push(path.join(mount.mountPoint, ...segments.slice(0, depth), limitFile));
         }
@@ -624,7 +643,12 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
       addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, record[2] ?? "");
     } else if (controllers.split(",").includes("memory")) {
       sawMemoryRecord = true;
-      addHierarchy(mounts.v1Memory, CGROUP_V1_MEMORY_LIMIT_FILES, record[2] ?? "");
+      addHierarchy(
+        mounts.v1Memory,
+        CGROUP_V1_MEMORY_LIMIT_FILES,
+        record[2] ?? "",
+        "memory.use_hierarchy",
+      );
     }
   }
   // Only probe the mounts blind when this process has no memory cgroup record at all; a record
