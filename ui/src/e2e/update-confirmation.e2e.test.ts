@@ -27,22 +27,32 @@ function confirmationCopy(page: Page) {
   return page.locator("openclaw-modal-dialog");
 }
 
-async function openUpdateCard(page: Page, baseUrl: string) {
+async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   const gateway = await installMockGateway(page, {
     methodResponses: { "update.run": UPDATE_RUN_RESPONSE },
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
+  if (compact) {
+    await page.locator(".chat-header-session-menu__trigger").click();
+    const updateButton = page.getByText("Update available v2.0.0", { exact: true });
+    await updateButton.waitFor({ timeout: 10_000 });
+    return { compact, gateway, updateButton };
+  }
   const updateButton = page.locator(
     '[data-attention-kind="updateAvailable"] .sidebar-attention__open:visible',
   );
   await updateButton.waitFor({ timeout: 10_000 });
-  return { gateway, updateButton };
+  return { compact, gateway, updateButton };
 }
 
-async function openConfirmationFromAlert(page: Page, updateButton: Locator) {
+async function openConfirmationFromAlert(page: Page, updateButton: Locator, compact = false) {
   await updateButton.click();
+  if (compact) {
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+    return;
+  }
   const action = page
     .locator(".custodian__alert-card")
     .getByRole("button", { name: "Update and restart", exact: true });
@@ -98,8 +108,13 @@ suite.define(() => {
           viewport: variant.viewport,
         },
         async ({ page }) => {
-          const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-          await openConfirmationFromAlert(page, updateButton);
+          const compact = variant.viewport.width < 600;
+          const { gateway, updateButton } = await openUpdateCard(
+            page,
+            suite.server.baseUrl,
+            compact,
+          );
+          await openConfirmationFromAlert(page, updateButton, compact);
           await page.getByRole("dialog").waitFor();
           expect(
             await confirmationCopy(page)
