@@ -107,6 +107,58 @@ describe("read tool", () => {
     }
   });
 
+  it("drops the image payload for a non-vision model and keeps the note (#127009)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-nonvision-"));
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+    // A model whose input lacks "image" — it cannot consume image content, so the
+    // full base64 payload must be omitted (the note promises omission) to avoid
+    // exhausting the context window with tokens the model cannot use.
+    const nonVisionModel = { input: ["text"] } as never;
+    const tool = createReadToolDefinition(stateDir, { autoResizeImages: false });
+    try {
+      const result = await tool.execute(
+        "call-nonvision",
+        { path: imagePath },
+        undefined,
+        undefined,
+        { model: nonVisionModel } as never,
+      );
+      // No image part: only the text note (which includes the omission warning).
+      const imageParts = result.content.filter((part) => part.type === "image");
+      expect(imageParts).toHaveLength(0);
+      expect(textContent(result)).toContain("Read image file [image/png]");
+      expect(textContent(result)).toContain("does not support images");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the image payload when the model supports vision (#127009)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-vision-"));
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+    // A vision-capable model receives the image attachment as before.
+    const visionModel = { input: ["text", "image"] } as never;
+    const tool = createReadToolDefinition(stateDir, { autoResizeImages: false });
+    try {
+      const result = await tool.execute("call-vision", { path: imagePath }, undefined, undefined, {
+        model: visionModel,
+      } as never);
+      const imageParts = result.content.filter((part) => part.type === "image");
+      expect(imageParts).toHaveLength(1);
+      expect(imageParts[0]).toStrictEqual({
+        type: "image",
+        data: ONE_PIXEL_PNG_BASE64,
+        mimeType: "image/png",
+      });
+      // No omission note for a vision model.
+      expect(textContent(result)).not.toContain("does not support images");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("converts BMP files to PNG attachments", async () => {
     const tempDir = tempDirs.make("openclaw-read-bmp-");
     const filePath = path.join(tempDir, "pixel.bmp");

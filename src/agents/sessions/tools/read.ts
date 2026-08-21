@@ -571,10 +571,16 @@ export function createReadToolDefinition(
                 if (processed.hints.length > 0) {
                   textNote += `\n${processed.hints.join("\n")}`;
                 }
+                // A non-vision model cannot consume image content; the note already
+                // tells the model the image is omitted, so drop the payload to keep
+                // the promise and avoid base64 token bloat that can exhaust the
+                // context window. The path + note remain for context.
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
+                  content = [{ type: "text", text: textNote }];
+                } else {
+                  content = [{ type: "text", text: textNote }, processed.image];
                 }
-                content = [{ type: "text", text: textNote }, processed.image];
               }
             } else {
               const decodedText =
