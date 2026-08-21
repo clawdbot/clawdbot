@@ -291,7 +291,6 @@ describe("UsagePage detail requests", () => {
     page.routeData = {
       gateway,
       gatewaySnapshot: gateway.snapshot,
-      client,
       query: {
         startDate: "2026-05-14",
         endDate: "2026-05-14",
