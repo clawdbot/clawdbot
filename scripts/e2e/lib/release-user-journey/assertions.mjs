@@ -277,15 +277,27 @@ function configureClickClack() {
   writeConfig(cfg);
 }
 
-function assertChannelStatus() {
+function readChannelStatus() {
   const channel = process.argv[3];
   const statusPath = process.argv[4];
   const status = readJson(statusPath);
+  return { channel, status };
+}
+
+function assertChannelConfigured() {
+  const { channel, status } = readChannelStatus();
   const configured = Array.isArray(status.configuredChannels) ? status.configuredChannels : [];
-  const liveStatus = status.channels?.[channel];
   assert(
-    configured.includes(channel) || liveStatus?.ok === true,
-    `${channel} missing from channels status: ${JSON.stringify(status)}`,
+    configured.includes(channel),
+    `${channel} missing from configured channels: ${JSON.stringify(status)}`,
+  );
+}
+
+function assertChannelRunning() {
+  const { channel, status } = readChannelStatus();
+  assert(
+    status.channels?.[channel]?.ok === true,
+    `${channel} is not running: ${JSON.stringify(status)}`,
   );
 }
 
@@ -382,7 +394,8 @@ const commands = {
   "assert-file-contains": assertFileContains,
   "assert-plugin-uninstalled": assertPluginUninstalled,
   "configure-clickclack": configureClickClack,
-  "assert-channel-status": assertChannelStatus,
+  "assert-channel-configured": assertChannelConfigured,
+  "assert-channel-running": assertChannelRunning,
   "post-clickclack-inbound": postClickClackInbound,
   "wait-clickclack-socket": waitClickClackSocket,
   "assert-clickclack-state": assertClickClackState,

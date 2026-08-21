@@ -175,6 +175,57 @@ describe("release user journey assertions", () => {
     }
   });
 
+  it("accepts a configured channel before Gateway startup", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const statusPath = path.join(root, "status.json");
+
+    try {
+      writeJson(statusPath, { configuredChannels: ["clickclack"] });
+
+      await expect(
+        runReleaseUserJourneyAssertion("assert-channel-configured", ["clickclack", statusPath]),
+      ).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a configured channel that failed after Gateway restart", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const statusPath = path.join(root, "status.json");
+
+    try {
+      writeJson(statusPath, {
+        configuredChannels: ["clickclack"],
+        channels: { clickclack: { ok: false, error: "startup failed" } },
+      });
+
+      await expect(
+        runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
+      ).rejects.toThrow("clickclack is not running");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts a running channel after Gateway restart", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const statusPath = path.join(root, "status.json");
+
+    try {
+      writeJson(statusPath, {
+        configuredChannels: ["clickclack"],
+        channels: { clickclack: { ok: true } },
+      });
+
+      await expect(
+        runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
+      ).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("fails when uninstall leaves the managed plugin directory behind", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
