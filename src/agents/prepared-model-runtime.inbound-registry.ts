@@ -56,23 +56,19 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
       return existing;
     }
     const activeRegistry = getActivePluginRegistry();
-    const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
-    // Reuse is generation-bound: the requesting snapshot must BE the process-current
-    // published generation, or a leaked/older active registry could satisfy the
-    // manifest match (bundled records compare by id+origin only) and serve another
-    // generation's plugins. Identity, not equivalence, is the authority check here.
-    const currentGenerationSnapshot = getCurrentPluginMetadataSnapshot({
-      config: input.config,
-      workspaceDir: metadataSnapshot.workspaceDir,
-      allowWorkspaceScopedSnapshot: true,
-    });
+    // Identity is the generation authority. Manifest equivalence alone could let a
+    // stale active registry satisfy a newer bundled snapshot.
     const reusableGatewayRegistry =
       input.allowGatewaySubagentBinding === true &&
       input.env === undefined &&
       getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
       activeRegistry &&
-      currentGenerationSnapshot === metadataSnapshot &&
-      (activeWorkspaceDir === undefined || activeWorkspaceDir === metadataSnapshot.workspaceDir) &&
+      getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
+      getCurrentPluginMetadataSnapshot({
+        config: input.config,
+        workspaceDir: metadataSnapshot.workspaceDir,
+        allowWorkspaceScopedSnapshot: true,
+      }) === metadataSnapshot &&
       registryMatchesManifestPluginIds(
         activeRegistry,
         metadataSnapshot.manifestRegistry.plugins,
@@ -113,11 +109,6 @@ export function prepareWorkspacePluginRegistries(
   const inboundPluginRegistry = input.readOnly
     ? undefined
     : loadInboundRegistry?.(input, metadataSnapshot);
-  // Extending the reused Gateway generation inherits its artifact preference: the
-  // Gateway loader realizes built artifacts, so the delta load must not re-import
-  // the same plugins through source transforms. Isolated loads keep source truth.
-  const extendsActiveGatewayGeneration =
-    inboundPluginRegistry !== undefined && inboundPluginRegistry === getActivePluginRegistry();
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
@@ -131,11 +122,7 @@ export function prepareWorkspacePluginRegistries(
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
           metadataSnapshot,
-          // Lifecycle-selected callers and delta loads extending the active Gateway
-          // generation both stay on built artifacts; isolated loads keep source truth.
-          ...(preferBuiltPluginArtifacts || extendsActiveGatewayGeneration
-            ? { preferBuiltPluginArtifacts: true }
-            : {}),
+          ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
         })
       : inboundPluginRegistry;

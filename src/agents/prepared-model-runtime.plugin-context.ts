@@ -74,9 +74,8 @@ function resolveColdMetadataSnapshot(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
 ): PluginMetadataSnapshot {
-  // Resolve (slot-probing) instead of load: in the gateway the published current
-  // generation satisfies this read, which keeps snapshot identity stable for the
-  // generation-bound registry reuse in the inbound loader.
+  // Slot probing preserves the published Gateway generation identity; cold callers
+  // still fall through to a fresh metadata load.
   const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,

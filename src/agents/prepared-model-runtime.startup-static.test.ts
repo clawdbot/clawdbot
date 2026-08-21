@@ -407,9 +407,8 @@ describe("prepared model runtime Gateway catalog mode", () => {
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
-    // Two slot-probing resolutions share the published generation: the prepared
-    // cold plugin context and the model-id normalization lane. Neither builds a
-    // catalog; the laziness guards above are the eager-work protections.
+    // The prepared plugin context and model-id normalization probe the same
+    // published metadata generation without starting catalog discovery.
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);

@@ -36,7 +36,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
       inlineProviderModels: [],
       pluginMetadataSnapshot: gatewaySnapshot,
     };
-    const resolveMetadata = vi.spyOn(pluginMetadata, "loadPluginMetadataSnapshot");
+    const resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
     const getCurrentMetadata = vi.spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot");
 
     try {
