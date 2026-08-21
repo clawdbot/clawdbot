@@ -184,6 +184,25 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
+  it("accepts response-control delays above 60 seconds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-delay-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(control, JSON.stringify({ chunkDelayMs: 60_001, text: "delayed response" }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "validate the configured delay", stream: false }),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("reloads the lane-owned response control between turns", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-"));
     const control = join(root, "response.json");

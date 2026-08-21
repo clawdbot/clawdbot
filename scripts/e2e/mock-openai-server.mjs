@@ -37,7 +37,7 @@ function readCurrentResponse() {
     throw new Error("mock response control text is invalid");
   }
   const chunkDelayMs = value.chunkDelayMs ?? 0;
-  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 60_000) {
+  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 15 * 60_000) {
     throw new Error("mock response control chunkDelayMs is invalid");
   }
   if (value.hold !== undefined && typeof value.hold !== "boolean") {
