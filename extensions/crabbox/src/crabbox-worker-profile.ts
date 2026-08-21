@@ -7,6 +7,7 @@ import {
   type WorkerProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export { nonEmptyString };
 
@@ -39,6 +40,7 @@ type CrabboxProfile = {
   class: string;
   desktop?: boolean;
   heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
   idleTimeout: string;
   provider: string;
   ttl: string;
@@ -98,12 +100,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeout: string): number {
-  const idleNanoseconds = parsePositiveGoDurationNanoseconds(idleTimeout);
-  if (idleNanoseconds === undefined) {
-    throw new Error("Crabbox heartbeat requires a positive idle timeout");
-  }
-  const idleTimeoutMs = Number(idleNanoseconds) / 1_000_000;
+function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.
@@ -127,6 +124,7 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   }
   const ttl = requirePositiveDuration(profile.ttl, "ttl");
   const idleTimeout = requirePositiveDuration(profile.idleTimeout, "idleTimeout");
+  const idleTimeoutMs = Number(parsePositiveGoDurationNanoseconds(idleTimeout)) / 1_000_000;
   const binaryValue = profile.binary;
   const binary = binaryValue === undefined ? undefined : nonEmptyString(binaryValue);
   if (binaryValue !== undefined && !binary) {
@@ -153,7 +151,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     binary,
     class: machineClass,
     desktop,
-    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeout),
+    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeoutMs),
+    heartbeatTimeoutMs: Math.min(
+      CRABBOX_HEARTBEAT_TIMEOUT_MS,
+      Math.max(1, Math.floor(idleTimeoutMs / 2)),
+    ),
     idleTimeout,
     provider,
     setup,
