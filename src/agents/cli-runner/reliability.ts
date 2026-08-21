@@ -8,6 +8,7 @@ import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
+  CLI_TOOL_ACTIVE_NO_OUTPUT_TIMEOUT_DEFAULT_MS,
   CLI_WATCHDOG_MIN_TIMEOUT_MS,
 } from "../cli-watchdog-defaults.js";
 import type { EmbeddedRunTrigger } from "../embedded-agent-runner/run/params.js";
@@ -96,6 +97,25 @@ export function resolveCliNoOutputTimeoutMs(params: {
   const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
   const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));
   return Math.min(bounded, cap);
+}
+
+/**
+ * Resolves the no-output watchdog timeout that applies while the CLI has a
+ * tool call in flight. Never below the idle watchdog timeout; always below
+ * the overall run timeout.
+ */
+export function resolveCliToolActiveNoOutputTimeoutMs(params: {
+  backend: CliBackendConfig;
+  timeoutMs: number;
+  noOutputTimeoutMs: number;
+}): number {
+  const configured = params.backend.reliability?.watchdog?.toolActiveNoOutputTimeoutMs;
+  const base =
+    typeof configured === "number" && Number.isFinite(configured) && configured > 0
+      ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured))
+      : CLI_TOOL_ACTIVE_NO_OUTPUT_TIMEOUT_DEFAULT_MS;
+  const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
+  return Math.min(Math.max(base, params.noOutputTimeoutMs), cap);
 }
 
 export function resolveCliRunTimeoutOverrideMs(params: {

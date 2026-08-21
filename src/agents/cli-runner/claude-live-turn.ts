@@ -97,6 +97,8 @@ export type ClaudeLiveTurnHost = {
   providerId: string;
   modelId: string;
   noOutputTimeoutMs: number;
+  /** No-output allowance while a tool call is in flight. */
+  toolActiveNoOutputTimeoutMs?: number;
   stderr: string;
   stdoutBuffer: { pending: string };
   currentTurn: ClaudeLiveTurn | null;

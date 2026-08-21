@@ -446,6 +446,7 @@ export async function spawnClaudeProcess(params: {
   key: string;
   mcpCaptureKey?: string;
   noOutputTimeoutMs: number;
+  toolActiveNoOutputTimeoutMs?: number;
   supervisor: ProcessSupervisor;
   cleanup: () => Promise<void>;
   onSpawned: (session: ClaudeLiveProcess) => void;
@@ -515,6 +516,7 @@ export async function spawnClaudeProcess(params: {
     providerId: params.context.params.provider,
     modelId: params.context.modelId,
     noOutputTimeoutMs: params.noOutputTimeoutMs,
+    toolActiveNoOutputTimeoutMs: params.toolActiveNoOutputTimeoutMs,
     stderr: "",
     stdoutBuffer: { pending: "" },
     currentTurn: null,

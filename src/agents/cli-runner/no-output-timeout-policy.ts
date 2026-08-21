@@ -11,6 +11,8 @@ type CliNoOutputTimeoutPolicyParams = {
   hasReplayUnsafeActivity: boolean;
   allowResumeControlOnlyRetry?: boolean;
   outstandingWorkGraceMs?: number;
+  /** Names of tool calls still reported in flight, for kill-message attribution. */
+  activeToolNames?: readonly string[];
 };
 
 export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPolicyParams): {
@@ -33,12 +35,21 @@ export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPoli
     !outstandingWork;
   const retryable =
     (!params.cliTimeout.observedActivity && !params.hasOutputText) || retryableResumeStall;
+  // Attribute the kill to the in-flight tool(s): the model was not silent, a
+  // tool call exceeded the tool-active allowance.
+  const activeToolNames =
+    params.cliTimeout.activeToolCount > 0 ? (params.activeToolNames ?? []) : [];
+  const messageOverride =
+    activeToolNames.length > 0
+      ? `CLI produced no output for ${params.cliTimeout.timeoutSeconds}s while tool call(s) [${activeToolNames.join(", ")}] were still reported in flight and was terminated.`
+      : undefined;
   return {
     ...(deferMs !== undefined && deferMs > 0 ? { deferMs } : {}),
     error: createCliTimeoutError(
       params.context,
       params.cliTimeout,
       retryable ? "cli_no_output_timeout" : undefined,
+      messageOverride,
     ),
   };
 }
@@ -47,11 +58,13 @@ export function createCliTimeoutError(
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">,
   cliTimeout: CliTimeoutContext,
   code?: string,
+  messageOverride?: string,
 ): FailoverError {
   return createCliFailoverError(
-    cliTimeout.mode === "no-output"
-      ? `CLI produced no output for ${cliTimeout.timeoutSeconds}s and was terminated.`
-      : `CLI exceeded timeout (${cliTimeout.timeoutSeconds}s) and was terminated.`,
+    messageOverride ??
+      (cliTimeout.mode === "no-output"
+        ? `CLI produced no output for ${cliTimeout.timeoutSeconds}s and was terminated.`
+        : `CLI exceeded timeout (${cliTimeout.timeoutSeconds}s) and was terminated.`),
     "timeout",
     context,
     { code, cliTimeout },

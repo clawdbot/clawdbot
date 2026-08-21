@@ -10,7 +10,7 @@ type ClaudeLiveTimeoutTurn = {
   noOutputTimer: NodeJS.Timeout | null;
   lastOutputAtMs: number | null;
   timeoutTimer: NodeJS.Timeout | null;
-  activeTools: { size: number };
+  activeTools: { size: number; values(): Iterable<{ toolName: string }> };
   observedStdout: boolean;
   useResume: boolean;
   hasReplayUnsafeActivity: boolean;
@@ -21,6 +21,8 @@ type ClaudeLiveTimeoutHost = {
   providerId: string;
   modelId: string;
   noOutputTimeoutMs: number;
+  /** No-output allowance while a tool call is in flight; falls back to the blocked-tool floor. */
+  toolActiveNoOutputTimeoutMs?: number;
   stdoutBuffer: { pending: string };
   outstandingBackgroundTaskIds: { size: number };
   close(reason: "idle" | "restart" | "abort" | "mcp-capture-rotation", error?: unknown): void;
@@ -53,7 +55,8 @@ function armNoOutputTimer(
       useResume: turn.useResume,
       hasReplayUnsafeActivity: turn.hasReplayUnsafeActivity,
       allowResumeControlOnlyRetry: true,
-      outstandingWorkGraceMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+      outstandingWorkGraceMs: host.toolActiveNoOutputTimeoutMs ?? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+      activeToolNames: [...turn.activeTools.values()].map((tool) => tool.toolName),
     });
     if (decision.deferMs !== undefined) {
       armNoOutputTimer(host, turn, decision.deferMs);

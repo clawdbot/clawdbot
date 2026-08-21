@@ -51,6 +51,7 @@ import {
   resolveCliNoOutputTimeoutMs,
   resolveCliRunQueueKey,
   resolveCliRunTimeoutOverrideMs,
+  resolveCliToolActiveNoOutputTimeoutMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -531,6 +532,11 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
+      const toolActiveNoOutputTimeoutMs = resolveCliToolActiveNoOutputTimeoutMs({
+        backend,
+        timeoutMs: params.timeoutMs,
+        noOutputTimeoutMs,
+      });
       toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
       runOutput = await executeCliProcess({
         context,
@@ -555,6 +561,7 @@ export async function executePreparedCliRun(
         argsPrompt,
         stdin,
         noOutputTimeoutMs,
+        toolActiveNoOutputTimeoutMs,
         outputMode,
         logOutputText,
         cliTurnStartedAt,

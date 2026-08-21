@@ -85,6 +85,7 @@ export async function executeCliProcess(params: {
   argsPrompt?: string;
   stdin?: string;
   noOutputTimeoutMs: number;
+  toolActiveNoOutputTimeoutMs?: number;
   outputMode: CliBackendConfig["output"];
   logOutputText: boolean;
   cliTurnStartedAt: number;
@@ -128,6 +129,7 @@ export async function executeCliProcess(params: {
         ? context.requiredClaudeLiveSessionGeneration
         : undefined,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
+      toolActiveNoOutputTimeoutMs: params.toolActiveNoOutputTimeoutMs,
       getProcessSupervisor: params.deps.getProcessSupervisor,
       onAssistantDelta: params.events.emitCliAssistantDelta,
       onThinkingDelta: params.events.emitCliThinkingDelta,

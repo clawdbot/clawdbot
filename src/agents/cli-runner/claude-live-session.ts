@@ -40,6 +40,7 @@ import {
 } from "./claude-live-registry.js";
 import type { ClaudeLiveToolTerminalOutcome } from "./claude-live-turn.js";
 import { cliBackendLog } from "./log.js";
+import { resolveCliToolActiveNoOutputTimeoutMs } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<
@@ -61,6 +62,7 @@ type RunClaudeTurnParams = {
   forceNewSession?: boolean;
   requiredSessionGeneration?: string;
   noOutputTimeoutMs: number;
+  toolActiveNoOutputTimeoutMs?: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
@@ -389,6 +391,16 @@ async function runSerializedClaudeTurn(
   cleanup: () => Promise<void>,
 ): Promise<ClaudeLiveRunResult> {
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
+  // The Claude CLI stream is silent between tool_use and tool_result, so the
+  // plain no-output allowance would kill healthy long tool calls; resolve the
+  // larger tool-active allowance up front (run timeout remains the ceiling).
+  const toolActiveNoOutputTimeoutMs =
+    params.toolActiveNoOutputTimeoutMs ??
+    resolveCliToolActiveNoOutputTimeoutMs({
+      backend: params.context.preparedBackend.backend,
+      timeoutMs: params.context.params.timeoutMs,
+      noOutputTimeoutMs: params.noOutputTimeoutMs,
+    });
   const execPermission = resolveClaudeLiveExecPermission(params.context);
   const argv = [
     params.executableCommand ?? params.context.preparedBackend.backend.command,
@@ -534,6 +546,7 @@ async function runSerializedClaudeTurn(
       key,
       mcpCaptureKey,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
+      toolActiveNoOutputTimeoutMs,
       supervisor: params.getProcessSupervisor(),
       cleanup,
       onSpawned: (spawned) => registerClaudeSession(spawned, pendingCreate),
@@ -574,6 +587,7 @@ async function runSerializedClaudeTurn(
   }
   notifyMcpCaptureReady(session.mcpCaptureKey);
   session.noOutputTimeoutMs = params.noOutputTimeoutMs;
+  session.toolActiveNoOutputTimeoutMs = toolActiveNoOutputTimeoutMs;
   session.stderr = "";
   const inputUuid = crypto.randomUUID();
   const outputPromise = beginClaudeTurn(session, {

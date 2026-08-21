@@ -12,3 +12,7 @@ export const CLI_RESUME_WATCHDOG_DEFAULTS = {
   minMs: 60_000,
   maxMs: 180_000,
 } as const;
+
+// While the CLI reports a tool call in flight, stdout silence is expected;
+// allow a longer no-output window before terminating (run timeout still caps).
+export const CLI_TOOL_ACTIVE_NO_OUTPUT_TIMEOUT_DEFAULT_MS = 1_800_000;
