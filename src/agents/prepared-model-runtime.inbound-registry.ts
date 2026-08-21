@@ -130,9 +130,12 @@ export function prepareWorkspacePluginRegistries(
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-          ...(extendsActiveGatewayGeneration ? { preferBuiltPluginArtifacts: true } : {}),
           metadataSnapshot,
-          ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
+          // Lifecycle-selected callers and delta loads extending the active Gateway
+          // generation both stay on built artifacts; isolated loads keep source truth.
+          ...(preferBuiltPluginArtifacts || extendsActiveGatewayGeneration
+            ? { preferBuiltPluginArtifacts: true }
+            : {}),
           selections: input.runtimePluginSelections,
         })
       : inboundPluginRegistry;

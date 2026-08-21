@@ -388,6 +388,7 @@ describe("agent runtime plugin registries", () => {
       installRecords: {},
       manifestRegistry: snapshot.manifestRegistry,
       onlyPluginIds: ["codex", "memory-core"],
+      preferBuiltPluginArtifacts: true,
       runtimeOptions: undefined,
       workspaceDir: snapshot.workspaceDir,
     });

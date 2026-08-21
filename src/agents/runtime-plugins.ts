@@ -31,8 +31,6 @@ type AgentRuntimePluginRegistryParams = {
   /** Lifecycle-owned selection; standalone/direct generations stay source-default. */
   preferBuiltPluginArtifacts?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
-  /** Set when extending a Gateway generation that loaded built artifacts itself. */
-  preferBuiltPluginArtifacts?: boolean;
 };
 
 function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistryParams) {
@@ -96,7 +94,6 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
         ? {}
         : { onlyPluginIds: plan.pluginIds }),
       ...(startupPluginIds === undefined ? {} : { channelPluginLoadIntent: "full" as const }),
-      ...(params.preferBuiltPluginArtifacts === true ? { preferBuiltPluginArtifacts: true } : {}),
       runtimeOptions: params.allowGatewaySubagentBinding
         ? { allowGatewaySubagentBinding: true }
         : undefined,
