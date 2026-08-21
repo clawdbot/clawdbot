@@ -96,9 +96,9 @@ function startModelSetupFirstRunRedirect(params: {
     }
     if (snapshot.phase !== "connected" || !snapshot.client) {
       // A build fence can move a previously authenticated client straight into
-      // reconnecting, or reject the handshake with a reload-required phase. Do
-      // not hold the router when the shell needs to present either recovery state.
-      if (snapshot.hello || snapshot.phase === "reload-required") {
+      // reconnecting or reload-required, while a terminal first attempt returns
+      // to stopped. Do not hold the router when the shell needs to present recovery.
+      if (snapshot.hello || snapshot.phase === "reload-required" || snapshot.phase === "stopped") {
         settleInitialDecision();
       }
       return;
