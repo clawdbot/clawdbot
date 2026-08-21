@@ -27,7 +27,7 @@ function evidenceManifest() {
   return { runAttempt: 1, runId: "99", targetSha: TARGET_SHA };
 }
 
-function generatedManifest(planArtifact: Record<string, any>) {
+function generatedManifest(planArtifact: Record<string, any>): Record<string, any> {
   return {
     childRuns: {
       normalCi: "101",
@@ -349,7 +349,9 @@ describe("release state artifacts", () => {
     parentRunAttempt = 2,
     sealedPlan = executionPlan({ rerunGroup: "ci" }),
   ) {
-    const plannedChild = sealedPlan.children.find((entry) => entry.key === "normalCi");
+    const plannedChild = sealedPlan.children.find(
+      (entry: Record<string, any>) => entry.key === "normalCi",
+    );
     const children = [
       child("normalCi", {
         ...plannedChild,

@@ -1435,7 +1435,10 @@ describe("release CI summary child correlation", () => {
       verifierSourceSha: "c".repeat(40),
     };
 
-    fixture.client.getRef = () => ({ object: { sha: "6".repeat(40) } });
+    fixture.client.getRef = (fullRef: string) => ({
+      object: { sha: "6".repeat(40) },
+      ref: fullRef,
+    });
     expect(() => validateReleaseRunEvidence(options, fixture.client)).toThrow(
       "protected tooling tag moved",
     );
