@@ -46,4 +46,21 @@ describe("handleFollowupCommand", () => {
     });
     expect(params.directives.hasQueueDirective).toBe(false);
   });
+
+  it("leaves an existing followup skill in control of the direct command", async () => {
+    const params = buildParams("/followup skill input");
+    params.loadSkillCommands = async () => [
+      {
+        name: "followup_2",
+        skillName: "followup",
+        description: "Existing followup skill",
+      },
+    ];
+
+    const result = await handleFollowupCommand(params, true);
+
+    expect(result).toBeNull();
+    expect(params.command.commandBodyNormalized).toBe("/followup skill input");
+    expect(params.directives.hasQueueDirective).toBe(false);
+  });
 });

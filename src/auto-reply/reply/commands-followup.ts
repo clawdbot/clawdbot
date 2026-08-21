@@ -1,4 +1,5 @@
 // Implements a one-message followup queue override without changing session settings.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -15,9 +16,17 @@ function parseFollowupMessage(raw: string): string | null {
 
 export const handleFollowupCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/followup", match: parseFollowupMessage },
-  (params, message) => {
+  async (params, message) => {
     if (!message) {
       return commandReply(FOLLOWUP_USAGE);
+    }
+
+    const skillCommands = params.skillCommands ?? (await params.loadSkillCommands?.()) ?? [];
+    const hasExistingFollowupSkill = skillCommands.some(
+      (command) => normalizeOptionalLowercaseString(command.skillName) === "followup",
+    );
+    if (hasExistingFollowupSkill) {
+      return null;
     }
 
     applyCommandTextToParams(params, message);

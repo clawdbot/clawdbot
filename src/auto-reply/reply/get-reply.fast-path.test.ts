@@ -15,6 +15,7 @@ import {
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { handleFollowupCommand } from "./commands-followup.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
@@ -173,11 +174,15 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     mocks.ensureAgentWorkspace.mockReset();
     mocks.handleCommands.mockReset();
     mocks.handleCommands.mockImplementation(async (params: unknown) => {
-      const result = await handleGoalCommand(
+      const goalResult = await handleGoalCommand(
         params as Parameters<typeof handleGoalCommand>[0],
         true,
       );
-      return result ?? { shouldContinue: true, reply: undefined };
+      const followupResult = await handleFollowupCommand(
+        params as Parameters<typeof handleFollowupCommand>[0],
+        true,
+      );
+      return goalResult ?? followupResult ?? { shouldContinue: true, reply: undefined };
     });
     mocks.handleInlineActions.mockReset();
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
@@ -756,6 +761,76 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(preparedReplyParams.command.commandBodyNormalized).toBe(continuationPrompt);
     expect(preparedReplyParams.sessionCtx.BodyForAgent).toBe(continuationPrompt);
     expect(mocks.handleInlineActions).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries a native /followup override through ordinary queue admission", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-followup-fast-"));
+    const targetSessionKey = "agent:main:telegram:123";
+    const storePath = path.join(home, "sessions.json");
+    await seedFastPathSessionStore(storePath, {
+      [targetSessionKey]: {
+        sessionId: "native-followup-active",
+        updatedAt: Date.now(),
+        queueMode: "steer",
+      },
+    });
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    const continueDirectives = async (params: unknown) =>
+      createGetReplyContinueDirectivesResult({
+        body: (params as { triggerBodyNormalized: string }).triggerBodyNormalized,
+        abortKey: targetSessionKey,
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "telegram:user:42",
+        commandSource: (params as { triggerBodyNormalized: string }).triggerBodyNormalized,
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      });
+    mocks.resolveReplyDirectives.mockImplementation(continueDirectives);
+    mocks.handleInlineActions.mockImplementation(async (params: unknown) => {
+      const input = params as {
+        cleanedBody: string;
+        directives: Record<string, unknown>;
+      };
+      return {
+        kind: "continue",
+        directives: input.directives,
+        abortedLastRun: false,
+        cleanedBody: input.cleanedBody,
+      };
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: "/followup explain the decision afterward",
+          BodyForAgent: "/followup explain the decision afterward",
+          RawBody: "/followup explain the decision afterward",
+          CommandBody: "/followup explain the decision afterward",
+          CommandSource: "native",
+          CommandAuthorized: true,
+          SessionKey: "telegram:slash:123",
+          CommandTargetSessionKey: targetSessionKey,
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.opts?.queueModeOverride).toBe("followup");
+    expect(preparedReplyParams.command.commandBodyNormalized).toBe(
+      "explain the decision afterward",
+    );
+    expect(readFastPathSessionEntry(storePath, targetSessionKey).queueMode).toBe("steer");
   });
 
   it("uses native command target session keys during fast bootstrap", () => {

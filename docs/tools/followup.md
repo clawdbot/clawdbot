@@ -38,6 +38,12 @@ Use:
 - `/queue steer` when future normal messages should guide active runs by default.
 - `/steer <message>` when one message should guide the active run now.
 
+If an installed skill already uses the name `followup`, that skill keeps the
+direct `/followup` command after upgrade. Use `/skill followup [input]` as its
+stable explicit form. In that workspace, use the session-level `/queue`
+sequence for queue followups; OpenClaw does not silently take the existing
+skill command away.
+
 The explicit `/followup` command is Gateway-backed. In `openclaw chat` or
 `openclaw tui --local`, select `/queue followup`, send the message, and restore
 the preferred mode afterward.

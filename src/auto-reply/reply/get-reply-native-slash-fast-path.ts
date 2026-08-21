@@ -143,7 +143,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   opts?: GetReplyOptions;
   skillFilter?: string[];
 }): Promise<
-  { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined } | { handled: false }
+  | { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined }
+  | { handled: false }
+  | { handled: false; queueModeOverride: "followup" }
 > {
   if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
     return { handled: false };
@@ -345,6 +347,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     command.isAuthorizedSender &&
     (command.commandBodyNormalized === "/compact" ||
       command.commandBodyNormalized.startsWith("/compact "));
+  const commandDirectives = clearInlineDirectives(sessionState.triggerBodyNormalized);
   const commandResult = compactNeedsModelSelection
     ? { shouldContinue: true, reply: undefined }
     : await (
@@ -356,7 +359,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         command,
         agentId: params.agentId,
         agentDir: params.agentDir,
-        directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
+        directives: commandDirectives,
         elevated: {
           enabled: false,
           allowed: false,
@@ -496,6 +499,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       handled: true,
       reply: markCommandReplyForDelivery(inlineActionResult.reply),
     };
+  }
+  if (commandDirectives.hasQueueDirective && commandDirectives.queueMode === "followup") {
+    return { handled: false, queueModeOverride: "followup" };
   }
   return { handled: false };
 }

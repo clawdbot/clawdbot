@@ -152,6 +152,13 @@ export function resolveSkillCommandInvocation(params: {
   const command = params.skillCommands.find(
     (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
   );
+  if (!command && commandName === "followup") {
+    const existingFollowupSkill = findSkillCommand(params.skillCommands, commandName);
+    if (existingFollowupSkill) {
+      const args = match[2]?.trim();
+      return { command: existingFollowupSkill, args: args || undefined };
+    }
+  }
   if (!command) {
     return null;
   }

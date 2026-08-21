@@ -236,6 +236,17 @@ describe("resolveSkillCommandInvocation", () => {
     });
     expect(invocation).toBeNull();
   });
+
+  it("keeps a colliding followup skill reachable by its original direct command", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/followup existing behavior",
+      skillCommands: [{ name: "followup_2", skillName: "followup", description: "Existing skill" }],
+    });
+
+    expect(invocation?.command.name).toBe("followup_2");
+    expect(invocation?.command.skillName).toBe("followup");
+    expect(invocation?.args).toBe("existing behavior");
+  });
 });
 
 describe("resolveSkillReferenceInvocations", () => {

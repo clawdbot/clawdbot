@@ -501,6 +501,10 @@ export async function getReplyFromConfig(
     logResolverTiming("completed", "native_slash_command_fast_path");
     return nativeSlashCommandFastReply.reply;
   }
+  const optsAfterNativeSlashFastPath =
+    "queueModeOverride" in nativeSlashCommandFastReply
+      ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
+      : optsWithSkillFilter;
 
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
@@ -670,8 +674,8 @@ export async function getReplyFromConfig(
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
   const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
-    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
-    : optsWithSkillFilter;
+    ? { ...optsAfterNativeSlashFastPath, skillOverrides: sessionEntry.toolOverrides.skills }
+    : optsAfterNativeSlashFastPath;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
