@@ -9,6 +9,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  resolveConfiguredAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -142,6 +143,14 @@ const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 // Apply can await evaluator, proposal-change, and skill-change hook phases.
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
+function normalizeExplicitAgentId(agentId?: string): string | undefined {
+  const normalizedAgentId = agentId?.trim();
+  if (agentId !== undefined && !normalizedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  return normalizedAgentId;
+}
+
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -151,14 +160,14 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const config = getRuntimeConfig(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
-  const explicitAgentId = normalizeOptionalString(options?.agentId);
+  const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
     : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
-  const agentId =
-    explicitAgentId ??
-    inferredAgentId ??
-    resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." });
+  const agentId = explicitAgentId
+    ? resolveConfiguredAgentId(config, explicitAgentId)
+    : (inferredAgentId ??
+      resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." }));
   return {
     config,
     agentId,
@@ -231,8 +240,8 @@ function resolveClawHubTargetWorkspace(
   opts: { agent?: string; global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
-  const agentId = resolveAgentOption(command, opts);
-  if (opts.global && normalizeOptionalString(agentId)) {
+  const agentId = normalizeExplicitAgentId(resolveAgentOption(command, opts));
+  if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
     return undefined;
