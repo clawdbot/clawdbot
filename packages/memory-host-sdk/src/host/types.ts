@@ -29,6 +29,8 @@ export type MemorySearchResult = {
   triggers?: string;
   /** Semicolon-separated stable repository identities lifted from inline annotations. */
   projectKey?: string;
+  /** @deprecated Use provenance.originClass. This field is not authoritative for automatic injection. */
+  originClass?: string;
   citation?: string;
   provenance?: MemoryEntryProvenance;
 };
