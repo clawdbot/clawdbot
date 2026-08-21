@@ -22,6 +22,9 @@ const CHILD_SCRIPT = String.raw`
   const read = (session, seq) => db.prepare(
     "SELECT event_json FROM transcript_events WHERE session_id=? AND seq=?",
   ).get(session, seq).event_json;
+  const readTrajectory = (seq) => db.prepare(
+    "SELECT event_json FROM trajectory_runtime_events WHERE session_id=? AND seq=?",
+  ).get("large-corpus-0", seq).event_json;
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   const before = [hash(read("large-corpus-20", 64)), hash(read("large-corpus-39", 127))];
   db.close();
@@ -31,14 +34,25 @@ const CHILD_SCRIPT = String.raw`
   db = new DatabaseSync(path, { readOnly: true });
   const count = (table) => db.prepare("SELECT COUNT(*) count FROM " + table).get().count;
   const first = JSON.parse(read("large-corpus-0", 0));
+  const boundary = JSON.parse(read("large-corpus-0", 64));
+  const trajectoryBoundary = JSON.parse(readTrajectory(64));
   process.stdout.write(JSON.stringify({
     warnings: migration.warnings,
     changeCount: migration.changes.length,
     sessions: count("session_nodes"), windows: count("session_windows"),
     events: count("transcript_events"),
+    trajectoryEvents: count("trajectory_runtime_events"),
     firstIdentity: [first.type, first.id, first.parentId],
     firstMediaPath: first.message.__openclaw?.media?.[0]?.path,
     firstHasLegacyCarrier: Object.hasOwn(first.message, "MediaPath"),
+    boundaryMediaPath: boundary.message.__openclaw?.media?.[0]?.path,
+    boundaryHasLegacyCarrier: Object.hasOwn(boundary.message, "MediaPath"),
+    trajectoryBoundaryMediaPath:
+      trajectoryBoundary.data.messagesSnapshot[0].__openclaw?.media?.[0]?.path,
+    trajectoryBoundaryHasLegacyCarrier: Object.hasOwn(
+      trajectoryBoundary.data.messagesSnapshot[0],
+      "MediaPath",
+    ),
     middlePreserved: hash(read("large-corpus-20", 64)) === before[0],
     lastPreserved: hash(read("large-corpus-39", 127)) === before[1],
   }) + "\n");
@@ -73,8 +87,20 @@ function createCorpus(stateDir: string): void {
       json_object('type','message','id','event-'||i||'-'||seq,'parentId',NULL,'message',
         CASE WHEN i=0 AND seq=0
           THEN json_object('role','user','content',?,'MediaPath','/media/legacy.png')
+          WHEN i=0 AND seq=64
+          THEN json_object('role','user','content',?,'MediaPath','/media/boundary.png')
           ELSE json_object('role','user','content',?) END), seq+1 FROM s CROSS JOIN e`)
-    .run(ACTIVE_SESSIONS, EVENTS_PER_SESSION, PAYLOAD, PAYLOAD);
+    .run(ACTIVE_SESSIONS, EVENTS_PER_SESSION, PAYLOAD, PAYLOAD, PAYLOAD);
+  database.db
+    .prepare(`WITH RECURSIVE e(seq) AS (
+    VALUES(0) UNION ALL SELECT seq+1 FROM e WHERE seq+1 < ?
+  ) INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at)
+    SELECT 'large-corpus-0', seq, 'run-large-corpus',
+      json_object('type','model.completed','data',json_object('messagesSnapshot',json_array(
+        CASE WHEN seq=64
+          THEN json_object('role','user','content','trajectory','MediaPath','/media/trajectory-boundary.png')
+          ELSE json_object('role','user','content','trajectory') END))), seq+1 FROM e`)
+    .run(EVENTS_PER_SESSION);
   database.db.exec("COMMIT; UPDATE session_nodes SET entry_valid=1");
   closeOpenClawAgentDatabases();
 }
@@ -101,9 +127,14 @@ describe("legacy media persistence large corpus", () => {
         sessions: SESSION_COUNT,
         windows: SESSION_COUNT,
         events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
+        trajectoryEvents: EVENTS_PER_SESSION,
         firstIdentity: ["message", "event-0-0", null],
         firstMediaPath: "/media/legacy.png",
         firstHasLegacyCarrier: false,
+        boundaryMediaPath: "/media/boundary.png",
+        boundaryHasLegacyCarrier: false,
+        trajectoryBoundaryMediaPath: "/media/trajectory-boundary.png",
+        trajectoryBoundaryHasLegacyCarrier: false,
         middlePreserved: true,
         lastPreserved: true,
       });
