@@ -2,6 +2,7 @@
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
+  embeddingProviderOwnsDestination,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type EmbeddingInput,
@@ -181,17 +182,10 @@ function resolveGeminiOutputDimensionality(model: string, requested?: number): n
   return requested;
 }
 function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
-  const trimmed = resolveMemorySecretInputString({
+  return resolveMemorySecretInputString({
     value: remoteApiKey,
     path: "memory.search.remote.apiKey",
   });
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "GOOGLE_API_KEY" || trimmed === "GEMINI_API_KEY") {
-    return process.env[trimmed]?.trim();
-  }
-  return trimmed;
 }
 
 function normalizeGeminiModel(model: string): string {
@@ -366,26 +360,40 @@ async function resolveGeminiEmbeddingClient(
   const remote = options.remote;
   const remoteApiKey = resolveRemoteApiKey(remote?.apiKey);
   const remoteBaseUrl = remote?.baseUrl?.trim();
-
+  const providerConfig = options.config.models?.providers?.google;
+  const providerBaseUrl = normalizeGeminiBaseUrl(
+    normalizeOptionalString(providerConfig?.baseUrl) || DEFAULT_GOOGLE_API_BASE_URL,
+  );
+  const rawBaseUrl = remoteBaseUrl || providerBaseUrl;
+  const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
+  const providerOwnsDestination = embeddingProviderOwnsDestination({
+    baseUrl,
+    providerBaseUrl,
+  });
   const apiKey = remoteApiKey
     ? remoteApiKey
-    : requireApiKey(
-        await resolveApiKeyForProvider({
-          provider: "google",
-          cfg: options.config,
-          agentDir: options.agentDir,
-        }),
-        "google",
-      );
+    : providerOwnsDestination
+      ? requireApiKey(
+          await resolveApiKeyForProvider({
+            provider: "google",
+            cfg: options.config,
+            agentDir: options.agentDir,
+          }),
+          "google",
+        )
+      : undefined;
+  if (!apiKey) {
+    throw new Error(
+      `Google embedding credentials are not configured for ${baseUrl}. Set memory.search.remote.apiKey for this destination.`,
+    );
+  }
 
-  const providerConfig = options.config.models?.providers?.google;
-  const rawBaseUrl =
-    remoteBaseUrl ||
-    normalizeOptionalString(providerConfig?.baseUrl) ||
-    DEFAULT_GOOGLE_API_BASE_URL;
-  const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const headerOverrides = Object.assign(
+    {},
+    providerOwnsDestination ? providerConfig?.headers : undefined,
+    remote?.headers,
+  );
   const headers: Record<string, string> = {
     ...headerOverrides,
     ...resolveGoogleApiClientHeaders({
@@ -395,10 +403,12 @@ async function resolveGeminiEmbeddingClient(
       transport: "http",
     }),
   };
-  const apiKeys = collectProviderApiKeysForExecution({
-    provider: "google",
-    primaryApiKey: apiKey,
-  });
+  const apiKeys = remoteApiKey
+    ? [apiKey]
+    : collectProviderApiKeysForExecution({
+        provider: "google",
+        primaryApiKey: apiKey,
+      });
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
   const outputDimensionality = resolveGeminiOutputDimensionality(

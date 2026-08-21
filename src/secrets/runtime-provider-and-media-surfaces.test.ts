@@ -674,6 +674,101 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
+  it.each(["$MEMORY_REMOTE_KEY", "${MEMORY_REMOTE_KEY}"])(
+    "resolves memory shorthand %s through its configured env provider",
+    async (apiKey) => {
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
+            providers: {
+              memoryenv: { source: "env", allowlist: ["MEMORY_REMOTE_KEY"] },
+            },
+            defaults: { env: "memoryenv" },
+          },
+          memory: { search: { remote: { apiKey } } },
+        }),
+        env: { MEMORY_REMOTE_KEY: "resolved-memory-key" },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      });
+
+      expect(snapshot.config.memory?.search?.remote?.apiKey).toBe("resolved-memory-key");
+    },
+  );
+
+  it.each(["$MISSING_MEMORY_KEY", "${MISSING_MEMORY_KEY}"])(
+    "keeps unresolved memory shorthand %s as a structured unavailable ref",
+    async (apiKey) => {
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({ memory: { search: { remote: { apiKey } } } }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+        allowUnavailableSecretOwners: true,
+      });
+
+      expect(snapshot.config.memory?.search?.remote?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "MISSING_MEMORY_KEY",
+      });
+      expect(snapshot.degradedOwners).toMatchObject([
+        {
+          ownerKind: "capability",
+          ownerId: "memory-provider:main",
+          degradationState: "cold",
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      name: "an unknown provider",
+      ref: { source: "env", provider: "missing", id: "MEMORY_REMOTE_KEY" },
+      secrets: undefined,
+      code: "SECRET_PROVIDER_NOT_CONFIGURED",
+    },
+    {
+      name: "a source-mismatched provider",
+      ref: { source: "env", provider: "memorystore", id: "MEMORY_REMOTE_KEY" },
+      secrets: { providers: { memorystore: { source: "store" } } },
+      code: "SECRET_PROVIDER_INVALID",
+    },
+    {
+      name: "a denied env allowlist",
+      ref: { source: "env", provider: "memoryenv", id: "MEMORY_REMOTE_KEY" },
+      secrets: {
+        providers: { memoryenv: { source: "env", allowlist: ["OTHER_MEMORY_KEY"] } },
+      },
+      code: "SECRET_REF_POLICY_DENIED",
+    },
+  ])("rejects memory refs using $name before materialization", async ({ ref, secrets, code }) => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          ...(secrets ? { secrets } : {}),
+          memory: { search: { remote: { apiKey: ref } } },
+        }),
+        env: { MEMORY_REMOTE_KEY: "ambient-memory-key" },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toMatchObject({ code });
+  });
+
+  it("does not reactivate retired memory env markers", async () => {
+    const value = "secretref-env:MEMORY_REMOTE_KEY";
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({ memory: { search: { remote: { apiKey: value } } } }),
+      env: { MEMORY_REMOTE_KEY: "ambient-memory-key" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.memory?.search?.remote?.apiKey).toBe(value);
+  });
+
   it("isolates an inherited memory ref to its exact agent owner", async () => {
     const missingRef = envTokenRef("MISSING_TEST_VALUE");
     const healthyValue = "test-token-placeholder";

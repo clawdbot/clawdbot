@@ -1,4 +1,6 @@
 /** Collects per-agent memory search secret refs from runtime config. */
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasAgentRosterProperty,
   type ListedAgentEntry,
@@ -14,6 +16,39 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
+
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+
+function resolveMemoryEmbeddingProviderContract(params: {
+  config: OpenClawConfig;
+  defaults: Record<string, unknown> | undefined;
+  override: Record<string, unknown> | undefined;
+}) {
+  const configuredProvider =
+    normalizeOptionalString(params.override?.provider) ??
+    normalizeOptionalString(params.defaults?.provider);
+  const providerId =
+    !configuredProvider || configuredProvider === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : configuredProvider;
+  const providerConfig = findNormalizedProviderValue(params.config.models?.providers, providerId);
+  return {
+    id: providerId,
+    config: providerConfig
+      ? {
+          baseUrl: providerConfig.baseUrl,
+          apiKey: providerConfig.apiKey,
+          auth: providerConfig.auth,
+          authHeader: providerConfig.authHeader,
+          headers: providerConfig.headers,
+          request: providerConfig.request,
+          params: providerConfig.params,
+          region: providerConfig.region,
+          localService: providerConfig.localService,
+        }
+      : undefined,
+  };
+}
 
 /** Collects memory-search SecretRefs once for every agent that can inherit them. */
 export function collectAgentMemorySearchAssignments(params: {
@@ -63,6 +98,11 @@ export function collectAgentMemorySearchAssignments(params: {
         defaults: defaultsMemorySearch,
         override: memorySearch,
         agentEnabled: rawAgentRecord["enabled"],
+        provider: resolveMemoryEmbeddingProviderContract({
+          config: params.config,
+          defaults: defaultsMemorySearch,
+          override: memorySearch,
+        }),
       },
     } satisfies SecretAssignmentOwner;
 

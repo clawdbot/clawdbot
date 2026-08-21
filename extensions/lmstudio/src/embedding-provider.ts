@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
+  embeddingProviderOwnsDestination,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -192,20 +193,27 @@ export async function createLmstudioEmbeddingProvider(
         ? providerBaseUrl
         : undefined;
   const baseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
+  const providerOwnedBaseUrl = resolveLmstudioInferenceBase(providerBaseUrl);
+  const providerOwnsDestination =
+    !baseUrlSource ||
+    embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
   const providerHeaders = await resolveLmstudioProviderHeaders({
     config: options.config,
     env: process.env,
     headers: Object.assign(
       {},
-      providerConfig?.headers,
+      providerOwnsDestination ? providerConfig?.headers : undefined,
       !isFallbackActivation ? options.remote?.headers : {},
     ),
   });
   const apiKey = hasAuthorizationHeader(providerHeaders)
     ? undefined
     : !isFallbackActivation
-      ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options, resolvedProvider?.providerId))
+      ? remoteApiKey?.trim() ||
+        (providerOwnsDestination
+          ? await resolveLmstudioApiKey(options, resolvedProvider?.providerId)
+          : undefined)
       : await resolveLmstudioApiKey(options, resolvedProvider?.providerId);
   const headerOverrides = Object.assign({}, providerHeaders);
   const headers =

@@ -22,6 +22,7 @@ export {
   classifyMemoryMultimodalPath,
   createRemoteEmbeddingProvider,
   debugEmbeddingsLog,
+  embeddingProviderOwnsDestination,
   EmbeddingBatchUnavailableError,
   EMBEDDING_BATCH_ENDPOINT,
   enforceEmbeddingMaxInputTokens,

@@ -21,6 +21,7 @@ import { createGeminiEmbeddingProvider } from "./embedding-provider.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -55,6 +56,72 @@ function requireFirstFetchInput(fetchMock: ReturnType<typeof vi.fn>): RequestInf
 }
 
 describe("Gemini embedding provider", () => {
+  it("keeps provider credentials off a different remote destination", async () => {
+    const { client } = await createGeminiEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://provider.example.test/v1beta",
+              apiKey: "provider-key",
+              headers: { "X-Provider-Tenant": "provider-a" },
+              models: [],
+            },
+          },
+        },
+      } as never,
+      provider: "google",
+      remote: {
+        baseUrl: "https://remote.example.test/v1beta",
+        apiKey: "remote-key",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    expect(client.baseUrl).toBe("https://remote.example.test/v1beta");
+    expect(client.apiKeys).toEqual(["remote-key"]);
+    expect(client.headers).toMatchObject({ "X-Remote-Tenant": "remote-b" });
+    expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
+  });
+
+  it("fails before egress when a remote destination has no explicit key", async () => {
+    await expect(
+      createGeminiEmbeddingProvider({
+        config: {
+          models: {
+            providers: {
+              google: {
+                baseUrl: "https://provider.example.test/v1beta",
+                apiKey: "provider-key",
+                models: [],
+              },
+            },
+          },
+        } as never,
+        provider: "google",
+        remote: { baseUrl: "https://remote.example.test/v1beta" },
+        model: "gemini-embedding-001",
+        fallback: "none",
+      }),
+    ).rejects.toThrow(/memory\.search\.remote\.apiKey/);
+  });
+
+  it("does not reinterpret a resolved literal as an ambient env name", async () => {
+    vi.stubEnv("GOOGLE_API_KEY", "ambient-key");
+
+    const { client } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "google",
+      remote: { apiKey: "GOOGLE_API_KEY" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    expect(client.apiKeys).toEqual(["GOOGLE_API_KEY"]);
+  });
+
   it.each(["models/", "gemini/", "google/"])(
     "normalizes the %s model prefix through the provider request",
     async (prefix) => {
