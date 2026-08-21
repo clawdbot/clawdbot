@@ -260,7 +260,7 @@ const POLICY_FIX_METADATA = [
     "Merge required built-in deny tool classes.",
     {
       policyPath: ["tools", "denyTools"],
-      configTargets: ["tools.deny", "agents.list[].tools.deny"],
+      configTargets: ["tools.deny", "agents.entries.<id>.tools.deny"],
     },
   ),
   m(

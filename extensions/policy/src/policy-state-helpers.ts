@@ -23,7 +23,7 @@ export function readBooleanPath(value: unknown, path: readonly string[]): boolea
 }
 
 /** One configured agent, from either the keyed `agents.entries` map or the legacy `agents.list` array. */
-export type PolicyConfiguredAgent = {
+type PolicyConfiguredAgent = {
   readonly agentId: string;
   readonly container: "entries" | "list";
   /** Key for `entries`, array index for `list`. Feed to {@link policyAgentPathSegment}. */
