@@ -17,6 +17,7 @@ import {
   buildStatusEventsValue,
   buildStatusPluginCompatibilityValue,
   buildStatusProbesValue,
+  buildStatusSecretDiagnostics,
   buildStatusSecretsValue,
   buildStatusSessionsOverviewValue,
 } from "./status-overview-values.ts";
@@ -38,12 +39,12 @@ function buildStatusDegradationRows(
   decorate = (value: string) => value,
 ) {
   const rows: Array<{ Item: string; Value: string }> = [];
-  const secretOwners = summary.degradedSecretOwners ?? [];
+  const secretOwners = buildStatusSecretDiagnostics(summary.degradedSecretOwners ?? [], []);
   if (secretOwners.length > 0) {
     rows.push({
       Item: "Degraded secrets",
       Value: decorate(
-        `${secretOwners.length} degraded · ${secretOwners.map((owner) => `${owner.ownerKind}:${owner.ownerId}`).join(", ")}`,
+        `${secretOwners.length} degraded · ${secretOwners.slice(0, 10).join(", ")}${secretOwners.length > 10 ? `, … +${secretOwners.length - 10} more` : ""}`,
       ),
     });
   }

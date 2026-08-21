@@ -17,6 +17,7 @@ import {
   buildStatusOverviewSurfaceFromOverview,
   type StatusOverviewSurface,
 } from "../status-overview-surface.ts";
+import { buildStatusSecretDiagnostics } from "../status-overview-values.ts";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -58,11 +59,9 @@ async function resolveStatusAllLocalDiagnosis(params: {
   timeoutMs?: number;
 }): Promise<{
   configPath: string;
-  health: StatusGatewayHealthSafe | undefined;
   diagnosis: {
     snap: ConfigFileSnapshot | null;
     remoteUrlMissing: boolean;
-    secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
     sentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>> | null;
     lastErr: string | null;
     port: number;
@@ -161,11 +160,9 @@ async function resolveStatusAllLocalDiagnosis(params: {
 
   return {
     configPath,
-    health,
     diagnosis: {
       snap,
       remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
-      secretDiagnostics: overview.secretDiagnostics,
       sentinel,
       lastErr,
       port,
@@ -202,7 +199,7 @@ export async function buildStatusAllReportData(params: {
   timeoutMs?: number;
 }) {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
-  const [{ configPath, health, diagnosis }, summary] = await Promise.all([
+  const [{ configPath, diagnosis }, summary] = await Promise.all([
     resolveStatusAllLocalDiagnosis({
       overview: params.overview,
       progress: params.progress,
@@ -222,12 +219,16 @@ export async function buildStatusAllReportData(params: {
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
   });
+  const secretDiagnostics = buildStatusSecretDiagnostics(
+    summary.degradedSecretOwners ?? [],
+    params.overview.secretDiagnostics,
+  );
   const overviewRows = buildStatusAllOverviewRows({
     surface: overviewSurface,
     osLabel: params.overview.osSummary.label,
     configPath,
     summary,
-    secretDiagnosticsCount: params.overview.secretDiagnostics.length,
+    secretDiagnosticsCount: secretDiagnostics.length,
     updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
     tailscaleBackendState: diagnosis.tailscale.backendState,
@@ -250,7 +251,8 @@ export async function buildStatusAllReportData(params: {
     }),
     diagnosis: {
       ...diagnosis,
-      health,
+      secretDiagnostics,
+      hasDegradedSecretOwners: (summary.degradedSecretOwners?.length ?? 0) > 0,
     },
   };
 }

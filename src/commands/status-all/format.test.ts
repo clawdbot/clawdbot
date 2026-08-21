@@ -16,6 +16,7 @@ import {
   formatStatusDashboardValue,
   formatStatusServiceValue,
   formatStatusTailscaleValue,
+  redactStatusSecrets,
 } from "./format.js";
 
 describe("status-all format", () => {
@@ -202,6 +203,22 @@ describe("status-all format", () => {
       error: null,
       authWarning: "warn",
     });
+  });
+
+  it("redacts complete unquoted, quoted, and JSON-like credential values", () => {
+    expect(redactStatusSecrets("token=raw-command-secret next")).toBe("token=*** next");
+    expect(redactStatusSecrets('password="correct horse battery staple" next')).toBe(
+      "password=*** next",
+    );
+    expect(redactStatusSecrets('{"token": "raw-command-secret", "safe": true}')).toBe(
+      '{"token": ***, "safe": true}',
+    );
+    expect(redactStatusSecrets("token=Bearer eyJhbGciOi.secret next")).toBe("token=*** next");
+    expect(redactStatusSecrets("password=alpha,beta next")).toBe("password=*** next");
+    expect(redactStatusSecrets("token=Bearer ~abc+secret/== next")).toBe("token=*** next");
+    expect(redactStatusSecrets("Authorization: Bearer ~abc+secret/== next")).toBe(
+      "Authorization: Bearer *** next",
+    );
   });
 
   it("redacts credential-bearing Gateway URLs from text and JSON status", () => {

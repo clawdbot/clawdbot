@@ -24,9 +24,78 @@ describe("status-overview-rows", () => {
     );
     expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
     expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
+    expect(findRowValue(rows, "Degraded secrets")).toBeUndefined();
     expect(findRowValue(rows, "Sessions")).toBe(
       "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
+  });
+
+  it("shows every cold and stale runtime secret owner with its safe path and reason", () => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        summary: {
+          ...params.summary,
+          degradedSecretOwners: [
+            {
+              ownerKind: "capability",
+              ownerId: "tts",
+              state: "unavailable",
+              degradationState: "cold",
+              paths: ["tts.providers.elevenlabs.apiKey"],
+              reason: "secret reference was not found",
+            },
+            {
+              ownerKind: "provider",
+              ownerId: "openai",
+              state: "unavailable",
+              degradationState: "stale",
+              paths: ["models.providers.openai.apiKey"],
+              reason: "secret provider failed",
+            },
+          ],
+        },
+      }),
+    );
+
+    const value = findRowValue(rows, "Degraded secrets");
+    expect(value).toContain("2 degraded");
+    expect(value).toContain(
+      "cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+    );
+    expect(value).toContain(
+      "stale provider:openai (models.providers.openai.apiKey): secret provider failed",
+    );
+  });
+
+  it("redacts unresolved SecretRef identifiers and sanitizes untrusted owner display text", () => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        summary: {
+          ...params.summary,
+          degradedSecretOwners: [
+            {
+              ownerKind: "capability",
+              ownerId: "tts\u001b[31m\nforged-owner",
+              state: "unavailable",
+              paths: ["tts.providers.elevenlabs.apiKey\nforged-path"],
+              reason:
+                "secret reference was not found (env:default:PRIVATE_REF_ID token=raw-secret)",
+            },
+          ],
+        },
+      }),
+    );
+
+    const value = findRowValue(rows, "Degraded secrets") ?? "";
+    expect(value).toContain("cold capability:tts");
+    expect(value).toContain("tts.providers.elevenlabs.apiKey");
+    expect(value).toContain("secret resolution failed");
+    expect(value).not.toContain("PRIVATE_REF_ID");
+    expect(value).not.toContain("raw-secret");
+    expect(value).not.toContain("\u001b");
+    expect(value).not.toContain("\n");
   });
 
   it("marks skipped memory inspection as not checked in fast status output", () => {
@@ -131,7 +200,7 @@ describe("status-overview-rows", () => {
       },
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
-      secretDiagnosticsCount: 2,
+      secretDiagnosticsCount: 3,
       updateRestartValue: "restart pending health verification",
       agentStatus: {
         bootstrapPendingCount: 1,
@@ -146,8 +215,10 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
-    expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
+    expect(findRowValue(rows, "Degraded secrets")).toBe(
+      "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+    );
     expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
-    expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
+    expect(findRowValue(rows, "Secrets")).toBe("3 diagnostics");
   });
 });

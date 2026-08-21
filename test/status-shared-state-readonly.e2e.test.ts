@@ -70,6 +70,7 @@ describe("status shared-state ownership", () => {
       name: "status-runtime-degradation",
       env: {
         STATUS_E2E_MISSING_SECRET: undefined,
+        STATUS_E2E_MISSING_SKILL_SECRET: undefined,
         VITEST: undefined,
         VITEST_POOL_ID: undefined,
         VITEST_WORKER_ID: undefined,
@@ -82,6 +83,17 @@ describe("status shared-state ownership", () => {
                 source: "env",
                 provider: "default",
                 id: "STATUS_E2E_MISSING_SECRET",
+              },
+            },
+          },
+        },
+        skills: {
+          entries: {
+            cold: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "STATUS_E2E_MISSING_SKILL_SECRET",
               },
             },
           },
@@ -116,7 +128,15 @@ describe("status shared-state ownership", () => {
       expect(gatewayStatus.degradedSecretOwners).toEqual([
         expect.objectContaining({
           ownerKind: "capability",
+          ownerId: "skill:cold",
+          degradationState: "cold",
+          paths: ["skills.entries.cold.apiKey"],
+          reason: "secret reference was not found",
+        }),
+        expect.objectContaining({
+          ownerKind: "capability",
           ownerId: "tts",
+          degradationState: "cold",
           paths: ["tts.providers.elevenlabs.apiKey"],
           reason: "secret reference was not found",
         }),
@@ -138,18 +158,34 @@ describe("status shared-state ownership", () => {
           expect(payload.degradedPlugins).toEqual(gatewayStatus.degradedPlugins);
         } else {
           expect(status.stdout).toContain("Degraded secrets");
+          expect(status.stdout).toContain("2 degraded");
+          expect(status.stdout).toContain("capability:skill:cold");
           expect(status.stdout).toContain("capability:tts");
+          expect(status.stdout).toContain("cold");
+          expect(status.stdout).toContain("skills.entries.cold.apiKey");
+          expect(status.stdout).toContain("tts.providers.elevenlabs.apiKey");
+          expect(status.stdout).toContain("secret reference was not found");
           expect(status.stdout).toContain("Degraded plugins");
           expect(status.stdout).toContain(DEGRADED_PLUGIN_ID);
+          if (args.includes("--all")) {
+            expect(status.stdout).toContain("2 diagnostics");
+            expect(status.stdout).toContain("! Secret diagnostics (2)");
+            expect(status.stdout).not.toContain("✓ Secret diagnostics (0)");
+          }
         }
         expect(`${status.stdout}\n${status.stderr}`).not.toContain("STATUS_E2E_MISSING_SECRET");
+        expect(`${status.stdout}\n${status.stderr}`).not.toContain(
+          "STATUS_E2E_MISSING_SKILL_SECRET",
+        );
         expect(`${status.stdout}\n${status.stderr}`).not.toContain(pluginRoot);
       }
 
       const logs = instance.logs();
       expect(logs).toContain("Secret owner capability:tts is configured-unavailable");
+      expect(logs).toContain("Secret owner capability:skill:cold is configured-unavailable");
       expect(logs).toContain(`Plugin \"${DEGRADED_PLUGIN_ID}\"`);
       expect(logs).not.toContain("STATUS_E2E_MISSING_SECRET");
+      expect(logs).not.toContain("STATUS_E2E_MISSING_SKILL_SECRET");
     } finally {
       await instance.cleanup();
       fs.rmSync(pluginRoot, { recursive: true, force: true });

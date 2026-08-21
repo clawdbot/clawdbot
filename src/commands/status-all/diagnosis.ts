@@ -26,6 +26,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
+import { SECRET_DEGRADATION_RETRY_HINT } from "../../secrets/runtime-degraded-state.js";
 import type { StatusGatewayDiagnosticsResult } from "../status-runtime-shared.ts";
 import {
   formatUpdateRestartActionLines,
@@ -149,6 +150,7 @@ export async function appendStatusAllDiagnosis(params: {
   snap: ConfigSnapshotLike | null;
   remoteUrlMissing: boolean;
   secretDiagnostics: string[];
+  hasDegradedSecretOwners?: boolean;
   sentinel: { payload?: RestartSentinelPayload | null } | null;
   lastErr: string | null;
   port: number;
@@ -229,6 +231,9 @@ export async function appendStatusAllDiagnosis(params: {
   }
   if (params.secretDiagnostics.length > 10) {
     lines.push(`  ${muted(`… +${params.secretDiagnostics.length - 10} more`)}`);
+  }
+  if (params.hasDegradedSecretOwners) {
+    lines.push(`  ${muted(`Retry: ${SECRET_DEGRADATION_RETRY_HINT}`)}`);
   }
 
   if (params.sentinel?.payload) {

@@ -5,6 +5,7 @@ import {
   buildStatusEventsValue,
   buildStatusPluginCompatibilityValue,
   buildStatusProbesValue,
+  buildStatusSecretDiagnostics,
   buildStatusSecretsValue,
   buildStatusSessionsOverviewValue,
 } from "./status-overview-values.ts";
@@ -58,5 +59,45 @@ describe("status-overview-values", () => {
         formatKTokens: (value) => `${Math.round(value / 1000)}k`,
       }),
     ).toBe("2 active · default gpt-5.5 (12k ctx) · 2 stores");
+  });
+
+  it("deduplicates runtime owners and only their exact command-local paths", () => {
+    const owner = {
+      ownerKind: "capability" as const,
+      ownerId: "tts",
+      state: "unavailable" as const,
+      paths: ["tts.providers.elevenlabs.apiKey"],
+      reason: "secret reference was not found",
+    };
+    const diagnostics = buildStatusSecretDiagnostics(
+      [owner, owner],
+      [
+        "status: tts.providers.elevenlabs.apiKey is unavailable in this command path; continuing with degraded read-only config.",
+        "status: tts.providers.elevenlabs.apiKeyBackup is unavailable in this command path; token=raw-command-secret",
+      ],
+    );
+
+    expect(diagnostics).toEqual([
+      "cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+      "status: tts.providers.elevenlabs.apiKeyBackup is unavailable in this command path; token=***",
+    ]);
+  });
+
+  it("preserves authoritative totals while bounding owner labels and paths", () => {
+    const longLabel = "x".repeat(200);
+    const diagnostics = buildStatusSecretDiagnostics(
+      Array.from({ length: 12 }, (_, index) => ({
+        ownerKind: "capability" as const,
+        ownerId: `skill:${index}:${longLabel}`,
+        state: "unavailable" as const,
+        paths: [`skills.entries.skill${index}.${longLabel}.apiKey`],
+        reason: "secret reference was not found",
+      })),
+      ["unrelated command-local warning"],
+    );
+
+    expect(diagnostics).toHaveLength(13);
+    expect(diagnostics[0]).not.toContain(longLabel);
+    expect(diagnostics[0]).toContain("secret reference was not found");
   });
 });

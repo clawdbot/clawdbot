@@ -1,6 +1,35 @@
 // Small value formatters for status overview rows.
 // These helpers keep terse row text consistent between compact and full status reports.
 
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
+import type { StatusSummary } from "../status/types.js";
+import { redactStatusSecrets } from "./status-all/format.js";
+
+/** Combines authoritative owner details with distinct command-local human diagnostics. */
+export function buildStatusSecretDiagnostics(
+  owners: NonNullable<StatusSummary["degradedSecretOwners"]>,
+  diagnostics: string[],
+): string[] {
+  const safeText = (value: string) =>
+    truncateUtf16Safe(sanitizeTerminalText(redactStatusSecrets(value)), 160);
+  const ownerPaths = new Set(owners.flatMap((owner) => owner.paths));
+  const ownerDiagnostics = new Map(
+    owners.map((owner) => [
+      `${owner.ownerKind}\0${owner.ownerId}`,
+      `${owner.degradationState ?? "cold"} ${owner.ownerKind}:${safeText(owner.ownerId)} (${owner.paths.slice(0, 3).map(safeText).join(", ")}${owner.paths.length > 3 ? ", …" : ""}): ${safeText(redactSecretDegradationReason(owner.reason))}`,
+    ]),
+  );
+  const localDiagnostics = diagnostics.filter((diagnostic) => {
+    const ownerPath =
+      /^.+?: (.+?) is unavailable in this command path(?:;|$)/.exec(diagnostic)?.[1] ??
+      diagnostic.split(":", 1)[0];
+    return ownerPath === undefined || !ownerPaths.has(ownerPath);
+  });
+  return [...ownerDiagnostics.values(), ...new Set(localDiagnostics.map(safeText))];
+}
+
 type AgentStatusLike = {
   bootstrapPendingCount: number;
   totalSessions: number;

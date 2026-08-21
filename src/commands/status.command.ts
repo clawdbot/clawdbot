@@ -12,9 +12,11 @@ import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { SECRET_DEGRADATION_RETRY_HINT } from "../secrets/runtime-degraded-state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
+import { buildStatusSecretDiagnostics } from "./status-overview-values.ts";
 import {
   loadStatusProviderUsageModule,
   resolveStatusGatewayHealth,
@@ -163,7 +165,7 @@ export async function statusCommand(
     agentStatus,
     channels,
     summary,
-    secretDiagnostics,
+    secretDiagnostics: commandSecretDiagnostics,
     memory,
     memoryPlugin,
     pluginCompatibility,
@@ -262,18 +264,29 @@ export async function statusCommand(
 
   const tableWidth = getTerminalTableWidth();
 
+  const secretDiagnostics = buildStatusSecretDiagnostics(
+    summary.degradedSecretOwners ?? [],
+    commandSecretDiagnostics,
+  );
   if (secretDiagnostics.length > 0) {
-    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
-    for (const entry of secretDiagnostics) {
+    for (const entry of secretDiagnostics.slice(0, 10)) {
       runtime.log(`- ${entry}`);
     }
-    const wrapperContextHint = resolveServiceWrapperContextHint({
-      serviceWrapperPath: daemon.wrapperPath,
-      cliWrapperPath: process.env[OPENCLAW_WRAPPER_ENV_KEY],
-    });
-    if (wrapperContextHint) {
-      runtime.log(theme.warn(wrapperContextHint));
+    if (secretDiagnostics.length > 10) {
+      runtime.log(`… +${secretDiagnostics.length - 10} more`);
+    }
+    if (summary.degradedSecretOwners?.length) {
+      runtime.log(`Retry: ${SECRET_DEGRADATION_RETRY_HINT}`);
+    }
+    if (secretDiagnostics.length > (summary.degradedSecretOwners?.length ?? 0)) {
+      const wrapperContextHint = resolveServiceWrapperContextHint({
+        serviceWrapperPath: daemon.wrapperPath,
+        cliWrapperPath: process.env[OPENCLAW_WRAPPER_ENV_KEY],
+      });
+      if (wrapperContextHint) {
+        runtime.log(theme.warn(wrapperContextHint));
+      }
     }
     runtime.log("");
   }

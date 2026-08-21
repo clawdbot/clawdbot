@@ -1,6 +1,7 @@
 // Status-all diagnosis tests cover port checks, restart logs, config issues, and safe diagnostic output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
+import { buildStatusSecretDiagnostics } from "../status-overview-values.ts";
 
 type GatewayLogPaths = {
   logDir: string;
@@ -114,8 +115,89 @@ describe("status-all diagnosis port checks", () => {
     await appendStatusAllDiagnosis(params);
 
     const output = params.lines.join("\n");
+    expect(output).toContain("✓ Secret diagnostics (0)");
     expect(output).toContain("✓ Tailscale exposure: off · daemon Running · box.tail.ts.net");
     expect(output).not.toContain("Tailscale: off");
+  });
+
+  it("combines Gateway-owned degradation with distinct command diagnostics without double-counting", async () => {
+    const params = createBaseParams([]);
+    params.secretDiagnostics = buildStatusSecretDiagnostics(
+      [
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          degradationState: "cold",
+          paths: ["tts.providers.elevenlabs.apiKey"],
+          reason: "secret reference was not found",
+        },
+        {
+          ownerKind: "provider",
+          ownerId: "openai",
+          state: "unavailable",
+          degradationState: "stale",
+          paths: ["models.providers.openai.apiKey"],
+          reason: "secret provider failed",
+        },
+      ],
+      [
+        "status --all: tts.providers.elevenlabs.apiKey is unavailable in this command path; continuing with degraded read-only config.",
+        "status --all: channels.discord.accounts.ops.token is unavailable in this command path; continuing with degraded read-only config.",
+      ],
+    );
+    params.hasDegradedSecretOwners = true;
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Secret diagnostics (3)");
+    expect(output).toContain(
+      "cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+    );
+    expect(output).toContain(
+      "stale provider:openai (models.providers.openai.apiKey): secret provider failed",
+    );
+    expect(output).toContain(
+      "channels.discord.accounts.ops.token is unavailable in this command path",
+    );
+    expect(output).toContain("Retry: openclaw secrets reload");
+    expect(output).not.toContain("✓ Secret diagnostics (0)");
+    expect(
+      params.lines.filter((line) => line.includes("tts.providers.elevenlabs.apiKey")),
+    ).toHaveLength(1);
+  });
+
+  it("redacts unresolved references and credential values from degraded-owner diagnostics", async () => {
+    const params = createBaseParams([]);
+    params.secretDiagnostics = buildStatusSecretDiagnostics(
+      [
+        {
+          ownerKind: "capability",
+          ownerId: "tts\u001b[31m\nforged-owner",
+          state: "unavailable",
+          paths: ["tts.providers.elevenlabs.apiKey\nforged-path"],
+          reason:
+            "secret reference was not found (env:default:PRIVATE_REF_ID token=raw-owner-secret)",
+        },
+      ],
+      ["channels.discord.accounts.ops.token: token=raw-command-secret"],
+    );
+    params.hasDegradedSecretOwners = true;
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    const ownerLine = params.lines.find((line) => line.includes("capability:tts"));
+    expect(output).toContain("! Secret diagnostics (2)");
+    expect(ownerLine).toContain("cold capability:tts");
+    expect(ownerLine).toContain("tts.providers.elevenlabs.apiKey");
+    expect(ownerLine).toContain("secret resolution failed");
+    expect(ownerLine).not.toContain("\u001b");
+    expect(ownerLine).not.toContain("\n");
+    expect(output).not.toContain("PRIVATE_REF_ID");
+    expect(output).not.toContain("raw-owner-secret");
+    expect(output).not.toContain("raw-command-secret");
   });
 
   it("treats same-process dual-stack loopback listeners as healthy", async () => {
