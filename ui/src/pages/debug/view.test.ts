@@ -1,5 +1,5 @@
 // Control UI tests cover debug behavior.
-import { render } from "lit";
+import { render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -385,26 +385,46 @@ describe("DebugOverlay", () => {
       await vi.advanceTimersByTimeAsync(0);
       await overlay.updateComplete;
 
-      expect(overlay.querySelector(".debug-overlay__metrics")?.textContent).toContain("42%");
-      expect(overlay.querySelector(".debug-overlay__graphs")).toBeNull();
+      const vitalUpdated = async () => {
+        await overlay.updateComplete;
+        for (const tile of overlay.querySelectorAll("openclaw-debug-sparkline")) {
+          await (tile as LitElement).updateComplete;
+        }
+      };
+      await vitalUpdated();
+
+      // One sample: tiles show current values, charts wait for a second point.
+      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain(
+        "loop 42%",
+      );
+      expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
 
       await vi.advanceTimersByTimeAsync(2_000);
-      await overlay.updateComplete;
+      await vitalUpdated();
 
-      expect(overlay.querySelectorAll(".debug-overlay__graph")).toHaveLength(3);
-      expect(normalizedText(overlay.querySelector(".debug-overlay__graph--cpu"))).toContain("120%");
-      expect(normalizedText(overlay.querySelector(".debug-overlay__graph--memory"))).toContain(
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain("120%");
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--memory"))).toContain(
         "402 MB",
       );
-      expect(normalizedText(overlay.querySelector(".debug-overlay__graph--delay"))).toContain(
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--memory"))).toContain(
+        "heap 100 MB",
+      );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
         "12ms",
       );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
+        "max 87ms",
+      );
+      expect(overlay.querySelectorAll(".debug-vital__chart")).toHaveLength(3);
+      // Healthy event loop: no tile carries the degraded tint.
+      expect(overlay.querySelector(".debug-overlay__vital[data-degraded]")).toBeNull();
 
       await vi.advanceTimersByTimeAsync(180_000);
-      await overlay.updateComplete;
+      await vitalUpdated();
 
       const points = overlay
-        .querySelector(".debug-overlay__graph--cpu polyline")
+        .querySelector(".debug-overlay__vital--cpu polyline")
         ?.getAttribute("points")
         ?.split(" ");
       expect(points).toHaveLength(90);
@@ -412,10 +432,10 @@ describe("DebugOverlay", () => {
       overlay.toggle();
       overlay.toggle();
       await vi.advanceTimersByTimeAsync(0);
-      await overlay.updateComplete;
+      await vitalUpdated();
 
-      expect(overlay.querySelector(".debug-overlay__metrics")).not.toBeNull();
-      expect(overlay.querySelector(".debug-overlay__graphs")).toBeNull();
+      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+      expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
     } finally {
       overlay.remove();
       vi.useRealTimers();

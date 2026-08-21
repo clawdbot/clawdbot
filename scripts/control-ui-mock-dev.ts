@@ -2616,7 +2616,12 @@ async function createChatPickerScenario(
         },
       },
       status: {
-        eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },
+        eventLoop: { utilization: 0.42, cpuCoreRatio: 0.24, delayP99Ms: 12, delayMaxMs: 87 },
+        processMemory: {
+          rssBytes: 432 * 1_048_576,
+          heapUsedBytes: 210 * 1_048_576,
+          heapTotalBytes: 280 * 1_048_576,
+        },
         uptimeMs: 5_412_000,
       },
       "last-heartbeat": { ts: baseTime },

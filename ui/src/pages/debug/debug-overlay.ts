@@ -9,6 +9,7 @@ import "../../styles/debug.css";
 import {
   DEBUG_OVERLAY_SECTIONS,
   type DebugOverlaySectionDescriptor,
+  type DebugOverlayStatusSample,
   type DebugOverlayStatusSnapshot,
 } from "./debug-overlay-sections.ts";
 
@@ -30,7 +31,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
   private requestController: AbortController | null = null;
   private requestActive = false;
   private requestGeneration = 0;
-  private statusHistory: DebugOverlayStatusSnapshot[] = [];
+  private statusHistory: DebugOverlayStatusSample[] = [];
   private eventLogSource: ApplicationContext["gateway"] | null = null;
   private unsubscribeEventLog: (() => void) | null = null;
   private readonly polling = new PollController(
@@ -143,7 +144,7 @@ export class DebugOverlay extends OpenClawLightDomElement {
       const snapshot = state.value as DebugOverlayStatusSnapshot;
       this.statusHistory = [
         ...this.statusHistory.slice(-(DEBUG_OVERLAY_HISTORY_LIMIT - 1)),
-        snapshot,
+        { at: Date.now(), status: snapshot },
       ];
     }
     const next = new Map(this.sections);

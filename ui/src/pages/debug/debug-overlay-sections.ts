@@ -13,6 +13,8 @@ import {
   type CommandLaneDiagnostics,
 } from "../../lib/gateway-diagnostics.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
+import "./sparkline-tile.ts";
+import type { SparklineSample } from "./sparkline-tile.ts";
 
 type DebugOverlaySectionContext = {
   client: GatewayBrowserClient;
@@ -23,7 +25,7 @@ type TypedDebugOverlaySectionDescriptor<T> = {
   id: string;
   titleKey: string;
   load: (context: DebugOverlaySectionContext, signal: AbortSignal) => Promise<T>;
-  render: (value: T, statusHistory: readonly DebugOverlayStatusSnapshot[]) => TemplateResult;
+  render: (value: T, statusHistory: readonly DebugOverlayStatusSample[]) => TemplateResult;
 };
 
 export type DebugOverlaySectionDescriptor = TypedDebugOverlaySectionDescriptor<unknown>;
@@ -45,6 +47,7 @@ type EventLoopSnapshot = {
   cpuCoreRatio?: number;
   delayP99Ms?: number;
   delayMaxMs?: number;
+  reasons?: string[];
 };
 
 export type DebugOverlayStatusSnapshot = {
@@ -55,6 +58,11 @@ export type DebugOverlayStatusSnapshot = {
     heapTotalBytes: number;
   };
   uptimeMs?: number;
+};
+
+export type DebugOverlayStatusSample = {
+  at: number;
+  status: DebugOverlayStatusSnapshot;
 };
 
 type ActiveSession = {
@@ -82,104 +90,86 @@ function renderLanes(diagnostics: CommandLaneDiagnostics): TemplateResult {
   `;
 }
 
-function renderSparkline(
-  history: readonly DebugOverlayStatusSnapshot[],
-  kind: "cpu" | "memory" | "delay",
-  label: string,
-  readValue: (sample: DebugOverlayStatusSnapshot) => number | undefined,
-  formatValue: (value: number) => string | undefined,
-) {
-  const values = history.map(readValue).filter((value): value is number => Number.isFinite(value));
-  const current = values.at(-1);
-  if (values.length < 2 || current === undefined) {
-    return nothing;
+function collectSamples(
+  history: readonly DebugOverlayStatusSample[],
+  read: (status: DebugOverlayStatusSnapshot) => number | undefined,
+): SparklineSample[] {
+  const samples: SparklineSample[] = [];
+  for (const entry of history) {
+    const value = read(entry.status);
+    if (typeof value === "number" && Number.isFinite(value)) {
+      samples.push({ value, at: entry.at });
+    }
   }
-  const maximum = Math.max(...values, 1);
-  const points = values
-    .map((value, index) => {
-      const x = (index / (values.length - 1)) * 100;
-      const y = 30 - (value / maximum) * 26;
-      return `${x},${y}`;
-    })
-    .join(" ");
-  return html`
-    <figure class="debug-overlay__graph debug-overlay__graph--${kind}">
-      <figcaption>
-        <span>${label}</span>
-        <span class="mono">${formatValue(current)}</span>
-      </figcaption>
-      <svg viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
-        <polygon points="0,32 ${points} 100,32"></polygon>
-        <polyline points=${points}></polyline>
-      </svg>
-    </figure>
-  `;
+  return samples;
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatMegabytes(bytes: number): string {
+  return t("debug.overlay.memoryMb", { value: String(Math.round(bytes / 1_048_576)) });
+}
+
+function formatDelayMs(value: number): string {
+  return formatDurationCompact(value) ?? t("common.na");
 }
 
 function renderStatus(
   status: DebugOverlayStatusSnapshot,
-  history: readonly DebugOverlayStatusSnapshot[],
+  history: readonly DebugOverlayStatusSample[],
 ): TemplateResult {
   const eventLoop = status.eventLoop;
-  const utilization =
+  const reasons = eventLoop?.reasons ?? [];
+  const cpuDegraded = reasons.includes("cpu") || reasons.includes("event_loop_utilization");
+  const delayDegraded = reasons.includes("event_loop_delay");
+  const loopSub =
     typeof eventLoop?.utilization === "number"
-      ? `${Math.round(eventLoop.utilization * 100)}%`
-      : t("common.na");
-  const delay =
-    typeof eventLoop?.delayP99Ms === "number"
-      ? formatDurationCompact(eventLoop.delayP99Ms)
-      : t("common.na");
-  const maxDelay =
+      ? t("debug.overlay.loopShort", { value: formatPercent(eventLoop.utilization) })
+      : "";
+  const heapSub =
+    typeof status.processMemory?.heapUsedBytes === "number"
+      ? t("debug.overlay.heapShort", { value: formatMegabytes(status.processMemory.heapUsedBytes) })
+      : "";
+  const maxSub =
     typeof eventLoop?.delayMaxMs === "number"
-      ? formatDurationCompact(eventLoop.delayMaxMs)
-      : t("common.na");
+      ? t("debug.overlay.maxShort", { value: formatDelayMs(eventLoop.delayMaxMs) })
+      : "";
   return html`
-    ${history.length >= 2
-      ? html`<div class="debug-overlay__graphs">
-          ${renderSparkline(
-            history,
-            "cpu",
-            t("debug.overlay.cpu"),
-            (sample) => sample.eventLoop?.cpuCoreRatio,
-            (value) => `${Math.round(value * 100)}%`,
-          )}
-          ${renderSparkline(
-            history,
-            "memory",
-            t("debug.overlay.memory"),
-            (sample) => sample.processMemory?.rssBytes,
-            (value) =>
-              t("debug.overlay.memoryMb", { value: String(Math.round(value / 1_048_576)) }),
-          )}
-          ${renderSparkline(
-            history,
-            "delay",
-            t("debug.overlay.delayP99"),
-            (sample) => sample.eventLoop?.delayP99Ms,
-            formatDurationCompact,
-          )}
+    <div class="debug-overlay__vitals">
+      <openclaw-debug-sparkline
+        class="debug-overlay__vital debug-overlay__vital--cpu"
+        data-degraded=${cpuDegraded ? "" : nothing}
+        .label=${t("debug.overlay.cpu")}
+        .sub=${loopSub}
+        .samples=${collectSamples(history, (sample) => sample.eventLoop?.cpuCoreRatio)}
+        .format=${formatPercent}
+        .floorMax=${1}
+      ></openclaw-debug-sparkline>
+      <openclaw-debug-sparkline
+        class="debug-overlay__vital debug-overlay__vital--memory"
+        .label=${t("debug.overlay.memory")}
+        .sub=${heapSub}
+        .samples=${collectSamples(history, (sample) => sample.processMemory?.rssBytes)}
+        .format=${formatMegabytes}
+        autorange
+      ></openclaw-debug-sparkline>
+      <openclaw-debug-sparkline
+        class="debug-overlay__vital debug-overlay__vital--delay"
+        data-degraded=${delayDegraded ? "" : nothing}
+        .label=${t("debug.overlay.delayP99")}
+        .sub=${maxSub}
+        .samples=${collectSamples(history, (sample) => sample.eventLoop?.delayP99Ms)}
+        .format=${formatDelayMs}
+        .floorMax=${20}
+      ></openclaw-debug-sparkline>
+    </div>
+    ${typeof status.uptimeMs === "number"
+      ? html`<div class="debug-overlay__vitals-footer mono">
+          ${t("debug.overlay.uptime")} ${formatDurationHuman(status.uptimeMs)}
         </div>`
       : nothing}
-    <dl class="debug-overlay__metrics">
-      <div>
-        <dt>${t("debug.overlay.utilization")}</dt>
-        <dd class="mono">${utilization}</dd>
-      </div>
-      <div>
-        <dt>${t("debug.overlay.delayP99")}</dt>
-        <dd class="mono">${delay}</dd>
-      </div>
-      <div>
-        <dt>${t("debug.overlay.delayMax")}</dt>
-        <dd class="mono">${maxDelay}</dd>
-      </div>
-      ${typeof status.uptimeMs === "number"
-        ? html`<div>
-            <dt>${t("debug.overlay.uptime")}</dt>
-            <dd class="mono">${formatDurationHuman(status.uptimeMs)}</dd>
-          </div>`
-        : ""}
-    </dl>
   `;
 }
 
