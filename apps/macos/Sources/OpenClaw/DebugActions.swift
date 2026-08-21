@@ -108,7 +108,6 @@ enum DebugActions {
                 }
 
             case .unconfigured:
-                await GatewayConnection.shared.shutdown()
                 await ControlChannel.shared.disconnect()
             }
         }
