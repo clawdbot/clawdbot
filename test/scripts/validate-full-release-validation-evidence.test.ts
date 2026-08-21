@@ -117,8 +117,8 @@ describe("full release validation evidence", () => {
     });
   });
 
-  it("accepts canonical SHA-pinned evidence bound to current main", () => {
-    const { isTrustedMainAncestor, result } = validate();
+  it.each([3, 4])("accepts canonical v%s SHA-pinned evidence bound to current main", (version) => {
+    const { isTrustedMainAncestor, result } = validate({}, { version });
 
     expect(result.source).toBe("sha-pinned-main");
     expect(isTrustedMainAncestor).toHaveBeenCalledWith(workflowSha);
@@ -257,7 +257,7 @@ describe("full release validation evidence", () => {
     ["workflow full ref", {}, { workflowFullRef: "refs/heads/main" }, "workflowFullRef"],
     ["target SHA", {}, { targetSha: "c".repeat(40) }, "targetSha"],
     ["target ref", {}, { targetRef: "v2026.7.1-beta.3" }, "target ref"],
-    ["manifest version", {}, { version: 2 }, "version 3"],
+    ["manifest version", {}, { version: 2 }, "version 3 or 4"],
   ])("rejects mismatched %s", (_name, runOverrides, manifestOverrides, message) => {
     expect(() => validate(runOverrides, manifestOverrides)).toThrow(message);
   });
@@ -276,8 +276,8 @@ describe("full release validation evidence", () => {
     expect(() => validate({}, {}, false)).toThrow("not reachable from current main");
   });
 
-  it("accepts exact-target evidence reuse on the SHA-pinned path", () => {
-    expect(validate({}, { evidenceReuse: exactTargetEvidenceReuse() }).result.source).toBe(
+  it.each([3, 4])("accepts exact-target evidence reuse with a v%s manifest", (version) => {
+    expect(validate({}, { version, evidenceReuse: exactTargetEvidenceReuse() }).result.source).toBe(
       "sha-pinned-main",
     );
   });

@@ -1,0 +1,52 @@
+{
+  "schema": "openclaw.release-plan-lock.v1",
+  "digest": "sha256:f48b6de82045491d086c8fafb8217ea565a99a87a01e96bd01a30c9690f89462",
+  "plan": {
+    "schema": "openclaw.release-plan.v1",
+    "release_id": "2026.8.1-beta.2",
+    "version": "2026.8.1-beta.2",
+    "tag": "v2026.8.1-beta.2",
+    "candidate_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "target_context_ref": "refs/tags/v2026.8.1-beta.2",
+    "purpose": "beta-publish",
+    "tooling": {
+      "repository": "openclaw/openclaw",
+      "workflow_path": ".github/workflows/full-release-validation.yml",
+      "ref": "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "validation": {
+      "profile": "beta",
+      "soak": false,
+      "allowed_groups": ["all", "ci", "package"]
+    },
+    "inventory": {
+      "packages": [
+        {
+          "name": "@openclaw/example",
+          "version": "2026.8.1-beta.2",
+          "targets": ["clawhub", "npm"]
+        },
+        {
+          "name": "openclaw",
+          "version": "2026.8.1-beta.2",
+          "targets": ["npm"]
+        }
+      ],
+      "platforms": [
+        {
+          "id": "android",
+          "source": ".github/workflows/android-release.yml"
+        },
+        {
+          "id": "docker",
+          "source": ".github/workflows/docker-release.yml"
+        },
+        {
+          "id": "windows",
+          "source": ".github/workflows/windows-node-release.yml"
+        }
+      ]
+    }
+  }
+}

@@ -482,7 +482,7 @@ export function validateParentManifest(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("release validation manifest must be an object");
   }
-  if (![2, 3].includes(value.version) || value.workflowName !== "Full Release Validation") {
+  if (![2, 3, 4].includes(value.version) || value.workflowName !== "Full Release Validation") {
     throw new Error("release validation manifest schema is unsupported");
   }
   if (String(value.runId) !== String(expected.runId)) {
@@ -504,7 +504,7 @@ export function validateParentManifest(value, expected) {
   let workflowSha;
   let workflowFullRef;
   let workflowRefType;
-  if (value.version === 3) {
+  if (value.version >= 3) {
     workflowSha = normalizeSha(value.workflowSha, "release validation manifest workflow SHA");
     if (expected.workflowSha !== undefined && workflowSha !== expected.workflowSha) {
       throw new Error("release validation manifest workflow SHA mismatch");
@@ -532,7 +532,7 @@ export function validateParentManifest(value, expected) {
     throw new Error("release validation manifest release soak value is invalid");
   }
   const controls = normalizeJsonObject(value.controls, "release validation manifest controls");
-  if (value.version === 3 && controls.performanceReportPublication !== "artifact-only") {
+  if (value.version >= 3 && controls.performanceReportPublication !== "artifact-only") {
     throw new Error("release validation manifest performance report publication mode is invalid");
   }
   const validationInputs =
@@ -1386,8 +1386,8 @@ export function validateTrustedProducerIdentity(
     );
   }
   if (shaPinned) {
-    if (manifest.version !== 3) {
-      throw new Error("SHA-pinned release evidence requires a v3 manifest");
+    if (manifest.version < 3) {
+      throw new Error("SHA-pinned release evidence requires a v3 or v4 manifest");
     }
     if (!manifest.workflowRef.startsWith(`release-ci/${manifest.workflowSha.slice(0, 12)}-`)) {
       throw new Error("SHA-pinned release evidence branch does not match its workflow SHA");
@@ -1407,15 +1407,16 @@ export function validateTrustedProducerIdentity(
   }
 
   let workflowRefProof = "legacy-v2-main-ancestry";
-  if (manifest.version === 3) {
+  if (manifest.version >= 3) {
     if (manifest.workflowRefType !== "branch" || manifest.workflowFullRef !== expectedFullRef) {
       throw new Error("release evidence producer workflow full ref is not trusted");
     }
+    const manifestName = `manifest-v${manifest.version}`;
     workflowRefProof = protectedTagRoute
-      ? "manifest-v3-protected-tag-exact-sha"
+      ? `${manifestName}-protected-tag-exact-sha`
       : shaPinned
-        ? "manifest-v3-sha-pinned-main-ancestry"
-        : "manifest-v3-branch";
+        ? `${manifestName}-sha-pinned-main-ancestry`
+        : `${manifestName}-branch`;
   }
 
   if (!protectedTagRoute) {
