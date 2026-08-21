@@ -429,6 +429,7 @@ jobs:
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
           RELEASE_CODEX_PLUGIN_SPEC_INPUT: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON_INPUT: ${{ inputs.candidate_artifact_json }}
+          RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
           if [[ -n "${CANDIDATE_ARTIFACT_JSON_INPUT// }" ]] &&
@@ -517,38 +518,19 @@ jobs:
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
-          normalize_suite_filter() {
-            local raw="$1"
-            local normalized=""
-            local token
-            while IFS= read -r token; do
-              [[ -z "$token" ]] && continue
-              normalized+="${normalized:+,}${token}"
-            done < <(printf '%s\n' "$raw" | tr '[:upper:]' '[:lower:]' | tr ',[:space:]' '\n')
-            printf '%s' "$normalized"
-          }
-          live_suite_filter="$(normalize_suite_filter "$RELEASE_LIVE_SUITE_FILTER_INPUT")"
-          cross_os_suite_filter="$(normalize_suite_filter "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT")"
-          if [[ -n "$RELEASE_LIVE_SUITE_FILTER_INPUT" && -z "$live_suite_filter" ]]; then
-            echo "live_suite_filter must contain at least one suite selector." >&2
-            exit 1
-          fi
-          if [[ -n "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT" && -z "$cross_os_suite_filter" ]]; then
-            echo "cross_os_suite_filter must contain at least one suite selector." >&2
-            exit 1
-          fi
-          if [[ -n "$cross_os_suite_filter" &&
-                "$RELEASE_RERUN_GROUP_INPUT" != "cross-os" ]]; then
-            echo "cross_os_suite_filter requires rerun_group=cross-os; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
-            exit 1
-          fi
+          source "$RELEASE_FILTER_VALIDATOR"
+          validate_release_suite_filters \
+            "$RELEASE_RERUN_GROUP_INPUT" \
+            "$RELEASE_LIVE_SUITE_FILTER_INPUT" \
+            "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT" \
+            release-checks
+          live_suite_filter="$RELEASE_FILTER_LIVE_SUITE_FILTER"
+          cross_os_suite_filter="$RELEASE_FILTER_CROSS_OS_SUITE_FILTER"
 
-          qa_filter_seen=false
-          repo_filter_seen=false
+          qa_filter_seen="$RELEASE_FILTER_QA_FILTER_SEEN"
           filter="$live_suite_filter"
-          repo_live_suite_filter="$filter"
+          repo_live_suite_filter="$RELEASE_FILTER_REPO_LIVE_SUITE_FILTER"
           if [[ -n "$filter" ]]; then
-            repo_filter_tokens=()
             matrix_selected=false
             buzz_selected=false
             telegram_selected=false
@@ -605,31 +587,12 @@ jobs:
                   [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
                   ;;
                 qa-live-slack|qa-slack|slack)
-                  qa_filter_seen=true
                   slack_selected="$qa_live_slack_ci_enabled"
                   [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
-                *)
-                  repo_filter_seen=true
-                  repo_filter_tokens+=("$token")
-                  ;;
+                *) ;;
               esac
             done
-
-            if [[ "$qa_filter_seen" == "true" &&
-                  "$RELEASE_RERUN_GROUP_INPUT" != "qa" &&
-                  "$RELEASE_RERUN_GROUP_INPUT" != "qa-live" ]]; then
-              echo "QA live_suite_filter selectors require rerun_group=qa or qa-live; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
-              exit 1
-            fi
-            if [[ "$repo_filter_seen" == "true" && "$RELEASE_RERUN_GROUP_INPUT" != "live-e2e" ]]; then
-              echo "Repo live_suite_filter selectors require rerun_group=live-e2e; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
-              exit 1
-            fi
-
-            if [[ "$qa_filter_seen" == "true" ]]; then
-              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]-}")"
-            fi
 
             if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
               echo "live_suite_filter explicitly requested disabled QA live lane(s): ${disabled_required_lanes[*]}" >&2

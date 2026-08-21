@@ -397,6 +397,7 @@ function runReleaseChecksInputValidation(
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
       RELEASE_FAIL_FAST_INPUT: "false",
+      RELEASE_FILTER_VALIDATOR: resolve("scripts/github/validate-release-suite-filters.sh"),
       RELEASE_LIVE_SUITE_FILTER_INPUT: liveSuiteFilter,
       RELEASE_MODE_INPUT: "both",
       RELEASE_PROFILE_INPUT: releaseProfile,

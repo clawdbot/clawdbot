@@ -193,36 +193,24 @@ jobs:
             --expected-sha "$EXPECTED_SHA" \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Normalize suite filters
+      - name: Validate suite filters
         id: filters
         env:
+          RERUN_GROUP: ${{ inputs.rerun_group }}
           RAW_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RAW_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
-          normalize_suite_filter() {
-            local raw="$1"
-            local normalized=""
-            local token
-            while IFS= read -r token; do
-              [[ -z "$token" ]] && continue
-              normalized+="${normalized:+,}${token}"
-            done < <(printf '%s\n' "$raw" | tr '[:upper:]' '[:lower:]' | tr ',[:space:]' '\n')
-            printf '%s' "$normalized"
-          }
-          live_suite_filter="$(normalize_suite_filter "$RAW_LIVE_SUITE_FILTER")"
-          cross_os_suite_filter="$(normalize_suite_filter "$RAW_CROSS_OS_SUITE_FILTER")"
-          if [[ -n "$RAW_LIVE_SUITE_FILTER" && -z "$live_suite_filter" ]]; then
-            echo "live_suite_filter must contain at least one suite selector." >&2
-            exit 1
-          fi
-          if [[ -n "$RAW_CROSS_OS_SUITE_FILTER" && -z "$cross_os_suite_filter" ]]; then
-            echo "cross_os_suite_filter must contain at least one suite selector." >&2
-            exit 1
-          fi
+          source "$RELEASE_FILTER_VALIDATOR"
+          validate_release_suite_filters \
+            "$RERUN_GROUP" \
+            "$RAW_LIVE_SUITE_FILTER" \
+            "$RAW_CROSS_OS_SUITE_FILTER" \
+            controller
           {
-            printf 'live_suite_filter=%s\n' "$live_suite_filter"
-            printf 'cross_os_suite_filter=%s\n' "$cross_os_suite_filter"
+            printf 'live_suite_filter=%s\n' "$RELEASE_FILTER_LIVE_SUITE_FILTER"
+            printf 'cross_os_suite_filter=%s\n' "$RELEASE_FILTER_CROSS_OS_SUITE_FILTER"
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout target package manifest
