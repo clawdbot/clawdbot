@@ -562,11 +562,23 @@ function createStreamFnWithExtraParams(
   }
 
   const readSupportsPromptCacheKey = (m: unknown): boolean => {
-    const compat = (m as { compat?: unknown })?.compat;
-    if (!compat || typeof compat !== "object") {
+    const runtimeModel = m as ProviderRuntimeModel | undefined;
+    const compat = runtimeModel?.compat;
+    const configured =
+      compat && typeof compat === "object"
+        ? (compat as Record<string, unknown>).supportsPromptCacheKey
+        : undefined;
+    if (typeof configured === "boolean") {
+      return configured;
+    }
+    // No explicit compat flag: fall back to the transport-resolved default so
+    // automatic first-party OpenAI/Azure detection also drives retention
+    // filtering (otherwise a configured cacheRetention is dropped here before
+    // the transport can honor it).
+    if (runtimeModel?.api !== "openai-completions") {
       return false;
     }
-    return (compat as Record<string, unknown>).supportsPromptCacheKey === true;
+    return detectOpenAICompletionsCompat(runtimeModel).defaults.supportsPromptCacheKey === true;
   };
 
   const initialCacheRetention = resolveCacheRetention(

@@ -331,10 +331,72 @@ describe("applyCustomApiConfig", () => {
     const model = provider?.models?.find((m) => m.id === "gpt-4.1");
     expect(model?.reasoning).toBe(false);
     expect(model?.input).toEqual(["text"]);
-    expect(model?.compat).toEqual({ supportsStore: false });
+    // Multi-model Foundry host + alias-derived display name: prompt-cache
+    // fields must stay opt-in (a non-OpenAI deployment aliased `gpt-*` would
+    // otherwise inherit them and strict endpoints reject the request).
+    expect(model?.compat).toEqual({ supportsStore: false, supportsPromptCacheKey: false });
 
     const modelRef = `${providerId}/gpt-4.1`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBeUndefined();
+  });
+
+  it("keeps the prompt-cache opt-out for regional Foundry hosts", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://eastus.api.cognitive.microsoft.com",
+      modelId: "gpt-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+
+    expect(provider?.baseUrl).toBe("https://eastus.api.cognitive.microsoft.com/openai/v1");
+    const model = provider?.models?.find((m) => m.id === "gpt-prod");
+    // Regional multi-model Foundry hosts front non-OpenAI deployments too, so
+    // the synthesized alias-derived name must not enable prompt-cache fields.
+    expect(model?.compat).toEqual({ supportsStore: false, supportsPromptCacheKey: false });
+  });
+
+  it("omits the prompt-cache opt-out for dedicated cognitiveservices hosts", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://my-resource.cognitiveservices.azure.com",
+      modelId: "my-deployment",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+
+    const model = provider?.models?.find((m) => m.id === "my-deployment");
+    // Dedicated Azure OpenAI resource: transport defaults apply unconditionally.
+    expect(model?.compat).toEqual({ supportsStore: false });
+  });
+
+  it("preserves a caller-authored Foundry prompt-cache opt-in across re-onboarding", () => {
+    const first = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://my-resource.services.ai.azure.com",
+      modelId: "gpt-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const providerId = first.providerId!;
+    const withOptIn = structuredClone(first.config);
+    const models = withOptIn.models!.providers![providerId]!.models!;
+    const target = models.find((m) => m.id === "gpt-prod")!;
+    target.compat = { ...target.compat, supportsPromptCacheKey: true };
+
+    const second = applyCustomApiConfig({
+      config: withOptIn,
+      baseUrl: "https://my-resource.services.ai.azure.com",
+      modelId: "gpt-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const model = second.config.models?.providers?.[providerId]?.models?.find(
+      (m) => m.id === "gpt-prod",
+    );
+    expect(model?.compat).toEqual({ supportsStore: false, supportsPromptCacheKey: true });
   });
 
   it("strips pre-existing deployment path from Azure URL in stored config", () => {
@@ -349,6 +411,23 @@ describe("applyCustomApiConfig", () => {
     const provider = result.config.models?.providers?.[providerId];
 
     expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
+  });
+
+  it("normalizes query-bearing regional Azure URLs before appending paths", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21",
+      modelId: "gpt-5.6-prod",
+      compatibility: "openai",
+      apiKey: "key123",
+    });
+    const providerId = result.providerId!;
+    const provider = result.config.models?.providers?.[providerId];
+
+    // Query string should be preserved, path should be normalized to /openai/v1
+    expect(provider?.baseUrl).toBe(
+      "https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21",
+    );
   });
 
   it("re-onboard updates existing Azure provider instead of creating a duplicate", () => {

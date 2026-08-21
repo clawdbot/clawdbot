@@ -995,17 +995,27 @@ describe("OpenAI-compatible completions params", () => {
   it("omits prompt cache retention when third-party models have not opted into cache keys", async () => {
     let capturedCacheKey: unknown;
     let capturedRetention: unknown;
-    const stream = streamOpenAICompletions(createModel(32_000), context, {
-      apiKey: "sk-test",
-      sessionId: "session-123",
-      cacheRetention: "long",
-      onPayload(payload) {
-        capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
-        capturedRetention = (payload as { prompt_cache_retention?: unknown })
-          .prompt_cache_retention;
-        throw new Error("stop before network");
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        compat: {
+          supportsPromptCacheKey: false,
+          supportsLongCacheRetention: true,
+        },
       },
-    });
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          capturedRetention = (payload as { prompt_cache_retention?: unknown })
+            .prompt_cache_retention;
+          throw new Error("stop before network");
+        },
+      },
+    );
 
     const result = await stream.result();
 
@@ -1033,6 +1043,31 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.stopReason).toBe("error");
     expect(capturedCacheKey).toBeUndefined();
     expect(capturedRetention).toBe("24h");
+  });
+
+  it("enables prompt cache keys for Azure OpenAI endpoints", async () => {
+    let capturedCacheKey: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBe("session-123");
   });
 
   it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {

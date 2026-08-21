@@ -106,7 +106,12 @@ function isAzureFoundryUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return host.endsWith(".services.ai.azure.com");
+    // Mirrors isAzureFoundryMultiModelHostname in
+    // packages/ai/src/transports/azure-openai-hostnames-internal.ts (kept
+    // internal there on purpose): multi-model Foundry resources also answer
+    // on regional *.api.cognitive.microsoft.com hosts, and the prompt-cache
+    // opt-out below must cover them too.
+    return host.endsWith(".services.ai.azure.com") || host.endsWith(".api.cognitive.microsoft.com");
   } catch {
     return false;
   }
@@ -116,7 +121,10 @@ function isAzureOpenAiUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return host.endsWith(".openai.azure.com");
+    // Mirrors isDedicatedAzureOpenAIHostname: cognitiveservices hosts are
+    // dedicated Azure OpenAI resources, so every deployment speaks the
+    // OpenAI API regardless of its operator-chosen alias.
+    return host.endsWith(".openai.azure.com") || host.endsWith(".cognitiveservices.azure.com");
   } catch {
     return false;
   }
@@ -147,20 +155,48 @@ function transformAzureUrl(baseUrl: string, modelId: string): string {
 
 /**
  * Transforms an Azure URL into the base URL stored in config.
+ * Handles query-bearing URLs by parsing pathname and search separately.
  *
  * Example:
  *   https://my-resource.openai.azure.com
  *   => https://my-resource.openai.azure.com/openai/v1
+ *
+ *   https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21
+ *   => https://eastus.api.cognitive.microsoft.com/openai/v1?api-version=2024-10-21
  */
 function transformAzureConfigUrl(baseUrl: string): string {
-  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  if (normalizedUrl.endsWith("/openai/v1")) {
-    return normalizedUrl;
+  let normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+
+  try {
+    const url = new URL(normalizedUrl);
+    const pathname = url.pathname;
+
+    // Check if pathname already ends with /openai/v1
+    if (pathname.endsWith("/openai/v1")) {
+      return normalizedUrl;
+    }
+
+    // Strip a full deployment path back to the base origin
+    const deploymentIdx = pathname.indexOf("/openai/deployments/");
+    let basePath = deploymentIdx !== -1 ? pathname.slice(0, deploymentIdx) : pathname;
+
+    // Ensure basePath has trailing content for proper joining
+    if (!basePath || basePath === "/" || basePath === "") {
+      basePath = "";
+    }
+
+    // Reconstruct URL by building the full string with base + path + search
+    const origin = `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ""}`;
+    return `${origin}${basePath}/openai/v1${url.search}`;
+  } catch {
+    // Fallback for non-URL strings
+    if (normalizedUrl.endsWith("/openai/v1")) {
+      return normalizedUrl;
+    }
+    const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
+    const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
+    return `${base}/openai/v1`;
   }
-  // Strip a full deployment path back to the base origin
-  const deploymentIdx = normalizedUrl.indexOf("/openai/deployments/");
-  const base = deploymentIdx !== -1 ? normalizedUrl.slice(0, deploymentIdx) : normalizedUrl;
-  return `${base}/openai/v1`;
 }
 
 function hasSameHost(a: string, b: string): boolean {
@@ -631,7 +667,17 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         input: generatedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         reasoning: isLikelyReasoningModel,
-        compat: { supportsStore: false },
+        compat: {
+          supportsStore: false,
+          // Multi-model Foundry hosts can front non-OpenAI deployments and
+          // this synthesized display name is derived from the operator-chosen
+          // deployment alias, not canonical model metadata. Keep prompt-cache
+          // fields opt-in there so a non-OpenAI deployment aliased `gpt-*`
+          // never inherits them; strict endpoints reject the request
+          // otherwise. Dedicated Azure OpenAI hosts stay on transport
+          // defaults (every deployment speaks the OpenAI API).
+          ...(isAzureOpenAi ? {} : { supportsPromptCacheKey: false }),
+        },
       }
     : {
         id: modelId,
@@ -655,6 +701,13 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
               cost: model.cost ?? nextModel.cost,
               contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
               maxTokens: model.maxTokens ?? nextModel.maxTokens,
+              // Caller-authored compat overrides (e.g. a deliberate
+              // prompt-cache opt-in for a verified OpenAI deployment on a
+              // Foundry host) survive re-onboarding; synthesized defaults
+              // only fill the gaps.
+              ...(isAzure && "compat" in nextModel
+                ? { compat: { ...nextModel.compat, ...model.compat } }
+                : {}),
             }
           : model,
       )

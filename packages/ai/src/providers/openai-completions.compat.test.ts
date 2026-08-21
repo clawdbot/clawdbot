@@ -631,7 +631,11 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: { ...defaultResolvedCompat, supportsJsonSchemaResponseFormat: true },
+      expected: {
+        ...defaultResolvedCompat,
+        supportsJsonSchemaResponseFormat: true,
+        supportsPromptCacheKey: true,
+      },
     },
     {
       name: "Azure OpenAI",
@@ -645,7 +649,138 @@ describe("OpenAI-compatible completions compatibility", () => {
         supportsDeveloperRole: false,
         supportsUsageInStreaming: false,
         supportsStrictMode: false,
+        supportsPromptCacheKey: true,
       },
+    },
+    {
+      name: "Azure AI Foundry host outside the manifest endpoint class",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna (Azure)",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "regional Azure Foundry host outside the manifest endpoint class",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna (Azure)",
+        provider: "azure-openai",
+        baseUrl: "https://eastus.api.cognitive.microsoft.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "non-OpenAI deployment on an Azure Foundry host",
+      model: createModel({
+        id: "MAI-DS-R1",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "gpt-oss deployment on an Azure Foundry host",
+      model: createModel({
+        id: "gpt-oss-120b",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "custom deployment id with an OpenAI display name on an Azure Foundry host",
+      model: createModel({
+        id: "prod-spud",
+        name: "GPT-5.5 (Azure)",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "custom deployment id with a bare OpenAI model name on an Azure Foundry host",
+      model: createModel({
+        id: "deployment-gpt5",
+        name: "gpt-5.4",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "gpt-oss display name on an Azure Foundry host",
+      model: createModel({
+        id: "serverless-oss-a1",
+        name: "GPT-OSS 120B",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "OpenAI-alias deployment id with a non-OpenAI display name on an Azure Foundry host",
+      model: createModel({
+        id: "gpt-prod",
+        name: "Llama 3.1 405B Instruct",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: proxyResolvedCompat,
+    },
+    {
+      name: "OpenAI deployment id without a display name on an Azure Foundry host",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        name: "",
+        provider: "azure-openai",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "non-OpenAI deployment on a dedicated Azure OpenAI host",
+      model: createModel({
+        id: "my-custom-deployment",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      }),
+      expected: {
+        ...defaultResolvedCompat,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        supportsStrictMode: false,
+        supportsPromptCacheKey: true,
+      },
+    },
+    {
+      name: "alias deployment with a non-OpenAI display name on an Azure cognitiveservices host",
+      model: createModel({
+        id: "prod-spud",
+        name: "Llama 3.1 405B Instruct",
+        provider: "azure-openai",
+        baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "uppercase Azure OpenAI host",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna (Azure)",
+        provider: "azure-openai",
+        baseUrl: "https://EXAMPLE.SERVICES.AI.AZURE.COM/openai/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "proxy with an Azure-looking path fragment",
+      model: createModel({
+        baseUrl: "https://proxy.example/v1/tenant.openai.azure.com",
+      }),
+      expected: proxyResolvedCompat,
     },
     {
       name: "OpenAI legacy model",
@@ -654,7 +789,16 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "regional OpenAI endpoint",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        provider: "openai",
+        baseUrl: "https://eu.api.openai.com/v1",
+      }),
+      expected: { ...proxyResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "custom proxy",
@@ -677,6 +821,51 @@ describe("OpenAI-compatible completions compatibility", () => {
     },
   ])("resolves the $name compat record", ({ model, expected }) => {
     expect(resolveOpenAICompletionsCompat(model)).toEqual(expected);
+  });
+
+  it("keeps prompt cache keys opt-in for proxies under the inert default host", () => {
+    // The package-level inert host resolves every route to the "default" endpoint
+    // class, so only routes without a custom base URL count as first-party OpenAI.
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: () => ({
+        endpointClass: "default",
+        knownProviderFamily: "",
+        supportsNativeStreamingUsageCompat: false,
+        supportsOpenAICompletionsStreamingUsageCompat: false,
+        usesExplicitProxyLikeEndpoint: false,
+        allowsAnthropicServiceTier: false,
+      }),
+    });
+    const toProxy = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: "https://proxy.example/v1",
+    });
+    expect(resolveOpenAICompletionsCompat(toProxy).supportsPromptCacheKey).toBe(false);
+    const defaultRoute = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: undefined,
+    });
+    expect(resolveOpenAICompletionsCompat(defaultRoute).supportsPromptCacheKey).toBe(true);
+    const explicitOpenAI = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(resolveOpenAICompletionsCompat(explicitOpenAI).supportsPromptCacheKey).toBe(true);
+    const regionalOpenAI = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: "https://us.api.openai.com/v1",
+    });
+    expect(resolveOpenAICompletionsCompat(regionalOpenAI).supportsPromptCacheKey).toBe(true);
+    const lookalikeProxy = createModel({
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      baseUrl: "https://fake-api.openai.com.attacker.example/v1",
+    });
+    expect(resolveOpenAICompletionsCompat(lookalikeProxy).supportsPromptCacheKey).toBe(false);
   });
 
   it("buffers encrypted reasoning details until their tool call arrives", async () => {
