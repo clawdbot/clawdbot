@@ -60,7 +60,10 @@ type TargetedImmediateWakeParams = {
 };
 
 export function isTargetedImmediateUnscheduledWake(params: TargetedImmediateWakeParams): boolean {
-  if (params.intent !== "immediate") {
+  const reason = params.reason?.trim();
+  const isExecEventWake =
+    params.source === "exec-event" && params.intent === "event" && reason === "exec-event";
+  if (params.intent !== "immediate" && !isExecEventWake) {
     return false;
   }
   const hasSessionTarget = normalizeOptionalString(params.sessionKey) !== undefined;
@@ -70,12 +73,16 @@ export function isTargetedImmediateUnscheduledWake(params: TargetedImmediateWake
   }
 
   // These sources queue targeted events that would otherwise sit unread for a
-  // configured agent without a recurring heartbeat schedule.
+  // configured agent without a recurring heartbeat schedule. Exec completion
+  // wakes intentionally retain their event intent so they cannot broaden the
+  // existing immediate-wake exception.
   switch (params.source) {
     case "notifications-event":
-      return hasSessionTarget && params.reason?.trim() === "wake";
+      return hasSessionTarget && reason === "wake";
     case "hook":
-      return params.reason?.trim().startsWith("hook:") ?? false;
+      return reason?.startsWith("hook:") ?? false;
+    case "exec-event":
+      return isExecEventWake;
     case "background-task":
     case "background-task-blocked":
       return true;
