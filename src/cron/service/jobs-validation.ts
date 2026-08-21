@@ -12,6 +12,9 @@ import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
 function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
+  if (!script.trim()) {
+    throw new Error(`cron ${subject} must not be empty`);
+  }
   const parsed = parseCodeModeScriptSyntax(script);
   if (!parsed.ok) {
     throw new Error(
@@ -70,11 +73,10 @@ export function assertScriptPayloadSupport(
   if (job.payload.kind !== "script") {
     return;
   }
-  if (!job.payload.script.trim()) {
-    throw new Error("cron script payload must not be empty");
-  }
   if (opts?.validateSyntax !== false) {
     assertCronScriptSyntax(job.payload.script, "script payload");
+  } else if (!job.payload.script.trim()) {
+    throw new Error("cron script payload must not be empty");
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one

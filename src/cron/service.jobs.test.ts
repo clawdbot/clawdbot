@@ -887,25 +887,26 @@ describe("condition trigger syntax validation", () => {
     ["declarative convergence", "declarative"],
   ] as const)("rejects malformed trigger scripts on %s", (_name, mutation) => {
     const state = createMockState(now, { scriptPayloadsEnabled: true });
-    const mutate = () => {
+    const mutate = (script: string) => {
       if (mutation === "create") {
-        createJob(state, input(malformedScript));
+        createJob(state, input(script));
         return;
       }
       const job = createJob(state, input());
       if (mutation === "patch") {
-        applyJobPatch(job, { trigger: { script: malformedScript } });
+        applyJobPatch(job, { trigger: { script } });
         return;
       }
-      applyDeclarativeJobSpec(job, input(malformedScript), {
+      applyDeclarativeJobSpec(job, input(script), {
         enabledExplicit: true,
         nowMs: now,
       });
     };
 
-    expect(mutate).toThrow(
+    expect(() => mutate(malformedScript)).toThrow(
       "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
     );
+    expect(() => mutate("   ")).toThrow("cron trigger script must not be empty");
   });
 
   it.each([
