@@ -247,8 +247,9 @@ Tool factories receive trusted runtime context, including `deliveryContext`,
 `requesterSenderId`. A factory can use
 `toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
 current conversation. The property is unavailable outside an active channel
-turn. OpenClaw binds the route, account, thread, and media access policy; the
-capability expires when the turn ends.
+turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
+account, thread, and media access policy; the capability expires when the turn
+ends.
 
 ```typescript
 register(api) {

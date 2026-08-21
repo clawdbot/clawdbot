@@ -402,6 +402,47 @@ describe("createOpenClawTools browser plugin integration", () => {
     ).toBeUndefined();
   });
 
+  it("does not expose process-local plugin delivery to gateway-owned channels", () => {
+    const gatewayPlugin = createOutboundTestPlugin({
+      id: "gatewaychat",
+      outbound: { deliveryMode: "gateway" },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
+    );
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:gatewaychat:direct:123",
+      sessionId: "session-1",
+      requesterSenderId: "sender-1",
+    });
+    const config = {
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
+    } as OpenClawConfig;
+
+    try {
+      hoisted.resolvePluginTools.mockReturnValue([]);
+      createOpenClawTools({
+        config,
+        agentSessionKey: "agent:main:gatewaychat:direct:123",
+        runId: "run-1",
+        sessionId: "session-1",
+        agentChannel: "gatewaychat",
+        agentTo: "123",
+        requesterAgentIdOverride: "main",
+        messageActionTurnCapability: turnCapability,
+        disableMessageTool: true,
+      });
+
+      expect(
+        (firstResolvePluginToolsParams().context as { delivery?: unknown } | undefined)?.delivery,
+      ).toBeUndefined();
+    } finally {
+      revokeMessageActionTurnCapability(turnCapability);
+    }
+  });
+
   it("forwards gateway subagent binding to plugin resolution", () => {
     hoisted.resolvePluginTools.mockReturnValue([]);
     const config = {

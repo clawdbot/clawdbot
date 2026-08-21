@@ -19,7 +19,6 @@ import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -61,9 +60,6 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
 const loadMessageActionRunner = createLazyRuntimeModule(
   () => import("../infra/outbound/message-action-runner.js"),
 );
-const loadMessageActionGatewayIdentity = createLazyRuntimeModule(
-  () => import("./tools/gateway.js"),
-);
 
 function createPluginToolDelivery(params: {
   options: ResolveOpenClawPluginToolsOptions | undefined;
@@ -90,6 +86,14 @@ function createPluginToolDelivery(params: {
     !token ||
     !activeRegistry
   ) {
+    return undefined;
+  }
+  const channelPlugin = activeRegistry.channels.find(
+    (entry) => entry.plugin.id === deliveryContext.channel,
+  )?.plugin;
+  // The turn capability and sender-scoped media reader are process-local.
+  // Gateway-owned delivery needs a server-verifiable authority contract first.
+  if (channelPlugin?.outbound?.deliveryMode === "gateway") {
     return undefined;
   }
   const route = {
@@ -171,27 +175,6 @@ function createPluginToolDelivery(params: {
           runId,
           agentId,
           mediaAccess,
-          gateway: {
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            clientDisplayName: "agent",
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-            resolveAgentRuntimeIdentityToken: async () => {
-              const { resolveMessageActionAgentRuntimeIdentityToken } =
-                await loadMessageActionGatewayIdentity();
-              const identityToken = await resolveMessageActionAgentRuntimeIdentityToken({
-                opts: {},
-                target: "local",
-                turnCapability: token,
-                turnCapabilitySessionKey: sessionKey,
-                runId,
-                sessionId,
-              });
-              if (!identityToken) {
-                throw new Error("plugin delivery requires active agent runtime authority");
-              }
-              return identityToken;
-            },
-          },
           onPlatformSendDispatch: async () => {
             resolveAuthorization();
           },
