@@ -477,4 +477,193 @@ describe("buildSubagentList", () => {
     expect(list.active).toStrictEqual([]);
     expect(list.recent[0]?.status).toBe("done");
   });
+
+  // The shared-cwd advisory warns when a caller deliberately aimed two live
+  // children at one directory. Assertions target the structured `sharedCwd`
+  // field, not just the line suffix: subagents-tool strips `line` from its JSON
+  // output, so line-only coverage would pass while the tool surface carried
+  // nothing.
+  describe("shared cwd advisory", () => {
+    const makeRun = (
+      suffix: string,
+      now: number,
+      options?: { ended?: boolean },
+    ): SubagentRunRecord =>
+      ({
+        runId: `run-${suffix}`,
+        childSessionKey: `agent:main:subagent:${suffix}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: `work inside ${suffix}`,
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        execution: options?.ended
+          ? {
+              status: "terminal",
+              startedAt: now - 120_000,
+              endedAt: now - 60_000,
+              outcome: { status: "ok" },
+            }
+          : { status: "running", startedAt: now - 120_000 },
+      }) satisfies SubagentRunRecord;
+
+    const seedSessionEntry = async (storePath: string, sessionKey: string, spawnedCwd?: string) => {
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          sessionId: `session-${sessionKey}`,
+          updatedAt: Date.now(),
+          ...(spawnedCwd ? { spawnedCwd } : {}),
+        },
+      );
+    };
+
+    it("reports peers and path for live runs spawned into the same explicit cwd", async () => {
+      const now = Date.now();
+      const sharedDir = path.join(testWorkspaceDir, "shared-tree");
+      const runA = makeRun("shared-cwd-a", now);
+      const runB = makeRun("shared-cwd-b", now);
+      addSubagentRunForTests(runA);
+      addSubagentRunForTests(runB);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-pair.json");
+      await seedSessionEntry(storePath, runA.childSessionKey, sharedDir);
+      await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(2);
+      const byRunId = new Map(list.active.map((item) => [item.runId, item]));
+      expect(byRunId.get(runA.runId)?.sharedCwd).toEqual({
+        path: path.resolve(sharedDir),
+        peerRunIds: [runB.runId],
+      });
+      expect(byRunId.get(runB.runId)?.sharedCwd).toEqual({
+        path: path.resolve(sharedDir),
+        peerRunIds: [runA.runId],
+      });
+      expect(byRunId.get(runA.runId)?.line).toContain(
+        `[shared cwd with 1 other run: ${path.resolve(sharedDir)}]`,
+      );
+    });
+
+    it("pluralizes the suffix and excludes self from peers for three sharing runs", async () => {
+      const now = Date.now();
+      const sharedDir = path.join(testWorkspaceDir, "shared-tree-trio");
+      const runs = ["trio-a", "trio-b", "trio-c"].map((suffix) => makeRun(suffix, now));
+      for (const run of runs) {
+        addSubagentRunForTests(run);
+      }
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-trio.json");
+      for (const run of runs) {
+        await seedSessionEntry(storePath, run.childSessionKey, sharedDir);
+      }
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(3);
+      for (const item of list.active) {
+        expect(item.sharedCwd?.path).toBe(path.resolve(sharedDir));
+        expect(item.sharedCwd?.peerRunIds).not.toContain(item.runId);
+        expect(item.sharedCwd?.peerRunIds).toHaveLength(2);
+        expect(item.line).toContain("[shared cwd with 2 other runs:");
+      }
+    });
+
+    it("stays silent for live runs that inherited the parent workspace", async () => {
+      // Default `collect` swarms pass no `cwd`, so every child has
+      // spawnedCwd === undefined and legitimately shares the parent workspace.
+      const now = Date.now();
+      const runA = makeRun("inherited-a", now);
+      const runB = makeRun("inherited-b", now);
+      addSubagentRunForTests(runA);
+      addSubagentRunForTests(runB);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-inherited.json");
+      await seedSessionEntry(storePath, runA.childSessionKey);
+      await seedSessionEntry(storePath, runB.childSessionKey);
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(2);
+      for (const item of list.active) {
+        expect(item.sharedCwd).toBeUndefined();
+        expect(item.line).not.toContain("shared cwd");
+      }
+    });
+
+    it("stays silent for live runs pointed at different explicit directories", async () => {
+      const now = Date.now();
+      const runA = makeRun("distinct-a", now);
+      const runB = makeRun("distinct-b", now);
+      addSubagentRunForTests(runA);
+      addSubagentRunForTests(runB);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-distinct.json");
+      await seedSessionEntry(
+        storePath,
+        runA.childSessionKey,
+        path.join(testWorkspaceDir, "tree-a"),
+      );
+      await seedSessionEntry(
+        storePath,
+        runB.childSessionKey,
+        path.join(testWorkspaceDir, "tree-b"),
+      );
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(2);
+      for (const item of list.active) {
+        expect(item.sharedCwd).toBeUndefined();
+        expect(item.line).not.toContain("shared cwd");
+      }
+    });
+
+    it("ignores ended runs that shared a directory", async () => {
+      const now = Date.now();
+      const sharedDir = path.join(testWorkspaceDir, "shared-tree-ended");
+      const runA = makeRun("ended-share-a", now, { ended: true });
+      const runB = makeRun("ended-share-b", now, { ended: true });
+      addSubagentRunForTests(runA);
+      addSubagentRunForTests(runB);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-ended.json");
+      await seedSessionEntry(storePath, runA.childSessionKey, sharedDir);
+      await seedSessionEntry(storePath, runB.childSessionKey, sharedDir);
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
+
+      expect(list.active).toStrictEqual([]);
+      expect(list.recent).toHaveLength(2);
+      for (const item of list.recent) {
+        expect(item.sharedCwd).toBeUndefined();
+        expect(item.line).not.toContain("shared cwd");
+      }
+    });
+
+    it("does not flag a live run whose only directory peer has ended", async () => {
+      // Exclusivity is only at risk while both runs are live; a settled peer
+      // leaves the directory to the survivor.
+      const now = Date.now();
+      const sharedDir = path.join(testWorkspaceDir, "shared-tree-mixed");
+      const liveRun = makeRun("mixed-live", now);
+      const endedRun = makeRun("mixed-ended", now, { ended: true });
+      addSubagentRunForTests(liveRun);
+      addSubagentRunForTests(endedRun);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-mixed.json");
+      await seedSessionEntry(storePath, liveRun.childSessionKey, sharedDir);
+      await seedSessionEntry(storePath, endedRun.childSessionKey, sharedDir);
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs: [liveRun, endedRun], recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(1);
+      expect(list.active[0]?.runId).toBe(liveRun.runId);
+      expect(list.active[0]?.sharedCwd).toBeUndefined();
+      expect(list.active[0]?.line).not.toContain("shared cwd");
+      expect(list.recent[0]?.sharedCwd).toBeUndefined();
+    });
+  });
 });

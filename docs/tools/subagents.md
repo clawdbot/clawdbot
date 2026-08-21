@@ -363,6 +363,37 @@ Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
 a task. Cancellation is confined to the controlled session tree; a leaf
 sub-agent cannot cancel work owned by another session.
 
+### Shared working directory advisory
+
+`action: "list"` rows carry an optional `sharedCwd` field when two or more
+**live** sub-agent runs were spawned into the same working directory:
+
+```json
+{
+  "runId": "…",
+  "sharedCwd": {
+    "path": "/abs/path/to/directory",
+    "peerRunIds": ["…"]
+  }
+}
+```
+
+`path` is the resolved directory; `peerRunIds` lists the other live runs
+sharing it, excluding the row's own run. The human-readable `text` view
+appends a matching `[shared cwd with N other runs: <path>]` suffix.
+
+The field is **advisory only** — it never blocks or refuses a spawn. Two
+agents editing one checkout can overwrite each other's work, so treat it as
+a prompt to re-check before writing, or to give one of the runs its own
+directory.
+
+It is reported only when a caller passed an explicit `cwd`
+([tool parameters](/tools/subagents#tool-parameters)) to `sessions_spawn`.
+Runs that inherited the target agent workspace share it by
+design — the default for `collect` swarms — and are never flagged. Ended runs
+are excluded: the advisory covers concurrent writers, so a settled run leaves
+the directory to the survivor.
+
 ## Thread-bound sessions
 
 When thread bindings are enabled for a channel, a sub-agent can stay bound

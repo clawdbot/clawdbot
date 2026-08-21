@@ -1,5 +1,9 @@
 // Subagents tool tests cover requester-scoped task listing and cancellation.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS } from "../../tasks/task-status.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../subagents/registry/subagent-lifecycle-events.js";
@@ -91,6 +95,75 @@ describe("subagents tool", () => {
       expect((result.details as { text: string }).text).toContain(" killed");
     } finally {
       resetSubagentRegistryForTests();
+    }
+  });
+
+  it("surfaces the shared-cwd advisory in structured list output", async () => {
+    // `line` is stripped from the tool's JSON payload, so the structured
+    // `sharedCwd` field is the only way this advisory reaches a caller.
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagents-tool-"));
+    const sharedCwd = path.join(workspaceDir, "shared-tree");
+    const runs = ["tool-shared-a", "tool-shared-b"].map(
+      (suffix) =>
+        ({
+          runId: `run-${suffix}`,
+          childSessionKey: `agent:main:subagent:${suffix}`,
+          controllerSessionKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: `work inside ${suffix}`,
+          cleanup: "keep",
+          createdAt: now - 2_000,
+          execution: { status: "running", startedAt: now - 2_000 },
+        }) satisfies SubagentRunRecord,
+    );
+    for (const run of runs) {
+      addSubagentRunForTests(run);
+    }
+    const storePath = path.join(workspaceDir, "sessions.json");
+    for (const run of runs) {
+      await replaceSessionEntry(
+        { storePath, sessionKey: run.childSessionKey },
+        {
+          sessionId: `session-${run.runId}`,
+          updatedAt: now,
+          spawnedCwd: sharedCwd,
+        },
+      );
+    }
+
+    try {
+      const tool = createSubagentsTool({
+        agentSessionKey: "agent:main:main",
+        config: { session: { store: storePath } },
+        listTasks: () => [],
+      });
+
+      const result = await tool.execute("list-shared-cwd", { action: "list" });
+
+      const details = result.details as {
+        active: Array<{ runId: string; line?: string; sharedCwd?: unknown }>;
+      };
+      expect(details.active).toHaveLength(2);
+      expect(details.active).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: "run-tool-shared-a",
+            sharedCwd: { path: path.resolve(sharedCwd), peerRunIds: ["run-tool-shared-b"] },
+          }),
+          expect.objectContaining({
+            runId: "run-tool-shared-b",
+            sharedCwd: { path: path.resolve(sharedCwd), peerRunIds: ["run-tool-shared-a"] },
+          }),
+        ]),
+      );
+      // Confirms the structured field is load-bearing rather than the line text.
+      expect(details.active.every((item) => item.line === undefined)).toBe(true);
+    } finally {
+      resetSubagentRegistryForTests();
+      await fs.rm(workspaceDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

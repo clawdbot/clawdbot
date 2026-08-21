@@ -13,6 +13,7 @@ import { listSessionEntriesReadOnly } from "../../../config/sessions/session-acc
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
+import { resolveUserPath } from "../../../infra/home-dir.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../../../routing/session-key.js";
 import {
   formatTokenUsageDisplay,
@@ -34,6 +35,16 @@ import {
 } from "./subagent-run-liveness.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
+/**
+ * Advisory marker for live sibling runs spawned into one working directory.
+ * Present only when the spawner passed an explicit `cwd`; inherited workspaces
+ * are shared by design and are never reported.
+ */
+type SubagentSharedCwd = {
+  path: string;
+  peerRunIds: string[];
+};
+
 type SubagentListItem = {
   index: number;
   line: string;
@@ -51,6 +62,7 @@ type SubagentListItem = {
   totalTokens?: number;
   startedAt?: number;
   endedAt?: number;
+  sharedCwd?: SubagentSharedCwd;
 };
 
 type BuiltSubagentList = {
@@ -139,6 +151,65 @@ function buildLatestSubagentRunIndex(
   };
 }
 
+/** Case-fold the grouping key only where the platform filesystem is case-insensitive. */
+function sharedCwdGroupKey(resolved: string) {
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Index live runs by the explicit working directory they were spawned into.
+ *
+ * Reads `spawnedCwd` off the already-cached session entry, so this costs no new
+ * I/O and never probes the filesystem. Runs without an explicit `spawnedCwd`
+ * inherited the parent workspace — the default for `collect` swarms — and are
+ * skipped so the advisory stays silent on normal usage.
+ */
+function buildSharedCwdIndex(params: {
+  cfg: OpenClawConfig;
+  runs: SubagentRunRecord[];
+  cache: Map<string, Record<string, SessionEntry>>;
+  now: number;
+}) {
+  const groups = new Map<string, { path: string; runIds: string[] }>();
+  const groupKeyByRunId = new Map<string, string>();
+  for (const run of params.runs) {
+    if (!isLiveUnendedSubagentRun(run, params.now)) {
+      continue;
+    }
+    const spawnedCwd = resolveSessionEntryForKey({
+      cfg: params.cfg,
+      key: run.childSessionKey,
+      cache: params.cache,
+    }).entry?.spawnedCwd?.trim();
+    if (!spawnedCwd) {
+      continue;
+    }
+    const resolved = resolveUserPath(spawnedCwd);
+    if (!resolved) {
+      continue;
+    }
+    const groupKey = sharedCwdGroupKey(resolved);
+    groupKeyByRunId.set(run.runId, groupKey);
+    const existing = groups.get(groupKey);
+    if (existing) {
+      existing.runIds.push(run.runId);
+      continue;
+    }
+    groups.set(groupKey, { path: resolved, runIds: [run.runId] });
+  }
+  return (runId: string): SubagentSharedCwd | undefined => {
+    const groupKey = groupKeyByRunId.get(runId);
+    const group = groupKey ? groups.get(groupKey) : undefined;
+    if (!group || group.runIds.length < 2) {
+      return undefined;
+    }
+    return {
+      path: group.path,
+      peerRunIds: group.runIds.filter((peerRunId) => peerRunId !== runId),
+    };
+  };
+}
+
 /** Return whether a run should be shown in the active subagent section. */
 function isActiveSubagentRun(
   entry: SubagentRunRecord,
@@ -210,6 +281,12 @@ export function buildSubagentList(params: {
     dedupedRuns.push(entry);
   }
   const cache = new Map<string, Record<string, SessionEntry>>();
+  const resolveSharedCwd = buildSharedCwdIndex({
+    cfg: params.cfg,
+    runs: dedupedRuns,
+    cache,
+    now,
+  });
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const { childSessionsByController, readIndex } = buildLatestSubagentRunIndex(snapshot);
   const pendingDescendantCount = (sessionKey: string) =>
@@ -231,7 +308,11 @@ export function buildSubagentList(params: {
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
-    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const sharedCwd = resolveSharedCwd(entry.runId);
+    const sharedCwdSuffix = sharedCwd
+      ? ` [shared cwd with ${sharedCwd.peerRunIds.length} other run${sharedCwd.peerRunIds.length === 1 ? "" : "s"}: ${sharedCwd.path}]`
+      : "";
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${sharedCwdSuffix}`;
     const view: SubagentListItem = {
       index,
       line,
@@ -249,6 +330,9 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
+      // The structured field is the primary surface: subagents-tool strips
+      // `line` from its JSON output, so the suffix alone would reach no caller.
+      ...(sharedCwd ? { sharedCwd } : {}),
     };
     index += 1;
     return view;
