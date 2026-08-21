@@ -275,7 +275,7 @@ describe("AppSidebar session indicators", () => {
       sessionSpinner?.getAttribute("aria-label"),
     );
     expect(home?.querySelector(".session-unread-dot")).toBeNull();
-    expect(home?.getAttribute("aria-label")).toBe("Home · Unread");
+    expect(home?.getAttribute("aria-label")).toBe("Home · Active run · Unread");
     expect(
       home?.querySelector(".nav-item__state .session-row-badge--attention")?.textContent,
     ).toContain("2");

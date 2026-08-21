@@ -179,11 +179,16 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
-  const unread = mainRow?.unread === true && !active && !running;
-  const hiddenUnread = mainRow?.unread === true && !active && running;
+  const hasUnread = mainRow?.unread === true && !active;
+  const unread = hasUnread && !running;
   const homeLabel =
-    attentionLabel || hiddenUnread
-      ? [t("nav.home"), attentionLabel, hiddenUnread ? t("sessionsView.unread") : ""]
+    attentionLabel || (running && hasUnread)
+      ? [
+          t("nav.home"),
+          attentionLabel,
+          running ? t("sessionsView.activeRun") : "",
+          hasUnread ? t("sessionsView.unread") : "",
+        ]
           .filter(Boolean)
           .join(" · ")
       : undefined;
