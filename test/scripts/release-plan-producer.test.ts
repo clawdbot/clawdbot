@@ -16,8 +16,13 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TOOLING_CLOSURE = [
+  "packages/normalization-core/src/record-coerce.ts",
+  "packages/normalization-core/src/string-coerce.ts",
+  "packages/plugin-package-contract/src/index.ts",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-contract.mjs",
+  "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/plugin-publication-collector.ts",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
 ];
@@ -54,7 +59,10 @@ function copyToolingClosure(root: string) {
   }
 }
 
-function createFixtureRepo(version = "2026.8.1-beta.2") {
+function createFixtureRepo(
+  version = "2026.8.1-beta.2",
+  options: { malformedPlugin?: boolean } = {},
+) {
   const root = tempDirs.make("openclaw-release-plan-");
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
 
@@ -79,6 +87,26 @@ function createFixtureRepo(version = "2026.8.1-beta.2") {
         name,
         version,
         openclaw: { release: { publishToNpm: true } },
+      }),
+    );
+  }
+  if (options.malformedPlugin) {
+    writeFixture(
+      root,
+      "extensions/broken/package.json",
+      JSON.stringify({
+        name: "@openclaw/broken",
+        version,
+        type: "commonjs",
+        private: true,
+        repository: { type: "git", url: "https://github.com/openclaw/openclaw" },
+        openclaw: {
+          extensions: ["./index.ts"],
+          compat: { pluginApi: `>=${version}` },
+          build: { openclawVersion: version },
+          install: { npmSpec: "@openclaw/broken" },
+          release: { publishToNpm: true },
+        },
       }),
     );
   }
@@ -311,6 +339,13 @@ describe("release plan producer", () => {
         toolingFullRef,
       }),
     ).toThrow("tooling import closure differs from tooling SHA");
+  });
+
+  it("rejects malformed publishable plugins while producing the plan", () => {
+    const fixture = createFixtureRepo("2026.8.1-beta.2", { malformedPlugin: true });
+    expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(
+      /Publishable plugin metadata validation failed:[\s\S]*private must not be true[\s\S]*type must be "module"[\s\S]*README\.md must exist/u,
+    );
   });
 
   it("matches the current publisher inventory: 93 npm and 89 ClawHub packages", () => {

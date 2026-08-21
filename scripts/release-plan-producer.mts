@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import {
+  collectPublishablePluginPackagesFromCandidates,
+  type PluginPackageJson,
+  type PublishablePluginPackageCandidate,
+} from "./lib/plugin-publication-collector.ts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   canonicalReleasePlanJson,
@@ -29,15 +34,7 @@ type ReleasePlanSource = {
   toolingFullRef: string;
 };
 
-type PackageManifest = {
-  name?: unknown;
-  version?: unknown;
-  dependencies?: Record<string, unknown>;
-  openclaw?: {
-    build?: { bundledDist?: unknown };
-    release?: { publishToClawHub?: unknown; publishToNpm?: unknown };
-  };
-};
+type PackageManifest = PluginPackageJson;
 
 type CorePackagePolicy = {
   path: string;
@@ -132,6 +129,37 @@ function collectLocalImports(source: string): string[] {
   return [...imports].toSorted(compareAscii);
 }
 
+function resolveToolingImportPath(
+  repoRoot: string,
+  toolingSha: string,
+  sourcePath: string,
+  specifier: string,
+): string {
+  const importedPath = posix.normalize(posix.join(posix.dirname(sourcePath), specifier));
+  if (importedPath.startsWith("../") || importedPath === "..") {
+    throw new Error(`tooling import escapes repository root: ${sourcePath} -> ${specifier}`);
+  }
+  const candidates = new Set([importedPath]);
+  if (importedPath.endsWith(".js")) {
+    candidates.add(`${importedPath.slice(0, -3)}.ts`);
+  } else if (importedPath.endsWith(".mjs")) {
+    candidates.add(`${importedPath.slice(0, -4)}.mts`);
+  } else if (importedPath.endsWith(".cjs")) {
+    candidates.add(`${importedPath.slice(0, -4)}.cts`);
+  } else if (!posix.extname(importedPath)) {
+    for (const suffix of [".ts", ".mts", ".mjs", "/index.ts"]) {
+      candidates.add(`${importedPath}${suffix}`);
+    }
+  }
+  const existing = [...candidates].filter((path) => gitPathExists(repoRoot, toolingSha, path));
+  if (existing.length !== 1) {
+    throw new Error(
+      `tooling import must resolve to exactly one owned file: ${sourcePath} -> ${specifier}`,
+    );
+  }
+  return existing[0]!;
+}
+
 function verifyToolingImportClosure(repoRoot: string, toolingSha: string) {
   const pending = [PRODUCER_PATH];
   const verified = new Set<string>();
@@ -149,11 +177,7 @@ function verifyToolingImportClosure(repoRoot: string, toolingSha: string) {
     verified.add(sourcePath);
     const source = toolingBytes.toString("utf8");
     for (const specifier of collectLocalImports(source)) {
-      const importedPath = posix.normalize(posix.join(posix.dirname(sourcePath), specifier));
-      if (importedPath.startsWith("../") || importedPath === "..") {
-        throw new Error(`tooling import escapes repository root: ${sourcePath} -> ${specifier}`);
-      }
-      pending.push(importedPath);
+      pending.push(resolveToolingImportPath(repoRoot, toolingSha, sourcePath, specifier));
     }
   }
 }
@@ -176,7 +200,7 @@ function withCandidateSnapshot<T>(
       if (
         !path ||
         (path !== "package.json" &&
-          !/^extensions\/[^/]+\/package\.json$/u.test(path) &&
+          !/^extensions\/[^/]+\/(?:package\.json|README\.md)$/u.test(path) &&
           !/^packages\/[^/]+\/package\.json$/u.test(path))
       ) {
         continue;
@@ -255,6 +279,29 @@ function readPackageManifest(path: string): PackageManifest {
   return JSON.parse(readFileSync(path, "utf8")) as PackageManifest;
 }
 
+function collectPluginCandidates(snapshotRoot: string): PublishablePluginPackageCandidate[] {
+  return readdirSync(join(snapshotRoot, "extensions"), { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory()) {
+      return [];
+    }
+    const packageDir = `extensions/${entry.name}`;
+    const absolutePackageDir = join(snapshotRoot, packageDir);
+    const packageJsonPath = join(absolutePackageDir, "package.json");
+    if (!existsSync(packageJsonPath)) {
+      return [];
+    }
+    const readmePath = join(absolutePackageDir, "README.md");
+    return [
+      {
+        extensionId: entry.name,
+        packageDir,
+        packageJson: readPackageManifest(packageJsonPath),
+        ...(existsSync(readmePath) ? { readmeText: readFileSync(readmePath, "utf8") } : {}),
+      },
+    ];
+  });
+}
+
 function collectCorePackagePolicy(workflowText: string): CorePackagePolicy[] {
   const workflow = parseYaml(workflowText) as {
     jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
@@ -326,22 +373,17 @@ function collectPackageInventory(
     packages.set(manifest.name, entry);
   };
   addPackage({ name: "openclaw", version }, ["npm"], "package.json");
-  for (const entry of readdirSync(join(snapshotRoot, "extensions"), { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const manifest = readPackageManifest(
-      join(snapshotRoot, "extensions", entry.name, "package.json"),
-    );
-    if (manifest.openclaw?.build?.bundledDist === true) {
-      continue;
-    }
-    const targets = [
-      ...(manifest.openclaw?.release?.publishToClawHub === true ? ["clawhub"] : []),
-      ...(manifest.openclaw?.release?.publishToNpm === true ? ["npm"] : []),
-    ];
-    if (targets.length > 0) {
-      addPackage(manifest, targets, `extensions/${entry.name}/package.json`);
+  const pluginCandidates = collectPluginCandidates(snapshotRoot);
+  for (const [target, plugins] of [
+    ["clawhub", collectPublishablePluginPackagesFromCandidates(pluginCandidates, "clawhub")],
+    ["npm", collectPublishablePluginPackagesFromCandidates(pluginCandidates, "npm")],
+  ] as const) {
+    for (const plugin of plugins) {
+      addPackage(
+        { name: plugin.packageName, version: plugin.version },
+        [target],
+        `${plugin.packageDir}/package.json`,
+      );
     }
   }
   for (const policy of corePackages) {
