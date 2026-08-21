@@ -392,7 +392,15 @@ export function selectProviderModelRouteAuth(params: {
     const runtimeAuthOwnerIsCompatible =
       Boolean(normalizedRuntimeAuthOwner) &&
       routeSupport.runtimePolicy.compatibleIds.includes(normalizedRuntimeAuthOwner ?? "");
-    if (params.resolution.routes.length > 1 && runtimeAuthOwnerIsCompatible && !configuredRoute) {
+    const hostHasNoCredentialToHonor =
+      params.sourcePlan.kind === "automatic" &&
+      params.sourcePlan.orderedProfiles.length === 0 &&
+      params.sourcePlan.fallback === undefined;
+    if (
+      runtimeAuthOwnerIsCompatible &&
+      !configuredRoute &&
+      (params.resolution.routes.length > 1 || hostHasNoCredentialToHonor)
+    ) {
       return { kind: "deferred", reason: "runtime-auth-owner", routeSupport };
     }
     return reject(

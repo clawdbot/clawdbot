@@ -331,6 +331,24 @@ describe("provider model route auth", () => {
     });
   });
 
+  it("lets an explicit native owner authenticate its sole compatible route", () => {
+    expect(
+      selectProviderModelRouteAuth({
+        provider: "openai",
+        resolution: { ...routes, routes: [routes.routes[1]] },
+        runtimeAuthOwner: { id: "codex" },
+        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
+      }),
+    ).toEqual({
+      kind: "deferred",
+      reason: "runtime-auth-owner",
+      routeSupport: {
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      },
+    });
+  });
+
   it.each([
     ["Platform", routes.routes[0], profile("openai:chatgpt", "oauth", "ready")],
     ["subscription", routes.routes[1], profile("openai:platform", "api_key", "ready")],

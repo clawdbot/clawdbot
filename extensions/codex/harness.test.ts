@@ -133,6 +133,17 @@ describe("Codex agent harness supports()", () => {
     ).toEqual({ supported: true, priority: 100 });
   });
 
+  it("lets explicit Codex model discovery run before auth has been prepared", () => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        modelId: "gpt-future",
+        requestedRuntime: "codex",
+        modelProvider: { requestTransportOverrides: "none" },
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
+
   it.each([
     {
       label: "automatic runtime selection",

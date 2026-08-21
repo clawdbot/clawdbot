@@ -141,9 +141,9 @@ export function createCodexAppServerAgentHarness(options: {
         provider === "openai" &&
         ctx.requestedRuntime === "codex" &&
         Boolean(ctx.modelId?.trim()) &&
-        preparedAuth?.source === "harness" &&
-        preparedAuth.mode === undefined &&
-        preparedAuth.requirement === undefined &&
+        (preparedAuth === undefined || preparedAuth.source === "harness") &&
+        preparedAuth?.mode === undefined &&
+        preparedAuth?.requirement === undefined &&
         ctx.modelProvider?.api === undefined &&
         ctx.modelProvider?.baseUrl === undefined &&
         ctx.modelProvider?.azureApiVersion === undefined &&
