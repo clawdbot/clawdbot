@@ -11,6 +11,13 @@ const mocks = vi.hoisted(() => ({
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
+  // The global-only subcommands get their own spies rather than sharing
+  // `noopAsync`: a shared one stays called from the previous table row, so a
+  // later row asserting "the leaf ran" passes even when its leaf never runs.
+  modelsAliasesAddCommand: vi.fn(async () => undefined),
+  modelsAliasesListCommand: vi.fn(async () => undefined),
+  modelsAliasesRemoveCommand: vi.fn(async () => undefined),
+  modelsScanCommand: vi.fn(async () => undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
@@ -34,10 +41,13 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsAliasesAddCommand,
+  modelsAliasesListCommand,
+  modelsAliasesRemoveCommand,
+  modelsScanCommand,
   modelsSetCommand,
   modelsSetImageCommand,
   modelsStatusCommand,
-  noopAsync,
 } = mocks;
 
 vi.mock("../commands/models/list.list-command.js", () => ({
@@ -65,9 +75,9 @@ vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderSetCommand: mocks.modelsAuthOrderSetCommand,
 }));
 vi.mock("../commands/models/aliases.js", () => ({
-  modelsAliasesAddCommand: mocks.noopAsync,
-  modelsAliasesListCommand: mocks.noopAsync,
-  modelsAliasesRemoveCommand: mocks.noopAsync,
+  modelsAliasesAddCommand: mocks.modelsAliasesAddCommand,
+  modelsAliasesListCommand: mocks.modelsAliasesListCommand,
+  modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
 vi.mock("../commands/models/fallbacks.js", () => ({
   modelsFallbacksAddCommand: mocks.noopAsync,
@@ -82,7 +92,7 @@ vi.mock("../commands/models/image-fallbacks.js", () => ({
   modelsImageFallbacksRemoveCommand: mocks.noopAsync,
 }));
 vi.mock("../commands/models/scan.js", () => ({
-  modelsScanCommand: mocks.noopAsync,
+  modelsScanCommand: mocks.modelsScanCommand,
 }));
 vi.mock("../commands/models/set.js", () => ({
   modelsSetCommand: mocks.modelsSetCommand,
@@ -104,6 +114,10 @@ describe("models cli", () => {
     modelsAuthPasteApiKeyCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
+    modelsAliasesAddCommand.mockClear();
+    modelsAliasesListCommand.mockClear();
+    modelsAliasesRemoveCommand.mockClear();
+    modelsScanCommand.mockClear();
     modelsSetCommand.mockClear();
     modelsSetImageCommand.mockClear();
     modelsStatusCommand.mockClear();
@@ -463,41 +477,57 @@ describe("models cli", () => {
   // --agent-aware models subcommand validated it (#126597). Unlike `set`, these run
   // inside the CLI error wrapper, so the guard surfaces as a formatted operator
   // error rather than an unhandled throw.
-  it.each([
-    { label: "aliases list", args: ["models", "--agent", "poe", "aliases", "list"] },
+  //
+  // One row per subcommand, carrying its own leaf spy, so the rejected case and
+  // the unscoped case can never end up describing different commands.
+  const globalOnlyModelsCommands = [
+    { label: "aliases list", leaf: modelsAliasesListCommand, args: ["aliases", "list"] },
     {
       label: "aliases add",
-      args: ["models", "--agent", "poe", "aliases", "add", "zzz", "soraka/grok-4.6"],
+      leaf: modelsAliasesAddCommand,
+      args: ["aliases", "add", "zzz", "soraka/grok-4.6"],
     },
-    { label: "aliases remove", args: ["models", "--agent", "poe", "aliases", "remove", "zzz"] },
-    { label: "scan", args: ["models", "--agent", "poe", "scan", "--no-probe", "--no-input"] },
-  ])("reports parent --agent as an operator error for models $label", async ({ label, args }) => {
-    const errorWrites = captureRuntimeErrors();
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    {
+      label: "aliases remove",
+      leaf: modelsAliasesRemoveCommand,
+      args: ["aliases", "remove", "zzz"],
+    },
+    { label: "scan", leaf: modelsScanCommand, args: ["scan", "--no-probe", "--no-input"] },
+  ];
 
-    // `defaultRuntime.exit` calls process.exit and then throws a sentinel so the
-    // path stays unreachable when process.exit is mocked (src/runtime.ts).
-    await expect(runModelsCommand(args)).rejects.toThrow("unreachable");
+  it.each(globalOnlyModelsCommands)(
+    "reports parent --agent as an operator error for models $label",
+    async ({ label, leaf, args }) => {
+      const errorWrites = captureRuntimeErrors();
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-    const stderr = errorWrites.join(" ");
-    expect(stderr).toContain("does not support --agent");
-    // The message has to name the subcommand it rejected, or a copy-paste that
-    // guards `scan` while reporting `set` reads as correct.
-    expect(stderr).toContain(`openclaw models ${label}`);
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(noopAsync).not.toHaveBeenCalled();
-  });
+      // `defaultRuntime.exit` calls process.exit and then throws a sentinel so the
+      // path stays unreachable when process.exit is mocked (src/runtime.ts).
+      await expect(runModelsCommand(["models", "--agent", "poe", ...args])).rejects.toThrow(
+        "unreachable",
+      );
 
-  it.each([
-    { label: "aliases list", args: ["models", "aliases", "list"] },
-    { label: "aliases add", args: ["models", "aliases", "add", "zzz", "soraka/grok-4.6"] },
-    { label: "aliases remove", args: ["models", "aliases", "remove", "zzz"] },
-    { label: "scan", args: ["models", "scan", "--no-probe", "--no-input"] },
-  ])("still runs models $label without --agent", async ({ args }) => {
-    await runModelsCommand(args);
+      const stderr = errorWrites.join(" ");
+      expect(stderr).toContain("does not support --agent");
+      // The message has to name the subcommand it rejected, or a copy-paste that
+      // guards `scan` while reporting `set` reads as correct.
+      expect(stderr).toContain(`openclaw models ${label}`);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(leaf).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(noopAsync).toHaveBeenCalled();
-  });
+  it.each(globalOnlyModelsCommands)(
+    "still runs models $label without --agent",
+    async ({ leaf, args }) => {
+      await runModelsCommand(["models", ...args]);
+
+      // Exactly once, on this row's own leaf: a shared spy would already be
+      // called from an earlier row, and the guard must not grow into a blanket
+      // refusal or a double dispatch.
+      expect(leaf).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
