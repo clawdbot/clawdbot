@@ -281,6 +281,62 @@ describe("safeRemoveAttachmentsDir", () => {
 
     realpathSpy.mockRestore();
   });
+
+  it("refuses to remove attachments while the child stop is unconfirmed", async () => {
+    // The backstop lives inside the destructive call, not only in each caller's
+    // policy check: attachment removal is the one terminal effect a later
+    // observed promotion can never undo, and a caller that forgets the guard
+    // would silently destroy a possibly-live child's output.
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    await expect(
+      safeRemoveAttachmentsDir(
+        createRunEntry({
+          cleanup: "delete",
+          attachmentsDir: "/tmp/openclaw-child-attachments",
+          attachmentsRootDir: "/tmp/openclaw-attachments",
+          execution: {
+            status: "terminal",
+            startedAt: 1_000,
+            endedAt: 2_000,
+            outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+          },
+        }),
+      ),
+    ).resolves.toBe(false);
+    // Not even a realpath probe: the decision is made before touching the disk.
+    expect(realpathSpy).not.toHaveBeenCalled();
+
+    realpathSpy.mockRestore();
+  });
+
+  it("removes attachments once an observed stop promotes the run", async () => {
+    // Anti-vacuity control for the case above: the same delete-mode row with an
+    // observed disposition does reach the removal, so the refusal is the guard
+    // and not an unrelated early return.
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockRejectedValue(Object.assign(new Error("probe reached"), { code: "EACCES" }));
+
+    await expect(
+      safeRemoveAttachmentsDir(
+        createRunEntry({
+          cleanup: "delete",
+          attachmentsDir: "/tmp/openclaw-child-attachments",
+          attachmentsRootDir: "/tmp/openclaw-attachments",
+          execution: {
+            status: "terminal",
+            startedAt: 1_000,
+            endedAt: 2_000,
+            outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+          },
+        }),
+      ),
+    ).resolves.toBe(false);
+    expect(realpathSpy).toHaveBeenCalled();
+
+    realpathSpy.mockRestore();
+  });
 });
 
 describe("reconcileOrphanedRun", () => {

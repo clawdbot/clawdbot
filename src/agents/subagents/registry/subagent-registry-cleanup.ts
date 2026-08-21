@@ -81,7 +81,14 @@ export function resolveEffectiveCleanupMode(
   return cleanup ?? entry.cleanup;
 }
 
-/** Whether this cleanup attempt may remove the run's attachments directory. */
+/**
+ * Whether this cleanup attempt may remove the run's attachments directory.
+ *
+ * The single owner of that decision: every cleanup path asks here rather than
+ * re-deriving `cleanup === "delete" || !retainAttachmentsOnKeep`, and
+ * `safeRemoveAttachmentsDir` re-checks the provisional predicate itself so a new
+ * call site cannot reintroduce the bypass.
+ */
 export function shouldDeleteSubagentAttachments(
   entry: SubagentRunRecord,
   cleanup?: "delete" | "keep",

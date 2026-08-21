@@ -29,6 +29,35 @@
  *   Every request is recorded, so the proof asserts on what the production code
  *   actually submitted — notably whether any `sessions.delete` was sent for a
  *   child that may still be live.
+ * - `subagentRegistryDeps.loadAgentRuntimePluginRegistryHandle` — resolves "no
+ *   plugin registry" rather than loading the plugin host. The terminal-hook code
+ *   path still executes for real against an empty registry, which is what a real
+ *   load would return for this config's zero configured plugins. The reason is
+ *   measured, not aesthetic: the real loader compiles the plugin host through
+ *   jiti synchronously and blocked the event loop for ~160s on a cold cache.
+ *   Plugin-hook deferral itself is covered by unit tests, not by this script.
+ *
+ * WHAT IS ADVANCED RATHER THAN WAITED OUT
+ * - Two retention clocks are rewound on the live registry rows (the real
+ *   `subagentRuns` map, not a copy): the armed `archiveAtMs`, floored by the
+ *   config schema to one minute, and `delivery.suspendedAt`, whose expiry is a
+ *   hard-coded seven days. Sleeping either out in wall-clock is not an option —
+ *   the seven-day one is impossible and the one-minute one stalled an earlier
+ *   revision of this script for ~57 seconds with no output. Nothing under test
+ *   is faked by this: the sweeper still reads `Date.now()` itself and still
+ *   compares it against those fields, so the archive/delete and
+ *   suspended-expiry branches become genuinely eligible. The rewind only moves
+ *   the clock in the direction that makes the fail-closed assertions
+ *   load-bearing instead of vacuous.
+ *
+ * OUTPUT CADENCE AND RUNTIME
+ * - Measured here: ~2 minutes end to end, of which ~95s is one cold synchronous jiti
+ *   compile of a large production module graph reached by the real promotion
+ *   path. That block cannot be split or yielded, so a heartbeat worker prints an
+ *   `[alive]` line every 5s straight to fd 1 (see below) — no gap in this
+ *   script's output exceeds ~5s, in any environment.
+ * - The script exits on its own verdict rather than waiting for the registry's
+ *   live timers and open session store to drain, which added ~3 minutes.
  *
  * WHAT THIS PROOF DOES NOT COVER — stated plainly
  * - This is not a live isolated-Gateway run with a real child agent process. No
@@ -61,12 +90,20 @@
  *  5. Control (anti-vacuity)    — that same promotion attempted from a published
  *                                 `timed_out` is rejected, which is what makes
  *                                 scenario 1 load-bearing rather than cosmetic.
+ *  6. Suspended-delivery expiry — a still-unconfirmed run whose final delivery
+ *                                 has been suspended past its seven-day
+ *                                 retention: the expiry fires and abandons the
+ *                                 stale delivery, but the child's real
+ *                                 attachments directory survives and the row is
+ *                                 not retired. The assertion that the discard
+ *                                 actually ran is what keeps this non-vacuous.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 
 type SubagentRegistryModule =
   typeof import("../src/agents/subagents/registry/subagent-registry.js");
@@ -76,6 +113,8 @@ type SubagentRegistryDepsModule =
   typeof import("../src/agents/subagents/registry/subagent-registry-deps.js");
 type SessionReconciliationModule =
   typeof import("../src/agents/subagents/registry/subagent-session-reconciliation.js");
+type SubagentRegistryMemoryModule =
+  typeof import("../src/agents/subagents/registry/subagent-registry-memory.js");
 type DetachedTaskRuntimeModule = typeof import("../src/tasks/detached-task-runtime.js");
 type SessionAccessorModule = typeof import("../src/config/sessions/session-accessor.js");
 
@@ -107,6 +146,7 @@ const ABSENT_CHILD_SESSION_KEY = "agent:main:subagent:proof-126924-absent";
 const CONTROL_RUN_ID = "run-proof-126924-control";
 const CONTROL_CHILD_SESSION_KEY = "agent:main:subagent:proof-126924-control";
 const RUN_TIMEOUT_SECONDS = 6;
+const SUSPENDED_RETENTION_DAYS = 7;
 
 const importSource = async (relativePath: string) =>
   import(pathToFileURL(path.join(repoRoot, relativePath)).href);
@@ -135,7 +175,30 @@ const log = (message: string) => {
   process.stdout.write(`${message}\n`);
 };
 
+// Liveness output that cannot be starved. The promotion path's real terminal-hook
+// emit pulls the plugin-SDK module graph in through jiti, which compiles
+// synchronously and blocked this thread's event loop for over a minute on a cold
+// cache (profiled). A `setInterval` here could not fire during that window, so
+// the heartbeat runs in a worker writing straight to fd 1, where it is never
+// gated on this thread. Without it a reviewer's harness sees a long silence and
+// concludes the script hung — which is exactly what happened in review round 6.
+const heartbeat = new Worker(
+  [
+    'const fs = require("node:fs");',
+    "const startedAt = Date.now();",
+    "setInterval(() => {",
+    "  const seconds = Math.round((Date.now() - startedAt) / 1000);",
+    "  fs.writeSync(1, `[alive] ${seconds}s elapsed; loading production modules or sweeping\\n`);",
+    "}, 5000);",
+  ].join("\n"),
+  { eval: true, execArgv: [] },
+);
+heartbeat.unref();
+
+let exitCode = 0;
 try {
+  const bootStartedAt = Date.now();
+  log("[boot] importing the production registry, task runtime and session store...");
   const depsModule = (await importSource(
     "src/agents/subagents/registry/subagent-registry-deps.js",
   )) as SubagentRegistryDepsModule;
@@ -148,12 +211,19 @@ try {
   const reconciliation = (await importSource(
     "src/agents/subagents/registry/subagent-session-reconciliation.js",
   )) as SessionReconciliationModule;
+  // The live registry row map the sweeper itself reads. Used only to rewind the
+  // two retention clocks described in the header; every decision under test is
+  // still made by production code against `Date.now()`.
+  const memory = (await importSource(
+    "src/agents/subagents/registry/subagent-registry-memory.js",
+  )) as SubagentRegistryMemoryModule;
   const taskRuntime = (await importSource(
     "src/tasks/detached-task-runtime.js",
   )) as DetachedTaskRuntimeModule;
   const sessionAccessor = (await importSource(
     "src/config/sessions/session-accessor.js",
   )) as SessionAccessorModule;
+  log(`[boot] production modules imported in ${Math.round((Date.now() - bootStartedAt) / 1_000)}s`);
 
   // The ONLY stub: the gateway edge that would reach the child agent's own run.
   // `agent.wait` returning a bare timeout with no terminal snapshot IS the
@@ -166,6 +236,16 @@ try {
       }
       return {};
     }) as SubagentRegistryDepsModule["subagentRegistryDeps"]["callGateway"],
+    // Second declared stub, at the plugin-host edge: resolve "no plugin registry"
+    // instead of loading the plugin runtime. The terminal-hook path still runs
+    // for real (`emitSubagentEndedHookOnce`, its exactly-once marker, and the
+    // provisional gate above it) — it just runs against an empty registry, which
+    // is what a real load would return anyway for this config's zero configured
+    // plugins. This is here for a measured reason: the real loader compiles the
+    // plugin host through jiti synchronously, which blocked the event loop for
+    // ~160s on a cold cache (profiled: 181s sampled, 12s idle, the rest in
+    // jiti frames) and made this script unrunnable inside a reviewer's harness.
+    loadAgentRuntimePluginRegistryHandle: () => undefined,
   });
 
   const writeChildSessionRow = async (
@@ -203,6 +283,32 @@ try {
   const startedAtMs = Date.now();
   const deadlineMs = startedAtMs + RUN_TIMEOUT_SECONDS * 1_000;
 
+  const attachmentsRootDir = path.join(stateRoot, "attachments");
+  const attachmentsDirFor = (runId: string) => path.join(attachmentsRootDir, runId);
+  const artifactFor = (runId: string) => path.join(attachmentsDirFor(runId), "child-output.txt");
+  for (const runId of [LIVE_RUN_ID, ABSENT_RUN_ID]) {
+    fs.mkdirSync(attachmentsDirFor(runId), { recursive: true });
+    fs.writeFileSync(artifactFor(runId), "written by a child that may still be running\n");
+  }
+
+  // Rewind an already-armed retention due time on the live registry row. See the
+  // header: the sweeper's own `Date.now()` comparison and every guard under test
+  // stay real; only the clock moves.
+  const liveRow = (runId: string) => {
+    const row = memory.subagentRuns.get(runId);
+    assert.ok(row, `the live registry row for ${runId} must be readable`);
+    return row;
+  };
+  const rewindArchiveClock = (runId: string) => {
+    const row = liveRow(runId);
+    assert.equal(
+      typeof row.archiveAtMs,
+      "number",
+      `retention must be armed on ${runId}, or the fail-closed assertions prove nothing`,
+    );
+    row.archiveAtMs = Date.now() - 1;
+  };
+
   // The live child's own record: alive and running. This is a real row on disk
   // and the only independent liveness evidence the registry ever consults.
   await writeChildSessionRow(LIVE_CHILD_SESSION_KEY, {
@@ -238,6 +344,11 @@ try {
       runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
       expectsCompletionMessage: false,
       taskRowOwnership: "required",
+      // Real directories with real content, handed to the production launch
+      // path. Attachment removal is the one terminal effect a later promotion
+      // can never undo, so it is asserted on the filesystem, not on a spy.
+      attachmentsRootDir,
+      attachmentsDir: attachmentsDirFor(runId),
     });
     assert.equal(
       readTaskStatus(runId, childSessionKey),
@@ -275,34 +386,20 @@ try {
       `the detached task must stay nonterminal on a deadline-only expiry (${runId} was ${String(taskStatus)})`,
     );
   }
-  log("[1/5] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
+  log("[1/6] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
   log(
-    "[1/5] detached tasks read back through the real task registry: status=running (nonterminal)",
+    "[1/6] detached tasks read back through the real task registry: status=running (nonterminal)",
   );
 
   // Both rows are delete-mode, so retention is armed at `endedAt +
-  // archiveAfterMinutes`. Wait until it has actually come due: without that the
-  // fail-closed assertions below would pass simply because nothing was eligible
-  // for teardown yet.
-  const liveArchiveAtMs = readRun(LIVE_RUN_ID)?.archiveAtMs;
-  const absentArchiveAtMs = readRun(ABSENT_RUN_ID)?.archiveAtMs;
-  assert.equal(
-    typeof liveArchiveAtMs,
-    "number",
-    "retention must be armed on the live run, or scenario 2 proves nothing",
-  );
-  assert.equal(
-    typeof absentArchiveAtMs,
-    "number",
-    "retention must be armed on the absent run, or scenario 3 proves nothing",
-  );
-  const retentionDueAt = Math.max(liveArchiveAtMs ?? 0, absentArchiveAtMs ?? 0) + 2_000;
+  // archiveAfterMinutes`. It has to have actually come due, or the fail-closed
+  // assertions below would pass simply because nothing was eligible for teardown
+  // yet — that exact vacuity bit an earlier revision of this script.
+  rewindArchiveClock(LIVE_RUN_ID);
+  rewindArchiveClock(ABSENT_RUN_ID);
   log(
-    `[wait] retention armed (archiveAfterMinutes=${ARCHIVE_AFTER_MINUTES}); waiting ${Math.max(0, Math.ceil((retentionDueAt - Date.now()) / 1_000))}s for it to come due`,
+    `[clock] retention was armed (archiveAfterMinutes=${ARCHIVE_AFTER_MINUTES}, floored to 1); its due time is rewound past now so the archive branch is eligible`,
   );
-  while (Date.now() < retentionDueAt) {
-    await sleep(500);
-  }
 
   // ---------------------------------------------------------------- scenario 2
   await sweep();
@@ -323,8 +420,12 @@ try {
     "running",
     "the task must still be nonterminal after sweeps with a live child",
   );
+  assert.ok(
+    fs.existsSync(artifactFor(LIVE_RUN_ID)),
+    "the child's attachments must survive: a live child may still be writing there",
+  );
   log(
-    `[2/5] continued liveness: run retained, child row still "running", sessions.delete count=${sessionDeleteCount()}`,
+    `[2/6] continued liveness: run retained, child row still "running", attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
 
   // ---------------------------------------------------------------- scenario 3
@@ -347,8 +448,12 @@ try {
     0,
     "an absent session snapshot must not authorize deleting the child's session",
   );
+  assert.ok(
+    fs.existsSync(artifactFor(ABSENT_RUN_ID)),
+    "an absent session snapshot must not authorize removing the child's attachments",
+  );
   log(
-    `[3/5] absent session snapshot: run retained across repeated sweeps, sessions.delete count=${sessionDeleteCount()}`,
+    `[3/6] absent session snapshot: run retained across repeated sweeps, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
 
   // ---------------------------------------------------------------- scenario 4
@@ -374,7 +479,7 @@ try {
     "succeeded",
     "the observed success must be publishable; a published timed_out would have blocked it",
   );
-  log("[4/5] later observed completion: detached task promoted running -> succeeded");
+  log("[4/6] later observed completion: detached task promoted running -> succeeded");
 
   // ---------------------------------------------------------------- scenario 5
   // Control. The same promotion from a published `timed_out` is refused, which
@@ -417,10 +522,65 @@ try {
     "timed_out",
     "a published timeout stays published forever",
   );
-  log("[5/5] control: timed_out -> succeeded rejected by the real task transition rules");
+  log("[5/6] control: timed_out -> succeeded rejected by the real task transition rules");
+
+  // ---------------------------------------------------------------- scenario 6
+  // The absent run is still `child-unconfirmed`. Suspend its final delivery and
+  // rewind the suspension past the hard-coded seven-day retention. The sweeper
+  // handles suspended delivery at phase 1, ahead of the unconfirmed-child
+  // reconciliation branch, so this row reaches expiry without passing through
+  // it — which is exactly how the expiry path escaped the provisional guard.
+  const suspendedRow = liveRow(ABSENT_RUN_ID);
+  suspendedRow.expectsCompletionMessage = true;
+  suspendedRow.delivery = {
+    status: "suspended",
+    suspendedAt: Date.now() - (SUSPENDED_RETENTION_DAYS + 1) * 24 * 60 * 60_000,
+    suspendedReason: "expiry",
+    payload: {
+      requesterSessionKey: REQUESTER_SESSION_KEY,
+      requesterDisplayKey: "main",
+      childSessionKey: ABSENT_CHILD_SESSION_KEY,
+      childRunId: ABSENT_RUN_ID,
+      task: suspendedRow.task,
+    },
+  } as (typeof suspendedRow)["delivery"];
+  await sweep();
+  assert.ok(
+    memory.subagentRuns.get(ABSENT_RUN_ID),
+    "suspended-delivery expiry must not retire an unconfirmed row: promotion resolves the run by id, so a retired row can never be promoted at all",
+  );
+  // Non-vacuity: the expiry must actually have fired. Without this the survival
+  // assertions could pass simply because the branch never ran.
+  assert.notEqual(
+    liveRow(ABSENT_RUN_ID).delivery?.status,
+    "suspended",
+    "the seven-day suspended-delivery expiry must actually have fired for this scenario to mean anything",
+  );
+  assert.ok(
+    fs.existsSync(artifactFor(ABSENT_RUN_ID)),
+    "suspended-delivery expiry must not remove attachments while the child stop is unconfirmed",
+  );
+  assert.equal(
+    sessionDeleteCount(),
+    0,
+    "suspended-delivery expiry must not delete the child's session either",
+  );
+  log(
+    `[6/6] suspended-delivery expiry (${SUSPENDED_RETENTION_DAYS + 1}d old): delivery discarded, row retained, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+  );
 
   log("");
   log("All runtime assertions passed.");
+} catch (error) {
+  exitCode = 1;
+  process.stderr.write(
+    `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+  );
 } finally {
   fs.rmSync(stateRoot, { recursive: true, force: true });
 }
+// The registry legitimately holds live sweeper timers, run-wait loops and an
+// open session store, so the event loop stays busy for minutes after the last
+// assertion. Exit on the verdict instead of leaving the process — and any CI
+// harness watching its output — waiting for those handles to drain.
+process.exit(exitCode);

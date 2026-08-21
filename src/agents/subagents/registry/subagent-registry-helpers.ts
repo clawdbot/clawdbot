@@ -19,6 +19,10 @@ import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  shouldDeferTerminalCleanupForUnconfirmedChild,
+  shouldDeleteSubagentAttachments,
+} from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -195,6 +199,16 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 
 /** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
+  // Fail closed at the destructive call itself, not only at each caller's policy
+  // check. Attachment removal is the one terminal effect a later promotion can
+  // never undo, and eight call sites reach this function; a caller that forgets
+  // the guard (as the suspended-delivery expiry path did) silently destroys a
+  // possibly-live child's output. Returning false means "not removed", so the
+  // callers that treat it as a completion signal retain the row and retry once
+  // observed stop evidence promotes it.
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    return false;
+  }
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return true;
   }
@@ -273,9 +287,10 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
-  const shouldDeleteAttachments =
-    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
-  if (shouldDeleteAttachments) {
+  // The third copy of this condition; now the one owner. The sync remover is
+  // reached only from here, so the guard rides the shared decision rather than
+  // being duplicated inside it.
+  if (shouldDeleteSubagentAttachments(params.entry)) {
     safeRemoveAttachmentsDirSync(params.entry);
   }
   const removed = params.runs.delete(params.runId);
