@@ -18,6 +18,8 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -526,6 +528,18 @@ describe("agents delete command", () => {
           "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
         },
       });
+      const storePath = resolveCronJobsStorePath();
+      await saveCronStore(storePath, {
+        version: 1,
+        jobs: [
+          makeCronJob({
+            id: "credentials-job",
+            name: "credentials-job",
+            agentId: "ops",
+            payload: { kind: "agentTurn", message: "keep until the Gateway owns cleanup" },
+          }),
+        ],
+      });
       gatewayMocks.callGateway.mockRejectedValue(
         Object.assign(
           new Error("gateway agents.delete requires credentials before opening a websocket"),
@@ -548,6 +562,13 @@ describe("agents delete command", () => {
       expect(output?.workspaceRetainedReason).toBe("shared");
       expect(output?.transport).toBeUndefined();
       expect(output).not.toHaveProperty("purgeFailed");
+      expect(output?.cronCleanupSkipped).toBe(true);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "credentials-job",
+      ]);
+      expect(runtime.error).toHaveBeenCalledWith(
+        'Warning: cron cleanup was skipped for deleted agent "ops" because the Gateway could not be authenticated; scheduled jobs may remain.',
+      );
       expect(output?.clearedOwnerRefs).toEqual([
         "agents.defaults.heartbeat.agentId",
         "agents.defaults.systemAgent.agentId",
@@ -609,6 +630,46 @@ describe("agents delete command", () => {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
       expect(readExecApprovalsSnapshot().exists).toBe(false);
+    });
+  });
+
+  it("removes only the deleted agent's cron jobs during offline deletion", async () => {
+    await withStateDirEnv("openclaw-agents-delete-cron-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      };
+      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+      const jobs = [
+        makeCronJob({ id: "removed-job", name: "removed-job", agentId: "ops" }),
+        makeCronJob({ id: "survivor-job", name: "survivor-job", agentId: "main" }),
+        makeCronJob({
+          id: "heartbeat-main",
+          agentId: "main",
+          declarationKey: "heartbeat:main",
+          payload: { kind: "heartbeat" },
+        }),
+        makeCronJob({
+          id: "memory-dreaming",
+          declarationKey: "memory-core:memory-dreaming-promotion",
+        }),
+      ];
+      const storePath = resolveCronJobsStorePath();
+      await saveCronStore(storePath, { version: 1, jobs });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "survivor-job",
+        "heartbeat-main",
+        "memory-dreaming",
+      ]);
     });
   });
 
