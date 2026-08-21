@@ -40394,10 +40394,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift"
-        },
-        {
-          "kind": "ui-localized-call",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift"
         }
       ]
     },
