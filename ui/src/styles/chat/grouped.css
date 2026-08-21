@@ -869,7 +869,8 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user .chat-bubble {
   border-color: transparent;
-  background: var(--accent-subtle);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  color: var(--text-strong);
   box-shadow: none;
 }
 
