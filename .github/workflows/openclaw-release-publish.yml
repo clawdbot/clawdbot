@@ -955,6 +955,70 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Write Windows release approval
+        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        env:
+          RELEASE_PUBLISH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
+          RELEASE_TOOLING_REF: ${{ github.ref_name }}
+          RELEASE_TOOLING_SHA: ${{ github.sha }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+        run: |
+          set -euo pipefail
+          approval_dir="${RUNNER_TEMP}/windows-release-approval"
+          mkdir -p "${approval_dir}"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const digests = JSON.parse(process.env.WINDOWS_NODE_INSTALLER_DIGESTS);
+          const installerDigests = Object.fromEntries(
+            Object.entries(digests).toSorted(([left], [right]) => left.localeCompare(right)),
+          );
+          const approval = {
+            schema: "windows-release-approval.v1",
+            repository: process.env.GITHUB_REPOSITORY,
+            workflow: "OpenClaw Release Publish",
+            parentRunId: process.env.RELEASE_PUBLISH_RUN_ID,
+            parentRunAttempt: Number(process.env.RELEASE_PUBLISH_RUN_ATTEMPT),
+            tooling: {
+              ref: process.env.RELEASE_TOOLING_REF,
+              fullRef: process.env.RELEASE_TOOLING_FULL_REF,
+              sha: process.env.RELEASE_TOOLING_SHA,
+            },
+            releaseTag: process.env.RELEASE_TAG,
+            targetSha: process.env.TARGET_SHA,
+            windowsSource: {
+              repository: "openclaw/openclaw-windows-node",
+              tag: process.env.WINDOWS_NODE_TAG,
+              installerDigests,
+            },
+          };
+          writeFileSync(
+            join(process.env.RUNNER_TEMP, "windows-release-approval", "approval.json"),
+            `${JSON.stringify(approval, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Attest Windows release approval
+        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/windows-release-approval/approval.json
+
+      - name: Upload Windows release approval
+        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-release-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/windows-release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Dispatch publish workflows
         env:
           GH_TOKEN: ${{ github.token }}
@@ -993,6 +1057,22 @@ jobs:
 
           is_android_release() {
             [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+          }
+
+          verify_release_tooling_identity() {
+            local -a verify_args=(
+              verify
+              --repository "${GITHUB_REPOSITORY}"
+              --workflow-ref "${PARENT_WORKFLOW_BRANCH}"
+              --workflow-full-ref "${PARENT_WORKFLOW_FULL_REF}"
+              --workflow-sha "${PARENT_WORKFLOW_SHA}"
+              --release-publish-run-id "${GITHUB_RUN_ID}"
+              --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
+            )
+            if [[ "${PARENT_WORKFLOW_BRANCH}" != "main" && ! "${PARENT_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/ ]]; then
+              verify_args+=(--allow-prevalidated-ref)
+            fi
+            node .release-harness/scripts/release-tooling-identity.mjs "${verify_args[@]}" >/dev/null
           }
 
           verify_child_run_sha() {
@@ -1692,12 +1772,14 @@ jobs:
                   return 0
                 fi
               fi
+              verify_release_tooling_identity
               gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
                 --title "${title}" \
                 --notes-file "${prepared_release_notes_file}" \
                 "${prerelease_arg}" \
                 "${latest_arg}"
             else
+              verify_release_tooling_identity
               gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
                 --verify-tag \
                 --draft \
@@ -1718,6 +1800,7 @@ jobs:
             if is_stable_release; then
               verify_windows_release_asset_contract
             fi
+            verify_release_tooling_identity
             gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
             release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
             expected_prerelease="false"
@@ -1874,10 +1957,18 @@ jobs:
               return 0
             fi
 
+            verify_release_tooling_identity
             windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
               -f tag="${RELEASE_TAG}" \
               -f windows_node_tag="${WINDOWS_NODE_TAG}" \
-              -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")"
+              -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}" \
+              -f release_publish_run_id="${GITHUB_RUN_ID}" \
+              -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
+              -f release_tooling_ref="${PARENT_WORKFLOW_BRANCH}" \
+              -f release_tooling_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
+              -f release_tooling_sha="${PARENT_WORKFLOW_SHA}" \
+              -f release_target_sha="${TARGET_SHA}" \
+              -f direct_release_recovery=false)"
             # Promotion runs in a background subshell; hand the run id to the
             # parent shell for the release proof links.
             printf '%s' "${windows_node_run_id}" > "${RUNNER_TEMP}/windows-node-run-id.txt"
@@ -1980,6 +2071,7 @@ jobs:
               exit 1
             fi
 
+            verify_release_tooling_identity
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" --repo "${GITHUB_REPOSITORY}"
           }
 
@@ -1989,6 +2081,7 @@ jobs:
             # Postpublish evidence embeds this run's id, so resumable retries
             # regenerate it; the newest verification replaces the asset while
             # prior copies persist as workflow artifacts.
+            verify_release_tooling_identity
             gh release upload "${RELEASE_TAG}" "${source_path}#${asset_name}" \
               --repo "${GITHUB_REPOSITORY}" --clobber
           }
@@ -2217,6 +2310,7 @@ jobs:
           NODE
 
             render_github_release_notes "${notes_file}" "${proof_file}" "${metadata_file}"
+            verify_release_tooling_identity
             gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
             if jq -e '.verificationIncluded == true' "${metadata_file}" >/dev/null; then
               echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"
@@ -2584,18 +2678,42 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
+      actions: read
       contents: write
     steps:
+      - name: Checkout trusted release tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Publish the verified draft release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
+          RELEASE_TOOLING_REF: ${{ github.ref_name }}
+          RELEASE_TOOLING_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           expected_prerelease=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
             expected_prerelease=true
           fi
+          verify_args=(
+            verify
+            --repository "${GITHUB_REPOSITORY}"
+            --workflow-ref "${RELEASE_TOOLING_REF}"
+            --workflow-full-ref "${RELEASE_TOOLING_FULL_REF}"
+            --workflow-sha "${RELEASE_TOOLING_SHA}"
+            --release-publish-run-id "${GITHUB_RUN_ID}"
+            --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
+          )
+          if [[ "${RELEASE_TOOLING_REF}" != "main" && ! "${RELEASE_TOOLING_FULL_REF}" =~ ^refs/tags/release-publish/ ]]; then
+            verify_args+=(--allow-prevalidated-ref)
+          fi
+          node scripts/release-tooling-identity.mjs "${verify_args[@]}" >/dev/null
           gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
           release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease)"
           if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] || \

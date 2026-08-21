@@ -4,46 +4,172 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing OpenClaw release tag to receive Windows Hub installers, for example v2026.6.1
+        description: Existing OpenClaw release tag to receive Windows Hub installers
         required: true
         type: string
       windows_node_tag:
-        description: Exact openclaw-windows-node release tag to promote, for example v0.6.3
+        description: Exact openclaw-windows-node release tag to promote
         required: true
         type: string
       expected_installer_digests:
         description: Compact JSON map of installer asset names to pinned source sha256 digests
         required: true
         type: string
+      release_publish_run_id:
+        description: OpenClaw Release Publish run that approved this promotion
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish run attempt
+        required: true
+        type: string
+      release_tooling_ref:
+        description: Exact ref name of the approving release tooling
+        required: true
+        type: string
+      release_tooling_full_ref:
+        description: Exact full ref of the approving release tooling
+        required: true
+        type: string
+      release_tooling_sha:
+        description: Exact SHA of the approving release tooling
+        required: true
+        type: string
+      release_target_sha:
+        description: Exact OpenClaw release candidate SHA
+        required: true
+        type: string
+      direct_release_recovery:
+        description: Reuse the exact original approval after its parent run completed
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  actions: read
+  attestations: read
+  contents: read
 
 concurrency:
   group: windows-node-release-${{ inputs.tag }}
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.16.0"
+
 jobs:
-  promote_signed_windows_installers:
-    name: Promote signed Windows installers
+  validate_signed_windows_installers:
+    name: Validate signed Windows installers
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - name: Validate inputs
+      - name: Checkout exact trusted release tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.release_tooling_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+            scripts/validate-release-publish-approval.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Download parent Windows release approval
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-release-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/windows-release-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate immutable release approval
         shell: pwsh
         env:
+          APPROVAL_PATH: ${{ runner.temp }}/windows-release-approval/approval.json
+          CHILD_WORKFLOW_FULL_REF: ${{ github.ref }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          CHILD_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_tooling_ref }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_tooling_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.release_tooling_sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_APPROVAL_KIND: windows-release
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
+          RELEASE_TOOLING_FULL_REF: ${{ inputs.release_tooling_full_ref }}
+          RELEASE_TOOLING_REF: ${{ inputs.release_tooling_ref }}
+          RELEASE_TOOLING_SHA: ${{ inputs.release_tooling_sha }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:GITHUB_ACTOR -ne "github-actions[bot]" -and $env:DIRECT_RELEASE_RECOVERY -ne "true") {
+            throw "Manual Windows release recovery must explicitly set direct_release_recovery=true."
+          }
+          if (
+            $env:CHILD_WORKFLOW_REF -ne $env:RELEASE_TOOLING_REF -or
+            $env:CHILD_WORKFLOW_FULL_REF -ne $env:RELEASE_TOOLING_FULL_REF -or
+            $env:CHILD_WORKFLOW_SHA -ne $env:RELEASE_TOOLING_SHA
+          ) {
+            throw "Windows release workflow execution does not match the attested tooling tuple."
+          }
+          $verifyArgs = @(
+            "verify",
+            "--repository", $env:GITHUB_REPOSITORY,
+            "--workflow-ref", $env:RELEASE_TOOLING_REF,
+            "--workflow-full-ref", $env:RELEASE_TOOLING_FULL_REF,
+            "--workflow-sha", $env:RELEASE_TOOLING_SHA
+          )
+          if (
+            $env:RELEASE_TOOLING_REF -ne "main" -and
+            $env:RELEASE_TOOLING_FULL_REF -notmatch '^refs/tags/release-publish/'
+          ) {
+            $verifyArgs += "--allow-prevalidated-ref"
+          }
+          node scripts/release-tooling-identity.mjs @verifyArgs | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows release tooling identity is no longer live."
+          }
+          gh attestation verify $env:APPROVAL_PATH `
+            --repo $env:GITHUB_REPOSITORY `
+            --signer-workflow "$env:GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" `
+            --source-ref $env:RELEASE_TOOLING_FULL_REF `
+            --source-digest $env:RELEASE_TOOLING_SHA `
+            --deny-self-hosted-runners
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows release approval attestation verification failed."
+          }
+          gh api `
+            "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RELEASE_PUBLISH_RUN_ID/attempts/$env:EXPECTED_RUN_ATTEMPT" `
+            --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}' |
+            node scripts/validate-release-publish-approval.mjs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows release approval does not match the exact parent run."
+          }
+
+      - name: Validate inputs and download installers
+        shell: pwsh
+        env:
+          DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
           EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
         run: |
+          $ErrorActionPreference = "Stop"
           if ($env:RELEASE_TAG -notmatch '^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$') {
             throw "Invalid OpenClaw release tag: $env:RELEASE_TAG"
           }
-          $stableRelease = -not (
-            $env:RELEASE_TAG.Contains("-alpha.") -or
-            $env:RELEASE_TAG.Contains("-beta.")
-          )
+          if ($env:RELEASE_TARGET_SHA -notmatch '^[a-f0-9]{40}$') {
+            throw "release_target_sha must be a full lowercase commit SHA."
+          }
           if ($env:WINDOWS_NODE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$') {
             throw "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: $env:WINDOWS_NODE_TAG"
           }
@@ -53,7 +179,6 @@ jobs:
           } catch {
             throw "expected_installer_digests must be a JSON object: $_"
           }
-          # Add future signed installer names, such as MSIX x64/ARM64, here.
           $requiredInstallerNames = @(
             "OpenClawCompanion-Setup-x64.exe",
             "OpenClawCompanion-Setup-arm64.exe"
@@ -67,14 +192,24 @@ jobs:
           }
           foreach ($name in $requiredInstallerNames) {
             $digest = [string]$expectedDigests[$name]
-            if ($digest -notmatch '^sha256:[A-Fa-f0-9]{64}$') {
+            if ($digest -notmatch '^sha256:[a-f0-9]{64}$') {
               throw "expected_installer_digests is missing a valid pinned digest for $name."
             }
           }
 
-          $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
+          $targetSha = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:RELEASE_TAG" --jq .sha
+          if ($targetSha -ne $env:RELEASE_TARGET_SHA) {
+            throw "OpenClaw release tag no longer resolves to the approved candidate SHA."
+          }
+          $targetRelease = gh release view $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --json tagName,isDraft,isPrerelease,assets,url |
+            ConvertFrom-Json
           if ($targetRelease.tagName -ne $env:RELEASE_TAG) {
             throw "OpenClaw release tag mismatch: expected $env:RELEASE_TAG, got $($targetRelease.tagName)"
+          }
+          if ($env:DIRECT_RELEASE_RECOVERY -ne "true" -and -not $targetRelease.isDraft) {
+            throw "Normal Windows promotion requires the target GitHub release to remain a draft."
           }
           $unexpectedTargetCompanionAssets = @(
             $targetRelease.assets |
@@ -89,7 +224,14 @@ jobs:
             throw "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload: $($unexpectedTargetCompanionAssets -join ', ')"
           }
 
-          $sourceRelease = gh release view $env:WINDOWS_NODE_TAG --repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url | ConvertFrom-Json
+          $stableRelease = -not (
+            $env:RELEASE_TAG.Contains("-alpha.") -or
+            $env:RELEASE_TAG.Contains("-beta.")
+          )
+          $sourceRelease = gh release view $env:WINDOWS_NODE_TAG `
+            --repo openclaw/openclaw-windows-node `
+            --json tagName,isDraft,isPrerelease,assets,url |
+            ConvertFrom-Json
           if ($sourceRelease.tagName -ne $env:WINDOWS_NODE_TAG) {
             throw "Windows source release tag mismatch: expected $env:WINDOWS_NODE_TAG, got $($sourceRelease.tagName)"
           }
@@ -109,52 +251,35 @@ jobs:
             }
           }
 
-      - name: Download Windows Hub release installers
-        shell: pwsh
-        env:
-          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
-          EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          # Add future signed installer patterns, such as MSIX x64/ARM64, here.
-          # Every matched installer is signature-checked, checksummed, and promoted.
-          $installerPatterns = @(
-            "OpenClawCompanion-Setup-x64.exe",
-            "OpenClawCompanion-Setup-arm64.exe"
-          )
           $downloadArgs = @(
             $env:WINDOWS_NODE_TAG,
             "--repo", "openclaw/openclaw-windows-node",
             "--dir", "dist"
           )
-          foreach ($pattern in $installerPatterns) {
-            $downloadArgs += @("--pattern", $pattern)
+          foreach ($name in $requiredInstallerNames) {
+            $downloadArgs += @("--pattern", $name)
           }
           gh release download @downloadArgs
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to download Windows release assets from $env:WINDOWS_NODE_TAG."
           }
-
-          foreach ($pattern in $installerPatterns) {
-            $patternMatches = @(Get-ChildItem -LiteralPath dist -File | Where-Object Name -Like $pattern)
-            if ($patternMatches.Count -ne 1) {
-              throw "Expected exactly one Windows installer matching '$pattern', found $($patternMatches.Count)."
+          foreach ($name in $requiredInstallerNames) {
+            $matches = @(Get-ChildItem -LiteralPath dist -File | Where-Object Name -eq $name)
+            if ($matches.Count -ne 1) {
+              throw "Expected exactly one Windows installer named '$name', found $($matches.Count)."
             }
-          }
-
-          $expectedDigests = $env:EXPECTED_INSTALLER_DIGESTS | ConvertFrom-Json -AsHashtable
-          foreach ($file in Get-ChildItem -LiteralPath dist -File) {
-            $expectedHash = ([string]$expectedDigests[$file.Name]) -replace '^sha256:', ''
-            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+            $expectedHash = ([string]$expectedDigests[$name]) -replace '^sha256:', ''
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $matches[0].FullName).Hash
             if ($actualHash -ne $expectedHash) {
-              throw "Downloaded Windows source asset does not match pinned digest: $($file.Name)"
+              throw "Downloaded Windows source asset does not match pinned digest: $name"
             }
           }
 
       - name: Verify Authenticode signatures
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $expectedSignerSubject = "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US"
           Get-ChildItem -LiteralPath dist -File | ForEach-Object {
             $signature = Get-AuthenticodeSignature -LiteralPath $_.FullName
@@ -167,11 +292,6 @@ jobs:
             if ($signature.SignerCertificate.Subject -ne $expectedSignerSubject) {
               throw "$($_.Name) has unexpected signer subject $($signature.SignerCertificate.Subject)."
             }
-            [pscustomobject]@{
-              File = $_.Name
-              Signer = $signature.SignerCertificate.Subject
-              Thumbprint = $signature.SignerCertificate.Thumbprint
-            } | Format-List
           }
 
       - name: Write SHA-256 manifest
@@ -184,16 +304,135 @@ jobs:
               "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
             } | Set-Content -Encoding utf8NoBOM -Path dist/OpenClawCompanion-SHA256SUMS.txt
 
+      - name: Upload validated Windows installers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-release-prepared-${{ github.run_id }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 30
+
+  promote_signed_windows_installers:
+    name: Promote signed Windows installers
+    needs: [validate_signed_windows_installers]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: npm-release
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - name: Checkout exact trusted release tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.release_tooling_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/lib/record-shared.mjs
+            scripts/release-tooling-identity.mjs
+            scripts/validate-release-publish-approval.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Download parent Windows release approval
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-release-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/windows-release-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download validated Windows installers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: windows-release-prepared-${{ github.run_id }}
+          path: dist
+
       - name: Upload to OpenClaw release
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          APPROVAL_PATH: ${{ runner.temp }}/windows-release-approval/approval.json
+          DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
+          EXPECTED_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_tooling_ref }}
+          EXPECTED_WORKFLOW_FULL_REF: ${{ inputs.release_tooling_full_ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.release_tooling_sha }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_APPROVAL_KIND: windows-release
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TARGET_SHA: ${{ inputs.release_target_sha }}
+          RELEASE_TOOLING_FULL_REF: ${{ inputs.release_tooling_full_ref }}
+          RELEASE_TOOLING_REF: ${{ inputs.release_tooling_ref }}
+          RELEASE_TOOLING_SHA: ${{ inputs.release_tooling_sha }}
+          WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.expected_installer_digests }}
+          WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
         run: |
-          $releaseAssets = @(Get-ChildItem -LiteralPath dist -File | Sort-Object Name | ForEach-Object FullName)
-          gh release upload $env:RELEASE_TAG @releaseAssets --repo $env:GITHUB_REPOSITORY --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to upload Windows release assets to $env:RELEASE_TAG."
+          $ErrorActionPreference = "Stop"
+          function Assert-ReleaseApproval {
+            $verifyArgs = @(
+              "verify",
+              "--repository", $env:GITHUB_REPOSITORY,
+              "--workflow-ref", $env:RELEASE_TOOLING_REF,
+              "--workflow-full-ref", $env:RELEASE_TOOLING_FULL_REF,
+              "--workflow-sha", $env:RELEASE_TOOLING_SHA
+            )
+            if (
+              $env:RELEASE_TOOLING_REF -ne "main" -and
+              $env:RELEASE_TOOLING_FULL_REF -notmatch '^refs/tags/release-publish/'
+            ) {
+              $verifyArgs += "--allow-prevalidated-ref"
+            }
+            node scripts/release-tooling-identity.mjs @verifyArgs | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows release tooling identity is no longer live."
+            }
+            gh attestation verify $env:APPROVAL_PATH `
+              --repo $env:GITHUB_REPOSITORY `
+              --signer-workflow "$env:GITHUB_REPOSITORY/.github/workflows/openclaw-release-publish.yml" `
+              --source-ref $env:RELEASE_TOOLING_FULL_REF `
+              --source-digest $env:RELEASE_TOOLING_SHA `
+              --deny-self-hosted-runners
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows release approval attestation verification failed."
+            }
+            gh api `
+              "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:RELEASE_PUBLISH_RUN_ID/attempts/$env:EXPECTED_RUN_ATTEMPT" `
+              --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}' |
+              node scripts/validate-release-publish-approval.mjs
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows release approval does not match the exact parent run."
+            }
+          }
+
+          $expectedDigests = $env:EXPECTED_INSTALLER_DIGESTS | ConvertFrom-Json -AsHashtable
+          $expectedFiles = @(
+            "OpenClawCompanion-Setup-arm64.exe",
+            "OpenClawCompanion-Setup-x64.exe",
+            "OpenClawCompanion-SHA256SUMS.txt"
+          ) | Sort-Object
+          $actualFiles = @(Get-ChildItem -LiteralPath dist -File | ForEach-Object Name | Sort-Object)
+          if (Compare-Object -ReferenceObject $expectedFiles -DifferenceObject $actualFiles) {
+            throw "Validated Windows artifact does not match the canonical file contract."
+          }
+          foreach ($file in Get-ChildItem -LiteralPath dist -File | Sort-Object Name) {
+            if ($file.Name -ne "OpenClawCompanion-SHA256SUMS.txt") {
+              $expectedHash = ([string]$expectedDigests[$file.Name]) -replace '^sha256:', ''
+              $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+              if ($actualHash -ne $expectedHash) {
+                throw "Prepared Windows installer does not match its approved digest: $($file.Name)"
+              }
+            }
+            Assert-ReleaseApproval
+            gh release upload $env:RELEASE_TAG $file.FullName `
+              --repo $env:GITHUB_REPOSITORY `
+              --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to upload Windows release asset $($file.Name) to $env:RELEASE_TAG."
+            }
           }
 
       - name: Verify promoted release asset contract
@@ -202,10 +441,14 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path verified | Out-Null
           $expectedAssets = @(Get-ChildItem -LiteralPath dist -File | Sort-Object Name)
           $expectedCompanionAssetNames = @($expectedAssets | ForEach-Object Name | Sort-Object)
-          $targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+          $targetRelease = gh release view $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --json assets |
+            ConvertFrom-Json
           $actualCompanionAssetNames = @(
             $targetRelease.assets |
               Where-Object { $_.name.StartsWith("OpenClawCompanion-") } |
@@ -233,7 +476,6 @@ jobs:
               throw "Failed to download promoted Windows release asset $($asset.Name)."
             }
           }
-
           $manifestPath = "verified/OpenClawCompanion-SHA256SUMS.txt"
           $manifestEntries = @(Get-Content -LiteralPath $manifestPath | ForEach-Object {
             if ($_ -notmatch '^([A-Fa-f0-9]{64})  ([^\\/]+)$') {
@@ -250,15 +492,9 @@ jobs:
               ForEach-Object Name
           )
           $manifestInstallerNames = @($manifestEntries | ForEach-Object Name | Sort-Object)
-          $contractDiff = @(
-            Compare-Object `
-              -ReferenceObject $expectedInstallerNames `
-              -DifferenceObject $manifestInstallerNames
-          )
-          if ($contractDiff.Count -ne 0) {
+          if (Compare-Object -ReferenceObject $expectedInstallerNames -DifferenceObject $manifestInstallerNames) {
             throw "Promoted Windows SHA-256 manifest does not match the installer asset contract."
           }
-
           foreach ($entry in $manifestEntries) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "verified/$($entry.Name)").Hash
             if ($hash -ne $entry.Hash) {

@@ -6655,6 +6655,11 @@ describe("package artifact reuse", () => {
     );
     expect(releaseWorkflow).toContain("promote_windows_release_assets()");
     expect(releaseWorkflow).toContain("dispatch_workflow windows-node-release.yml");
+    expect(releaseWorkflow).toContain('schema: "windows-release-approval.v1"');
+    expect(releaseWorkflow).toContain("Attest Windows release approval");
+    expect(releaseWorkflow).toContain(
+      "windows-release-approval-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
     expect(releaseWorkflow).toContain("verify_windows_release_asset_contract");
     expect(releaseWorkflow).toContain("Validate stable Windows source release");
     expect(releaseWorkflow).toContain("id: windows_source");
@@ -6671,6 +6676,9 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       '-f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}"',
     );
+    expect(releaseWorkflow).toContain('-f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}"');
+    expect(releaseWorkflow).toContain('-f release_tooling_sha="${PARENT_WORKFLOW_SHA}"');
+    expect(releaseWorkflow).toContain('-f release_target_sha="${TARGET_SHA}"');
     expect(releaseWorkflow).toContain("missing prevalidated Windows installer digests");
     expect(releaseWorkflow).toContain("does not match its pinned digest");
     expect(releaseWorkflow).toContain(
@@ -6702,17 +6710,30 @@ describe("package artifact reuse", () => {
 
     expect(windowsWorkflow).not.toContain("default: latest");
     expect(windowsWorkflow).toContain("expected_installer_digests:");
+    expect(windowsWorkflow).toContain("release_publish_run_attempt:");
+    expect(windowsWorkflow).toContain("release_tooling_full_ref:");
+    expect(windowsWorkflow).toContain("release_tooling_sha:");
+    expect(windowsWorkflow).toContain("release_target_sha:");
+    expect(windowsWorkflow).toContain("direct_release_recovery:");
+    expect(windowsWorkflow).toContain("validate_signed_windows_installers:");
+    expect(windowsWorkflow).toContain("promote_signed_windows_installers:");
+    expect(windowsWorkflow).toContain("needs: [validate_signed_windows_installers]");
+    expect(windowsWorkflow).toContain("environment: npm-release");
+    expect(windowsWorkflow).toContain(
+      "windows-release-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}",
+    );
+    expect(windowsWorkflow).toContain("RELEASE_APPROVAL_KIND: windows-release");
+    expect(windowsWorkflow).toContain("node scripts/release-tooling-identity.mjs @verifyArgs");
+    expect(windowsWorkflow).toContain("Windows release tooling identity is no longer live.");
     expect(windowsWorkflow).toContain("expected_installer_digests must contain exactly");
     expect(windowsWorkflow).toContain("must be an explicit openclaw-windows-node release tag");
-    expect(windowsWorkflow).toContain("$installerPatterns = @(");
-    expect(windowsWorkflow).toContain("Every matched installer is signature-checked");
+    expect(windowsWorkflow).toContain("$requiredInstallerNames = @(");
     expect(windowsWorkflow).toContain("Get-ChildItem -LiteralPath dist -File");
     expect(windowsWorkflow).toContain(
       "Downloaded Windows source asset does not match pinned digest",
     );
-    expect(windowsWorkflow).toContain(
-      "--repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url",
-    );
+    expect(windowsWorkflow).toContain("--repo openclaw/openclaw-windows-node");
+    expect(windowsWorkflow).toContain("--json tagName,isDraft,isPrerelease,assets,url");
     expect(windowsWorkflow).toContain(
       "Windows source release must contain exactly one required asset",
     );
@@ -6728,11 +6749,13 @@ describe("package artifact reuse", () => {
     expect(windowsWorkflow).toContain(
       "Promoted OpenClawCompanion asset names do not exactly match the current contract",
     );
-    expect(windowsWorkflow).toContain(
-      "$targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets",
-    );
+    expect(windowsWorkflow).toContain("$targetRelease = gh release view $env:RELEASE_TAG");
+    expect(windowsWorkflow).toContain("--json assets");
     expect(windowsWorkflow).toContain("Promoted Windows SHA-256 manifest does not match");
     expect(windowsWorkflow).toContain("Promoted Windows release asset checksum mismatch");
+    expect(windowsWorkflow.indexOf("Assert-ReleaseApproval")).toBeLessThan(
+      windowsWorkflow.indexOf("gh release upload $env:RELEASE_TAG"),
+    );
     expect(releaseDocs).toContain(
       "the selected `windows_node_tag`, its saved `windows_node_installer_digests`,",
     );

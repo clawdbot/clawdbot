@@ -42,8 +42,41 @@ function positiveRunAttempt(value) {
   return Number(value);
 }
 
-if (approvalKind === "clawhub-bootstrap" && !approvalPath) {
-  fail("ClawHub bootstrap approval requires an attested approval artifact.");
+function lowercaseSha(value, label) {
+  if (!/^[a-f0-9]{40}$/u.test(value)) {
+    fail(`${label} must be a full lowercase commit SHA.`);
+  }
+  return value;
+}
+
+function canonicalWindowsInstallerDigests(value) {
+  let digests;
+  try {
+    digests = JSON.parse(value);
+  } catch {
+    fail("Windows release approval installer digests must be valid JSON.");
+  }
+  const requiredNames = ["OpenClawCompanion-Setup-arm64.exe", "OpenClawCompanion-Setup-x64.exe"];
+  if (
+    !digests ||
+    Array.isArray(digests) ||
+    typeof digests !== "object" ||
+    JSON.stringify(Object.keys(digests).toSorted()) !== JSON.stringify(requiredNames) ||
+    requiredNames.some(
+      (name) => typeof digests[name] !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(digests[name]),
+    )
+  ) {
+    fail("Windows release approval installer digests do not match the canonical asset contract.");
+  }
+  return Object.fromEntries(requiredNames.map((name) => [name, digests[name]]));
+}
+
+if (["clawhub-bootstrap", "windows-release"].includes(approvalKind) && !approvalPath) {
+  fail(
+    approvalKind === "clawhub-bootstrap"
+      ? "ClawHub bootstrap approval requires an attested approval artifact."
+      : "Windows release approval requires an attested approval artifact.",
+  );
 }
 
 if (approvalPath) {
@@ -81,6 +114,30 @@ if (approvalPath) {
     };
     mismatchMessage =
       "Attested ClawHub bootstrap approval does not match this release target and package set.";
+  } else if (approvalKind === "windows-release") {
+    expectedApproval = {
+      schema: "windows-release-approval.v1",
+      repository: process.env.GITHUB_REPOSITORY,
+      workflow: "OpenClaw Release Publish",
+      parentRunId: releasePublishRunId,
+      parentRunAttempt: positiveRunAttempt(expectedRunAttempt),
+      tooling: {
+        ref: process.env.RELEASE_TOOLING_REF,
+        fullRef: process.env.RELEASE_TOOLING_FULL_REF,
+        sha: lowercaseSha(process.env.RELEASE_TOOLING_SHA ?? "", "Release tooling SHA"),
+      },
+      releaseTag: process.env.RELEASE_TAG,
+      targetSha: lowercaseSha(process.env.RELEASE_TARGET_SHA ?? "", "Release target SHA"),
+      windowsSource: {
+        repository: "openclaw/openclaw-windows-node",
+        tag: process.env.WINDOWS_NODE_TAG,
+        installerDigests: canonicalWindowsInstallerDigests(
+          process.env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "",
+        ),
+      },
+    };
+    mismatchMessage =
+      "Attested Windows release approval does not match this parent, tooling, release target, or installer set.";
   } else {
     fail(`Unsupported release approval kind: ${approvalKind}`);
   }

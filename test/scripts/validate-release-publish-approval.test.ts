@@ -22,9 +22,14 @@ function runApprovalScript(
     GITHUB_REPOSITORY?: string;
     RELEASE_APPROVAL_KIND?: string;
     RELEASE_PACKAGES?: string;
+    RELEASE_TOOLING_FULL_REF?: string;
+    RELEASE_TOOLING_REF?: string;
+    RELEASE_TOOLING_SHA?: string;
     RELEASE_TAG?: string;
     RELEASE_PUBLISH_RUN_ID?: string;
     RELEASE_TARGET_SHA?: string;
+    WINDOWS_NODE_INSTALLER_DIGESTS?: string;
+    WINDOWS_NODE_TAG?: string;
   } = {},
 ) {
   return spawnSync(process.execPath, [SCRIPT_PATH], {
@@ -43,9 +48,14 @@ function runApprovalScript(
       GITHUB_REPOSITORY: env.GITHUB_REPOSITORY ?? "openclaw/openclaw",
       RELEASE_APPROVAL_KIND: env.RELEASE_APPROVAL_KIND ?? "android",
       RELEASE_PACKAGES: env.RELEASE_PACKAGES ?? "",
+      RELEASE_TOOLING_FULL_REF: env.RELEASE_TOOLING_FULL_REF ?? "",
+      RELEASE_TOOLING_REF: env.RELEASE_TOOLING_REF ?? "",
+      RELEASE_TOOLING_SHA: env.RELEASE_TOOLING_SHA ?? "",
       RELEASE_TAG: env.RELEASE_TAG ?? "v2026.6.21",
       RELEASE_PUBLISH_RUN_ID: env.RELEASE_PUBLISH_RUN_ID ?? "123",
       RELEASE_TARGET_SHA: env.RELEASE_TARGET_SHA ?? "a".repeat(40),
+      WINDOWS_NODE_INSTALLER_DIGESTS: env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "",
+      WINDOWS_NODE_TAG: env.WINDOWS_NODE_TAG ?? "",
     },
     input: JSON.stringify(run),
   });
@@ -101,6 +111,40 @@ function writeClawHubApproval(overrides: Record<string, unknown> = {}) {
       releaseTag: "v2026.7.1-beta.3",
       targetSha: "a".repeat(40),
       packages: ["@openclaw/meta-provider", "@openclaw/voice-call"],
+      ...overrides,
+    })}\n`,
+  );
+  return approvalPath;
+}
+
+const windowsInstallerDigests = {
+  "OpenClawCompanion-Setup-arm64.exe": `sha256:${"1".repeat(64)}`,
+  "OpenClawCompanion-Setup-x64.exe": `sha256:${"2".repeat(64)}`,
+};
+
+function writeWindowsApproval(overrides: Record<string, unknown> = {}) {
+  const tempRoot = tempRoots.make("openclaw-windows-release-approval-");
+  const approvalPath = path.join(tempRoot, "approval.json");
+  fs.writeFileSync(
+    approvalPath,
+    `${JSON.stringify({
+      schema: "windows-release-approval.v1",
+      repository: "openclaw/openclaw",
+      workflow: "OpenClaw Release Publish",
+      parentRunId: "123",
+      parentRunAttempt: 2,
+      tooling: {
+        ref: "release-publish/dddddddddddd-111",
+        fullRef: "refs/tags/release-publish/dddddddddddd-111",
+        sha: "d".repeat(40),
+      },
+      releaseTag: "v2026.6.21",
+      targetSha: "a".repeat(40),
+      windowsSource: {
+        repository: "openclaw/openclaw-windows-node",
+        tag: "v0.6.3",
+        installerDigests: windowsInstallerDigests,
+      },
       ...overrides,
     })}\n`,
   );
@@ -279,6 +323,110 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "ClawHub bootstrap approval requires an attested approval artifact.",
+    );
+  });
+
+  it("accepts an exact attested Windows release handoff", () => {
+    const approvalPath = writeWindowsApproval();
+    const workflowSha = "d".repeat(40);
+    const workflowRef = "release-publish/dddddddddddd-111";
+    const workflowFullRef = `refs/tags/${workflowRef}`;
+    const result = runApprovalScript(
+      approvalRun({
+        headBranch: workflowRef,
+        headSha: workflowSha,
+        path: `.github/workflows/openclaw-release-publish.yml@${workflowFullRef}`,
+        runAttempt: 2,
+      }),
+      {
+        APPROVAL_PATH: approvalPath,
+        EXPECTED_RUN_ATTEMPT: "2",
+        EXPECTED_WORKFLOW_BRANCH: workflowRef,
+        EXPECTED_WORKFLOW_FULL_REF: workflowFullRef,
+        EXPECTED_WORKFLOW_SHA: workflowSha,
+        RELEASE_APPROVAL_KIND: "windows-release",
+        RELEASE_TOOLING_FULL_REF: workflowFullRef,
+        RELEASE_TOOLING_REF: workflowRef,
+        RELEASE_TOOLING_SHA: workflowSha,
+        WINDOWS_NODE_INSTALLER_DIGESTS: JSON.stringify(windowsInstallerDigests),
+        WINDOWS_NODE_TAG: "v0.6.3",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each([
+    ["parent run", { parentRunId: "999" }, {}],
+    ["parent attempt", { parentRunAttempt: 1 }, {}],
+    [
+      "tooling tuple",
+      { tooling: { ref: "main", fullRef: "refs/heads/main", sha: "d".repeat(40) } },
+      {},
+    ],
+    ["release target", { targetSha: "c".repeat(40) }, {}],
+    [
+      "Windows source tag",
+      {
+        windowsSource: {
+          repository: "openclaw/openclaw-windows-node",
+          tag: "v0.6.4",
+          installerDigests: windowsInstallerDigests,
+        },
+      },
+      {},
+    ],
+    [
+      "installer digest",
+      {},
+      {
+        WINDOWS_NODE_INSTALLER_DIGESTS: JSON.stringify({
+          ...windowsInstallerDigests,
+          "OpenClawCompanion-Setup-x64.exe": `sha256:${"3".repeat(64)}`,
+        }),
+      },
+    ],
+    ["extra field", { unexpected: true }, {}],
+  ])("rejects a Windows release approval for another %s", (_name, overrides, envOverrides) => {
+    const approvalPath = writeWindowsApproval(overrides);
+    const workflowSha = "d".repeat(40);
+    const workflowRef = "release-publish/dddddddddddd-111";
+    const workflowFullRef = `refs/tags/${workflowRef}`;
+    const result = runApprovalScript(
+      approvalRun({
+        headBranch: workflowRef,
+        headSha: workflowSha,
+        path: `.github/workflows/openclaw-release-publish.yml@${workflowFullRef}`,
+        runAttempt: 2,
+      }),
+      {
+        APPROVAL_PATH: approvalPath,
+        EXPECTED_RUN_ATTEMPT: "2",
+        EXPECTED_WORKFLOW_BRANCH: workflowRef,
+        EXPECTED_WORKFLOW_FULL_REF: workflowFullRef,
+        EXPECTED_WORKFLOW_SHA: workflowSha,
+        RELEASE_APPROVAL_KIND: "windows-release",
+        RELEASE_TOOLING_FULL_REF: workflowFullRef,
+        RELEASE_TOOLING_REF: workflowRef,
+        RELEASE_TOOLING_SHA: workflowSha,
+        WINDOWS_NODE_INSTALLER_DIGESTS: JSON.stringify(windowsInstallerDigests),
+        WINDOWS_NODE_TAG: "v0.6.3",
+        ...envOverrides,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Attested Windows release approval does not match");
+  });
+
+  it("rejects a Windows release handoff without an attested approval artifact", () => {
+    const result = runApprovalScript(approvalRun(), {
+      RELEASE_APPROVAL_KIND: "windows-release",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Windows release approval requires an attested approval artifact.",
     );
   });
 
