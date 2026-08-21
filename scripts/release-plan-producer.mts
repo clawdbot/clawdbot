@@ -1,20 +1,26 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
-import { builtinModules, createRequire } from "node:module";
+import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { deserialize, serialize } from "node:v8";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
@@ -70,7 +76,6 @@ export type ReleasePlanSource =
     });
 
 type PackageManifest = PluginPackageJson;
-type ParseYaml = (source: string) => unknown;
 
 type CorePackagePolicy = {
   path: string;
@@ -94,6 +99,99 @@ const YAML_PACKAGE_TREE_SHA256 = "610ccacfe592d226ac1eb04842d1f591c5381f2a68b9f7
 const YAML_PACKAGE_MAX_FILES = 512;
 const YAML_PACKAGE_MAX_ENTRIES = 1024;
 const YAML_PACKAGE_MAX_BYTES = 4 * 1024 * 1024;
+const YAML_PACKAGE_ENTRY_PATH = "dist/index.js";
+const YAML_PACKAGE_SNAPSHOT_PREFIX = "openclaw-release-yaml-";
+const YAML_CHILD_MAX_BUFFER = 8 * 1024 * 1024;
+const YAML_PARSER_CHILD_RUNNER = String.raw`
+"use strict";
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const v8 = require("node:v8");
+
+const snapshotRoot = process.argv[1];
+const expectedDigest = process.argv[2];
+const maxFiles = Number(process.argv[3]);
+const maxEntries = Number(process.argv[4]);
+const maxBytes = Number(process.argv[5]);
+const entryPath = process.argv[6];
+
+const compareAscii = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+const assertSafePath = value => {
+  if (
+    !value ||
+    !/^[\x20-\x7e]+$/.test(value) ||
+    value.includes("\\") ||
+    path.posix.isAbsolute(value) ||
+    value.split("/").some(component => component === "." || component === "..")
+  ) {
+    throw new Error("verified yaml snapshot contains an unsafe path");
+  }
+};
+const records = [];
+let entryCount = 0;
+let fileCount = 0;
+let totalBytes = 0;
+const walk = (directory, relativeDirectory = "") => {
+  for (const name of fs.readdirSync(directory).sort(compareAscii)) {
+    const relativePath = relativeDirectory ? relativeDirectory + "/" + name : name;
+    assertSafePath(relativePath);
+    entryCount += 1;
+    if (entryCount > maxEntries) throw new Error("verified yaml snapshot has too many entries");
+    const absolutePath = path.join(directory, name);
+    const lstat = fs.lstatSync(absolutePath);
+    if (lstat.isSymbolicLink()) throw new Error("verified yaml snapshot contains a symlink");
+    if (lstat.isDirectory()) {
+      records.push(JSON.stringify(["directory", relativePath]));
+      walk(absolutePath, relativePath);
+      continue;
+    }
+    if (!lstat.isFile()) throw new Error("verified yaml snapshot contains a special file");
+    fileCount += 1;
+    if (fileCount > maxFiles) throw new Error("verified yaml snapshot has too many files");
+    const fd = fs.openSync(absolutePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    let bytes;
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) throw new Error("verified yaml snapshot file changed type");
+      totalBytes += stat.size;
+      if (totalBytes > maxBytes) throw new Error("verified yaml snapshot is too large");
+      bytes = fs.readFileSync(fd);
+      if (bytes.byteLength !== stat.size) {
+        throw new Error("verified yaml snapshot file changed while being read");
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    records.push(JSON.stringify([
+      "file",
+      relativePath,
+      bytes.byteLength,
+      crypto.createHash("sha256").update(bytes).digest("hex")
+    ]));
+  }
+};
+walk(snapshotRoot);
+const manifest = records.sort(compareAscii).join("\n") + "\n";
+const digest = crypto.createHash("sha256").update(manifest, "ascii").digest("hex");
+if (digest !== expectedDigest) throw new Error("verified yaml snapshot digest mismatch");
+
+const packageJson = JSON.parse(fs.readFileSync(path.join(snapshotRoot, "package.json"), "utf8"));
+if (packageJson.name !== "yaml" || packageJson.version !== "2.9.0") {
+  throw new Error("verified yaml snapshot package identity mismatch");
+}
+const sources = v8.deserialize(fs.readFileSync(0));
+if (
+  !Array.isArray(sources) ||
+  sources.length !== 3 ||
+  sources.some(source => typeof source !== "string")
+) {
+  throw new Error("verified yaml parser input must contain three workflow strings");
+}
+const yaml = require(path.join(snapshotRoot, entryPath));
+if (typeof yaml.parse !== "function") throw new Error("verified yaml parser must export parse");
+process.stdout.write(v8.serialize(sources.map(source => yaml.parse(source))));
+`;
 const BUILTIN_IMPORTS = new Set([
   ...builtinModules,
   ...builtinModules.map((specifier) => `node:${specifier}`),
@@ -337,18 +435,21 @@ function assertYamlPackagePath(path: string) {
   }
 }
 
-function verifyInstalledYamlPackageTree(packageRoot: string) {
-  const rootStat = lstatSync(packageRoot);
-  if (!rootStat.isDirectory()) {
+function copyBoundedYamlPackageSnapshot(
+  packageRoot: string,
+  snapshotRoot: string,
+  snapshotFiles: string[],
+  snapshotDirectories: string[],
+) {
+  if (!lstatSync(packageRoot).isDirectory()) {
     throw new Error("installed yaml package root must be a directory");
   }
 
-  const records: string[] = [];
   let entryCount = 0;
   let fileCount = 0;
   let totalBytes = 0;
-  const walk = (directory: string, relativeDirectory = "") => {
-    for (const name of readdirSync(directory).toSorted(compareAscii)) {
+  const walk = (sourceDirectory: string, targetDirectory: string, relativeDirectory = "") => {
+    for (const name of readdirSync(sourceDirectory).toSorted(compareAscii)) {
       const relativePath = relativeDirectory ? `${relativeDirectory}/${name}` : name;
       assertYamlPackagePath(relativePath);
       entryCount += 1;
@@ -358,55 +459,58 @@ function verifyInstalledYamlPackageTree(packageRoot: string) {
         );
       }
 
-      const absolutePath = join(directory, name);
-      const stat = lstatSync(absolutePath);
-      if (stat.isSymbolicLink()) {
+      const sourcePath = join(sourceDirectory, name);
+      const targetPath = join(targetDirectory, name);
+      const sourceLstat = lstatSync(sourcePath);
+      if (sourceLstat.isSymbolicLink()) {
         throw new Error(`installed yaml package must not contain symbolic links: ${relativePath}`);
       }
-      if (stat.isDirectory()) {
-        records.push(JSON.stringify(["directory", relativePath]));
-        walk(absolutePath, relativePath);
+      if (sourceLstat.isDirectory()) {
+        mkdirSync(targetPath, { mode: 0o700 });
+        snapshotDirectories.push(targetPath);
+        walk(sourcePath, targetPath, relativePath);
         continue;
       }
-      if (!stat.isFile()) {
+      if (!sourceLstat.isFile()) {
         throw new Error(`installed yaml package must contain only directories and files`);
       }
-      if (stat.nlink !== 1) {
-        throw new Error(`installed yaml package files must have one link: ${relativePath}`);
-      }
-
       fileCount += 1;
       if (fileCount > YAML_PACKAGE_MAX_FILES) {
         throw new Error(`installed yaml package exceeds ${YAML_PACKAGE_MAX_FILES} files`);
       }
-      totalBytes += stat.size;
-      if (totalBytes > YAML_PACKAGE_MAX_BYTES) {
-        throw new Error(`installed yaml package exceeds ${YAML_PACKAGE_MAX_BYTES} bytes`);
+      if (typeof fsConstants.O_NOFOLLOW !== "number") {
+        throw new Error("installed yaml package verification requires O_NOFOLLOW support");
       }
-      const bytes = readFileSync(absolutePath);
-      if (bytes.byteLength !== stat.size) {
-        throw new Error(`installed yaml package file changed while being read: ${relativePath}`);
+      const descriptor = openSync(sourcePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      let bytes: Buffer;
+      try {
+        const stat = fstatSync(descriptor);
+        if (!stat.isFile()) {
+          throw new Error(`installed yaml package file changed type: ${relativePath}`);
+        }
+        totalBytes += stat.size;
+        if (totalBytes > YAML_PACKAGE_MAX_BYTES) {
+          throw new Error(`installed yaml package exceeds ${YAML_PACKAGE_MAX_BYTES} bytes`);
+        }
+        bytes = readFileSync(descriptor);
+        if (bytes.byteLength !== stat.size) {
+          throw new Error(`installed yaml package file changed while being read: ${relativePath}`);
+        }
+      } finally {
+        closeSync(descriptor);
       }
-      records.push(
-        JSON.stringify([
-          "file",
-          relativePath,
-          bytes.byteLength,
-          createHash("sha256").update(bytes).digest("hex"),
-        ]),
-      );
+      writeFileSync(targetPath, bytes, { flag: "wx", mode: 0o600 });
+      snapshotFiles.push(targetPath);
     }
   };
-  walk(packageRoot);
-
-  const manifest = `${records.toSorted(compareAscii).join("\n")}\n`;
-  const digest = createHash("sha256").update(manifest, "ascii").digest("hex");
-  if (digest !== YAML_PACKAGE_TREE_SHA256) {
-    throw new Error(`installed yaml package tree must match yaml@${YAML_PACKAGE_VERSION}`);
-  }
+  walk(packageRoot, snapshotRoot);
 }
 
-function loadVerifiedYamlParser(repoRoot: string, toolingSha: string): ParseYaml {
+function parseVerifiedYamlDocuments(
+  repoRoot: string,
+  toolingSha: string,
+  sources: [string, string, string],
+): [unknown, unknown, unknown] {
   const packageJsonBytes = readVerifiedToolingRootBytes(
     repoRoot,
     toolingSha,
@@ -426,44 +530,62 @@ function loadVerifiedYamlParser(repoRoot: string, toolingSha: string): ParseYaml
   }
   verifyYamlLockfile(lockfileBytes.toString("utf8"));
 
-  const toolingRequire = createRequire(resolve(EXECUTION_ROOT, TOOLING_PACKAGE_JSON_PATH));
-  const packageJsonPath = realpathSync(toolingRequire.resolve("yaml/package.json"));
-  const packageRoot = realpathSync(dirname(packageJsonPath));
-  const modulePath = realpathSync(toolingRequire.resolve("yaml"));
-  const moduleRelativePath = relative(packageRoot, modulePath);
-  if (
-    moduleRelativePath === ".." ||
-    moduleRelativePath.startsWith(`..${sep}`) ||
-    isAbsolute(moduleRelativePath)
-  ) {
-    throw new Error("resolved yaml module must be owned by its installed package");
-  }
-  const packageJsonRelativePath = relative(packageRoot, packageJsonPath);
-  if (
-    packageJsonRelativePath === ".." ||
-    packageJsonRelativePath.startsWith(`..${sep}`) ||
-    isAbsolute(packageJsonRelativePath)
-  ) {
-    throw new Error("resolved yaml package.json must be owned by its installed package");
-  }
-  verifyInstalledYamlPackageTree(packageRoot);
+  const packageRoot = realpathSync(join(EXECUTION_ROOT, "node_modules", "yaml"));
+  const snapshotRoot = mkdtempSync(join(tmpdir(), YAML_PACKAGE_SNAPSHOT_PREFIX));
+  chmodSync(snapshotRoot, 0o700);
+  const snapshotFiles: string[] = [];
+  const snapshotDirectories = [snapshotRoot];
+  try {
+    copyBoundedYamlPackageSnapshot(packageRoot, snapshotRoot, snapshotFiles, snapshotDirectories);
+    for (const path of snapshotFiles) {
+      chmodSync(path, 0o400);
+    }
+    for (const path of snapshotDirectories.toReversed()) {
+      chmodSync(path, 0o500);
+    }
 
-  const installedPackageJsonBytes = readFileSync(packageJsonPath);
-  const installedPackageJson = JSON.parse(installedPackageJsonBytes.toString("utf8")) as {
-    name?: unknown;
-    version?: unknown;
-  };
-  if (
-    installedPackageJson.name !== "yaml" ||
-    installedPackageJson.version !== YAML_PACKAGE_VERSION
-  ) {
-    throw new Error(`installed yaml package must be exactly yaml@${YAML_PACKAGE_VERSION}`);
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        YAML_PARSER_CHILD_RUNNER,
+        snapshotRoot,
+        YAML_PACKAGE_TREE_SHA256,
+        String(YAML_PACKAGE_MAX_FILES),
+        String(YAML_PACKAGE_MAX_ENTRIES),
+        String(YAML_PACKAGE_MAX_BYTES),
+        YAML_PACKAGE_ENTRY_PATH,
+      ],
+      {
+        cwd: snapshotRoot,
+        encoding: null,
+        env: {},
+        input: serialize(sources),
+        maxBuffer: YAML_CHILD_MAX_BUFFER,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    if (result.error) {
+      throw new Error("verified yaml parser child failed to start", { cause: result.error });
+    }
+    if (result.status !== 0) {
+      const stderr = result.stderr.toString("utf8").trim();
+      throw new Error(`verified yaml parser child failed: ${stderr || `exit ${result.status}`}`);
+    }
+    const parsed = deserialize(result.stdout) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 3) {
+      throw new Error("verified yaml parser child returned an invalid document set");
+    }
+    return parsed as [unknown, unknown, unknown];
+  } finally {
+    for (const path of snapshotFiles) {
+      if (existsSync(path)) chmodSync(path, 0o600);
+    }
+    for (const path of snapshotDirectories.toReversed()) {
+      if (existsSync(path)) chmodSync(path, 0o700);
+    }
+    rmSync(snapshotRoot, { force: true, recursive: true });
   }
-  const yamlModule = toolingRequire(modulePath) as { parse?: unknown };
-  if (typeof yamlModule.parse !== "function") {
-    throw new Error(`installed yaml@${YAML_PACKAGE_VERSION} must export parse`);
-  }
-  return yamlModule.parse as ParseYaml;
 }
 
 function withCandidateSnapshot<T>(
@@ -567,8 +689,8 @@ export function deriveReleasePlanPolicy(
   };
 }
 
-function collectAllowedGroups(workflowText: string, parseYaml: ParseYaml): string[] {
-  const workflow = parseYaml(workflowText) as {
+function collectAllowedGroups(workflowDocument: unknown): string[] {
+  const workflow = workflowDocument as {
     on?: { workflow_dispatch?: { inputs?: { rerun_group?: { options?: unknown } } } };
   };
   const options = workflow.on?.workflow_dispatch?.inputs?.rerun_group?.options;
@@ -590,8 +712,11 @@ function readPackageManifest(path: string): PackageManifest {
   return JSON.parse(readFileSync(path, "utf8")) as PackageManifest;
 }
 
-function collectCorePackagePolicy(workflowText: string, parseYaml: ParseYaml): CorePackagePolicy[] {
-  const workflow = parseYaml(workflowText) as {
+function collectCorePackagePolicy(
+  workflowText: string,
+  workflowDocument: unknown,
+): CorePackagePolicy[] {
+  const workflow = workflowDocument as {
     jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
   };
   const declarations = Object.values(workflow.jobs ?? {}).flatMap((job) =>
@@ -714,7 +839,7 @@ function collectPackageInventory(
     .toSorted((left, right) => compareAscii(left.name, right.name));
 }
 
-function collectPlatformSources(workflowText: string, parseYaml: ParseYaml) {
+function collectPlatformSources(workflowText: string, workflowDocument: unknown) {
   const platforms = new Map<string, string>();
   const addPlatform = (id: string, source: string) => {
     const existing = platforms.get(id);
@@ -736,7 +861,7 @@ function collectPlatformSources(workflowText: string, parseYaml: ParseYaml) {
     }
     addPlatform(id, `.github/workflows/${workflowName}`);
   }
-  const workflow = parseYaml(workflowText) as {
+  const workflow = workflowDocument as {
     jobs?: Record<string, { uses?: unknown }>;
   };
   for (const [jobId, job] of Object.entries(workflow.jobs ?? {})) {
@@ -762,9 +887,9 @@ function collectPlatformInventory(
   repoRoot: string,
   toolingSha: string,
   workflowText: string,
-  parseYaml: ParseYaml,
+  workflowDocument: unknown,
 ) {
-  return collectPlatformSources(workflowText, parseYaml).map(([id, source]) => {
+  return collectPlatformSources(workflowText, workflowDocument).map(([id, source]) => {
     if (!gitPathExists(repoRoot, toolingSha, source)) {
       throw new Error(`release platform workflow does not exist at tooling SHA: ${source}`);
     }
@@ -818,14 +943,19 @@ function resolveSource(params: ReleasePlanSource) {
 export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
   const { candidateSha, repoRoot, toolingFullRef, toolingSha } = resolveSource(params);
   verifyToolingImportClosure(repoRoot, toolingSha);
-  const parseYaml = loadVerifiedYamlParser(repoRoot, toolingSha);
   const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
   const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
   const npmPublicationWorkflow = readGitText(repoRoot, toolingSha, NPM_PUBLICATION_WORKFLOW_PATH);
+  const [validationDocument, publicationDocument, npmPublicationDocument] =
+    parseVerifiedYamlDocuments(repoRoot, toolingSha, [
+      validationWorkflow,
+      publicationWorkflow,
+      npmPublicationWorkflow,
+    ]);
   const candidate = readCandidateInventory(
     repoRoot,
     candidateSha,
-    collectCorePackagePolicy(npmPublicationWorkflow, parseYaml),
+    collectCorePackagePolicy(npmPublicationWorkflow, npmPublicationDocument),
   );
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
   // ReleasePlan binds the candidate bytes. A branch used only to make the FRV
@@ -861,11 +991,16 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
       intent: policy.intent,
       profile: policy.profile,
       soak: policy.soak,
-      allowed_groups: collectAllowedGroups(validationWorkflow, parseYaml),
+      allowed_groups: collectAllowedGroups(validationDocument),
     },
     inventory: {
       packages: candidate.packages,
-      platforms: collectPlatformInventory(repoRoot, toolingSha, publicationWorkflow, parseYaml),
+      platforms: collectPlatformInventory(
+        repoRoot,
+        toolingSha,
+        publicationWorkflow,
+        publicationDocument,
+      ),
     },
   });
 }
