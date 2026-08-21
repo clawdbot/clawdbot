@@ -236,18 +236,40 @@ function collectDisplacedOwnersForClaimants(
     const activeClaimants = claimants.filter((record) =>
       policy.isPluginActive(record.id, claimedId),
     );
-    const declarants = activeClaimants.length > 0 ? activeClaimants : claimants;
-    for (const record of declarants) {
-      for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
-        // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
-        // skips the self comparison, so a self-edge would strand ownership on another claimant
-        // while that plugin stays active.
-        if (replacedId === record.id || policy.isPluginExplicitlySelected(replacedId)) {
-          continue;
+    const base = activeClaimants.length > 0 ? activeClaimants : claimants;
+    // A claimant this channel has already displaced keeps declaring. Auto-enable disables the
+    // middle of an A-replaces-B-replaces-C chain, and reading only active declarants then dropped
+    // B's edge to C for exactly the plugin A had displaced: the source config resolved to A while
+    // the materialized one left A and C to origin rank, so validation could check A's strict
+    // schema against a config the Gateway then served with C. Re-run until the edge set settles so
+    // both views answer the same way.
+    for (;;) {
+      const declarants = [
+        ...base,
+        ...claimants.filter(
+          (record) =>
+            !base.includes(record) && isDisplacedChannelOwner(displaced, claimedId, record.id),
+        ),
+      ];
+      let added = false;
+      for (const record of declarants) {
+        for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
+          // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
+          // skips the self comparison, so a self-edge would strand ownership on another claimant
+          // while that plugin stays active.
+          if (replacedId === record.id || policy.isPluginExplicitlySelected(replacedId)) {
+            continue;
+          }
+          const replacedIds = displaced.get(claimedId) ?? new Set<string>();
+          displaced.set(claimedId, replacedIds);
+          if (!replacedIds.has(replacedId)) {
+            replacedIds.add(replacedId);
+            added = true;
+          }
         }
-        const replacedIds = displaced.get(claimedId) ?? new Set<string>();
-        displaced.set(claimedId, replacedIds);
-        replacedIds.add(replacedId);
+      }
+      if (!added) {
+        break;
       }
     }
   }

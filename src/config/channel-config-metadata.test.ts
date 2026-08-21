@@ -404,3 +404,47 @@ describe("channel id canonicalization", () => {
     expect(entries[0]?.configUiHints?.token?.sensitive).toBe(true);
   });
 });
+
+// Codex review P1 on #123209: auto-enable disables the middle of an A-replaces-B-replaces-C chain,
+// so ownership saw B active while validating the source config and inactive afterwards. Dropping
+// B's edge to C in the second view left A and C to origin rank, and a closer C won there — the
+// config was validated against A's strict schema while the runtime resolved to C.
+describe("replacement chains across the materialization boundary", () => {
+  function chainClaimant(id: string, origin: string, preferOver?: string[]) {
+    return {
+      id,
+      origin,
+      channels: ["clickclack"],
+      channelConfigs: {
+        clickclack: {
+          schema: { type: "object", additionalProperties: true },
+          ...(preferOver ? { preferOver } : {}),
+        },
+      },
+    };
+  }
+
+  const byId: Record<string, ReturnType<typeof chainClaimant>> = {
+    // C sits closer to the operator than A, so origin rank alone would prefer it.
+    "chain-a": chainClaimant("chain-a", "global", ["chain-b"]),
+    "chain-b": chainClaimant("chain-b", "global", ["chain-c"]),
+    "chain-c": chainClaimant("chain-c", "config"),
+  };
+
+  it.each([
+    { view: "source config, every claimant active", inactive: undefined },
+    { view: "materialized config, chain-b disabled", inactive: "chain-b" },
+  ])("resolves to chain-a under the $view", ({ inactive }) => {
+    const registry = {
+      plugins: ["chain-c", "chain-b", "chain-a"].map((id) => byId[id]),
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+
+    const owner = collectChannelSchemaMetadataWithOwnership(
+      registry,
+      policyFor({ isPluginActive: (pluginId: string) => pluginId !== inactive }),
+    ).find((entry) => entry.id === "clickclack")?.schemaPluginId;
+
+    expect(owner).toBe("chain-a");
+  });
+});
