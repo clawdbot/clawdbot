@@ -49,6 +49,24 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
+// Mirrors extensions/codex/package.json's openclaw.install.requiredPlatformPackages:
+// the @openai/codex binary only ships native artifacts for these platform/arch
+// pairs. Selecting the harness on any other pair lets the app-server process
+// spawn and then exit immediately with "Unsupported platform" instead of
+// letting implicit selection fall back to the OpenClaw runtime.
+const CODEX_APP_SERVER_SUPPORTED_PLATFORMS = new Set([
+  "linux-x64",
+  "linux-arm64",
+  "darwin-x64",
+  "darwin-arm64",
+  "win32-x64",
+  "win32-arm64",
+  ]);
+
+function isCodexAppServerPlatformSupported(): boolean {
+  return CODEX_APP_SERVER_SUPPORTED_PLATFORMS.has(`${process.platform}-${process.arch}`);
+}
+
 type CodexAppServerAgentHarness = AgentHarnessV2 & {
   cloudPlacement?: { mode: "remote-exec" };
 };
@@ -188,6 +206,13 @@ export function createCodexAppServerAgentHarness(
       return await loadCodexEffectiveMcpCatalog(params, { bindingStore: options.bindingStore });
     },
     supports: (ctx) => {
+      if (!isCodexAppServerPlatformSupported()) {
+        return {
+          supported: false,
+          reason: `no native Codex app-server binary is published for this platform (${process.platform}-${process.arch})`,
+          fallbackRuntime: "openclaw",
+        };
+      }
       const provider = ctx.provider.trim().toLowerCase();
       if (!providerIds.has(provider)) {
         return {
