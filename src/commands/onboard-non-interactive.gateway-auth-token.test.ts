@@ -15,7 +15,7 @@ import {
   readTestConfig,
   resolveTestConfigPath,
   runNonInteractiveSetup,
-  runtime,
+  gatewayOnboardRuntime as runtime,
   testConfigStore,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
 import {

@@ -17,13 +17,13 @@ import {
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
   loadGatewayOnboardModules,
-  readConfigFileSnapshotMock,
+  gatewayOnboardConfigSnapshotMock as readConfigFileSnapshotMock,
   readLastGatewayErrorLineMock,
   readTestConfig,
   resolveInstallDaemonGatewayHealthTiming,
   resolveTestConfigPath,
   runNonInteractiveSetup,
-  runtime,
+  gatewayOnboardRuntime as runtime,
   testConfigStore,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
 import {

@@ -18,7 +18,9 @@ export const {
   resolveConfigPath: resolveTestConfigPath,
   readConfig: readTestConfig,
 } = onboardTestConfigStore;
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn<() => Promise<ConfigFileSnapshot>>());
+const gatewayOnboardConfigSnapshotMock = vi.hoisted(() =>
+  vi.fn<() => Promise<ConfigFileSnapshot>>(),
+);
 const pluginLifecycleLeaseState = vi.hoisted(() => ({ depth: 0 }));
 export const configWritePluginLeaseDepths: number[] = [];
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
@@ -42,14 +44,16 @@ const readLastGatewayErrorLineMock = vi.hoisted(() =>
 /** Suites swap reachability behavior per test; the hoisted mock factory reads the current value. */
 export const gatewayReachableState: { mock: WaitForGatewayReachableMock } = { mock: undefined };
 
-readConfigFileSnapshotMock.mockImplementation(async () => onboardTestConfigStore.readSnapshot());
+gatewayOnboardConfigSnapshotMock.mockImplementation(async () =>
+  onboardTestConfigStore.readSnapshot(),
+);
 
 vi.mock("../config/io.js", () => ({
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
   loadConfig: () => readTestConfig(),
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  readConfigFileSnapshot: gatewayOnboardConfigSnapshotMock,
 }));
 
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
@@ -103,7 +107,7 @@ vi.mock("../config/config.js", async (importActual) => {
     transformConfigFileWithRetry: async (
       params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
     ) => {
-      const snapshot = await readConfigFileSnapshotMock();
+      const snapshot = await gatewayOnboardConfigSnapshotMock();
       const previousHash = snapshot.hash ?? null;
       const transformed = await params.transform(snapshot.sourceConfig, {
         snapshot,
@@ -203,13 +207,13 @@ export async function loadGatewayOnboardModules(): Promise<void> {
 
 export const getPseudoPort = (base: number): number => base + (process.pid % 1000);
 
-export const runtime = createThrowingRuntime();
+export const gatewayOnboardRuntime = createThrowingRuntime();
 
 // vi.hoisted values cannot be exported at their declaration; re-export them here.
 export {
   gatewayServiceMock,
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
-  readConfigFileSnapshotMock,
+  gatewayOnboardConfigSnapshotMock,
   readLastGatewayErrorLineMock,
 };
