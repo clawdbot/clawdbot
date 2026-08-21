@@ -429,11 +429,11 @@ describe("Gateway heartbeat session routing", () => {
 
         const configuredRequestBaseline = providerRequests.length;
         await expect(
-          client.request<{ ok: boolean; ran?: boolean }>("cron.run", {
+          client.request<{ enqueued: boolean; ok: boolean; runId: string }>("cron.run", {
             id: monitor.id,
             mode: "force",
           }),
-        ).resolves.toMatchObject({ ok: true, ran: true });
+        ).resolves.toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
         await expect
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(configuredRequestBaseline);
