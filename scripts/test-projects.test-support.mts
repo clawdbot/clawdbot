@@ -2273,6 +2273,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
     ["src/dockerfile.test.ts", packageAcceptance, pluginPrerelease],
   ],
+  [/^\.github\/workflows\/release-candidate-artifacts\.yml$/u, ["release-candidate-receipt"]],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
     [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
@@ -2424,6 +2425,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^apps\/ios\/fastlane\/Fastfile$/u, ["ios-release-fastlane-gates"]],
   [/^scripts\/ios-release-cut\.(?:sh|ts)$/u, ["ios-release-plan"]],
   [/^scripts\/ios-release-prepare\.sh$/u, ["ios-release-prepare", "ios-release-wrapper-args"]],
+  [
+    /^scripts\/release-candidate-receipt-(?:contract|locator)\.(?:d\.mts|mjs|mts)$/u,
+    ["release-candidate-receipt"],
+  ],
   [
     /^scripts\/lib\/bundled-runtime-sidecar-paths\.json$/u,
     [
