@@ -15,7 +15,7 @@ import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
-const RELEASE_ISOLATION_TOOLING_CONTRACT = "1";
+const RELEASE_ISOLATION_TOOLING_CONTRACT = "2";
 const RELEASE_ISOLATION_TOOLING_CONTRACT_ENV = "RELEASE_ISOLATION_TOOLING_CONTRACT";
 const RELEASE_EVIDENCE_VERIFIER_PATHS = [
   "scripts/release-ci-summary.mjs",
@@ -37,7 +37,21 @@ const RELEASE_CONTEXT_BRANCH_PATTERN =
   /^(?:release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
 const RELEASE_TAG_PATTERN =
   /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
+const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
+const RERUN_GROUPS = new Set([
+  "all",
+  "ci",
+  "plugin-prerelease",
+  "install-smoke",
+  "cross-os",
+  "live-e2e",
+  "package",
+  "qa-parity",
+  "qa-live",
+  "npm-telegram",
+  "performance",
+]);
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
@@ -59,6 +73,10 @@ type TemporaryRefParams = {
   parentConclusion: string;
   evidenceVerified: boolean;
 };
+type TrustedWorkflowHarness = {
+  contract: "1" | "2";
+  verifierPath: string;
+};
 
 function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -72,7 +90,7 @@ function displayValue(value: unknown): string {
 }
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-tooling-sha>] [--trusted-workflow-ref <main-or-release-publish-tag>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates temporary remote branches pinned to the exact Tooling SHA and Validation SHA,
 dispatches Full Release Validation with the full Validation SHA as its ref input
@@ -86,7 +104,9 @@ run. Child workflows collect independent failures by default; pass
 branch accepts only its final package version or a matching beta prerelease.
 Exact alpha tags remain supported for Tideclaw. The release profile defaults to
 beta for beta candidates and exact alpha tags, and stable otherwise; pass
--f release_profile=full for the broad advisory sweep.`);
+-f release_profile=full for the broad advisory sweep. Focused retries must use
+one controller rerun_group; the removed release-checks aggregate and the direct
+child's manual qa aggregate are not accepted.`);
 }
 
 function run(command: string, args: string[], options: CommandOptions = {}) {
@@ -125,6 +145,7 @@ export function parseArgs(argv: string[]) {
   const args = {
     sha: "",
     targetRef: "",
+    trustedWorkflowRef: "main",
     workflowSha: "",
     keepBranch: false,
     dryRun: false,
@@ -144,6 +165,11 @@ export function parseArgs(argv: string[]) {
     }
     if (arg === "--workflow-sha") {
       args.workflowSha = readOptionValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--trusted-workflow-ref") {
+      args.trustedWorkflowRef = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -219,11 +245,17 @@ export function parseArgs(argv: string[]) {
   ) {
     throw new Error("release_profile must be beta, stable, or full");
   }
+  if (!RERUN_GROUPS.has(args.inputs.rerun_group)) {
+    throw new Error(`rerun_group must be one of: ${[...RERUN_GROUPS].join(", ")}`);
+  }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }
   if (Object.hasOwn(args.inputs, "expected_sha")) {
     throw new Error("SHA-pinned release validation reserves expected_sha for the resolved --sha");
+  }
+  if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
+    throw new Error("SHA-pinned release validation reserves trusted_workflow_json");
   }
   if (
     args.targetRef &&
@@ -231,6 +263,19 @@ export function parseArgs(argv: string[]) {
     !RELEASE_TAG_PATTERN.test(args.targetRef)
   ) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
+  }
+  if (
+    args.trustedWorkflowRef !== "main" &&
+    !TRUSTED_WORKFLOW_TAG_PATTERN.test(args.trustedWorkflowRef)
+  ) {
+    throw new Error(
+      "--trusted-workflow-ref must be main or a protected release-publish/<12hex>-<decimal> tag",
+    );
+  }
+  if (args.trustedWorkflowRef !== "main" && !SHA_PATTERN.test(args.workflowSha.toLowerCase())) {
+    throw new Error(
+      "protected release-publish workflow refs require --workflow-sha with an explicit full Tooling SHA",
+    );
   }
   if (
     RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
@@ -378,22 +423,53 @@ export function releaseProfileForTarget(
   return releaseProfileForVersion(targetVersionForTarget(targetSha, readPackageJson));
 }
 
-function resolveTrustedWorkflowSha(requestedSha: string) {
-  run("git", ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
-    stdio: "inherit",
-  });
-  const workflowSha = resolveSha(requestedSha || "origin/main");
-  const ancestry = runStatus("git", [
-    "merge-base",
-    "--is-ancestor",
-    workflowSha,
-    "refs/remotes/origin/main",
-  ]);
-  if (ancestry.status !== 0) {
+export function verifyTrustedWorkflowRef(
+  workflowSha: string,
+  trustedWorkflowRef: string,
+  resolveRemoteTagSha: (tag: string) => string = (tag) =>
+    run("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`]).split(/\s+/u)[0] ?? "",
+  isMainAncestor: (sha: string) => boolean = (sha) =>
+    runStatus("git", ["merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"]).status === 0,
+) {
+  if (trustedWorkflowRef === "main") {
+    if (!isMainAncestor(workflowSha)) {
+      throw new Error(
+        `Workflow SHA ${workflowSha} is not reachable from current origin/main; refusing an untrusted release harness.`,
+      );
+    }
+    return;
+  }
+
+  const tagMatch = trustedWorkflowRef.match(TRUSTED_WORKFLOW_TAG_PATTERN);
+  if (!tagMatch) {
     throw new Error(
-      `Workflow SHA ${workflowSha} is not reachable from current origin/main; refusing an untrusted release harness.`,
+      "trusted workflow ref must be main or a protected release-publish/<12hex>-<decimal> tag",
     );
   }
+  if (workflowSha.slice(0, 12) !== tagMatch[1]) {
+    throw new Error(
+      `Trusted workflow tag ${trustedWorkflowRef} does not match Tooling SHA ${workflowSha}`,
+    );
+  }
+  const remoteTagSha = resolveRemoteTagSha(trustedWorkflowRef);
+  if (!remoteTagSha) {
+    throw new Error(`Trusted workflow tag ${trustedWorkflowRef} does not exist on origin`);
+  }
+  if (remoteTagSha.toLowerCase() !== workflowSha.toLowerCase()) {
+    throw new Error(
+      `Trusted workflow tag ${trustedWorkflowRef} resolves to ${remoteTagSha}, expected ${workflowSha}`,
+    );
+  }
+}
+
+function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: string) {
+  if (trustedWorkflowRef === "main") {
+    run("git", ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
+      stdio: "inherit",
+    });
+  }
+  const workflowSha = resolveSha(requestedSha || "origin/main");
+  verifyTrustedWorkflowRef(workflowSha, trustedWorkflowRef);
   return workflowSha;
 }
 
@@ -539,15 +615,29 @@ export function releaseEvidenceVerificationArgs(
   parentRunId: unknown,
   verifierSourceSha: string,
   verifierSourceFile: string,
+  trustedWorkflowRef = "main",
 ) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
+  }
+  const trustedWorkflowFullRef =
+    trustedWorkflowRef === "main"
+      ? "refs/heads/main"
+      : TRUSTED_WORKFLOW_TAG_PATTERN.test(trustedWorkflowRef)
+        ? `refs/tags/${trustedWorkflowRef}`
+        : "";
+  if (!trustedWorkflowFullRef) {
+    throw new Error("trusted workflow ref must be main or a protected release-publish tag");
   }
   return [
     "--validate-run",
     String(parentRunId),
     "--trusted-workflow-ref",
-    "main",
+    trustedWorkflowRef,
+    "--trusted-workflow-full-ref",
+    trustedWorkflowFullRef,
+    "--trusted-workflow-sha",
+    verifierSourceSha,
     "--json",
     "--verifier-source-sha",
     verifierSourceSha,
@@ -571,7 +661,7 @@ export function assertTrustedWorkflowHarness(
     }).status === 0,
   readPath: (relativePath: string) => string = (relativePath) =>
     run("git", ["show", `${workflowSha}:${relativePath}`]),
-) {
+): TrustedWorkflowHarness {
   if (!pathExists(TRUSTED_WORKFLOW_PATH)) {
     throw new Error(
       `trusted workflow SHA ${workflowSha} does not contain ${TRUSTED_WORKFLOW_PATH}`,
@@ -586,23 +676,33 @@ export function assertTrustedWorkflowHarness(
       { cause: error },
     );
   }
-  if (
-    !isJsonRecord(workflow) ||
-    !isJsonRecord(workflow.env) ||
-    workflow.env[RELEASE_ISOLATION_TOOLING_CONTRACT_ENV] !== RELEASE_ISOLATION_TOOLING_CONTRACT
-  ) {
+  const contract =
+    isJsonRecord(workflow) && isJsonRecord(workflow.env)
+      ? workflow.env[RELEASE_ISOLATION_TOOLING_CONTRACT_ENV]
+      : undefined;
+  if (contract !== "1" && contract !== RELEASE_ISOLATION_TOOLING_CONTRACT) {
     throw new Error(
-      `Tooling SHA ${workflowSha} does not declare ${RELEASE_ISOLATION_TOOLING_CONTRACT_ENV}=${RELEASE_ISOLATION_TOOLING_CONTRACT} in ${TRUSTED_WORKFLOW_PATH}`,
+      `Tooling SHA ${workflowSha} does not declare a supported ${RELEASE_ISOLATION_TOOLING_CONTRACT_ENV} in ${TRUSTED_WORKFLOW_PATH}`,
+    );
+  }
+  const workflowInputs =
+    isJsonRecord(workflow) &&
+    isJsonRecord(workflow.on) &&
+    isJsonRecord(workflow.on.workflow_dispatch) &&
+    isJsonRecord(workflow.on.workflow_dispatch.inputs)
+      ? workflow.on.workflow_dispatch.inputs
+      : undefined;
+  if (!workflowInputs || !Object.hasOwn(workflowInputs, "expected_sha")) {
+    throw new Error(
+      `Tooling SHA ${workflowSha} is missing workflow_dispatch input expected_sha in ${TRUSTED_WORKFLOW_PATH}`,
     );
   }
   if (
-    !isJsonRecord(workflow.on) ||
-    !isJsonRecord(workflow.on.workflow_dispatch) ||
-    !isJsonRecord(workflow.on.workflow_dispatch.inputs) ||
-    !Object.hasOwn(workflow.on.workflow_dispatch.inputs, "expected_sha")
+    contract === RELEASE_ISOLATION_TOOLING_CONTRACT &&
+    !Object.hasOwn(workflowInputs, "trusted_workflow_json")
   ) {
     throw new Error(
-      `Tooling SHA ${workflowSha} is missing workflow_dispatch input expected_sha in ${TRUSTED_WORKFLOW_PATH}`,
+      `Tooling SHA ${workflowSha} declares ${RELEASE_ISOLATION_TOOLING_CONTRACT_ENV}=2 but is missing workflow_dispatch input trusted_workflow_json in ${TRUSTED_WORKFLOW_PATH}`,
     );
   }
   const verifierPath = RELEASE_EVIDENCE_VERIFIER_PATHS.find((relativePath) =>
@@ -613,7 +713,7 @@ export function assertTrustedWorkflowHarness(
       `trusted workflow SHA ${workflowSha} does not contain a supported release evidence verifier`,
     );
   }
-  return verifierPath;
+  return { contract, verifierPath };
 }
 
 export function releaseEvidenceVerifierPath(worktreeRoot: string) {
@@ -627,7 +727,11 @@ export function releaseEvidenceVerifierPath(worktreeRoot: string) {
   return verifier;
 }
 
-function verifyReleaseEvidence(parentRunId: string, workflowSha: string) {
+function verifyReleaseEvidence(
+  parentRunId: string,
+  workflowSha: string,
+  trustedWorkflowRef: string,
+) {
   const verifierWorktree = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-"));
   try {
     run("git", ["worktree", "add", "--detach", verifierWorktree, workflowSha], {
@@ -637,7 +741,7 @@ function verifyReleaseEvidence(parentRunId: string, workflowSha: string) {
     const evidence: unknown = JSON.parse(
       run(process.execPath, [
         verifier,
-        ...releaseEvidenceVerificationArgs(parentRunId, workflowSha, verifier),
+        ...releaseEvidenceVerificationArgs(parentRunId, workflowSha, verifier, trustedWorkflowRef),
       ]),
     );
     if (
@@ -666,8 +770,11 @@ function main() {
   args.inputs.release_profile ??= releaseProfileForVersion(targetVersion);
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
-  const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
-  assertTrustedWorkflowHarness(workflowSha);
+  const workflowSha = resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);
+  const trustedWorkflowHarness = assertTrustedWorkflowHarness(workflowSha);
+  if (trustedWorkflowHarness.contract === "1") {
+    args.inputs.reuse_evidence = "false";
+  }
   const shortSha = workflowSha.slice(0, 12);
   const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
@@ -676,12 +783,25 @@ function main() {
   const dispatchInputs = {
     ref: targetSha,
     expected_sha: targetSha,
+    ...(trustedWorkflowHarness.contract === RELEASE_ISOLATION_TOOLING_CONTRACT
+      ? {
+          trusted_workflow_json: JSON.stringify({
+            ref: args.trustedWorkflowRef,
+            fullRef:
+              args.trustedWorkflowRef === "main"
+                ? "refs/heads/main"
+                : `refs/tags/${args.trustedWorkflowRef}`,
+            sha: workflowSha,
+          }),
+        }
+      : {}),
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,
   };
 
   console.log(`Validation SHA: ${targetSha}`);
   console.log(`Tooling SHA: ${workflowSha}`);
+  console.log(`Trusted workflow ref: ${args.trustedWorkflowRef}`);
   console.log(
     `Frozen validation tuple: candidate=${targetSha} tooling=${workflowSha} rerun_group=${args.inputs.rerun_group}`,
   );
@@ -735,7 +855,7 @@ function main() {
         `Full Release Validation concluded ${parentConclusion.toLowerCase() || "without a conclusion"}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
     }
-    verifyReleaseEvidence(parentRunId, workflowSha);
+    verifyReleaseEvidence(parentRunId, workflowSha, args.trustedWorkflowRef);
     evidenceVerified = true;
   } finally {
     if (

@@ -484,7 +484,7 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let response = try await self.transport.listSessionBranches(
+            let response = try await self.requestSessionBranchListing(
                 sessionKey: session.key,
                 agentID: self.outboxAgentID(for: session))
             guard self.isCurrentSession(session),

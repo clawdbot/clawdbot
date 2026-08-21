@@ -415,7 +415,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` or a zero duration such as `"0h"` to disable).
-    - Run history automatically keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>

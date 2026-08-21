@@ -420,6 +420,7 @@ async function executeDetachedCronJob(
     return {
       status: res.status,
       error: res.error,
+      errorClassification: res.errorClassification,
       deliveryError: res.deliveryError,
       summary: res.summary,
       delivered: res.delivered,

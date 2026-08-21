@@ -283,10 +283,10 @@ jobs:
       - name: Setup candidate build toolchain
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Checkout candidate runtime
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -774,10 +774,10 @@ jobs:
       - name: Setup trusted harness Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
-          use-actions-cache: "false"
 
       - name: Build trusted QA harness
         id: build_harness
@@ -1530,9 +1530,19 @@ jobs:
             "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*) ;;
             *) echo "SUT temp root escaped the workflow runtime root." >&2; exit 1 ;;
           esac
+          requested_config_path="${OPENCLAW_CONFIG_PATH:?}"
           config_path="${temp_root}/openclaw.json"
           [[ -f "$config_path" && ! -L "$config_path" ]]
           [[ "$(realpath -e "$config_path")" == "$config_path" ]]
+          case "$requested_config_path" in
+            "$config_path") ;;
+            "${temp_root}/state/qa-auth-bootstrap/openclaw.json")
+              [[ "${1:-}" == "models" && "${2:-}" == "auth" ]]
+              [[ -f "$requested_config_path" && ! -L "$requested_config_path" ]]
+              [[ "$(realpath -e "$requested_config_path")" == "$requested_config_path" ]]
+              ;;
+            *) echo "SUT config path escaped the canonical or auth-bootstrap roots." >&2; exit 1 ;;
+          esac
           capture_live_model_config "$config_path"
 
           export OPENCLAW_QA_TEMP_ROOT="$temp_root"
@@ -1540,7 +1550,7 @@ jobs:
           export OPENCLAW_HOME="$HOME"
           export OPENCLAW_STATE_DIR="${temp_root}/state"
           export OPENCLAW_OAUTH_DIR="${OPENCLAW_STATE_DIR}/credentials"
-          export OPENCLAW_CONFIG_PATH="$config_path"
+          export OPENCLAW_CONFIG_PATH="$requested_config_path"
           export XDG_CACHE_HOME="${temp_root}/xdg-cache"
           export XDG_CONFIG_HOME="${temp_root}/xdg-config"
           export XDG_DATA_HOME="${temp_root}/xdg-data"
@@ -1575,6 +1585,9 @@ jobs:
             chown -R "$SUT_UID:$SUT_GID" "$path"
             chmod -R u=rwX,go= "$path"
           done
+          if [[ "$requested_config_path" != "$config_path" ]]; then
+            [[ "$(stat -c '%F:%a:%u:%g' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}" ]]
+          fi
           if [[ -n "${OPENCLAW_BUNDLED_PLUGINS_DIR:-}" ]]; then
             chown -R root:root "$OPENCLAW_BUNDLED_PLUGINS_DIR"
             chmod -R a+rX,go-w "$OPENCLAW_BUNDLED_PLUGINS_DIR"
@@ -1640,6 +1653,7 @@ jobs:
           export SUT_UID SUT_GID RUNNER_UID RUNNER_GID RUNNER_HOME RUNNER_TEMP_DIR
           export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN
           export PRELOAD_PATH RUNNER_SENTINEL TRUSTED_WORKSPACE EVIDENCE_ROOT
+          export CANONICAL_CONFIG_PATH="$config_path"
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
@@ -1801,8 +1815,12 @@ jobs:
                     runtime_stage=verify-runtime-files
                     [[ -r "$CANDIDATE_ROOT/dist/index.js" &&
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
-                          -r "${OPENCLAW_CONFIG_PATH:?}" &&
-                          ! -w "$OPENCLAW_CONFIG_PATH" ]]
+                          -r "${CANONICAL_CONFIG_PATH:?}" &&
+                          ! -w "$CANONICAL_CONFIG_PATH" ]]
+                    if [[ "$OPENCLAW_CONFIG_PATH" != "$CANONICAL_CONFIG_PATH" ]]; then
+                      [[ "${1:-}" == "models" && "${2:-}" == "auth" &&
+                            -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" ]]
+                    fi
                     [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
                       "${OPENCLAW_QA_TEMP_ROOT:?}/workspace" \
@@ -1839,6 +1857,7 @@ jobs:
                     unset \
                       CANDIDATE_ROOT \
                       CANDIDATE_ARTIFACTS_DIR \
+                      CANONICAL_CONFIG_PATH \
                       EVIDENCE_ROOT \
                       NODE_BIN \
                       PRELOAD_PATH \
@@ -1880,9 +1899,6 @@ jobs:
                     else
                       runtime_node_args=("$runtime_candidate_root/dist/index.js" "$@")
                     fi
-                    # Login Bash reads /etc/bash.bashrc with inherited nounset.
-                    # Add PS1 only after the attested inbound env-key comparison.
-                    export PS1=
                     runtime_stage=exec-runtime
                     exec "$runtime_node_bin" "${runtime_node_args[@]}"
                   '\'' openclaw-sut "$@"

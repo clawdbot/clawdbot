@@ -10,6 +10,8 @@ import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-mod
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
@@ -220,9 +222,37 @@ describe("local gateway request context", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const cfg = {
       cron: { store: path.join(stateDir, "cron", "jobs.json") },
-      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, worker: {} },
+      },
     } as OpenClawConfig;
     try {
+      const now = Date.now();
+      const storePath = resolveCronJobsStorePath();
+      await saveCronStore(storePath, {
+        version: 1,
+        jobs: [
+          makeCronJob({
+            id: "worker-job",
+            name: "worker-job",
+            agentId: "worker",
+            schedule: { kind: "every", everyMs: 3_600_000, anchorMs: now },
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "remove" },
+            state: { nextRunAtMs: now + 3_600_000 },
+          }),
+          makeCronJob({
+            id: "agentless-system-job",
+            name: "agentless-system-job",
+            schedule: { kind: "every", everyMs: 3_600_000, anchorMs: now },
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "keep" },
+            state: { nextRunAtMs: now + 3_600_000 },
+          }),
+        ],
+      });
       await withLocalGatewayRequestScope(
         { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
         async () => {
@@ -235,6 +265,9 @@ describe("local gateway request context", () => {
           ).resolves.toBe("committed");
         },
       );
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "agentless-system-job",
+      ]);
     } finally {
       closeOpenClawStateDatabaseForTest();
       vi.unstubAllEnvs();

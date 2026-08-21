@@ -45,6 +45,21 @@ const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
+const DOCKER_SEED_LANE_ORDER = [
+  "mcp-channels",
+  "cron-mcp-cleanup",
+  "mcp-code-mode-gateway",
+] as const;
+type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
+const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
+  ".github/workflows/ci.yml": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
+  "scripts/e2e/docker-openai-seed.ts": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
+  "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
+  "scripts/lib/ci-changed-node-test-plan.mts": DOCKER_SEED_LANE_ORDER,
+};
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -60,6 +75,17 @@ const configsRequiringFullSuiteMetadata = new Set(
 const splitNodeTestConfigs = new Set(
   fullNodeTestShards.filter((shard) => shard.includePatterns).flatMap((shard) => shard.configs),
 );
+
+export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
+  const selected = new Set<DockerSeedLane>();
+  for (const changedPath of changedPaths) {
+    const normalizedPath = changedPath.replaceAll("\\", "/");
+    for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
+      selected.add(lane);
+    }
+  }
+  return DOCKER_SEED_LANE_ORDER.filter((lane) => selected.has(lane));
+}
 
 function isTestOnlyPath(changedPath: string) {
   return (

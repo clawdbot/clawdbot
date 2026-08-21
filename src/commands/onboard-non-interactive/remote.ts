@@ -9,6 +9,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createGatewayEnvSecretRef } from "../../secrets/ref-contract.js";
 import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
@@ -36,8 +37,19 @@ export async function runNonInteractiveRemoteSetup(params: {
     return;
   }
   const remoteToken = normalizeOptionalString(opts.remoteToken);
-  if (opts.remoteToken !== undefined && !remoteToken) {
-    runtime.error("Invalid --remote-token: value cannot be empty.");
+  const remotePassword = normalizeOptionalString(opts.remotePassword);
+  for (const [flag, input, normalized] of [
+    ["--remote-token", opts.remoteToken, remoteToken],
+    ["--remote-password", opts.remotePassword, remotePassword],
+  ] as const) {
+    if (input !== undefined && !normalized) {
+      runtime.error(`Invalid ${flag}: value cannot be empty.`);
+      runtime.exit(1);
+      return;
+    }
+  }
+  if (remoteToken && remotePassword) {
+    runtime.error("Use either --remote-token or --remote-password, not both.");
     runtime.exit(1);
     return;
   }
@@ -49,6 +61,9 @@ export async function runNonInteractiveRemoteSetup(params: {
   if (remoteToken) {
     delete preservedRemote.password;
   }
+  if (remotePassword) {
+    delete preservedRemote.token;
+  }
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,
@@ -58,7 +73,22 @@ export async function runNonInteractiveRemoteSetup(params: {
       remote: {
         ...preservedRemote,
         url: remoteUrl,
-        ...(remoteToken ? { token: remoteToken } : {}),
+        ...(remoteToken
+          ? {
+              token:
+                opts.secretInputMode === "ref"
+                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_TOKEN")
+                  : remoteToken,
+            }
+          : {}),
+        ...(remotePassword
+          ? {
+              password:
+                opts.secretInputMode === "ref"
+                  ? createGatewayEnvSecretRef(baseConfig, "OPENCLAW_GATEWAY_PASSWORD")
+                  : remotePassword,
+            }
+          : {}),
       },
     },
   };

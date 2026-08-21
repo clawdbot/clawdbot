@@ -7,6 +7,8 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
+import { formatCliJsonFailure } from "./failure-output.js";
+import { runCliWithExitFinalization } from "./one-shot-exit.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -264,17 +266,56 @@ describe("registerQrCli", () => {
     );
   });
 
-  it("rejects combining --limited with --voice-node", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+  const conflictingQrOptions = [
+    {
+      name: "access profiles",
+      args: ["--limited", "--voice-node"],
+      message: "Use either --limited or --voice-node, not both.",
+    },
+    {
+      name: "authentication overrides",
+      args: ["--token", "test-token", "--password", "test-password"],
+      message: "Use either --token or --password, not both.",
+    },
+  ];
 
-    await expect(runQr(["--setup-code-only", "--limited", "--voice-node"])).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith("Use either --limited or --voice-node, not both.");
+  it.each(conflictingQrOptions)("rejects conflicting $name in human mode", async (testCase) => {
+    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toThrow("exit");
+
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith(testCase.message);
+    expect(runtimeExit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(loadConfig).not.toHaveBeenCalled();
+  });
+
+  it.each(conflictingQrOptions)("renders conflicting $name as canonical JSON", async (testCase) => {
+    const args = ["--json", ...testCase.args];
+    const originalArgv = process.argv;
+    let exitCode: number | undefined;
+    process.argv = ["node", "openclaw", "qr", ...args];
+    try {
+      await runCliWithExitFinalization({
+        runtime,
+        run: async () => await runQr(args),
+        onError: (error) => {
+          runtime.writeJson(formatCliJsonFailure(error));
+          exitCode = 1;
+        },
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    const expected = {
+      ok: false,
+      error: { type: "cli_error", message: testCase.message },
+    };
+    expect(exitCode).toBe(1);
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(runtimeLog).toHaveBeenCalledOnce();
+    expect(JSON.parse(readRuntimeCallText(runtimeLog.mock.calls[0]))).toEqual(expected);
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(runtimeExit).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 
   it("renders ASCII QR by default", async () => {

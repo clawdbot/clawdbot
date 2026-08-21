@@ -165,17 +165,20 @@ export function createInMemorySessionStore(
     touchSession(session, now());
   };
 
-  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
-    const session = sessions.get(sessionId);
-    if (!session || (expectedRunId !== undefined && session.activeRunId !== expectedRunId)) {
-      return;
-    }
+  const releaseActiveRun = (session: AcpSession) => {
     if (session.activeRunId) {
       runIdToSessionId.delete(session.activeRunId);
     }
     session.activeRunId = null;
     session.abortController = null;
     touchSession(session, now());
+  };
+
+  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
+    const session = sessions.get(sessionId);
+    if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
+      releaseActiveRun(session);
+    }
   };
 
   const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId, expectedRunId) => {
@@ -187,12 +190,7 @@ export function createInMemorySessionStore(
       return false;
     }
     session.abortController.abort();
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
-    }
-    session.abortController = null;
-    session.activeRunId = null;
-    touchSession(session, now());
+    releaseActiveRun(session);
     return true;
   };
 

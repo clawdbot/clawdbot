@@ -5,6 +5,7 @@ import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -121,17 +122,14 @@ describe("AcpSessionManager turn results", () => {
   it("finishes submitted work when its lifecycle observer fails", async () => {
     const { runtimeState, sessionKey } = setupPromptStartedRuntime();
     const transitions: string[] = [];
-    let finishTurn!: (result: { status: "completed" }) => void;
-    const result = new Promise<{ status: "completed" }>((resolve) => {
-      finishTurn = resolve;
-    });
+    const result = createDeferred<{ status: "completed" }>();
     const startTurn = vi.fn<NonNullable<typeof runtimeState.runtime.startTurn>>((input) => ({
       requestId: input.requestId,
       promptStarted: Promise.resolve().then(() => {
         transitions.push("prompt-started");
       }),
       events: (async function* () {})(),
-      result,
+      result: result.promise,
       cancel: vi.fn(async () => {}),
       closeStream: vi.fn(async () => {}),
     }));
@@ -149,7 +147,7 @@ describe("AcpSessionManager turn results", () => {
           transitions.push("observer-failed");
           queueMicrotask(() => {
             transitions.push("turn-cleaned-up");
-            finishTurn({ status: "completed" });
+            result.resolve({ status: "completed" });
           });
           throw new Error("lifecycle observer unavailable");
         },
@@ -165,10 +163,7 @@ describe("AcpSessionManager turn results", () => {
     "settles a %s terminal result when prompt readiness never resolves",
     async (terminalStatus) => {
       const { runtimeState, sessionKey } = setupPromptStartedRuntime();
-      let resolveAbandonedReadiness!: () => void;
-      const promptStarted = new Promise<void>((resolve) => {
-        resolveAbandonedReadiness = resolve;
-      });
+      const promptStarted = createDeferred();
       const result =
         terminalStatus === "completed"
           ? { status: "completed" as const }
@@ -178,7 +173,7 @@ describe("AcpSessionManager turn results", () => {
             };
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
-        promptStarted,
+        promptStarted: promptStarted.promise,
         events: (async function* () {})(),
         result: Promise.resolve(result),
         cancel: vi.fn(async () => {}),
@@ -216,12 +211,12 @@ describe("AcpSessionManager turn results", () => {
         }
         expect(onLifecycle).not.toHaveBeenCalled();
 
-        resolveAbandonedReadiness();
+        promptStarted.resolve();
         await Promise.resolve();
         expect(onLifecycle).not.toHaveBeenCalled();
         expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
       } finally {
-        resolveAbandonedReadiness();
+        promptStarted.resolve();
         await outcome;
       }
     },
@@ -229,17 +224,14 @@ describe("AcpSessionManager turn results", () => {
 
   it("retries cleaned-up terminal failures without publishing abandoned prompt readiness", async () => {
     const { runtimeState, sessionKey } = setupPromptStartedRuntime();
-    let resolveAbandonedReadiness!: () => void;
-    const abandonedReadiness = new Promise<void>((resolve) => {
-      resolveAbandonedReadiness = resolve;
-    });
+    const abandonedReadiness = createDeferred();
     let attempt = 0;
     const startTurn = vi.fn<NonNullable<typeof runtimeState.runtime.startTurn>>((input) => {
       attempt += 1;
       const firstAttempt = attempt === 1;
       return {
         requestId: input.requestId,
-        promptStarted: firstAttempt ? abandonedReadiness : Promise.resolve(),
+        promptStarted: firstAttempt ? abandonedReadiness.promise : Promise.resolve(),
         events: (async function* () {})(),
         result: Promise.resolve(
           firstAttempt
@@ -278,11 +270,11 @@ describe("AcpSessionManager turn results", () => {
       expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
       expect(onLifecycle).toHaveBeenCalledOnce();
 
-      resolveAbandonedReadiness();
+      abandonedReadiness.resolve();
       await Promise.resolve();
       expect(onLifecycle).toHaveBeenCalledOnce();
     } finally {
-      resolveAbandonedReadiness();
+      abandonedReadiness.resolve();
       await turn.catch(() => {});
     }
   });

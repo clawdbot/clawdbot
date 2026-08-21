@@ -454,7 +454,7 @@ function renderCatalogSessionRow(
     );
   return html`
     <div
-      class="sidebar-recent-session session-row-host ${active
+      class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${active
         ? "sidebar-recent-session--active"
         : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running
         ? "session-row-host--running"

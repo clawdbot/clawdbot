@@ -10,7 +10,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { isMissingPathError, toErrorObject } from "../infra/errors.js";
+import { toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -50,7 +50,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
-import { expandOsHomePrefix, resolveReadPath } from "./sessions/tools/path-utils.js";
+import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
 import { createBoundedReadTextPage, formatReadContinuationNotice } from "./sessions/tools/read.js";
 import {
   ReadToolContinuationSchema,
@@ -110,7 +110,6 @@ type ReadTruncationDetails = {
 
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing (?:lines|part of line) [^\]]*|Read output capped [^\]]*|\d+ more lines? in file\. [^\]]*)\]\s*$/;
-const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
 
 export function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
   const contextWindowTokens = options?.modelContextWindowTokens;
@@ -292,61 +291,6 @@ function stripReadTruncationContentDetails(
   };
 }
 
-function missingDailyMemoryReadResult(relativePath: string): AgentToolResult<unknown> {
-  return {
-    content: [
-      {
-        type: "text",
-        text: `No daily memory file exists yet at ${relativePath}.`,
-      },
-    ],
-    details: {
-      status: "not_found",
-      path: relativePath,
-      optional: true,
-    },
-  };
-}
-
-function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "");
-  return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
-}
-
-function isNotFoundError(error: unknown): boolean {
-  if (isMissingPathError(error)) {
-    return true;
-  }
-  // Injected tool implementations may expose only their legacy human-readable error.
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return /\bENOENT\b|no such file or directory|file not found/i.test(error.message);
-}
-
-async function executeReadPage(params: {
-  base: AnyAgentTool;
-  toolCallId: string;
-  args: Record<string, unknown>;
-  signal?: AbortSignal;
-}): Promise<AgentToolResult<unknown>> {
-  try {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
-  } catch (error) {
-    const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
-    if (missingDailyMemoryPath && isNotFoundError(error)) {
-      return missingDailyMemoryReadResult(missingDailyMemoryPath);
-    }
-    throw error;
-  }
-}
-
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -382,12 +326,7 @@ async function executeReadWithAdaptivePaging(params: {
     if (next.kind === "line") {
       delete pageArgs.cursor;
     }
-    const pageResult = await executeReadPage({
-      base: params.base,
-      toolCallId: params.toolCallId,
-      args: pageArgs,
-      signal: params.signal,
-    });
+    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -695,6 +634,7 @@ function resolveToolPathAgainstWorkspaceRoot(params: {
 type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
+  memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   containerWorkdir?: string;
   sandbox?: {
     root: string;
@@ -817,14 +757,35 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      await appendMemoryFlushContent({
+      const contentBefore = await readOptionalUtf8File({
         absolutePath: allowedAbsolutePath,
-        root: options.root,
         relativePath: options.relativePath,
-        content,
         sandbox: options.sandbox,
         signal,
       });
+      const separator =
+        contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
+          ? "\n"
+          : "";
+      const commit = () =>
+        appendMemoryFlushContent({
+          absolutePath: allowedAbsolutePath,
+          root: options.root,
+          relativePath: options.relativePath,
+          content,
+          sandbox: options.sandbox,
+          signal,
+        });
+      if (options.memoryWriteProvenance?.classifies(allowedAbsolutePath)) {
+        await options.memoryWriteProvenance.write({
+          absolutePath: allowedAbsolutePath,
+          contentBefore,
+          contentAfter: `${contentBefore}${separator}${content}`,
+          commit,
+        });
+      } else {
+        await commit();
+      }
       // This wrapper inherits the write tool's output schema, so report only
       // the authoritative `changed`; deriving `created` before append is racy.
       return {
@@ -1070,15 +1031,23 @@ export function createOpenClawReadTool(
         ? normalizeFileToolPathParamsFromKeys(record, ["path"])
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
+      const filePath =
+        typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
+      const dailyMemoryPath =
+        process.platform === "win32" ? filePath.replace(/\\/g, "/") : filePath;
+      // Daily journals may not exist yet; let the concrete reader own filesystem errors.
+      const implicitlyOptional =
+        normalizedRecord?.optional === undefined &&
+        /^(?:\.\/)*memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(dailyMemoryPath);
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
-        args: normalizedRecord ?? {},
+        args: implicitlyOptional
+          ? { ...normalizedRecord, optional: true }
+          : (normalizedRecord ?? {}),
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
-      const filePath =
-        typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       const sanitizedResult = await sanitizeToolResultImages(
@@ -1111,7 +1080,7 @@ export function wrapReadToolWithSkillContent(
       root: cwd,
       containerWorkdir: options?.containerWorkdir,
     });
-    return resolveReadPath(mapped, cwd);
+    return resolveToCwd(mapped, cwd);
   };
   const instructionContent = new Map<string, string | undefined>(
     (options?.instructionPaths ?? []).map((filePath) => [

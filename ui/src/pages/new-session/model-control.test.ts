@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
@@ -72,7 +73,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", false);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.list", expect.anything());
     expect(
       renderControl(control, context).querySelector("[data-chat-model-target-group]"),
@@ -117,14 +118,14 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
         { agentId: "main", limitPerHost: 1 },
         { signal: expect.any(AbortSignal) },
       ),
     );
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(container.querySelector('[data-chat-model-target-group="cliAgents"]')).not.toBeNull();
       expect(container.querySelector('[data-chat-model-target="anthropic"]')).not.toBeNull();
@@ -149,7 +150,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
     const container = renderControl(control, context);
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
@@ -192,7 +193,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
 
     expect(control.isRestoringPreference()).toBe(false);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
   it("renders initial metadata loading without synthesizing the configured default", async () => {
@@ -203,7 +204,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const container = renderControl(control, context);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "Loading models",
@@ -343,7 +344,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(notify);
 
     control.load(context, "main", true);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(request).toHaveBeenCalledOnce();
       expect(notify).toHaveBeenCalledTimes(2);
     });
@@ -396,7 +397,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
         container
@@ -460,8 +461,8 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => {
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
         container

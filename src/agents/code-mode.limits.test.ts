@@ -12,8 +12,8 @@ import {
   createCodeModeHarness,
   testing,
 } from "./code-mode.test-support.js";
+import { projectMcpCallToolResult } from "./mcp-content.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode runtime and output limits", () => {
   beforeEach(() => {
@@ -193,7 +193,9 @@ describe("Code Mode runtime and output limits", () => {
       catalogRef,
     };
     const tools = createCodeModeTools(ctx);
-    const executeListIssues = vi.fn(async () => jsonResult({ ok: true }));
+    const executeListIssues = vi.fn(async () =>
+      projectMcpCallToolResult({ content: [{ type: "text", text: '{"ok":true}' }] }),
+    );
     const listIssues = mcpTool({
       name: "tickets__list",
       serverName: "tickets",

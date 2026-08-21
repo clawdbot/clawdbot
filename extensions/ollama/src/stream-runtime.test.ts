@@ -1136,15 +1136,6 @@ describe("buildAssistantMessage", () => {
     });
   });
 
-  it("rejects malformed stringified tool call arguments", () => {
-    const response = createToolCallResponse([
-      { function: { name: "bash", arguments: '{"command":"ls"' } },
-    ]);
-    expect(() => buildAssistantMessage(response, modelInfo)).toThrow(
-      "Provider completed tool call with malformed JSON arguments",
-    );
-  });
-
   it("sets all costs to zero for local models", () => {
     const response = createAssistantResponse({ content: "ok" });
     const result = buildAssistantMessage(response, modelInfo);

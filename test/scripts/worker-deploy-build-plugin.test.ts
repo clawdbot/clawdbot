@@ -35,6 +35,35 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain("was not composed by the build");
   });
 
+  it("bundles the undici dispatcher dependency without a worker runtime require", () => {
+    const dispatcherPath = path.resolve("src/infra/net/undici-dispatcher-options.ts");
+    const source = fs.readFileSync(dispatcherPath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, dispatcherPath);
+
+    expect(transformed).toContain('import * as bundledUndici from "undici";');
+    expect(transformed).toContain("return bundledUndici;");
+    expect(transformed).toContain('return override as typeof import("undici");');
+    expect(transformed).not.toContain('import { createRequire } from "node:module";');
+    expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
+    expect(transformed).not.toContain('requireUndici("undici")');
+  });
+
+  it("fails closed when the undici dispatcher bootstrap shape changes", () => {
+    const dispatcherPath = path.resolve("src/infra/net/undici-dispatcher-options.ts");
+    const source = fs.readFileSync(dispatcherPath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    expect(() =>
+      plugin.transform.call(
+        { error: fail },
+        source.replace('return requireUndici("undici")', 'return changedUndici("undici")'),
+        dispatcherPath,
+      ),
+    ).toThrow("undici dispatcher bootstrap changed");
+  });
+
   it("inlines Playwright package identity without a runtime manifest read", () => {
     const coreBundlePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
     const source = fs.readFileSync(coreBundlePath, "utf8");

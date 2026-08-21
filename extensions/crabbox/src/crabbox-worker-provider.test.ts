@@ -424,28 +424,51 @@ describe("Crabbox worker provider", () => {
     expect(desktopSetupText).not.toContain("/var/lib/crabbox/browser.env");
     expect(desktopSetupLines).not.toContain("export DISPLAY");
     expect(desktopSetupText).toContain(
+      'mapfile -t session_pids < <(pgrep -u "$worker_uid" -x xfce4-session || true)',
+    );
+    expect(desktopSetupText).toContain("Expected exactly one worker-owned XFCE session");
+    expect(desktopSetupText).toContain('session_pid="${session_pids[0]}"');
+    expect(desktopSetupText).toContain('read_xfce_process_environment "$session_pid"');
+    expect(desktopSetupText).toContain(
       'mapfile -t renderer_pids < <(pgrep -u "$worker_uid" -x xfdesktop || true)',
     );
-    expect(desktopSetupText).toContain("Expected exactly one worker-owned XFCE desktop renderer");
     expect(desktopSetupText).toContain('renderer_pid="${renderer_pids[0]}"');
-    expect(desktopSetupText).toContain('exec 8<"/proc/$renderer_pid/environ"');
+    expect(desktopSetupText).toContain('read_xfce_process_environment "$renderer_pid"');
+    expect(desktopSetupText).toContain('exec 8<"/proc/$process_pid/environ"');
     for (const [name, target] of [
-      ["DISPLAY", "renderer_display"],
-      ["DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_ADDRESS"],
-      ["SESSION_MANAGER", "SESSION_MANAGER"],
-      ["XDG_RUNTIME_DIR", "XDG_RUNTIME_DIR"],
+      ["DISPLAY", "process_display"],
+      ["DBUS_SESSION_BUS_ADDRESS", "process_dbus"],
+      ["XDG_RUNTIME_DIR", "process_runtime_dir"],
     ]) {
       expect(desktopSetupText).toContain(`${name}=*) ${target}="\${process_variable#*=}"`);
     }
-    expect(desktopSetupText).toContain('[ "$renderer_display" = ":99" ]');
+    expect(desktopSetupText).toContain('[ "$process_display" = ":99" ]');
+    expect(desktopSetupText).toContain('DBUS_SESSION_BUS_ADDRESS="$process_dbus"');
+    expect(desktopSetupLines).toContain("unset XDG_RUNTIME_DIR");
+    expect(desktopSetupText).toContain('XDG_RUNTIME_DIR="$process_runtime_dir"');
+    expect(desktopSetupText).toContain('[ -n "$DBUS_SESSION_BUS_ADDRESS" ]');
+    expect(desktopSetupText).not.toContain("SESSION_MANAGER");
     expect(desktopSetupText).toContain(
-      '[ -n "$DBUS_SESSION_BUS_ADDRESS" ] && [ -n "$SESSION_MANAGER" ]',
+      '[ "$process_display" = "$DISPLAY" ] && [ "$process_dbus" = "$DBUS_SESSION_BUS_ADDRESS" ]',
     );
     expect(desktopSetupText).toContain(
-      'case "${XDG_RUNTIME_DIR:-}" in ""|/*) ;; *) echo "XFCE desktop renderer has an invalid XDG_RUNTIME_DIR"',
+      'case "$XDG_RUNTIME_DIR" in ""|/*) ;; *) echo "XFCE session has an invalid XDG_RUNTIME_DIR"',
     );
-    expect(desktopSetupText).toContain("export DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER");
-    expect(desktopSetupText).toContain('[ -z "${XDG_RUNTIME_DIR:-}" ] || export XDG_RUNTIME_DIR');
+    expect(desktopSetupText).toContain("export DBUS_SESSION_BUS_ADDRESS");
+    expect(desktopSetupText).toContain('[ -z "$XDG_RUNTIME_DIR" ] || export XDG_RUNTIME_DIR');
+    for (const signal of ["TERM", "KILL"]) {
+      expect(desktopSetupText).toContain(`pkill -${signal} -u "$worker_uid" -x xfdesktop || true`);
+    }
+    expect(desktopSetupText).toContain('pgrep -u "$worker_uid" -x xfdesktop >/dev/null || break');
+    expect(desktopSetupText).toContain(
+      'nohup xfdesktop >"$worker_home/.cache/openclaw/xfdesktop.log" 2>&1 </dev/null &',
+    );
+    expect(desktopSetupText).toMatch(
+      /for _attempt in \$\(seq 1 \d+\); do bind_xfdesktop_renderer && break; sleep 0\.1; done/u,
+    );
+    expect(desktopSetupText).toContain(
+      "XFCE desktop renderer did not converge on the worker session",
+    );
     expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*(?:\.|source)\s+[^\n]*\/proc\//u);
     expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*eval(?:\s|$)/u);
     expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*(?:\.|source)\s+[^\n]*\.env/u);
@@ -470,11 +493,17 @@ describe("Crabbox worker provider", () => {
       'wallpaper_path="$worker_home/.local/share/backgrounds/openclaw-worker.png"',
     );
     expect(desktopSetupText).toContain('for backdrop in "${backdrop_roots[@]}"; do');
-    const sessionExportIndex = desktopSetupText.indexOf(
-      "export DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER",
-    );
+    const sessionExportIndex = desktopSetupText.indexOf("export DBUS_SESSION_BUS_ADDRESS");
     const sessionExtractionIndex = desktopSetupText.indexOf(
-      'DBUS_SESSION_BUS_ADDRESS=*) DBUS_SESSION_BUS_ADDRESS="${process_variable#*=}"',
+      'read_xfce_process_environment "$session_pid"',
+    );
+    const terminateRendererIndex = desktopSetupText.indexOf(
+      'pkill -TERM -u "$worker_uid" -x xfdesktop',
+    );
+    const killRendererIndex = desktopSetupText.indexOf('pkill -KILL -u "$worker_uid" -x xfdesktop');
+    const launchRendererIndex = desktopSetupText.indexOf("nohup xfdesktop");
+    const convergeRendererIndex = desktopSetupText.indexOf(
+      'bind_xfdesktop_renderer || { echo "XFCE desktop renderer did not converge',
     );
     const firstXfconfIndex = desktopSetupText.indexOf("xfconf-query -c xfce4-desktop");
     const xrandrIndex = desktopSetupText.indexOf("xrandr --listmonitors");
@@ -488,20 +517,20 @@ describe("Crabbox worker provider", () => {
     );
     expect(sessionExtractionIndex).toBeGreaterThan(-1);
     expect(sessionExportIndex).toBeGreaterThan(sessionExtractionIndex);
-    expect(sessionExportIndex).toBeGreaterThan(-1);
-    expect(firstXfconfIndex).toBeGreaterThan(sessionExportIndex);
+    expect(terminateRendererIndex).toBeGreaterThan(sessionExportIndex);
+    expect(killRendererIndex).toBeGreaterThan(terminateRendererIndex);
+    expect(launchRendererIndex).toBeGreaterThan(killRendererIndex);
+    expect(convergeRendererIndex).toBeGreaterThan(launchRendererIndex);
+    expect(firstXfconfIndex).toBeGreaterThan(convergeRendererIndex);
     expect(xrandrIndex).toBeGreaterThan(sessionExportIndex);
     expect(lastImageIndex).toBeGreaterThan(-1);
     expect(saveRendererIndex).toBeGreaterThan(lastImageIndex);
     expect(reloadRendererIndex).toBeGreaterThan(saveRendererIndex);
     expect(verifyRendererIndex).toBeGreaterThan(reloadRendererIndex);
-    expect(desktopSetupLines.filter((line) => line === "bind_xfdesktop_session")).toHaveLength(2);
-    expect(desktopSetupText).not.toMatch(/pkill[^\n]*xfdesktop/u);
-    expect(desktopSetupText).not.toContain("nohup xfdesktop");
-    expect(desktopSetupText).not.toContain("def ellipse");
-    expect(desktopSetupText).not.toContain("import struct");
-    expect(desktopSetupText).not.toContain(".svg");
-    expect(desktopSetupText).not.toContain("sshUser");
+    expect(desktopSetupText.slice(reloadRendererIndex, verifyRendererIndex)).toContain(
+      "bind_xfdesktop_renderer",
+    );
+    expect(desktopSetupText).not.toMatch(/pkill -(?:TERM|KILL) -x xfdesktop/u);
     const setup = calls.find(
       (call) => call.argv[1] === "run" && String(call.options.input).includes("node run"),
     )?.options.input;

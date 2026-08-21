@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
@@ -11,7 +10,6 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
-import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -47,13 +45,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
 import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
-
-function resolveCronTriggersEnabled(context: ApplicationContext): boolean {
-  const config = currentConfigObject(context.runtimeConfig.state) ?? {};
-  const cron = isRecord(config.cron) ? config.cron : undefined;
-  const triggers = cron && isRecord(cron.triggers) ? cron.triggers : undefined;
-  return triggers?.enabled !== false;
-}
 
 class CronPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -408,7 +399,6 @@ class CronPage extends OpenClawLightDomElement {
           agentId: fallbackAgentId,
           loading: this.cron.cronLoading,
           canManage,
-          triggersEnabled: resolveCronTriggersEnabled(this.context),
           status: this.cron.cronStatus,
           failingCount: this.cron.cronFailingCount,
           agentScoped: this.cron.cronAgentId !== null,

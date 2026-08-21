@@ -119,6 +119,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.nextcloud-talk.apiPassword`
 - `channels.nextcloud-talk.accounts.*.botSecret`
 - `channels.nextcloud-talk.accounts.*.apiPassword`
+- `channels.nostr.privateKey`
 - `channels.zalo.botToken`
 - `channels.zalo.webhookSecret`
 - `channels.zalo.accounts.*.botToken`

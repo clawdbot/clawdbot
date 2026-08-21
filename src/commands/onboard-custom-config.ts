@@ -195,6 +195,7 @@ type ApplyCustomApiConfigParams = {
   alias?: string;
   supportsImageInput?: boolean;
   target?: OnboardingAgentTarget;
+  setAsPrimary?: boolean;
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
@@ -557,7 +558,7 @@ export function parseNonInteractiveCustomApiFlags(
   };
 }
 
-/** Applies custom provider config and makes the custom model the primary model. */
+/** Applies custom provider config and optionally makes its model the primary model. */
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   if (!URL.canParse(baseUrl)) {
@@ -689,7 +690,9 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     },
   };
 
-  config = applyPrimaryModel(config, modelRef);
+  if (params.setAsPrimary !== false) {
+    config = applyPrimaryModel(config, modelRef);
+  }
   if (isAzure && isLikelyReasoningModel) {
     const existingPerModelThinking = config.agents?.defaults?.models?.[modelRef]?.params?.thinking;
     if (!existingPerModelThinking) {

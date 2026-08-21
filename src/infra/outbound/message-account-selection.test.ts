@@ -39,3 +39,38 @@ describe("validateExplicitMessageAccountSelection", () => {
     ).toThrow('Unknown account "missing"');
   });
 });
+
+describe("resolveMessageBroadcastAccountPlan (registry-scoped channel plugins)", () => {
+  const scopedPlugin = {
+    id: "line",
+    config: {
+      listAccountIds: () => ["ops"],
+      resolveAccount: (_cfg: OpenClawConfig, accountId?: string | null) => ({
+        accountId,
+        enabled: true,
+      }),
+    },
+  } as unknown as ChannelPlugin;
+  const scopedCfg = { channels: { line: { enabled: true } } } as unknown as OpenClawConfig;
+
+  it("plans candidates from a channel plugin that is only registry-scoped", async () => {
+    const { withPluginRuntimeRegistryScope } =
+      await import("../../plugins/runtime/gateway-request-scope.js");
+    const { resolveMessageBroadcastAccountPlan } = await import("./message-account-selection.js");
+
+    const plan = withPluginRuntimeRegistryScope(
+      { channels: [{ plugin: scopedPlugin }] } as never,
+      () => resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" }),
+    );
+    expect(plan?.candidateChannels).toContain("line");
+    expect(plan?.secretChannels).toEqual(["line"]);
+  });
+
+  it("does not see the scoped channel outside the scope", async () => {
+    const { resolveMessageBroadcastAccountPlan } = await import("./message-account-selection.js");
+
+    const plan = resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
+    expect(plan?.candidateChannels).not.toContain("line");
+    expect(plan?.secretChannels).toEqual([]);
+  });
+});

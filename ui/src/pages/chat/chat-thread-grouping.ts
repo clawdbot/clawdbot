@@ -15,6 +15,7 @@ import {
   chatItemStartsUserTurn,
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
+import { indexTurnContinuations } from "./stream-causal-boundary.ts";
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
   const record = asRecord(message);
@@ -511,7 +512,7 @@ type ActivityRunRenderItem = {
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming) {
+  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -522,15 +523,15 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
 // visible outcome; they must never fold into the work rollup. Normalized
 // content passes unknown block types through (e.g. raw image blocks), so
 // anything that is not a tool block counts as visible reply content.
-function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
   return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
+    if (includeText && extractTextCached(message)?.trim()) {
       return true;
     }
     const content = safeNormalizeMessage(message)?.content ?? [];
     return content.some((block) => {
       if (block.type === "text") {
-        return Boolean(block.text?.trim());
+        return includeText && Boolean(block.text?.trim());
       }
       return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
     });
@@ -541,7 +542,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    assistantGroupHasVisibleReplyContent(group)
+    groupHasVisibleReplyContent(group)
   );
 }
 
@@ -550,11 +551,20 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
 // stands in for the final reply. Turns whose last content is commentary
 // merely collapse less; the visible reply is never folded away.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
-  return (
-    isCollapsibleWorkGroup(item) &&
-    item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasVisibleReplyContent(item)
-  );
+  return item.kind === "group" && !item.isStreaming && assistantGroupCanOwnActiveRunStatus(item);
+}
+
+function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
+  const boundary = turn[0];
+  if (!boundary || boundary.kind === "stream-run") {
+    return [];
+  }
+  if (boundary.kind === "group") {
+    return boundary.role.toLowerCase() === "user"
+      ? boundary.messages.map(({ message }) => message)
+      : [];
+  }
+  return boundary.kind === "message" && chatItemStartsUserTurn(boundary) ? [boundary.message] : [];
 }
 
 /**
@@ -594,13 +604,52 @@ export function collapseCompletedTurnWork(
     turns.push(currentTurn);
   }
 
+  const { continuationTurnIndexes, precedingContinuationTurnIndexes } = indexTurnContinuations(
+    turns,
+    turnUserMessages,
+  );
+  const finalReplyIndexes = turns.map((turn, turnIndex) => {
+    if (continuationTurnIndexes.has(turnIndex)) {
+      return -1;
+    }
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (candidate && isFinalReplyGroup(candidate)) {
+        return index;
+      }
+    }
+    return -1;
+  });
+  const terminalReplies = finalReplyIndexes.map((index, turnIndex) =>
+    index >= 0 ? (turns[turnIndex]?.[index] as MessageGroup) : undefined,
+  );
+  for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
+    const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
+    if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {
+      terminalReplies[turnIndex] = terminalReplies[continuationTurnIndex];
+    }
+  }
+  const liveTurnIndexes = new Set<number>();
+  if (opts.runWorking) {
+    let liveTurnIndex = turns.length - 1;
+    liveTurnIndexes.add(liveTurnIndex);
+    for (;;) {
+      const precedingTurnIndex = precedingContinuationTurnIndexes.get(liveTurnIndex);
+      if (precedingTurnIndex === undefined) {
+        break;
+      }
+      liveTurnIndex = precedingTurnIndex;
+      liveTurnIndexes.add(liveTurnIndex);
+    }
+  }
+
   const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
   for (const [turnIndex, turn] of turns.entries()) {
     // In-flight content (stream runs, streaming groups) marks the turn live.
     // While the run works, the trailing turn also stays expanded so activity
     // is watchable until the terminal rebuild collapses it.
     const isLive =
-      (opts.runWorking && turnIndex === turns.length - 1) ||
+      liveTurnIndexes.has(turnIndex) ||
       turn.some(
         (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
       );
@@ -608,21 +657,15 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    let finalReplyIndex = -1;
-    for (let index = turn.length - 1; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (candidate && isFinalReplyGroup(candidate)) {
-        finalReplyIndex = index;
-        break;
-      }
-    }
+    const finalReplyIndex = finalReplyIndexes[turnIndex] ?? -1;
+    const terminalReply = terminalReplies[turnIndex];
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
-    if (finalReplyIndex === -1) {
+    if (!terminalReply) {
       result.push(...turn);
       continue;
     }
-    const segmentEnd = finalReplyIndex - 1;
+    const segmentEnd = finalReplyIndex >= 0 ? finalReplyIndex - 1 : turn.length - 1;
     let segmentStart = segmentEnd + 1;
     for (let index = segmentEnd; index >= 0; index -= 1) {
       const candidate = turn[index];
@@ -646,14 +689,16 @@ export function collapseCompletedTurnWork(
         ? boundary.timestamp
         : null;
     const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
-    const finalReply = turn[finalReplyIndex] as MessageGroup;
-    const endTimestamp = finalReply.timestamp;
+    const endTimestamp = terminalReply.timestamp;
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
+    const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
       // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${finalReply.key}`,
+      key: `work:${
+        finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
+      }`,
       groups,
       durationMs,
     });

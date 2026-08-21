@@ -362,7 +362,7 @@ type IMessageInboundDispatchDecision = {
   sender: string;
   senderNormalized: string;
   route: ReturnType<typeof resolveAgentRoute>;
-  bindingResolution?: ConfiguredBindingRouteResult["bindingResolution"];
+  bindingResolution: ConfiguredBindingRouteResult["bindingResolution"];
   bodyText: string;
   agentBodyText?: string;
   createdAt?: number;

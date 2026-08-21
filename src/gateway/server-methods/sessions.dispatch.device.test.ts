@@ -199,6 +199,7 @@ describe("sessions.dispatch device targets", () => {
         });
         runtime.bindNodeTransport({
           listCurrentNodes: async () => nodes,
+          hasCurrentRunner: () => nodes.length > 0,
           isCurrent: () => true,
           invoke: async () => ({ ok: false }),
         });

@@ -39,6 +39,7 @@ import {
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
   ensureSessionEntrySync,
+  listSessionChildEntriesReadOnly,
   listSessionEntriesCore,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
@@ -76,6 +77,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   appendTranscriptEventSync,
@@ -973,12 +975,25 @@ describe("session accessor seam", () => {
     expect(fs.existsSync(storePath)).toBe(false);
   });
 
-  it("does not parse unrelated blobs across canonical candidate and transcript reads", async () => {
+  it("does not parse unrelated blobs across focused child, candidate, and transcript reads", async () => {
     const sessionKey = "agent:main:focused-session";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "focused-session", updatedAt: 42 },
     );
+    for (const [childSessionKey, lineage] of [
+      ["agent:main:focused-both-child", { spawnedBy: sessionKey }],
+      ["agent:main:focused-parent-child", { parentSessionKey: sessionKey }],
+      [
+        "agent:main:focused-spawned-child",
+        { parentSessionKey: "agent:main:other-parent", spawnedBy: sessionKey },
+      ],
+    ] as const) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        { ...lineage, sessionId: childSessionKey, updatedAt: 43 },
+      );
+    }
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       "focused session database path",
@@ -993,6 +1008,16 @@ describe("session accessor seam", () => {
 
     const parse = vi.spyOn(JSON, "parse");
     try {
+      expect(
+        listSessionChildEntriesReadOnly({ agentId: "main", sessionKey, storePath }).map(
+          (child) => child.sessionKey,
+        ),
+      ).toEqual([
+        "agent:main:focused-both-child",
+        "agent:main:focused-parent-child",
+        "agent:main:focused-spawned-child",
+      ]);
+      expect(parse.mock.calls.filter(([value]) => value === unrelatedEntryJson)).toHaveLength(0);
       expect(
         resolveSessionEntrySelection({ agentId: "main", sessionKey, storePath }),
       ).toMatchObject({
@@ -2500,6 +2525,35 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)).toMatchObject({ model: "newer", updatedAt: 20 });
   });
 
+  it("replaces a status-selected entry whose participants are projected only inside the transaction", async () => {
+    const scope = { sessionKey: "agent:main:participant-replacement", storePath };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "participant-replacement",
+      status: "running",
+      updatedAt: 10,
+    });
+    // No owner or createdActor, so this participant survives owner filtering and the
+    // transaction-side read hydrates fields the status-selected snapshot never sees.
+    recordSessionParticipant(scope, {
+      actor: { id: "8167215807", type: "human" },
+      source: "channel",
+    });
+
+    await applySessionEntryReplacements({
+      statuses: ["running"],
+      storePath,
+      update: (entries) => ({
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          entry: { ...entry, abortedLastRun: true },
+          sessionKey,
+        })),
+        result: undefined,
+      }),
+    });
+
+    expect(loadSessionEntry(scope)).toMatchObject({ abortedLastRun: true });
+  });
+
   it("awaits lifecycle builders outside transactions while keeping their commit indivisible", async () => {
     const scope = { sessionKey: "agent:main:lifecycle-prepare", storePath };
     await upsertSessionEntryCore(scope, {
@@ -3150,6 +3204,7 @@ describe("session accessor seam", () => {
       try {
         result = await persistSessionTranscriptTurn(scope, {
           ...(guarded ? { expectedSessionId: scope.sessionId } : {}),
+          runId: "run-ordered-turn",
           messages: [
             {
               message: {
@@ -3212,6 +3267,7 @@ describe("session accessor seam", () => {
           },
           messageId: result.messages[1]?.messageId,
           messageSeq: 3,
+          runId: "run-ordered-turn",
         },
       ]);
       expect(internalUpdates).toEqual([

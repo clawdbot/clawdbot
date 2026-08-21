@@ -61,6 +61,8 @@ type LazyCustomElementRequest = LazyCustomElementRequestState & {
 export class LazyCustomElementRequestController {
   private current: LazyCustomElementRequest | undefined;
   private readonly preloads = new Set<string>();
+  private active: OptionalCustomElement | undefined;
+  private activeDismissed = false;
 
   constructor(
     private readonly host: UpdatingHost,
@@ -96,6 +98,23 @@ export class LazyCustomElementRequestController {
     this.load(request);
   }
 
+  requestWhileActive(element: OptionalCustomElement, active: boolean): void {
+    if (active) {
+      if (this.active !== element) {
+        this.active = element;
+        this.activeDismissed = false;
+      }
+    } else if (this.active === element) {
+      this.active = undefined;
+      this.activeDismissed = false;
+    }
+    if (!active && this.current?.element === element) {
+      this.abandon();
+    } else {
+      this.pumpActive();
+    }
+  }
+
   retry(): void {
     const request = this.current;
     if (request?.status !== "error") {
@@ -117,6 +136,9 @@ export class LazyCustomElementRequestController {
 
   close(): void {
     if (this.current) {
+      if (this.current.element === this.active) {
+        this.activeDismissed = true;
+      }
       this.onClose?.();
       this.abandon();
     }
@@ -126,6 +148,18 @@ export class LazyCustomElementRequestController {
     if (this.current) {
       this.current = undefined;
       this.host.requestUpdate();
+      this.pumpActive();
+    }
+  }
+
+  private pumpActive(): void {
+    if (
+      this.active &&
+      !this.activeDismissed &&
+      !this.current &&
+      !isOptionalElementDefined(this.active)
+    ) {
+      this.request(this.active);
     }
   }
 

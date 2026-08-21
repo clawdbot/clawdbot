@@ -13,10 +13,10 @@ inputs:
     description: Expected Node.js version already installed by actions/setup-node.
     required: false
     default: ""
-  use-actions-cache:
-    description: Whether actions/cache should restore the pnpm store.
+  cache-mode:
+    description: Cache authority for this setup action (off, restore, or read-write).
     required: false
-    default: "true"
+    default: "off"
 outputs:
   pnpm-version:
     description: Resolved pnpm version activated by the setup action.
@@ -40,10 +40,18 @@ runs:
       id: setup-pnpm
       shell: bash
       env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
         PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}
         REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
       run: |
         set -euo pipefail
+        case "$CACHE_MODE" in
+          off|restore|read-write) ;;
+          *)
+            echo "::error::Invalid cache-mode input: '$CACHE_MODE' (expected off, restore, or read-write)"
+            exit 2
+            ;;
+        esac
         project_dir="$(dirname "$PACKAGE_MANAGER_FILE")"
         if [[ ! -f "$PACKAGE_MANAGER_FILE" ]]; then
           echo "::error::package manager file not found: $PACKAGE_MANAGER_FILE"
@@ -88,7 +96,7 @@ runs:
 
     - name: Resolve pnpm store path
       id: pnpm-store
-      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
+      if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -98,7 +106,7 @@ runs:
 
     - name: Restore pnpm store cache
       id: pnpm-store-cache
-      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
+      if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}

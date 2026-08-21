@@ -1,8 +1,6 @@
 name: Mantis Telegram Live
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       candidate_ref:
@@ -231,6 +229,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -238,7 +237,7 @@ jobs:
         run: pnpm build
 
       - name: Cache Mantis candidate pnpm store
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.local/share/pnpm/store

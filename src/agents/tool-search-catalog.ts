@@ -140,6 +140,7 @@ function restoreToolSearchCatalog(params: {
   };
   params.catalogRef.current = next;
   catalogFingerprints.set(next, params.fingerprint);
+  params.catalogRef.onChange?.();
 }
 
 function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCatalogSession): void {
@@ -290,6 +291,7 @@ function registerToolSearchCatalog(params: {
   };
   catalogFingerprints.set(next, catalogEntriesFingerprint(next.entries));
   params.catalogRef.current = next;
+  params.catalogRef.onChange?.();
   return next;
 }
 
@@ -301,7 +303,10 @@ export function clearToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
 }): void {
   if (params.catalogRef) {
+    params.catalogRef.onDispose?.();
     params.catalogRef.current = undefined;
+    delete params.catalogRef.onChange;
+    delete params.catalogRef.onDispose;
   }
   if (!params.runId?.trim()) {
     const snapshotKey = reusableCatalogKey(params);
@@ -332,6 +337,7 @@ export function restrictToolSearchCatalog(params: {
   }
   current.entries = entries;
   catalogFingerprints.set(current, catalogEntriesFingerprint(entries));
+  params.catalogRef?.onChange?.();
   return entries.length;
 }
 
@@ -347,9 +353,14 @@ export function visibleCatalogEntries(
   catalog: ToolSearchCatalogSession,
   options?: CatalogVisibilityOptions,
 ): ToolSearchCatalogEntry[] {
-  return options?.includeMcp === false
-    ? catalog.entries.filter((entry) => entry.source !== "mcp")
-    : catalog.entries;
+  const { includeMcp, allowedIds } = options ?? {};
+  if (includeMcp !== false && !allowedIds) {
+    return catalog.entries;
+  }
+  return catalog.entries.filter(
+    (entry) =>
+      (includeMcp !== false || entry.source !== "mcp") && (!allowedIds || allowedIds.has(entry.id)),
+  );
 }
 
 export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
@@ -485,7 +496,7 @@ export function addClientToolsToToolCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
   const catalogRef = params.catalogRef;
-  if (!params.enabled || !catalogRef?.current) {
+  if (!params.enabled || !catalogRef?.current || params.tools.length === 0) {
     return { tools: params.tools, compacted: false, catalogToolCount: 0 };
   }
   registerToolSearchCatalog({

@@ -346,9 +346,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
           "<b>Shelling</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>\n<b>Update</b> <code>tests passed</code>",
         ),
       );
-      // A tool-progress-only window with nothing to summarize is torn down via the
-      // deferred-delete reposition (new content first, delete later), not a bare
-      // immediate clear/delete or forceNewMessage.
+      // Retire a tool-progress-only window by repositioning, with its delete deferred.
       expect(draftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
       expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
       expect(draftStream.clear).not.toHaveBeenCalled();

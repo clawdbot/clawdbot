@@ -1097,9 +1097,9 @@ export const en: TranslationMap = {
     unread: "Unread",
     automationAttached: "Automation attached",
     incognito: "Incognito session",
-    cloudWorkerPlacement: "Runner: {state}",
-    cloudWorkerPlacementConflict: "Runner: {state} · 1 workspace conflict",
-    cloudWorkerPlacementConflicts: "Runner: {state} · {count} workspace conflicts",
+    cloudWorkerPlacement: "Placement: {state}",
+    cloudWorkerPlacementConflict: "Placement: {state} · 1 workspace conflict",
+    cloudWorkerPlacementConflicts: "Placement: {state} · {count} workspace conflicts",
     cloudWorkerDiskWarning: "Cloud session disk space is low",
     cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
@@ -1150,7 +1150,6 @@ export const en: TranslationMap = {
     stopCloudWorkerConfirmAction: "Stop worker",
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
-    cloudWorkerStopResult: 'Cloud worker for "{session}" is {state}.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',
@@ -4694,6 +4693,7 @@ export const en: TranslationMap = {
     providerUsage: {
       title: "Provider plans & billing",
       subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      unavailable: "Provider usage is unavailable; the last request failed. Refresh to retry.",
       balance: "Balance",
       spend: "Usage",
       budget: "Budget",
@@ -5596,6 +5596,9 @@ export const en: TranslationMap = {
       copyFailed: "Could not copy this image. Check clipboard access and try again.",
       downloadFailed: "Could not download this image. Try again.",
       loadFailed: "Could not load this image. Try again.",
+      zoomIn: "Zoom in",
+      zoomOut: "Zoom out",
+      resetZoom: "Reset zoom",
       close: "Close image preview",
       untitled: "Image",
     },
@@ -6592,9 +6595,13 @@ export const en: TranslationMap = {
       nameRequired: "Name is required.",
       scheduleAtInvalid: "Enter a valid date/time.",
       everyAmountInvalid: "Interval must be greater than 0.",
+      triggerIntervalTooShort:
+        "Condition-triggered automations must run at least every 30 seconds.",
       cronExprRequired: "Cron expression is required.",
       staggerAmountInvalid: "Stagger must be greater than 0.",
       triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
+      triggerScriptPayloadUnsupported:
+        "Script payloads cannot use condition triggers because both own the same saved state.",
       triggerScheduleUnsupported:
         "Condition triggers require an interval, cron, or stream schedule.",
       systemTextRequired: "System text is required.",

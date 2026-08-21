@@ -11,6 +11,7 @@ import {
   applyAgentModelDefaults,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveOnboardingSetupTarget,
   resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 
@@ -69,6 +70,27 @@ describe("onboarding agent target", () => {
     expect(resolveSystemAgentOnboardingTarget(config)).toMatchObject({
       agentId: "main",
       workspaceDir: "/srv/main",
+    });
+  });
+
+  it("uses the system agent for explicit fleets without changing legacy ownership", () => {
+    const entries = {
+      main: { workspace: "/srv/main" },
+      ops: { default: true, workspace: "/srv/ops" },
+    };
+
+    expect(
+      resolveOnboardingSetupTarget({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries,
+        },
+      }),
+    ).toMatchObject({ agentId: "main", workspaceDir: "/srv/main" });
+    expect(resolveOnboardingSetupTarget({ agents: { entries } })).toMatchObject({
+      agentId: "ops",
+      workspaceDir: "/srv/ops",
     });
   });
 

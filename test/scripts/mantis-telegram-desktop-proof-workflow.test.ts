@@ -13,6 +13,7 @@ const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
+const DISPATCH_WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof-dispatch.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
@@ -20,12 +21,14 @@ const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
+  id?: string;
   if?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
   uses?: string;
-  with?: Record<string, boolean | string>;
+  with?: Record<string, boolean | number | string>;
 };
 
 type WorkflowJob = {
@@ -39,6 +42,12 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    issue_comment?: {
+      types?: string[];
+    };
+    pull_request_target?: {
+      types?: string[];
+    };
     workflow_dispatch?: {
       inputs?: Record<
         string,
@@ -136,12 +145,27 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow.permissions?.actions).toBe("read");
     expect(leaseRun).toContain("lease-restore");
     expect(leaseRun).toContain("until node --import tsx");
-    expect(leaseRun).toContain("deadline=$(( SECONDS + 15 * 60 ))");
-    expect(leaseRun).toContain("still leased by another run after 15 minutes");
-    expect(leaseRun).toContain("sleep 60");
+    expect(leaseRun).toContain("lease_deadline=$(( SECONDS + 4 * 60 * 60 ))");
+    expect(leaseRun).toContain("remained busy for four hours");
+    expect(leaseRun).not.toContain("15 * 60");
+    expect(leaseRun).toContain("sleep 15");
     expect(leaseRun.indexOf('echo "lease_file=$credential_dir/lease.json"')).toBeLessThan(
       leaseRun.indexOf("until node --import tsx"),
     );
+  });
+
+  it("reports an honest blocked proof without failing the workflow", () => {
+    const trusted = workflowStep("Restore and validate trusted lane evidence").run ?? "";
+    const inspect = workflowStep("Inspect Mantis evidence manifest").run ?? "";
+    const fail = workflowStep("Fail when Mantis Telegram desktop proof failed");
+
+    expect(trusted).toContain('lane_status="blocked"');
+    expect(trusted).toContain('|| "$baseline_status" == "blocked"');
+    expect(trusted).toContain('[[ "$lane_status" == "pass" || "$lane_status" == "fail" ]]');
+    expect(trusted).toContain('.comparison.outcome == "blocked"');
+    expect(trusted).not.toContain("comparisonPass");
+    expect(inspect).toContain(".comparison.outcome");
+    expect(fail.if).toContain("steps.inspect.outputs.comparison_status != 'blocked'");
   });
 
   it("releases the runner Telegram QA lease after the agent", () => {
@@ -294,19 +318,103 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).toContain("throw error;");
   });
 
-  it("requires explicit maintainer dispatch before executing a PR worktree", () => {
+  it("routes maintainer comments and ClawSweeper labels to the proof agent", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
+    const dispatchWorkflow = parse(readFileSync(DISPATCH_WORKFLOW, "utf8")) as Workflow;
+    const dispatchText = readFileSync(DISPATCH_WORKFLOW, "utf8");
+    const dispatch = dispatchWorkflow.jobs?.dispatch;
+    const resolver = workflow.jobs?.resolve_request;
+    const capture = workflow.jobs?.run_telegram_desktop_proof;
 
     expect(workflow.on?.workflow_dispatch).toBeDefined();
     expect(workflow.on?.workflow_dispatch?.inputs?.approved_head_sha?.required).toBe(false);
-    expect(workflowText).not.toContain("issue_comment:");
-    expect(workflowText).not.toContain("pull_request_target:");
-    expect(workflowText).not.toContain("clear_issue_comment_reaction:");
+    expect(workflow.on?.workflow_dispatch?.inputs?.request_source?.required).toBe(false);
+    expect(workflow.on?.issue_comment).toBeUndefined();
+    expect(workflow.on?.pull_request_target).toBeUndefined();
+    expect(dispatchWorkflow.on?.issue_comment?.types).toEqual(["created"]);
+    expect(dispatchWorkflow.on?.pull_request_target?.types).toEqual(["labeled"]);
+    expect(dispatchWorkflow.permissions).toEqual({
+      actions: "write",
+      issues: "write",
+      "pull-requests": "read",
+    });
+    expect(dispatchText).toContain("@openclaw-mantis");
+    expect(dispatchText).not.toContain("requestsDesktopProof");
+    expect(dispatchText).toContain("createForIssueComment");
+    expect(dispatchText).toContain('content: "eyes"');
+    expect(dispatchText).toContain('.replace(/(?:@|\\/)openclaw-mantis/giu, "")');
+    expect(dispatchText).toContain('new Set(["admin", "maintain", "write"])');
+    expect(dispatchText).toContain('context.actor !== "clawsweeper[bot]"');
+    expect(dispatchText).toContain("Ignoring Mantis label applied by");
+    expect(dispatchText).toContain("actions.createWorkflowDispatch");
+    expect(dispatchText).toContain('workflow_id: "mantis-telegram-desktop-proof.yml"');
+    expect(dispatchText).toContain('inputs.allow_fork_candidate = "true"');
+    expect(dispatchText).toContain("inputs.approved_head_sha = pr.head.sha");
+    expect(dispatchText).toContain("pr.head.repo?.full_name");
+    expect(dispatchText).toContain("if (!pr.head.repo)");
+    expect(dispatchText).not.toContain("actions/checkout");
+    expect(dispatchText).not.toContain("secrets.");
+    expect(dispatch?.steps).toHaveLength(1);
+    expect(workflowText).toContain('setOutput("request_source", requestSource)');
+    expect(workflowText).toContain('context.actor === "github-actions[bot]"');
+    expect(workflowText).toContain(
+      'const dispatcherSources = new Set(["clawsweeper_label", "issue_comment"]);',
+    );
+    expect(workflowText).toContain("dispatcherSources.has(inputs.request_source)");
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
-    expect(workflowText).not.toContain("allow-bot-users: clawsweeper[bot]");
-    expect(workflowText).toContain('setOutput("request_source", "workflow_dispatch")');
+    expect(workflowText).not.toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
     expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
+
+    const startedToken = resolver?.steps?.find(
+      (step) => step.name === "Create Mantis status token",
+    );
+    const startedComment = resolver?.steps?.find(
+      (step) => step.name === "Report Mantis run started",
+    );
+    const fallbackComment = resolver?.steps?.find(
+      (step) => step.name === "Report Mantis start failure with workflow token",
+    );
+    expect(startedToken?.if).toContain("request_source == 'issue_comment'");
+    expect(startedToken?.with?.["permission-pull-requests"]).toBe("write");
+    expect(startedComment?.["continue-on-error"]).toBe(true);
+    expect(startedComment?.with?.script).toContain("Mantis started this proof.");
+    expect(startedComment?.with?.script).toContain("actions/runs/${process.env.GITHUB_RUN_ID}");
+    expect(startedComment?.with?.script).toContain("mantis-telegram-desktop-proof:");
+    expect(startedComment?.with?.script).toContain("GITHUB_RUN_ATTEMPT");
+    expect(startedComment?.with?.script).toContain("issues.createComment");
+    expect(startedComment?.with?.script).toContain("issues.deleteComment");
+    expect(fallbackComment?.if).toContain("steps.mantis_status_token.outcome != 'success'");
+    expect(fallbackComment?.if).toContain("steps.mantis_status_comment.outcome != 'success'");
+    expect(fallbackComment?.with?.["github-token"]).toBe("${{ github.token }}");
+    expect(fallbackComment?.["continue-on-error"]).toBeUndefined();
+    expect(fallbackComment?.with?.script).toContain("mantis-telegram-desktop-proof");
+    expect(fallbackComment?.with?.script).toContain("Mantis could not start this proof.");
+    expect(fallbackComment?.with?.script).toContain("core.setFailed");
+
+    const proofSteps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
+    const evidenceComment = proofSteps.find(
+      (step) => step.name === "Comment PR with inline QA evidence",
+    );
+    const failureComment = proofSteps.find((step) => step.name === "Report failed Mantis proof");
+    expect(evidenceComment?.id).toBe("publish_evidence");
+    expect(failureComment?.if).toContain("always()");
+    expect(failureComment?.if).toContain("request_source == 'issue_comment'");
+    expect(failureComment?.if).toContain("steps.publish_evidence.outcome != 'success'");
+    expect(failureComment?.with?.script).toContain("Mantis could not complete this proof.");
+    expect(failureComment?.with?.script).toContain("issues.updateComment");
+    expect(failureComment?.with?.script).toContain("skipping stale failure output");
+    expect(evidenceComment?.run).toContain(
+      "mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+    );
+    expect(evidenceComment?.run).toContain("--create-missing false");
+
+    expect(capture?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(workflowText).not.toContain("Classify visible behavior");
+    expect(workflowText).not.toContain("visibility_decision");
+    expect(workflow.jobs?.report_no_visible_change).toBeUndefined();
     expect(workflowStep("Upload Mantis Telegram desktop artifacts").if).toContain(
       "steps.trusted_evidence.outcome == 'success'",
     );
@@ -326,9 +434,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
-    expect(captureJob?.if).toBe(
-      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
-    );
+    expect(captureJob?.if).toContain("needs.resolve_request.outputs.publish_artifact_name == ''");
     expect(workflow.jobs?.validate_refs).toBeUndefined();
     expect(publishJob?.if).toBe(
       "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",
@@ -579,6 +685,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
     const create = workflowStep("Create exact proof worktrees");
+    const setup = workflowStep("Setup Node environment");
     const restore = workflowStep("Restore exact baseline build");
     const baseline = workflowStep("Prepare baseline proof build");
     const save = workflowStep("Save exact baseline build");
@@ -602,6 +709,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(createRun).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
     expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
     expect(restore.uses).toContain("actions/cache/restore@");
+    expect(setup.with?.["cache-mode"]).toBe("read-write");
+    expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(restore.with?.key).toContain("needs.resolve_request.outputs.baseline_revision");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
@@ -617,7 +726,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(baselineRun).toContain(".artifacts/build-all-cache");
     expect(baselineRun).toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
     expect(baselineRun).toContain("-type f -links +1");
-    expect(save.if).toBe("steps.baseline_build_cache.outputs.cache-hit != 'true'");
+    expect(save.if).toContain("steps.baseline_build_cache.outputs.cache-hit != 'true'");
     expect(save.uses).toContain("actions/cache/save@");
     expect(save.with?.path).toBe(restore.with?.path);
     expect(candidate.if).toBeUndefined();
@@ -889,7 +998,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(laneScript).toContain("/proc/self/fd/${descriptor}");
     expect(laneScript).not.toContain("readRecorderSession");
     expect(laneScript).toContain('"artifacts"');
-    expect(laneScript).toContain('status: status === "complete" ? "pass" : "fail"');
+    expect(laneScript).toContain(
+      'status: status === "complete" ? "pass" : status === "blocked" ? "blocked" : "fail"',
+    );
     expect(workflow).toContain("if .sutAttestation == null then");
     expect(workflow).toContain('.status == "infra-error" and .artifacts == {} and .sendCount == 0');
     expect(workflow).toContain(
@@ -937,7 +1048,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("start --repo-root <prepared-root>");
     expect(prompt).toContain("MANTIS_BASELINE_ROOT");
     expect(prompt).toContain("MANTIS_CANDIDATE_ROOT");
-    expect(prompt).not.toContain("--sut-container");
     expect(prompt).toContain('--baseline-repo-root "$GITHUB_WORKSPACE"');
     expect(prompt).toContain('--candidate-repo-root "$GITHUB_WORKSPACE"');
     expect(workflow).toContain(
@@ -955,7 +1065,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).toContain('"$runtime_parent/attestations/$lane.json"');
     const attestationValidation =
       workflowStep("Restore and validate trusted lane evidence").run ?? "";
-    expect(attestationValidation).toContain('[[ "$lane_status" != "skipped" ]]');
     expect(attestationValidation).not.toContain('if [[ "$lane_status" == "skipped"');
     expect(attestationValidation.indexOf(".comparison[$lane].sha == $sha")).toBeLessThan(
       attestationValidation.indexOf('"$runtime_parent/attestations/$lane.json"'),

@@ -11,6 +11,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
@@ -30,6 +31,7 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const QUERY_PAGE_READ_CONCURRENCY = 16;
+const WIKI_SNIPPET_MAX_CHARS = 700;
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -819,10 +821,10 @@ function getMatchingClaims(page: QueryableWikiPage, queryLower: string): WikiCla
 function buildPageSnippet(page: QueryableWikiPage, query: string): string {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
   const matchingClaim = getMatchingClaims(page, queryLower)[0];
-  if (matchingClaim) {
-    return matchingClaim.text;
-  }
-  return buildSnippet(page.raw, query);
+  return truncateUtf16Safe(
+    matchingClaim?.text ?? buildSnippet(page.raw, query),
+    WIKI_SNIPPET_MAX_CHARS,
+  );
 }
 
 function scorePage(page: QueryableWikiPage, query: string, mode: WikiSearchMode): number {

@@ -562,6 +562,64 @@ describe("searchMemoryWiki", () => {
     expect(results[0]?.snippet).toBe("# Alias Carrier");
   });
 
+  it.each([
+    {
+      name: "oversized body lines",
+      source: "body",
+      text: `needle ${"x".repeat(20_000)}`,
+      expected: `needle ${"x".repeat(693)}`,
+    },
+    {
+      name: "oversized structured claims",
+      source: "claim",
+      text: `needle ${"x".repeat(20_000)}`,
+      expected: `needle ${"x".repeat(693)}`,
+    },
+    {
+      name: "UTF-16 surrogate pairs at the snippet boundary",
+      source: "body",
+      text: `needle ${"x".repeat(692)}🤖tail`,
+      expected: `needle ${"x".repeat(692)}`,
+    },
+  ])(
+    "bounds $name before search results reach model context",
+    async ({ source, text, expected }) => {
+      const { rootDir, config } = await createQueryVault({ initialize: true });
+      await fs.writeFile(
+        path.join(rootDir, "entities", "bounded-snippet.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.bounded-snippet",
+            title: "Bounded Snippet",
+            ...(source === "claim"
+              ? {
+                  claims: [
+                    {
+                      id: "claim.bounded-snippet",
+                      text,
+                      status: "supported",
+                      confidence: 0.9,
+                      evidence: [],
+                    },
+                  ],
+                }
+              : {}),
+          },
+          body:
+            source === "claim" ? "# Bounded Snippet\n\nUnrelated body.\n" : `# Wiki\n\n${text}\n`,
+        }),
+        "utf8",
+      );
+
+      const results = await searchMemoryWiki({ config, query: "needle" });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.snippet).toBe(expected);
+      expect(results[0]?.snippet.length).toBeLessThanOrEqual(700);
+    },
+  );
+
   it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

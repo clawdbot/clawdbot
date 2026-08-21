@@ -178,7 +178,7 @@ eval "$(xdotool getwindowgeometry --shell "$win")"
 printf '%s %s %s %s\n' "$X" "$Y" "$WIDTH" "$HEIGHT"`;
 }
 
-export function renderHideTelegramWindow(): string {
+function renderHideTelegramWindow(): string {
   return `set -euo pipefail
 export DISPLAY=:99
 win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"

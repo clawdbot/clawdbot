@@ -399,15 +399,21 @@ describe("createCronExitWatchers", () => {
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
-    w.reconcile([]);
+    let drained = false;
+    const drain = w.cancelAll().then(() => {
+      drained = true;
+    });
     expect(cancelled).toContain("cron-exit:job-a");
     expect(w.activeJobIds()).toEqual(["job-a"]);
+    await flush();
+    expect(drained).toBe(false);
 
     expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
       exitCode: null,
       reason: "manual-cancel",
     });
-    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
+    await drain;
+    expect(w.activeJobIds()).toEqual([]);
   });
 
   it("does not fire a job whose watcher was cancelled before exit", async () => {
@@ -455,11 +461,17 @@ describe("createCronExitWatchers", () => {
       reason: "exit",
     });
     await vi.waitFor(() => expect(persistCompletion).toHaveBeenCalledOnce());
-    w.reconcile([]);
+    let drained = false;
+    const drain = w.cancelAll().then(() => {
+      drained = true;
+    });
     expect(w.activeJobIds()).toEqual(["job-a"]);
+    await flush();
+    expect(drained).toBe(false);
 
     releasePersist(releaseCompletion);
-    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
+    await drain;
+    expect(w.activeJobIds()).toEqual([]);
     expect(fireOnExit).not.toHaveBeenCalled();
     expect(releaseCompletion).toHaveBeenCalledOnce();
   });

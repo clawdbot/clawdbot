@@ -8,6 +8,24 @@ import {
 } from "./tailscale-route-owner-protocol.js";
 import { runTailscaleRouteOwner } from "./tailscale-route-owner.worker.js";
 
+function spawnRouteOwnerFixture() {
+  const workerPath = fileURLToPath(new URL("./tailscale-route-owner.worker.ts", import.meta.url));
+  const fixturePath = fileURLToPath(
+    new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
+  );
+  const worker = fork(
+    workerPath,
+    [
+      TAILSCALE_ROUTE_OWNER_ARG,
+      JSON.stringify({ argv: [fixturePath, "serve", "--yes", "--bg=false", "18789"] }),
+    ],
+    { execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "ignore", "ipc"] },
+  );
+  const messages: TailscaleRouteOwnerMessage[] = [];
+  worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
+  return { messages, worker };
+}
+
 describe("Tailscale route owner", () => {
   it("reports readiness and terminates the foreground claim when its owner stops", async () => {
     const messages: TailscaleRouteOwnerMessage[] = [];
@@ -49,22 +67,7 @@ describe("Tailscale route owner", () => {
   it.runIf(process.platform !== "win32")(
     "terminates the claim when the Gateway IPC owner disappears",
     async () => {
-      const workerPath = fileURLToPath(
-        new URL("./tailscale-route-owner.worker.ts", import.meta.url),
-      );
-      const fixturePath = fileURLToPath(
-        new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
-      );
-      const worker = fork(
-        workerPath,
-        [
-          TAILSCALE_ROUTE_OWNER_ARG,
-          JSON.stringify({ argv: [fixturePath, "serve", "--yes", "--bg=false", "18789"] }),
-        ],
-        { execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "ignore", "ipc"] },
-      );
-      const messages: TailscaleRouteOwnerMessage[] = [];
-      worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
+      const { messages, worker } = spawnRouteOwnerFixture();
       try {
         await vi.waitFor(() => {
           expect(messages).toContainEqual({ type: "ready" });
@@ -80,6 +83,46 @@ describe("Tailscale route owner", () => {
       } finally {
         if (worker.exitCode === null && worker.signalCode === null) {
           worker.kill("SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "terminates the claim before exiting on an interactive interrupt",
+    async () => {
+      const { messages, worker } = spawnRouteOwnerFixture();
+      let routePid: number | undefined;
+      try {
+        await vi.waitFor(() => {
+          expect(messages).toContainEqual({ type: "ready" });
+        });
+        const spawned = messages.find((message) => message.type === "spawned");
+        if (!spawned) {
+          throw new Error("route owner did not report its claim process");
+        }
+        routePid = spawned.pid;
+        const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => {
+            worker.once("exit", (code, signal) => resolve({ code, signal }));
+          },
+        );
+        worker.kill("SIGINT");
+
+        await expect(exit).resolves.toEqual({ code: 0, signal: null });
+        await vi.waitFor(() => {
+          expect(() => process.kill(spawned.pid, 0)).toThrow();
+        });
+      } finally {
+        if (worker.exitCode === null && worker.signalCode === null) {
+          worker.kill("SIGKILL");
+        }
+        if (routePid) {
+          try {
+            process.kill(routePid, "SIGKILL");
+          } catch {
+            // Already released by the worker.
+          }
         }
       }
     },

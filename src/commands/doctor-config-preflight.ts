@@ -1,9 +1,9 @@
 /** Config preflight for doctor: legacy config/state migration, recovery, and snapshot loading. */
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
   parseConfigJson5,
-  preserveConfigSnapshotAsClobbered,
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
@@ -409,14 +409,8 @@ export async function runDoctorConfigPreflight(
         typeof snapshot.raw === "string" &&
         !parseConfigJson5(snapshot.raw).ok
       ) {
-        const clobberedPath = await preserveConfigSnapshotAsClobbered(snapshot);
-        if (!clobberedPath) {
-          throw new Error(
-            `Config could not be parsed or recovered, and doctor could not preserve a .clobbered snapshot. The original remains unchanged at ${snapshot.path}; refusing to apply repairs.`,
-          );
-        }
         throw new Error(
-          `Config could not be parsed or recovered. Original preserved at ${clobberedPath}. The current file remains unchanged; refusing to apply repairs.`,
+          `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`,
         );
       }
     }

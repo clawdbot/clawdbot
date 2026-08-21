@@ -70,7 +70,7 @@ const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent_v2": false,
 };
 
-// Exact Codex 0.147 registry features that can expose a model-visible tool or
+// Exact Codex 0.148 registry features that can expose a model-visible tool or
 // host capability. One list owns both the thread deny patch and requirement pin rejection.
 const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "apps",
@@ -141,6 +141,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 ]);
 
 const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
+  "packagedDefaults",
   "mdm",
   "system",
   "enterpriseManaged",

@@ -378,11 +378,20 @@ suite.define(() => {
     { label: "mobile", viewport: { height: 844, width: 390 } },
   ])(
     "keeps streamed text visible when a chat error terminates the turn on $label",
-    async ({ viewport }) => {
+    async ({ label, viewport }) => {
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
+        ...(artifactDir
+          ? {
+              recordVideo: {
+                dir: artifactDir,
+                size: { height: viewport.height, width: viewport.width },
+              },
+            }
+          : {}),
       });
       const page = await context.newPage();
       const gateway = await installMockGateway(page);
@@ -413,6 +422,19 @@ suite.define(() => {
           .locator(".chat-thread-inner")
           .getByText(partialText)
           .waitFor({ timeout: 10_000 });
+        await gateway.emitGatewayEvent("agent", {
+          data: {
+            args: { path: "README.md" },
+            name: "read",
+            phase: "start",
+            toolCallId: "call-before-terminal-error",
+          },
+          runId,
+          seq: 1,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
+        });
 
         const gatewayErrorText =
           "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
@@ -433,6 +455,13 @@ suite.define(() => {
           .locator(".chat-thread-inner")
           .getByText(partialText)
           .waitFor({ timeout: 10_000 });
+        expect(
+          await page.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
+        ).toBe(1);
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
+        }
         const alert = page.locator(".chat-run-error");
         await alert.getByText(errorText).waitFor({ timeout: 10_000 });
         expect(await alert.locator("button").count()).toBe(0);

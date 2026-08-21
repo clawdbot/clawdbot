@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
+import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
 import type { OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
@@ -67,10 +67,11 @@ export async function runSetupWizard(
 }
 
 async function runSetupWizardOnce(
-  opts: OnboardOptions,
+  initialOpts: OnboardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  let opts = initialOpts;
   const runtime = runtimeInput ?? defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   await onboardHelpers.printWizardHeader(runtime);
@@ -364,9 +365,12 @@ async function runSetupWizardOnce(
   const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
   const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
   const optionRemoteToken = normalizeOptionalString(opts.remoteToken);
+  const optionRemotePassword = normalizeOptionalString(opts.remotePassword);
   const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
   const remoteSeedConfig: OpenClawConfig =
-    opts.remoteUrl === undefined && opts.remoteToken === undefined
+    opts.remoteUrl === undefined &&
+    opts.remoteToken === undefined &&
+    opts.remotePassword === undefined
       ? baseConfig
       : {
           ...baseConfig,
@@ -377,10 +381,14 @@ async function runSetupWizardOnce(
               ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
               ...(opts.remoteToken !== undefined
                 ? { token: optionRemoteToken }
-                : remoteUrlChanged
+                : opts.remotePassword !== undefined || remoteUrlChanged
                   ? { token: undefined }
                   : {}),
-              ...(remoteUrlChanged ? { password: undefined } : {}),
+              ...(opts.remotePassword !== undefined
+                ? { password: optionRemotePassword }
+                : opts.remoteToken !== undefined || remoteUrlChanged
+                  ? { password: undefined }
+                  : {}),
             },
           },
         };
@@ -395,7 +403,7 @@ async function runSetupWizardOnce(
         cfg: remoteSeedConfig,
         env: process.env,
         mode: "remote",
-        explicitAuth: { token: optionRemoteToken },
+        explicitAuth: { token: optionRemoteToken, password: optionRemotePassword },
         ...(remoteUrlChanged
           ? { urlOverride: optionRemoteUrl, urlOverrideSource: "cli" as const }
           : {}),
@@ -491,6 +499,18 @@ async function runSetupWizardOnce(
     prompter,
     hasAuthoredRoster,
   });
+  if (opts.authChoice === undefined) {
+    const { inferAuthChoiceFromFlags } =
+      await import("../commands/onboard-non-interactive/local/auth-choice-inference.js");
+    const inferred = inferAuthChoiceFromFlags(opts, { config: baseConfig, workspaceDir });
+    if (inferred.matches.length > 1) {
+      runtime.error(
+        `Multiple provider credential flags (${inferred.matches.map((match) => match.label).join(", ")}). Use one flag or pass --auth-choice explicitly.`,
+      );
+      return runtime.exit(1);
+    }
+    opts = inferred.choice ? { ...opts, authChoice: inferred.choice } : opts;
+  }
   const firstAgent = await firstAgentOnboarding.promptFirstOnboardingAgent(
     hasAuthoredRoster,
     opts.agentName,
@@ -507,12 +527,14 @@ async function runSetupWizardOnce(
   }
   const preModelAuthConfig = nextConfig;
   let stagedModelAuth: SetupModelAuthCandidate | undefined;
-  if (!keepExistingModelConfig) {
+  const hasExplicitAuthSetup = opts.authChoice !== undefined && opts.authChoice !== "skip";
+  if (!keepExistingModelConfig || hasExplicitAuthSetup) {
     stagedModelAuth = await runSetupModelAuthStep({
       config: nextConfig,
       opts,
       prompter,
       runtime,
+      preserveExistingModelSelection: keepExistingModelConfig,
     });
     nextConfig = stagedModelAuth.config;
   }
@@ -550,7 +572,7 @@ async function runSetupWizardOnce(
     resolveAgentModelPrimaryValue(nextConfig.agents?.defaults?.model) !== undefined &&
     ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
-    const verificationTarget = resolveOnboardingAgentTarget(nextConfig);
+    const verificationTarget = resolveOnboardingSetupTarget(nextConfig);
     const verification = await offerLiveModelVerification({
       config: nextConfig,
       ...(stagedModelAuth
@@ -632,7 +654,7 @@ async function runSetupWizardOnce(
       allowConfigSizeDrop: false,
     });
   }
-  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  let onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
@@ -702,7 +724,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
-  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");

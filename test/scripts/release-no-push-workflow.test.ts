@@ -27,6 +27,7 @@ const UPDATE_MIGRATION = ".github/workflows/update-migration.yml";
 const PERFORMANCE = ".github/workflows/openclaw-performance.yml";
 const LIVE_BUILD = "scripts/test-live-build-docker.sh";
 const DOCKER_E2E_IMAGE_HELPER = "scripts/lib/docker-e2e-image.sh";
+const RELEASE_FILTER_VALIDATOR = resolve("scripts/github/validate-release-suite-filters.sh");
 
 type WorkflowInput = {
   default?: boolean | number | string;
@@ -191,7 +192,465 @@ function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
   expect(permissionAt(workflowJob.permissions, "packages", "none")).toBe("read");
 }
 
+function executeReleaseGroupCapture(
+  group: string,
+  runReleaseSoak = false,
+  liveSuiteFilter = "",
+  crossOsSuiteFilter = "",
+) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-groups-"));
+  const output = join(root, "github-output");
+  writeFileSync(output, "");
+  try {
+    const capture = step(
+      job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
+      "Capture selected inputs",
+    );
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", capture.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON_INPUT: "",
+        GITHUB_OUTPUT: output,
+        RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
+        RELEASE_CODEX_PLUGIN_SPEC_INPUT: "",
+        RELEASE_CROSS_OS_SUITE_FILTER_INPUT: crossOsSuiteFilter,
+        RELEASE_FAIL_FAST_INPUT: "false",
+        RELEASE_FILTER_VALIDATOR,
+        RELEASE_LIVE_SUITE_FILTER_INPUT: liveSuiteFilter,
+        RELEASE_MODE_INPUT: "both",
+        RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: "",
+        RELEASE_PACKAGE_SPEC_INPUT: "",
+        RELEASE_PROFILE_INPUT: "beta",
+        RELEASE_PROVIDER_INPUT: "openai",
+        RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
+        RELEASE_QA_SLACK_LIVE_CI_ENABLED: "false",
+        RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: "false",
+        RELEASE_REF_INPUT: "main",
+        RELEASE_RERUN_GROUP_INPUT: group,
+        RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
+        RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
+        RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+      },
+    });
+    const outputText = readFileSync(output, "utf8").trim();
+    const outputs = outputText
+      ? Object.fromEntries(
+          outputText.split("\n").map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+        )
+      : {};
+    return { outputs, result };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+function runReleaseGroupCapture(
+  group: string,
+  runReleaseSoak = false,
+  liveSuiteFilter = "",
+  crossOsSuiteFilter = "",
+): Record<string, string> {
+  const execution = executeReleaseGroupCapture(
+    group,
+    runReleaseSoak,
+    liveSuiteFilter,
+    crossOsSuiteFilter,
+  );
+  expect(execution.result.status, `${group}: ${execution.result.stderr}`).toBe(0);
+  return execution.outputs;
+}
+
+function executeParentFilterValidation(
+  group: string,
+  liveSuiteFilter = "",
+  crossOsSuiteFilter = "",
+) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-parent-filter-normalization-"));
+  const output = join(root, "github-output");
+  writeFileSync(output, "");
+  try {
+    const normalize = step(
+      job(readWorkflow(FULL_RELEASE), "resolve_target"),
+      "Validate suite filters",
+    );
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", normalize.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        RAW_CROSS_OS_SUITE_FILTER: crossOsSuiteFilter,
+        RAW_LIVE_SUITE_FILTER: liveSuiteFilter,
+        RELEASE_FILTER_VALIDATOR,
+        RERUN_GROUP: group,
+      },
+    });
+    return { output: readFileSync(output, "utf8"), result };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("release validation no-push transport", () => {
+  it("routes release retries through explicit concrete groups and resource gates", () => {
+    const full = readWorkflow(FULL_RELEASE);
+    const release = readWorkflow(RELEASE_CHECKS);
+    const umbrellaGroups = full.on?.workflow_dispatch?.inputs?.rerun_group?.options ?? [];
+    const releaseGroups = release.on?.workflow_dispatch?.inputs?.rerun_group?.options ?? [];
+    const dispatch = step(job(full, "release_checks"), "Dispatch and monitor release checks");
+    const capture = step(job(release, "resolve_target"), "Capture selected inputs");
+    const parentFilters = step(job(full, "resolve_target"), "Validate suite filters");
+
+    expect(umbrellaGroups).toEqual([
+      "all",
+      "ci",
+      "plugin-prerelease",
+      "install-smoke",
+      "cross-os",
+      "live-e2e",
+      "package",
+      "qa-parity",
+      "qa-live",
+      "npm-telegram",
+      "performance",
+    ]);
+    expect(umbrellaGroups).not.toContain("release-checks");
+    expect(umbrellaGroups).not.toContain("qa");
+    expect(releaseGroups).not.toContain("release-checks");
+    expect(releaseGroups).toContain("qa");
+    expect(parentFilters.env?.RELEASE_FILTER_VALIDATOR).toBe(
+      "workflow/scripts/github/validate-release-suite-filters.sh",
+    );
+    expect(capture.env?.RELEASE_FILTER_VALIDATOR).toBe(
+      "workflow/scripts/github/validate-release-suite-filters.sh",
+    );
+    expect(dispatch.run).toContain('-f rerun_group="$RERUN_GROUP"');
+    expect(dispatch.run).not.toContain("child_rerun_group");
+    const candidate = job(full, "prepare_release_candidate");
+    expect(candidate.if).not.toContain('"release-checks"');
+    expect(candidate.if).toContain(
+      'contains(fromJSON(\'["all","plugin-prerelease","cross-os","package"]\'), inputs.rerun_group)',
+    );
+    expect(candidate.if).toContain(
+      "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+    );
+    const verify = step(job(full, "summary"), "Verify child workflow results");
+    expect(verify.env?.LIVE_SUITE_FILTER).toBe(
+      "${{ needs.resolve_target.outputs.live_suite_filter }}",
+    );
+    expect(verify.run).toContain('[[ -n "${LIVE_SUITE_FILTER// }" ]] || candidate_required=1');
+
+    expect(capture.run).toContain(
+      "release_check_groups=(install-smoke cross-os package qa-parity)",
+    );
+    expect(capture.run).toContain("release_check_groups=(qa-parity qa-live)");
+    expect(capture.run).toContain("release_check_groups_json=");
+    expect(capture.run).toContain("package_required=false");
+    expect(capture.run).toContain("docker_required=false");
+    expect(job(release, "prepare_release_package").if).toBe(
+      "needs.resolve_target.outputs.package_required == 'true'",
+    );
+    expect(job(release, "docker_e2e_release_checks").if).toBe(
+      "needs.resolve_target.outputs.docker_required == 'true'",
+    );
+    expect(job(release, "install_smoke_release_checks").if).toBe(
+      "needs.resolve_target.outputs.install_smoke_scheduled == 'true'",
+    );
+    expect(job(release, "qa_lab_parity_lane_release_checks").if).toBe(
+      "needs.resolve_target.outputs.qa_parity_scheduled == 'true'",
+    );
+    expect(job(release, "qa_live_release_checks").if).toContain(
+      "needs.resolve_target.outputs.qa_live_scheduled == 'true'",
+    );
+  });
+
+  it.each([
+    {
+      group: "install-smoke",
+      groups: ["install-smoke"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "qa",
+      groups: ["qa-parity", "qa-live"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "qa-parity",
+      groups: ["qa-parity"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "qa-live",
+      groups: ["qa-live"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "cross-os",
+      groups: ["cross-os"],
+      packageRequired: "true",
+      dockerRequired: "false",
+    },
+    {
+      group: "package",
+      groups: ["package"],
+      packageRequired: "true",
+      dockerRequired: "false",
+    },
+    {
+      group: "live-e2e",
+      groups: ["live-e2e"],
+      packageRequired: "true",
+      dockerRequired: "true",
+    },
+  ])(
+    "maps $group to explicit release resources",
+    ({ group, groups, packageRequired, dockerRequired }) => {
+      const outputs = runReleaseGroupCapture(group);
+      expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(groups);
+      expect(outputs.package_required).toBe(packageRequired);
+      expect(outputs.docker_required).toBe(dockerRequired);
+    },
+  );
+
+  it("expands all only to the profile-selected concrete groups", () => {
+    const beta = runReleaseGroupCapture("all");
+    const soak = runReleaseGroupCapture("all", true);
+
+    expect(JSON.parse(beta.release_check_groups_json ?? "null")).toEqual([
+      "install-smoke",
+      "cross-os",
+      "package",
+      "qa-parity",
+    ]);
+    expect(beta.docker_required).toBe("false");
+    expect(JSON.parse(soak.release_check_groups_json ?? "null")).toEqual([
+      "install-smoke",
+      "cross-os",
+      "package",
+      "qa-parity",
+      "live-e2e",
+      "qa-live",
+    ]);
+    expect(soak.docker_required).toBe("true");
+  });
+
+  it("skips package and Docker prep for a focused repo live-E2E retry", () => {
+    const outputs = runReleaseGroupCapture("live-e2e", false, " Repo-E2E,\trepo-smoke ");
+
+    expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(["live-e2e"]);
+    expect(outputs.live_e2e_scheduled).toBe("true");
+    expect(outputs.live_suite_filter).toBe("repo-e2e,repo-smoke");
+    expect(outputs.repo_live_suite_filter).toBe("repo-e2e,repo-smoke");
+    expect(outputs.package_required).toBe("false");
+    expect(outputs.docker_required).toBe("false");
+  });
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty live filter %j before install-smoke scheduling",
+    (filter) => {
+      const parent = executeParentFilterValidation("install-smoke", filter);
+      const child = executeReleaseGroupCapture("install-smoke", false, filter);
+
+      expect(parent.result.status).not.toBe(0);
+      expect(parent.result.stderr).toContain(
+        "live_suite_filter must contain at least one suite selector",
+      );
+      expect(child.result.status).not.toBe(0);
+      expect(child.result.stderr).toContain(
+        "live_suite_filter must contain at least one suite selector",
+      );
+      expect(child.outputs.install_smoke_scheduled).toBeUndefined();
+    },
+  );
+
+  it.each([
+    "all",
+    "ci",
+    "plugin-prerelease",
+    "install-smoke",
+    "cross-os",
+    "live-e2e",
+    "package",
+    "qa-parity",
+    "npm-telegram",
+    "performance",
+  ])("parent rejects a QA selector with rerun_group=%s before scheduling", (group) => {
+    const { output, result } = executeParentFilterValidation(group, "qa-live-matrix");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "QA live_suite_filter selectors require rerun_group=qa or qa-live",
+    );
+    expect(output).toBe("");
+  });
+
+  it.each([
+    "all",
+    "ci",
+    "plugin-prerelease",
+    "install-smoke",
+    "cross-os",
+    "package",
+    "qa-parity",
+    "qa-live",
+    "npm-telegram",
+    "performance",
+  ])("parent rejects a repo-live selector with rerun_group=%s before scheduling", (group) => {
+    const { output, result } = executeParentFilterValidation(group, "repo-e2e");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Repo live_suite_filter selectors require rerun_group=live-e2e",
+    );
+    expect(output).toBe("");
+  });
+
+  it.each([
+    "all",
+    "ci",
+    "plugin-prerelease",
+    "install-smoke",
+    "live-e2e",
+    "package",
+    "qa-parity",
+    "qa-live",
+    "npm-telegram",
+    "performance",
+  ])("parent rejects a cross-OS selector with rerun_group=%s before scheduling", (group) => {
+    const { output, result } = executeParentFilterValidation(group, "", "windows/packaged-upgrade");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    expect(output).toBe("");
+  });
+
+  it.each([
+    ["qa-live", "qa-live-matrix", ""],
+    ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
+    ["cross-os", "", " Windows/Packaged-Upgrade "],
+  ])(
+    "parent accepts rerun_group=%s with its owned selector",
+    (group, liveSuiteFilter, crossOsSuiteFilter) => {
+      const { output, result } = executeParentFilterValidation(
+        group,
+        liveSuiteFilter,
+        crossOsSuiteFilter,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(output).not.toBe("");
+    },
+  );
+
+  it.each(["qa", "release-checks", "bogus", ""])(
+    "parent rejects unsupported controller rerun_group=%j before scheduling",
+    (group) => {
+      const { output, result } = executeParentFilterValidation(group);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`controller rerun_group is invalid: ${group}.`);
+      expect(output).toBe("");
+    },
+  );
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty live filter %j before live-E2E can widen or require prep",
+    (filter) => {
+      const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, filter);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live_suite_filter must contain at least one suite selector");
+      expect(outputs.live_e2e_scheduled).toBeUndefined();
+      expect(outputs.package_required).toBeUndefined();
+      expect(outputs.docker_required).toBeUndefined();
+    },
+  );
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty cross-OS filter %j before cross-OS scheduling",
+    (filter) => {
+      const parent = executeParentFilterValidation("cross-os", "", filter);
+      const child = executeReleaseGroupCapture("cross-os", false, "", filter);
+
+      expect(parent.result.status).not.toBe(0);
+      expect(parent.result.stderr).toContain(
+        "cross_os_suite_filter must contain at least one suite selector",
+      );
+      expect(child.result.status).not.toBe(0);
+      expect(child.result.stderr).toContain(
+        "cross_os_suite_filter must contain at least one suite selector",
+      );
+      expect(child.outputs.cross_os_scheduled).toBeUndefined();
+    },
+  );
+
+  it("fails before a QA selector can collapse into an unfiltered live-E2E run", () => {
+    const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, "qa-live-matrix");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "QA live_suite_filter selectors require rerun_group=qa or qa-live",
+    );
+    expect(outputs.repo_live_suite_filter).toBeUndefined();
+    expect(outputs.live_e2e_scheduled).toBeUndefined();
+  });
+
+  it.each(["all", "install-smoke", "cross-os", "live-e2e", "package", "qa-parity"])(
+    "rejects a QA selector with rerun_group=%s",
+    (group) => {
+      const { result } = executeReleaseGroupCapture(group, false, "qa-live-matrix");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "QA live_suite_filter selectors require rerun_group=qa or qa-live",
+      );
+    },
+  );
+
+  it.each(["all", "install-smoke", "cross-os", "package", "qa", "qa-parity", "qa-live"])(
+    "rejects a repo-live selector with rerun_group=%s",
+    (group) => {
+      const { result } = executeReleaseGroupCapture(group, false, "repo-e2e");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "Repo live_suite_filter selectors require rerun_group=live-e2e",
+      );
+    },
+  );
+
+  it.each(["all", "install-smoke", "live-e2e", "package", "qa", "qa-parity", "qa-live"])(
+    "rejects a cross-OS selector with rerun_group=%s",
+    (group) => {
+      const { result } = executeReleaseGroupCapture(group, false, "", "windows/packaged-upgrade");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    },
+  );
+
+  it.each([
+    ["qa", "qa-live-matrix"],
+    ["qa-live", "qa-live-matrix"],
+    ["live-e2e", "repo-e2e"],
+  ])("accepts rerun_group=%s with selector %s", (group, filter) => {
+    const outputs = runReleaseGroupCapture(group, false, filter);
+    expect(outputs.rerun_group).toBe(group);
+  });
+
+  it("accepts a cross-OS selector only for the cross-OS group", () => {
+    const outputs = runReleaseGroupCapture("cross-os", false, "", "windows/packaged-upgrade");
+    expect(outputs.cross_os_suite_filter).toBe("windows/packaged-upgrade");
+  });
+
   it("builds planned live images locally without entering pull fallback", () => {
     const workflow = readWorkflow(LIVE_E2E);
     for (const jobName of [

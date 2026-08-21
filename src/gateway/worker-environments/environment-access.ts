@@ -180,7 +180,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     }
     const timeoutError = serviceError(
       "provider_failure",
-      "Worker tunnel did not connect within 3 minutes; check worker SSH reachability and retry",
+      "Worker tunnel did not connect within 3 minutes; check that the worker is online and reachable, then retry",
     );
     try {
       return await withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {

@@ -811,6 +811,19 @@ describe("gatherDaemonStatus", () => {
     }
   }, 1_000);
 
+  it.each(["bogus", "0", "-1", "1.5"])(
+    "rejects invalid status timeout %s before reading service state",
+    async (timeout) => {
+      await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(
+        `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "${timeout}".`,
+      );
+
+      expect(serviceReadCommand).not.toHaveBeenCalled();
+      expect(serviceIsLoaded).not.toHaveBeenCalled();
+      expect(serviceReadRuntime).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);
     serviceIsLoaded.mockResolvedValueOnce(false);

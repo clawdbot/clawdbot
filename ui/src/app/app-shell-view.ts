@@ -99,6 +99,7 @@ export interface ShellViewHost {
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
+  readonly onboardingMemoryImportElement: OptionalCustomElement;
   readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -225,6 +226,11 @@ export function renderApplicationShell(host: ShellViewHost) {
   if (!context || !runtime) {
     return nothing;
   }
+  if (host.routeState.routeId === undefined) {
+    return html`<main class="connect-splash" role="status" aria-label=${t("common.loading")}>
+      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
+    </main>`;
+  }
   const gatewaySnapshot = context.gateway.snapshot;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
@@ -299,6 +305,11 @@ export function renderApplicationShell(host: ShellViewHost) {
     canAdmin: operatorAccess.canAdmin,
   });
   const onboarding = host.onboardingMode;
+  const memoryImportActive = onboarding && activeRoute !== "custodian";
+  host.lazyCustomElements.requestWhileActive(
+    host.onboardingMemoryImportElement,
+    memoryImportActive,
+  );
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
   const mobileNavLayout = isMobileNavLayout();
   const mergedChatChrome = shouldMergeChatChrome({
@@ -437,6 +448,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
         onNavigate: (routeId, options) => host.navigate(routeId, options),
+        onOpenApprovals: () => host.openApprovals(),
         onPreload: (routeId) => context.preload(routeId),
         onSearchQueryChange: (nextQuery) => {
           void host.handleSettingsSearchQueryChange(nextQuery);
@@ -706,7 +718,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           host.navigate("apps");
         },
       })}
-      ${onboarding && activeRoute !== "custodian"
+      ${memoryImportActive && isOptionalElementDefined(host.onboardingMemoryImportElement)
         ? html`<openclaw-onboarding-memory-import
             .active=${true}
             .context=${context}

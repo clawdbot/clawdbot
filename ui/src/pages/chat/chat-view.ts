@@ -142,8 +142,8 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     gatewayClient?: GatewayBrowserClient | null;
     composerHoldToRecord?: boolean;
     suggestionComposer?: boolean;
-    typingActors?: readonly { id: string; label: string }[];
-    onTypingChange?: (typing: boolean) => void;
+    typingActors?: readonly { id: string; label: string; preview?: string }[];
+    onTypingChange?: (typing: boolean, preview?: string) => void;
     canSend: boolean;
     disabledReason: string | null;
     disabledBanner?: ChatComposerDisabledBanner;

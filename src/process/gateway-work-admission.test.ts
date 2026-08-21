@@ -5,6 +5,7 @@ import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  isGatewayRestartDrainError,
   isGatewaySubordinateWorkAdmissionClosed,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
@@ -22,6 +23,26 @@ import { runWithGatewayRootWorkAdmissionForTest } from "./gateway-work-admission
 
 beforeEach(resetGatewayWorkAdmission);
 afterEach(resetGatewayWorkAdmission);
+
+it("classifies draining errors only while an authoritative restart signal or drain is active", () => {
+  const error = new GatewayDrainingError();
+
+  expect(isGatewayRestartDrainError(error)).toBe(false);
+  expect(isGatewayRestartDrainError(new Error("GatewayDrainingError"))).toBe(false);
+
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(isGatewayRestartDrainError(error)).toBe(false);
+  expect(suspension?.rollback()).toBe(true);
+
+  const signal = beginGatewayRestartSignalAdmission();
+  expect(isGatewayRestartDrainError(error)).toBe(true);
+  expect(isGatewayRestartDrainError(new Error("gateway is draining for restart"))).toBe(false);
+  expect(signal?.rollback()).toBe(true);
+  expect(isGatewayRestartDrainError(error)).toBe(false);
+
+  markGatewayRestartDraining();
+  expect(isGatewayRestartDrainError(error)).toBe(true);
+});
 
 it("counts one nested root chain once and excludes the preparing caller", async () => {
   const outer = tryBeginGatewayRootWorkAdmission();

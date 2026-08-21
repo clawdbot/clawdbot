@@ -142,7 +142,7 @@ function createCronSubmitHarness(
     const result = await addCronJob(state);
     return { call: findRequestCall(request.mock.calls, method), result };
   };
-  return { state, submit };
+  return { request, state, submit };
 }
 
 function createCronEditHarness(job: CronJob) {
@@ -153,7 +153,7 @@ function createCronEditHarness(job: CronJob) {
     await addCronJob(state);
     return findRequestCall(request.mock.calls, "cron.update");
   };
-  return { state, submit };
+  return { request, state, submit };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
@@ -1331,6 +1331,46 @@ describe("cron controller", () => {
     });
   });
 
+  it.each(["cron.add", "cron.update"] as const)(
+    "preserves the trigger draft and inventory when %s rejects its syntax",
+    async (method) => {
+      const existingJob = createCronJob({
+        id: "job-condition-syntax",
+        name: "Conditional job",
+        trigger: { script: "return { fire: true }" },
+      });
+      const { request, state } = createCronSubmitHarness(existingJob.id, {
+        method,
+        jobs: [existingJob],
+        state: { cronCreateOpen: method === "cron.add" },
+        form: {
+          name: "Conditional job",
+          scheduleKind: "every",
+          everyAmount: "1",
+          everyUnit: "minutes",
+          payloadText: "run",
+          triggerEnabled: true,
+          triggerScript: "const x = ;",
+        },
+      });
+      const originalInventory = structuredClone(state.cronJobs);
+      const message =
+        "cron trigger script has a syntax error: Unexpected token (line 1, column 10)";
+      request.mockRejectedValue(new Error(message));
+
+      await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+      expect(state.cronError).toBe(message);
+      expect(state.cronForm.triggerScript).toBe("const x = ;");
+      expect(state.cronJobs).toEqual(originalInventory);
+      expect(state.cronCreateOpen).toBe(method === "cron.add");
+      if (method === "cron.update") {
+        expect(state.cronEditingJobId).toBe(existingJob.id);
+        expect(state.cronEditingJob?.trigger).toEqual(existingJob.trigger);
+      }
+    },
+  );
+
   it("clears an existing condition trigger from cron.update", async () => {
     const job = createCronJob({
       id: "job-clear-trigger",
@@ -1343,6 +1383,63 @@ describe("cron controller", () => {
     const call = await submit();
 
     expect(requestPatch(call).trigger).toBeNull();
+  });
+
+  it("requires an explicit clear before saving an existing script payload with a condition trigger", async () => {
+    const job = createCronJob({
+      id: "job-script-trigger-conflict",
+      name: "Conflicting script",
+      schedule: { kind: "every", everyMs: 30_000 },
+      payload: { kind: "script", script: "json({ state: {} })" },
+      trigger: { script: "json({ fire: true })" },
+      delivery: { mode: "none" },
+    });
+    const { request, state, submit } = createCronEditHarness(job);
+
+    expect(state.cronForm.triggerEnabled).toBe(true);
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.triggerScript).toBe("cron.errors.triggerScriptPayloadUnsupported");
+    expect(request).not.toHaveBeenCalled();
+
+    state.cronForm.triggerEnabled = false;
+    const call = await submit();
+
+    expect(requestPatch(call).trigger).toBeNull();
+    expect(requestPatch(call)).not.toHaveProperty("payload");
+  });
+
+  it.each(["agentTurn", "systemEvent", "command"] as const)(
+    "preserves condition-trigger authoring for %s payloads",
+    (payloadKind) => {
+      expect(
+        validateCronForm({
+          ...DEFAULT_CRON_FORM,
+          name: "Supported conditional automation",
+          payloadKind,
+          payloadLocked: payloadKind === "command",
+          payloadText: "run",
+          triggerEnabled: true,
+          triggerScript: "json({ fire: true })",
+        }).triggerScript,
+      ).toBeUndefined();
+    },
+  );
+
+  it("revalidates condition triggers when the payload changes to or from script", () => {
+    const form = {
+      ...DEFAULT_CRON_FORM,
+      name: "Payload transition",
+      payloadText: "run",
+      triggerEnabled: true,
+      triggerScript: "json({ fire: true })",
+    };
+
+    expect(validateCronForm({ ...form, payloadKind: "script", payloadLocked: true })).toMatchObject(
+      {
+        triggerScript: "cron.errors.triggerScriptPayloadUnsupported",
+      },
+    );
+    expect(validateCronForm({ ...form, payloadKind: "agentTurn" }).triggerScript).toBeUndefined();
   });
 
   it("sends lightContext=false in cron.update when clearing prior light-context setting", async () => {
@@ -1713,6 +1810,107 @@ describe("cron controller", () => {
   );
 
   it.each([
+    ["5", "seconds"],
+    ["29.999", "seconds"],
+    ["0.49", "minutes"],
+  ] as const)(
+    "rejects a condition-triggered interval below the Gateway minimum: %s %s",
+    async (everyAmount, everyUnit) => {
+      const request = createCronRequest("job-trigger-too-fast");
+      const state = createStateWithRequest(request, {
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "Conditional automation",
+          everyAmount,
+          everyUnit,
+          payloadText: "run",
+          triggerEnabled: true,
+          triggerScript: "json({ fire: true })",
+          deliveryMode: "none",
+        },
+      });
+
+      expect(await addCronJob(state)).toEqual({ saved: false });
+      expect(state.cronFieldErrors.everyAmount).toBe("cron.errors.triggerIntervalTooShort");
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["30", "seconds"],
+    ["0.5", "minutes"],
+  ] as const)(
+    "accepts a condition-triggered interval at the Gateway minimum: %s %s",
+    async (everyAmount, everyUnit) => {
+      const { submit } = createCronSubmitHarness("job-trigger-boundary", {
+        form: {
+          name: "Boundary automation",
+          everyAmount,
+          everyUnit,
+          payloadText: "run",
+          triggerEnabled: true,
+          triggerScript: "json({ fire: true })",
+          deliveryMode: "none",
+        },
+      });
+
+      const { call, result } = await submit();
+
+      expect(result.saved).toBe(true);
+      expect(requestPayload(call).schedule).toEqual({ kind: "every", everyMs: 30_000 });
+    },
+  );
+
+  it("blocks adding a condition trigger to an existing short-interval automation", async () => {
+    const job = createCronJob({
+      id: "job-existing-short",
+      name: "Existing short interval",
+      schedule: { kind: "every", everyMs: 5_000 },
+    });
+    const { request, state } = createCronEditHarness(job);
+    state.cronForm.triggerEnabled = true;
+    state.cronForm.triggerScript = "json({ fire: true })";
+
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.everyAmount).toBe("cron.errors.triggerIntervalTooShort");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("blocks shortening an existing condition-triggered automation below the minimum", async () => {
+    const job = createCronJob({
+      id: "job-shorten-triggered",
+      name: "Existing conditional automation",
+      schedule: { kind: "every", everyMs: 30_000 },
+      trigger: { script: "json({ fire: true })" },
+    });
+    const { request, state } = createCronEditHarness(job);
+    state.cronForm.everyAmount = "5";
+
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.everyAmount).toBe("cron.errors.triggerIntervalTooShort");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("allows a short interval again when removing an existing condition trigger", async () => {
+    const job = createCronJob({
+      id: "job-remove-short-trigger",
+      name: "Previously conditional automation",
+      schedule: { kind: "every", everyMs: 30_000 },
+      trigger: { script: "json({ fire: true })" },
+    });
+    const { state, submit } = createCronEditHarness(job);
+    state.cronForm.everyAmount = "5";
+    state.cronForm.triggerEnabled = false;
+
+    const call = await submit();
+
+    expect(requestPatch(call)).toMatchObject({
+      schedule: { kind: "every", everyMs: 5_000 },
+      trigger: null,
+    });
+  });
+
+  it.each([
     ["1.5", "minutes", 90_000],
     ["4.1", "minutes", 246_000],
     ["0.1", "hours", 360_000],
@@ -1859,6 +2057,30 @@ describe("cron controller", () => {
     expect(addCall[1]).toEqual(
       expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
     );
+  });
+
+  it("keeps an existing condition trigger when cloning a script into an editable agent task", async () => {
+    const request = createCronRequest("job-script-clone");
+    const sourceJob = createCronJob({
+      id: "job-script-source",
+      name: "Script source",
+      schedule: { kind: "every", everyMs: 30_000 },
+      payload: { kind: "script", script: "json({ state: {} })" },
+      trigger: { script: "json({ fire: true })" },
+      delivery: { mode: "none" },
+    });
+    const state = createStateWithRequest(request, { cronJobs: [sourceJob] });
+
+    startCronClone(state, sourceJob);
+    state.cronForm.payloadText = "Continue as an agent task";
+
+    expect(state.cronForm.payloadKind).toBe("agentTurn");
+    expect(state.cronForm.triggerEnabled).toBe(true);
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "job-script-clone" });
+    expect(requestPayload(findRequestCall(request.mock.calls, "cron.add"))).toMatchObject({
+      payload: { kind: "agentTurn", message: "Continue as an agent task" },
+      trigger: { script: "json({ fire: true })", once: false },
+    });
   });
 
   it("round-trips hidden delivery destinations through clone and edit", async () => {

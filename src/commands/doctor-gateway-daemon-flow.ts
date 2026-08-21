@@ -34,7 +34,7 @@ import {
   readGatewayRestartHandoffSync,
 } from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import {
@@ -53,7 +53,7 @@ import {
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
-import { healthCommand } from "./health.js";
+import { healthCommandNonExiting } from "./health.js";
 
 type LaunchAgentBootstrapDoctorOutcome =
   | { status: "skipped" }
@@ -491,7 +491,7 @@ export async function maybeRepairGatewayDaemon(params: {
     const recentRestart = readGatewayRestartHandoffSync(serviceEnv);
     if (recentRestart) {
       try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+        await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, params.runtime);
         note("Gateway is healthy after recent restart; skipping restart prompt.", "Gateway");
         return;
       } catch {
@@ -523,8 +523,13 @@ export async function maybeRepairGatewayDaemon(params: {
       }
       await sleep(1500);
       try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+        await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, params.runtime);
       } catch (err) {
+        // A trapped ExitError means healthCommand already printed its own
+        // reachable-gateway diagnostic; re-formatting it would only add noise.
+        if (err instanceof ExitError) {
+          return;
+        }
         const closedDiagnostic = formatGatewayClosedDiagnostic(err);
         if (closedDiagnostic) {
           note(closedDiagnostic, "Gateway");

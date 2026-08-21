@@ -13,7 +13,7 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
-  const loadPluginMetadataSnapshot = vi.fn(() => {
+  const loadPluginMetadataSnapshot = vi.fn((_params?: unknown) => {
     const manifestRegistry = loadManifestRegistry();
     return {
       manifestRegistry,
@@ -24,10 +24,14 @@ const hoisted = vi.hoisted(() => {
         )?.id ?? pluginId,
     };
   });
+  const resolvePluginMetadataSnapshot = vi.fn((params: unknown) =>
+    loadPluginMetadataSnapshot(params),
+  );
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   };
 });
@@ -43,7 +47,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: hoisted.resolvePluginMetadataSnapshot,
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
@@ -182,6 +186,7 @@ function registerHealthyAcpBackend() {
 afterEach(async () => {
   hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
   hoisted.loadPluginMetadataSnapshot.mockClear();
+  hoisted.resolvePluginMetadataSnapshot.mockClear();
   hoisted.loadPluginRegistrySnapshot.mockReset();
   acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
   await tempDirs.cleanup();
@@ -221,6 +226,7 @@ describe("resolvePluginSkillDirs", () => {
       plugins: [],
     });
     hoisted.loadPluginMetadataSnapshot.mockClear();
+    hoisted.resolvePluginMetadataSnapshot.mockClear();
     hoisted.loadPluginRegistrySnapshot.mockReset();
     hoisted.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
   });
@@ -271,6 +277,29 @@ describe("resolvePluginSkillDirs", () => {
     });
 
     expect(dirs).toEqual(expectedDirs({ acpxRoot, helperRoot }));
+  });
+
+  it("reuses current lifecycle metadata before falling back to a cold load", async () => {
+    const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    registerHealthyAcpBackend();
+    const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+    hoisted.resolvePluginMetadataSnapshot.mockReturnValueOnce({
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      normalizePluginId: (pluginId: string) => pluginId,
+    });
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        acp: { enabled: true },
+        plugins: { entries: { acpx: { enabled: true }, helper: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(acpxRoot, "skills"), path.resolve(helperRoot, "skills")]);
+    expect(hoisted.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it.each([
