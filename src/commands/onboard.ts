@@ -32,6 +32,7 @@ import {
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
 import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   applyCustomApiConfig,
@@ -56,7 +57,6 @@ import {
 } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
-const BUILT_IN_AUTH_CHOICES = ["setup-token", "token", "apiKey", "custom-api-key", "skip"];
 
 function rejectOption(runtime: RuntimeEnv, message: string): false {
   runtime.error(message);
@@ -253,16 +253,14 @@ async function validateResetAuthChoice(params: {
   if (!authChoice) {
     return true;
   }
-  const availableChoices = new Set([
-    ...BUILT_IN_AUTH_CHOICES,
-    ...formatAuthChoiceChoicesForCli({
-      includeLegacyAliases: true,
+  const availableChoices = new Set(
+    formatAuthChoiceChoicesForCli({
       includeSkip: true,
       config: params.baseConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
     }).split("|"),
-  ]);
+  );
   if (!availableChoices.has(authChoice)) {
     return rejectOption(
       params.runtime,
@@ -283,8 +281,7 @@ async function validateResetAuthChoice(params: {
       includeUntrustedWorkspacePlugins: false,
     }),
   ];
-  const isGenericProviderChoice =
-    authChoice === "token" || authChoice === "setup-token" || authChoice === "apiKey";
+  const isGenericProviderChoice = GENERIC_PROVIDER_AUTH_CHOICES.includes(authChoice);
   const normalizedTokenProvider = normalizeTokenProviderInput(params.opts.tokenProvider);
   const inferredOptionKey = inferredAuthChoice?.matches[0]?.optionKey;
   const providerAuthChoice = isGenericProviderChoice

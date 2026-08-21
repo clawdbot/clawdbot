@@ -63,10 +63,7 @@ function validateRecommendationParentOptions(
   return false;
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
-  includeLegacyAliases: true,
-  includeSkip: true,
-});
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
 const NO_RECOMMENDATION_PARENT_OPTIONS = new Set<string>();
 
