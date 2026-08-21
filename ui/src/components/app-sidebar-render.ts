@@ -44,7 +44,6 @@ import {
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
-import { describeSessionTrailingState } from "./session-leading-indicator.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
@@ -181,11 +180,11 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
   const unread = mainRow?.unread === true && !active;
+  const activeRunLabel = running ? t("sessionsView.activeRun") : "";
+  const unreadLabel = unread ? t("sessionsView.unread") : "";
   const homeDescription =
-    attentionLabel || (running && unread)
-      ? [attentionLabel, mainRow ? describeSessionTrailingState(mainRow, "none") : ""]
-          .filter(Boolean)
-          .join(" · ")
+    attentionLabel || (activeRunLabel && unreadLabel)
+      ? [attentionLabel, activeRunLabel, unreadLabel].filter(Boolean).join(" · ")
       : "";
   // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
