@@ -1033,6 +1033,28 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each(["", "   "])("rejects blank --command-cwd %j", async (value) => {
+    await expectCronEditRejection(["--command-cwd", value], "--command-cwd must not be blank");
+  });
+
+  it("rejects blank --command-cwd before loading an existing job", async () => {
+    await expectCronEditRejection(
+      ["--pacing-min", "30m", "--command-cwd", "   "],
+      "--command-cwd must not be blank",
+    );
+  });
+
+  it.each(["", "   "])("preserves --command-input %j as command stdin", async (value) => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--command-input", value], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { payload: { kind: "command", input: value } },
+    });
+  });
+
   it("rejects --webhook combined with a delivery clear flag", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);

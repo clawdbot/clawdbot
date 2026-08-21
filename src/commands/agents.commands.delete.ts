@@ -42,6 +42,7 @@ import {
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
+import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -276,19 +277,21 @@ export async function agentsDeleteCommand(
     existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
   );
   try {
-    if (configured) {
-      await replaceConfigFile({
-        nextConfig: result.config,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-        writeOptions: {
-          allowedAgentRosterRemovals: [agentId],
-          ...(opts.json ? { skipOutputLogs: true } : {}),
-        },
-      });
-      if (!opts.json) {
-        logConfigUpdated(runtime);
+    await withAgentExecApprovalsRemoved(agentId, async () => {
+      if (configured) {
+        await replaceConfigFile({
+          nextConfig: result.config,
+          ...(baseHash !== undefined ? { baseHash } : {}),
+          writeOptions: {
+            allowedAgentRosterRemovals: [agentId],
+            ...(opts.json ? { skipOutputLogs: true } : {}),
+          },
+        });
+        if (!opts.json) {
+          logConfigUpdated(runtime);
+        }
       }
-    }
+    });
     deletion.commit();
   } catch (error) {
     if (!existingJournal) {

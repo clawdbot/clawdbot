@@ -746,6 +746,10 @@ describe("getApiKeyForModelCore", () => {
         expect((error as Error).message).toContain(
           `Auth store: ${resolveOpenClawStateSqlitePath(state.env)} (agentDir: ${state.agentDir()}).`,
         );
+        expect((error as Error).message).toContain(
+          "openclaw models auth paste-api-key --provider openai",
+        );
+        expect((error as Error).message).not.toContain("openclaw agents add");
       },
     );
 

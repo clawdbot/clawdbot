@@ -1788,13 +1788,62 @@ button.chat-reply-preview--message:disabled {
 
 .agent-chat__typing-indicator {
   display: grid;
+  gap: 10px;
+  min-width: 0;
+  width: fit-content;
+  max-width: calc(100% - 20px);
+  margin: 14px 16px 0 4px;
+  padding-bottom: 26px;
+}
+
+.agent-chat__typing-dots-row,
+.agent-chat__typing-preview-row {
+  display: grid;
   grid-template-columns: max-content minmax(0, auto);
   align-items: center;
   gap: 10px;
   min-width: 0;
-  width: fit-content;
-  margin: 14px 16px 0 4px;
-  padding-bottom: 26px;
+}
+
+.agent-chat__typing-preview-row {
+  align-items: end;
+}
+
+.agent-chat__typing-preview-content {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-chat__typing-preview-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-chat__typing-preview-bubble {
+  max-height: 9em;
+  overflow: hidden;
+  /* Preview carries the draft's tail; keep the newest text visible when the
+   * capped bubble overflows (block align-content, harmless where unsupported). */
+  align-content: end;
+  overflow-wrap: anywhere;
+  padding: 8px 12px;
+  border-radius: 15px;
+  background: var(--bg-muted);
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.agent-chat__typing-preview-bubble::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: -0.15em;
+  animation: chatTypingCaret 1s steps(2, start) infinite;
 }
 
 .agent-chat__typing-avatars {
@@ -1885,10 +1934,20 @@ button.chat-reply-preview--message:disabled {
   }
 }
 
+@keyframes chatTypingCaret {
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-chat__typing-bubble > span {
     animation: none;
     opacity: 0.8;
+  }
+
+  .agent-chat__typing-preview-bubble::after {
+    animation: none;
   }
 }
 

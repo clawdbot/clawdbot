@@ -8,45 +8,23 @@ import {
 } from "./view.test-support.ts";
 
 describe("cron view list pane", () => {
-  it("uses agent-scoped summary values", () => {
+  it.each([
+    { name: "an enabled scheduler", status: { enabled: true }, hasNextWake: true },
+    { name: "a disabled scheduler", status: { enabled: false }, hasNextWake: false },
+    { name: "loading scheduler status", status: null, hasNextWake: true },
+  ])("uses agent-scoped summary values for $name", ({ status, hasNextWake }) => {
     const container = renderView({
       agentScoped: true,
       scopedTotal: 3,
       scopedNextWakeAtMs: Date.now() + 60_000,
-      status: { enabled: true, triggersEnabled: true, jobs: 99, nextWakeAtMs: null },
+      status: status ? { ...status, triggersEnabled: true, jobs: 99, nextWakeAtMs: null } : null,
     });
     const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
       entry.textContent?.trim(),
     );
 
     expect(values[0]).toBe("3");
-    expect(values[2]).not.toBe("n/a");
-  });
-
-  it("hides an agent-scoped next wake while the scheduler is disabled", () => {
-    const container = renderView({
-      agentScoped: true,
-      scopedNextWakeAtMs: Date.now() + 60_000,
-      status: { enabled: false, triggersEnabled: true, jobs: 3, nextWakeAtMs: null },
-    });
-    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
-      entry.textContent?.trim(),
-    );
-
-    expect(values[2]).toBe("n/a");
-  });
-
-  it("keeps an agent-scoped next wake while scheduler status is loading", () => {
-    const container = renderView({
-      agentScoped: true,
-      scopedNextWakeAtMs: Date.now() + 60_000,
-      status: null,
-    });
-    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
-      entry.textContent?.trim(),
-    );
-
-    expect(values[2]).not.toBe("n/a");
+    expect(values[2] !== "n/a").toBe(hasNextWake);
   });
 
   it("wires the enabled tabs and marks the active one", () => {

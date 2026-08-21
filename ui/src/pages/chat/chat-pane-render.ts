@@ -358,7 +358,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       composerHoldToRecord: state.settings.composerHoldToRecord,
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
-      onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
+      onTypingChange: typingEnabled
+        ? (typing, preview) => this.sendTypingState(typing, preview)
+        : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&

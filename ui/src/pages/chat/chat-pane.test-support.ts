@@ -98,7 +98,9 @@ export type TestChatPane = HTMLElement & {
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   handleSessionTypingEvent: (event: SessionTypingEvent) => void;
   clearTypingActorForSessionMessage: (payload: unknown) => void;
-  typingActors: Map<string, { label: string; expiresAt: number }>;
+  typingActors: Map<string, { label: string; expiresAt: number; preview?: string }>;
+  typingActorViews: () => { id: string; label: string; preview?: string }[];
+  sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
     suggestion: SessionSuggestion,

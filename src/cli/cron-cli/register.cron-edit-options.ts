@@ -25,6 +25,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
   webhookUrl: string | undefined,
+  commandCwd: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -120,11 +121,13 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Use --account or --clear-account, not both");
   }
 
+  // Unlike cwd, command stdin intentionally accepts empty and whitespace strings.
+  const hasCommandInput = typeof opts.commandInput === "string";
   const hasCommandSpecificPayloadField =
     Boolean(commandShell) ||
     Boolean(commandArgv) ||
-    typeof opts.commandCwd === "string" ||
-    typeof opts.commandInput === "string" ||
+    Boolean(commandCwd) ||
+    hasCommandInput ||
     opts.commandEnv !== undefined ||
     noOutputTimeoutSeconds !== undefined ||
     outputMaxBytes !== undefined;
@@ -228,14 +231,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
     const payload: Record<string, unknown> = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
     assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
-    assignIf(
-      payload,
-      "cwd",
-      normalizeOptionalString(opts.commandCwd),
-      typeof opts.commandCwd === "string",
-    );
+    assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
-    assignIf(payload, "input", opts.commandInput, typeof opts.commandInput === "string");
+    assignIf(payload, "input", opts.commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(
       payload,

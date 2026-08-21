@@ -43,6 +43,27 @@ function listResponse(jobs: unknown[]) {
   };
 }
 
+function cronMethodResponses(jobs: unknown[]) {
+  return {
+    "cron.add": { id: "new-automation" },
+    "cron.list": {
+      cases: [
+        { match: { lastRunStatus: "error" }, response: listResponse([]) },
+        { response: listResponse(jobs) },
+      ],
+    },
+    "cron.runs": {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    },
+    "cron.status": { enabled: true, triggersEnabled: true, jobs: jobs.length, nextWakeAtMs: null },
+  };
+}
+
 async function captureProof(page: Page, name: string) {
   if (!proofDirectory) {
     return;
@@ -76,24 +97,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 1_050, width: 1_440 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "cron.add": { id: "new-automation" },
-            "cron.list": {
-              cases: [
-                { match: { lastRunStatus: "error" }, response: listResponse([]) },
-                { response: listResponse([scriptJob]) },
-              ],
-            },
-            "cron.runs": {
-              entries: [],
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.status": { enabled: true, triggersEnabled: true, jobs: 1, nextWakeAtMs: null },
-          },
+          methodResponses: cronMethodResponses([scriptJob]),
         });
 
         await page.goto(`${suite.server.baseUrl}cron`);
@@ -282,6 +286,54 @@ suite.define(() => {
           await config?.discardDraft();
           config?.setWritesSuspended(false);
         });
+      },
+    );
+  });
+
+  it("keeps a rejected trigger draft visible without reloading inventory", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1_050, width: 1_440 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: cronMethodResponses([scriptJob]),
+        });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        const existingRow = page.locator('[data-test-id="cron-row-existing-script-automation"]');
+        await existingRow.waitFor();
+        await page.locator('[data-test-id="cron-new-task"]').click();
+        await page.locator("#cron-name").fill("Malformed condition");
+        await page.locator("#cron-payload-text").fill("Run when the condition matches");
+        await page.locator("details.cron-advanced > summary").click();
+        await page
+          .locator(".settings-row--toggle")
+          .filter({ hasText: "Condition trigger" })
+          .click();
+        const triggerScript = page.locator("#cron-trigger-script");
+        await triggerScript.fill("const x = ;");
+        const listsBeforeSave = (await gateway.getRequests("cron.list")).length;
+        const submit = page.locator('[data-test-id="cron-submit"]');
+
+        await gateway.deferNext("cron.add");
+        await submit.click();
+        const request = await gateway.waitForRequest("cron.add");
+        expect(request.params).toMatchObject({
+          name: "Malformed condition",
+          trigger: { script: "const x = ;", once: false },
+        });
+        const message = "Condition script is invalid";
+        await gateway.rejectDeferred("cron.add", { code: "INVALID_REQUEST", message });
+
+        const errorBanner = page.locator(".cron-error-banner");
+        await errorBanner.waitFor({ state: "visible" });
+        expect(await errorBanner.textContent()).toContain(message);
+        expect(await triggerScript.inputValue()).toBe("const x = ;");
+        expect(await gateway.getRequests("cron.list")).toHaveLength(listsBeforeSave);
+        await errorBanner.scrollIntoViewIfNeeded();
+        await captureProof(page, "05-malformed-trigger-rejected");
+
+        await page.locator('[data-test-id="cron-back"]').click();
+        await existingRow.waitFor();
+        expect(await gateway.getRequests("cron.list")).toHaveLength(listsBeforeSave);
       },
     );
   });

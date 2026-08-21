@@ -169,7 +169,10 @@ function validateFullJob(
     context.patch.enabled === true ||
     context.patch.schedule?.kind === "stream";
   const validateCapabilities = () => {
-    assertTriggerSupport(job, { cronConfig, requireEnabled: triggerTouched });
+    assertTriggerSupport(job, {
+      cronConfig,
+      validateAuthoredTrigger: triggerTouched,
+    });
     assertScriptPayloadSupport(job, {
       cronConfig,
       requireEnabled: scriptTouched,

@@ -723,7 +723,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("returns INVALID_REQUEST for malformed cron scripts", async () => {
+  test("rejects malformed cron payload and trigger scripts before persistence", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-script-syntax-",
       cronEnabled: true,
@@ -745,6 +745,49 @@ describe("gateway server cron", () => {
       expect(response.error?.message).toContain(
         "cron script payload has a syntax error: Unexpected token (line 1, column 10)",
       );
+
+      const triggerInput = {
+        name: "condition watcher",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "changed" },
+      };
+      const invalidTrigger = { script: "const x = ;" };
+      const expectedTriggerError =
+        "cron trigger script has a syntax error: Unexpected token (line 1, column 10)";
+      const invalidCreate = await directCronReq(cronState, "cron.add", {
+        ...triggerInput,
+        trigger: invalidTrigger,
+      });
+
+      expect(invalidCreate.ok).toBe(false);
+      expect(invalidCreate.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(expectedTriggerError),
+      });
+      expect((await loadCronStore(cronState.storePath)).jobs).toEqual([]);
+
+      const validTrigger = { script: "return { fire: true }" };
+      const created = await directCronReq(cronState, "cron.add", {
+        ...triggerInput,
+        trigger: validTrigger,
+      });
+      const jobId = expectCronJobIdFromResponse(created);
+      const invalidUpdate = await directCronReq(cronState, "cron.update", {
+        id: jobId,
+        patch: { trigger: invalidTrigger },
+      });
+
+      expect(invalidUpdate.ok).toBe(false);
+      expect(invalidUpdate.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(expectedTriggerError),
+      });
+      expect((await loadCronStore(cronState.storePath)).jobs).toEqual([
+        expect.objectContaining({ id: jobId, trigger: validTrigger }),
+      ]);
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
