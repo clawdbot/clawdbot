@@ -50,6 +50,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
     config: params.nextConfig,
+    workspaceDir: params.target.workspaceDir,
     env: process.env,
   });
   const nextConfig = params.nextConfig;
