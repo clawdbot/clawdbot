@@ -94,6 +94,7 @@ function createModelFacingWebSearchSchema(options: {
     ? resolveWebSearchProviderModelSchema({
         config: runtimeContext.config,
         providerId: runtimeContext.providerSelectionId,
+        sandboxed: options.sandboxed,
       })
     : null;
   return projectProviderModelSchema(WebSearchSchema, selectedProviderSchema);

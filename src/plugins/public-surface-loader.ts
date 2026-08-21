@@ -228,6 +228,30 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
   }) as T;
 }
 
+/** Loads the first resolvable installed-plugin public artifact from an ordered candidate list. */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
+export function loadPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
+  pluginRoot: string;
+  artifactCandidates: readonly string[];
+}): T | null {
+  for (const artifactBasename of params.artifactCandidates) {
+    const modulePath = resolvePluginRootPublicSurfacePath({
+      pluginRoot: params.pluginRoot,
+      artifactBasename,
+    });
+    if (modulePath) {
+      return loadValidatedPublicSurfaceModule({
+        modulePath,
+        boundaryRoot: path.resolve(params.pluginRoot),
+        boundaryLabel: "plugin root",
+        surfaceLabel: `plugin public surface ${artifactBasename}`,
+        origin: "global",
+      }) as T;
+    }
+  }
+  return null;
+}
+
 /** Loads the first resolvable bundled public artifact from an ordered candidate list. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {

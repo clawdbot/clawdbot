@@ -1,7 +1,10 @@
 // Extracts explicit public artifacts from web provider plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+  loadPluginPublicArtifactModuleFromCandidatesSync,
+} from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -115,6 +118,37 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 
+function loadInstalledProviderEntriesFromRoot<TProvider extends object>(params: {
+  pluginRoot: string;
+  pluginId: string;
+  artifactCandidates: readonly string[];
+  suffix: string;
+  isProvider: (value: unknown) => value is TProvider;
+}): Array<TProvider & { pluginId: string }> | null {
+  const mod = loadPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    pluginRoot: params.pluginRoot,
+    artifactCandidates: params.artifactCandidates,
+  });
+  if (!mod) {
+    return null;
+  }
+  const { providers, errors } = collectProviderFactories({
+    mod,
+    suffix: params.suffix,
+    isProvider: params.isProvider,
+  });
+  if (providers.length === 0) {
+    if (errors.length > 0) {
+      throw unableToInitializeProviderError({
+        pluginId: params.pluginId,
+        errors,
+      });
+    }
+    return null;
+  }
+  return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
+}
+
 function resolveBundledExplicitProviders<TProvider>(params: {
   onlyPluginIds: readonly string[];
   loadProviders: (pluginId: string) => TProvider[] | null;
@@ -137,6 +171,18 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
   pluginId: string;
 }): PluginWebSearchProviderEntry[] | null {
   return loadBundledProviderEntriesFromDir<WebSearchProviderPlugin>({
+    ...params,
+    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
+    suffix: "WebSearchProvider",
+    isProvider: (value): value is WebSearchProviderPlugin => isWebProviderPlugin(value),
+  });
+}
+
+export function loadInstalledWebSearchProviderEntriesFromRoot(params: {
+  pluginRoot: string;
+  pluginId: string;
+}): PluginWebSearchProviderEntry[] | null {
+  return loadInstalledProviderEntriesFromRoot<WebSearchProviderPlugin>({
     ...params,
     artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
     suffix: "WebSearchProvider",

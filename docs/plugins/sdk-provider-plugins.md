@@ -1107,7 +1107,9 @@ catalog, API-key auth, and dynamic model resolution.
         shared `web_search` surface, declare them in the lightweight
         `modelSchema` artifact. Core projects only the selected provider's
         listed properties, including their declared required status, without
-        loading provider runtime code while preparing agent tools.
+        loading provider runtime code while preparing agent tools. The public
+        artifact is resolved for enabled installed plugins as well as bundled
+        plugins, so keep its imports limited to lightweight SDK contracts.
       </Tab>
     </Tabs>
 
