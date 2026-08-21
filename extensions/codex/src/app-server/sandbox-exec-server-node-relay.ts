@@ -32,9 +32,9 @@ const CODEX_NODE_HTTP_CREDENTIAL_HEADER_NAMES = new Set([
   "x-api-token",
 ]);
 const CODEX_NODE_HTTP_CREDENTIAL_HEADER_NAME_PATTERN =
-  /(?:^|[-_])(?:auth(?:orization|entication)?|token|secret|api[-_]?key|apikey|key|password|passwd|passphrase|passcode|credentials?|session|jwt|assertion|verifier|sig(?:nature)?|hmac|bearer|ticket|challenge|proof|dpop|otp|totp|pin|mfa)(?:[-_]|$)/iu;
+  /(?:^|[-_])(?:auth(?:orization|entication)?|token|secret|api[-_]?key|apikey|key|password|passwd|pwd|passphrase|passcode|credentials?|session|jwt|assertion|verifier|sig(?:nature)?|hmac|bearer|ticket|challenge|proof|dpop|otp|totp|pin|mfa)(?:[-_]|$)/iu;
 const CODEX_NODE_HTTP_CREDENTIAL_FIELD_NAME_PATTERN =
-  /^(?:(?:[a-z\d]+_)*(?:token|secret|password|passwd|passcode|credentials?|authorization|api_?key|private_key|secret_key|secret_access_key|jwt|assertion|verifier|signature|hmac|(?:oauth|consumer|auth|access)_key|otp|totp|pin)|(?:device|authorization|auth|verification|mfa)_code|session(?:_id)?|jsessionid|saml(?:_?response|_?assertion)?|auth|jwt|code|sig|signature|hmac|key|pass)$/u;
+  /^(?:(?:[a-z\d]+_)*(?:token|secret|password|passwd|pwd|passphrase|passcode|credentials?|authorization|api_?key|private_key|secret_key|secret_access_key|jwt|assertion|verifier|signature|hmac|bearer|ticket|(?:oauth|consumer|auth|access)_key|otp|totp|pin)|(?:device|authorization|auth|verification|mfa)_code|session(?:_id)?|jsessionid|saml(?:_?response|_?assertion)?|auth|jwt|code|sig|signature|hmac|key|pass)$/u;
 const nodeExecServerTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
 /** Produces the bounded, redacted terminal failure shared by pending and claimed node leases. */
@@ -244,28 +244,40 @@ function hasCredentialedCodexNodeHttpUrl(value: string): boolean {
       }
     }
   }
-  let pathname = url.pathname;
-  for (let depth = 0; depth <= CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_DEPTH; depth += 1) {
-    for (const segment of pathname.split("/")) {
-      for (const parameter of segment.split(";").slice(1)) {
-        const separator = parameter.indexOf("=");
-        const name = separator < 0 ? parameter : parameter.slice(0, separator);
-        const parameterValue = separator < 0 ? "" : parameter.slice(separator + 1);
-        if (hasCredentialedParameter(name, parameterValue)) {
-          return true;
+  for (const initial of [url.pathname, url.hash.slice(1), ...url.searchParams.values()]) {
+    let component = initial;
+    for (let depth = 0; depth <= CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_DEPTH; depth += 1) {
+      for (const nestedQuery of component.split(/[?#]/u).slice(1)) {
+        for (const [name, parameterValue] of new URLSearchParams(nestedQuery)) {
+          if (hasCredentialedParameter(name, parameterValue)) {
+            return true;
+          }
         }
       }
-    }
-    if (!/%[\da-f]{2}/iu.test(pathname)) {
-      return false;
-    }
-    try {
-      pathname = decodeURIComponent(pathname);
-    } catch {
-      return true;
+      for (const segment of component.split("/")) {
+        for (const parameter of segment.split(";").slice(1)) {
+          const separator = parameter.indexOf("=");
+          const name = separator < 0 ? parameter : parameter.slice(0, separator);
+          const parameterValue = separator < 0 ? "" : parameter.slice(separator + 1);
+          if (hasCredentialedParameter(name, parameterValue)) {
+            return true;
+          }
+        }
+      }
+      if (!/%[\da-f]{2}/iu.test(component)) {
+        break;
+      }
+      if (depth === CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_DEPTH) {
+        return true;
+      }
+      try {
+        component = decodeURIComponent(component);
+      } catch {
+        return true;
+      }
     }
   }
-  return true;
+  return false;
 }
 
 function hasCredentialedCodexNodeHttpBody(

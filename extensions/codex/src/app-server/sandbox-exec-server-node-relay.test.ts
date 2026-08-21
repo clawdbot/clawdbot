@@ -86,6 +86,13 @@ function createNodeRuntime(openDuplex: PluginRuntime["nodes"]["openDuplex"]): Pl
   return { nodes: { openDuplex } } as PluginRuntime;
 }
 
+function encodeHttpBody(contentType: string, body: string) {
+  return {
+    headers: [{ name: "Content-Type", value: contentType }],
+    bodyBase64: Buffer.from(body).toString("base64"),
+  };
+}
+
 async function expectPairedNodeHttpCredentialRejection(params: {
   url?: string;
   headers?: Array<{ name: string; value: string }>;
@@ -337,14 +344,18 @@ describe("Codex paired-device exec-server relay", () => {
     ["matrix case", { url: "https://x/p;JSESSIONID=synthetic-canary" }],
     ["encoded matrix", { url: "https://x/p%3Bjsessionid%3Dsynthetic-canary" }],
     ["nested matrix", { url: "https://x/a;region=west/b;session_id=synthetic-canary" }],
+    ["nested fragment MFA", { url: "https://x/#/callback?mfa_code=123456" }],
+    ["direct access-token fragment", { url: "https://x/#access_token=synthetic-canary" }],
+    ["direct ticket fragment", { url: "https://x/#ticket=synthetic-canary" }],
+    ["encoded path MFA", { url: "https://x/callback%3Fmfa_code%3D123456" }],
+    ["nested encoded MFA", { url: "https://x/callback%253Fmfa_code%253D123456" }],
+    ["ticket query", { url: "https://x/?ticket=synthetic-canary" }],
+    ["bearer query", { url: "https://x/?bearer=synthetic-canary" }],
     ["SAML assertion", { url: "https://example.test/path?SAMLResponse=synthetic-canary" }],
     ["OAuth device code", { url: "https://example.test/path?device_code=synthetic-canary" }],
     ["OAuth consumer key", { url: "https://x/?oauth_consumer_key=synthetic-canary" }],
     ["encoded token", { url: `https://x/?v=${["sk", "live", "x".repeat(30)].join("%255F")}` }],
-    [
-      "encoded nested form credential",
-      { url: "https://example.test/path?user%255Bpassword%255D=synthetic-canary" },
-    ],
+    ["encoded nested credential", { url: "https://x/?u%255Bpassword%255D=synthetic-canary" }],
     [
       "OAuth form body",
       {
@@ -356,35 +367,24 @@ describe("Codex paired-device exec-server relay", () => {
     ],
     [
       "OAuth client assertion form body",
-      {
-        headers: [{ name: "Content-Type", value: "application/x-www-form-urlencoded" }],
-        bodyBase64: Buffer.from("client_assertion=synthetic-canary").toString("base64"),
-      },
+      encodeHttpBody("application/x-www-form-urlencoded", "client_assertion=synthetic-canary"),
     ],
     [
-      "OAuth PKCE verifier JSON body",
-      {
-        headers: [{ name: "Content-Type", value: "application/json" }],
-        bodyBase64: Buffer.from(JSON.stringify({ code_verifier: "synthetic-canary" })).toString(
-          "base64",
-        ),
-      },
+      "passphrase form body",
+      encodeHttpBody("application/x-www-form-urlencoded", "passphrase=synthetic-canary"),
+    ],
+    ["pwd JSON body", encodeHttpBody("application/json", '{"pwd":"synthetic-canary"}')],
+    ["OAuth PKCE JSON", encodeHttpBody("application/json", '{"code_verifier":"synthetic-canary"}')],
+    [
+      "duplicate escaped JSON",
+      encodeHttpBody(
+        "application/json",
+        '{"client_se\\u0063ret":"synthetic-canary","client_secret":"safe"}',
+      ),
     ],
     [
-      "duplicate escaped JSON credential",
-      {
-        headers: [{ name: "Content-Type", value: "application/json" }],
-        bodyBase64: Buffer.from(
-          '{"client_se\\u0063ret":"synthetic-canary","client_secret":"safe"}',
-        ).toString("base64"),
-      },
-    ],
-    [
-      "oversized JSON body",
-      {
-        headers: [{ name: "Content-Type", value: "application/json" }],
-        bodyBase64: Buffer.from(`{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`).toString("base64"),
-      },
+      "oversized JSON",
+      encodeHttpBody("application/json", `{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`),
     ],
     [
       "oversized body without a declared content type",
@@ -392,32 +392,23 @@ describe("Codex paired-device exec-server relay", () => {
     ],
     [
       "invalid JSON body",
-      {
-        headers: [{ name: "Content-Type", value: "application/json" }],
-        bodyBase64: Buffer.from('{"client_assertion":"synthetic-canary"').toString("base64"),
-      },
+      encodeHttpBody("application/json", '{"client_assertion":"synthetic-canary"'),
     ],
     [
       "unsupported XML body",
-      {
-        headers: [{ name: "Content-Type", value: "application/xml" }],
-        bodyBase64: Buffer.from("<credential>synthetic-canary</credential>").toString("base64"),
-      },
+      encodeHttpBody("application/xml", "<credential>synthetic-canary</credential>"),
     ],
     [
       "unsupported multipart body",
-      {
-        headers: [{ name: "Content-Type", value: "multipart/form-data; boundary=test" }],
-        bodyBase64: Buffer.from("--test\r\nsynthetic-canary\r\n--test--").toString("base64"),
-      },
+      encodeHttpBody(
+        "multipart/form-data; boundary=test",
+        "--test\r\nsynthetic-canary\r\n--test--",
+      ),
     ],
     ["unsupported opaque body", { bodyBase64: Buffer.from("synthetic-canary").toString("base64") }],
     [
       "XML disguised as plain text",
-      {
-        headers: [{ name: "Content-Type", value: "text/plain" }],
-        bodyBase64: Buffer.from("<credential>synthetic-canary</credential>").toString("base64"),
-      },
+      encodeHttpBody("text/plain", "<credential>synthetic-canary</credential>"),
     ],
     ["invalid UTF-8 body", { bodyBase64: Buffer.from([0xff, 0xfe]).toString("base64") }],
     [
@@ -448,15 +439,28 @@ describe("Codex paired-device exec-server relay", () => {
     await expectPairedNodeHttpCredentialRejection({
       url: `https://example.test/?safe=${customLoggingPattern.value.replaceAll("-", "%252D")}`,
     });
-    await expectPairedNodeHttpCredentialRejection({
-      headers: [{ name: "Content-Type", value: "application/json" }],
-      bodyBase64: Buffer.from('{"safe":"tenant\\u002dpattern\\u002dcanary","safe":"ok"}').toString(
-        "base64",
+    await expectPairedNodeHttpCredentialRejection(
+      encodeHttpBody(
+        "application/json",
+        '{"safe":"tenant\\u002dpattern\\u002dcanary","safe":"ok"}',
       ),
-    });
+    );
   });
 
-  it("forwards credential-free repeated HTTP headers and streaming options byte-for-byte", async () => {
+  it.each([
+    [
+      "JSON nested routing",
+      "application/json",
+      JSON.stringify({ greeting: "hello", token_count: 2, status_code: 200 }),
+      "https://x/stream;region=west#/callback?view=summary",
+    ],
+    [
+      "ordinary plain text",
+      "text/plain",
+      "ordinary unstructured body",
+      "https://x/callback%3Fview%3Dsummary",
+    ],
+  ])("forwards credential-free %s byte-for-byte", async (_label, contentType, body, url) => {
     const transport = createNodeChannel();
     const sandbox = createNodeSandbox();
     const client = createClient();
@@ -472,15 +476,13 @@ describe("Codex paired-device exec-server relay", () => {
       method: "http/request",
       params: {
         method: "POST",
-        url: "https://example.test/stream;region=west/next;color=blue",
+        url,
         headers: [
           { name: "X-Trace", value: "first" },
           { name: "x-trace", value: "second" },
-          { name: "Content-Type", value: "application/json" },
+          { name: "Content-Type", value: contentType },
         ],
-        bodyBase64: Buffer.from(
-          JSON.stringify({ greeting: "hello", token_count: 2, status_code: 200 }),
-        ).toString("base64"),
+        bodyBase64: Buffer.from(body).toString("base64"),
         redirectPolicy: "follow",
         requestId: "request-14",
         streamResponse: true,
