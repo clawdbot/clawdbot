@@ -448,6 +448,15 @@ const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = 
   { value: "disabled", labelKey: "cron.tabs.paused" },
 ];
 
+const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = {
+  all: "cron.jobs.all",
+  at: "cron.form.at",
+  every: "cron.form.every",
+  cron: "cron.form.cronOption",
+  "on-exit": "cron.form.repeatOnExit",
+  stream: "cron.form.repeatStream",
+};
+
 function renderListView(props: CronProps) {
   const hasAdvancedJobsFilters =
     props.jobsScheduleKindFilter !== "all" ||
@@ -646,12 +655,10 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
           label: t("cron.jobs.schedule"),
           value: props.jobsScheduleKindFilter,
           testId: "cron-jobs-schedule-filter",
-          options: [
-            { value: "all", label: t("cron.jobs.all") },
-            { value: "at", label: t("cron.form.at") },
-            { value: "every", label: t("cron.form.every") },
-            { value: "cron", label: t("cron.form.cronOption") },
-          ],
+          options: Object.entries(SCHEDULE_KIND_FILTER_LABELS).map(([value, labelKey]) => ({
+            value,
+            label: t(labelKey),
+          })),
         })}
         ${renderJobsFilter(props, "cronJobsLastStatusFilter", {
           label: t("cron.jobs.lastRun"),

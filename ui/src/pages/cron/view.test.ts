@@ -122,9 +122,21 @@ describe("cron view list pane", () => {
       '[data-test-id="cron-jobs-schedule-filter"]',
       HTMLSelectElement,
     );
-    scheduleFilter.value = "cron";
-    scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
+    expect(Array.from(scheduleFilter.options, (option) => option.value)).toEqual([
+      "all",
+      "at",
+      "every",
+      "cron",
+      "on-exit",
+      "stream",
+    ]);
+    for (const scheduleKind of ["on-exit", "stream"] as const) {
+      scheduleFilter.value = scheduleKind;
+      scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onJobsFiltersChange).toHaveBeenCalledWith({
+        cronJobsScheduleKindFilter: scheduleKind,
+      });
+    }
 
     const lastStatusFilter = getElement(
       container,
