@@ -126,17 +126,15 @@ struct AppLaunchRuntimePlanTests {
             hasVisibleWindows: true) == .accessory)
     }
 
-    @Test func `elevation host derives its mandatory computer control role in memory`() {
+    @Test func `elevation host derives pause and Peekaboo roles in memory`() {
         let interactive = AppLaunchRuntimePlan(arguments: ["OpenClaw"])
         let elevation = AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"])
 
         for storedValue in [false, true] {
             #expect(interactive.resolvePaused(storedValue) == storedValue)
-            #expect(interactive.resolveComputerControlEnabled(storedValue) == storedValue)
             #expect(interactive.resolvePeekabooBridgeEnabled(storedValue) == storedValue)
         }
         #expect(!elevation.resolvePaused(true))
-        #expect(elevation.resolveComputerControlEnabled(false))
         #expect(elevation.resolvePeekabooBridgeEnabled(false))
     }
 

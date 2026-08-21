@@ -221,7 +221,7 @@ export async function runPreparedEmbeddedLoop(
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   // Presentation survives retry attempts, but a newer tool result must clear stale text.
   const terminalToolPresentation = createTerminalToolPresentationTracker();
-  const turnTaintState = createAgentTurnTaintState();
+  const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     terminalToolPresentation.observe(observation);
     turnTaintState.observe(observation);

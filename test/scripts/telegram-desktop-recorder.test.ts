@@ -17,7 +17,6 @@ import {
   type RecorderOperations,
   type RecorderSession,
   renderGoldenImagePreflight,
-  renderHideTelegramWindow,
   renderLaunchDesktop,
   renderPrepareQr,
   renderReadQrLink,
@@ -555,7 +554,6 @@ describe("Telegram Desktop recorder remote contract", () => {
     expect(openIndex).toBeGreaterThanOrEqual(0);
     expect(hideIndex).toBeGreaterThan(openIndex);
     expect(captureIndex).toBeGreaterThan(hideIndex);
-    expect(renderHideTelegramWindow()).toContain('xdotool windowminimize "$win"');
   });
 
   it("fetches the undecodable login screen when login attempts run out", async () => {

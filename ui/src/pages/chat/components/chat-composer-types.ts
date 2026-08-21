@@ -120,13 +120,13 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  onTypingChange?: (typing: boolean) => void;
+  onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: (followUpModeOverride?: "steer") => void;
+  onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;

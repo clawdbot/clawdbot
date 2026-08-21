@@ -605,8 +605,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const modelBehavior = readModelBehaviorConfig(agentsDefaults);
     // This keeps the pre-move General busy gate sourced from the same update state.
     const configBusy = this.configBusy();
+    const providerUsage = data.providerUsage?.ok ? data.providerUsage.value : null;
     const cards = buildModelProviderCards({
       ...data,
+      providerUsage,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
@@ -625,6 +627,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
       refreshing: this.refreshTask.status === TaskStatus.PENDING,
       error: rosterError ?? data.error ?? data.catalogError,
+      providerUsageFailed: data.providerUsage?.ok === false,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,

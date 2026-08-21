@@ -47,6 +47,7 @@ type DispatchGatewayMethodInProcessOptions = {
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  pluginSubagentToolsAllow?: string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
@@ -103,6 +104,9 @@ function resolveInProcessGatewayDispatch(
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
       : {}),
+    ...(options?.pluginSubagentToolsAllow
+      ? { pluginSubagentToolsAllow: options.pluginSubagentToolsAllow }
+      : {}),
     delegatedToolPolicyHandoffId,
     ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
@@ -120,6 +124,7 @@ function resolveInProcessGatewayDispatch(
       options?.agentRunTracking ||
       options?.pluginSubagentRequester ||
       options?.runtimePluginToolGrant ||
+      options?.pluginSubagentToolsAllow ||
       options?.delegatedToolPolicyHandoff ||
       scope?.client?.internal?.delegatedToolPolicyHandoffId
       ? {
@@ -129,6 +134,7 @@ function resolveInProcessGatewayDispatch(
             ? { pluginSubagentRequester: options.pluginSubagentRequester }
             : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
+          pluginSubagentToolsAllow: options?.pluginSubagentToolsAllow,
           delegatedToolPolicyHandoffId,
         }
       : undefined,

@@ -251,6 +251,9 @@ export function createGatewaySubagentRuntime(
 
   const subagentRuntime: PluginRuntime["subagent"] = {
     async run(params) {
+      if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
+        throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
+      }
       const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
         params.completionDelivery,
       );
@@ -311,6 +314,7 @@ export function createGatewaySubagentRuntime(
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
           ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
           ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
+          ...(params.disableTools === true ? { pluginSubagentToolsAllow: [] } : {}),
           resolveGatewayContext,
         },
       );

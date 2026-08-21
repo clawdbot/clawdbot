@@ -2353,7 +2353,7 @@ describe("resolvePluginTools optional tools", () => {
 
     let result = await expectDefined(controls[0], "Code Mode exec tool").execute(
       "code-call-cached-network",
-      { code: 'return await tools.callValue("cached_network_tool", {});' },
+      { code: "return await cached_network_tool({});" },
     );
     for (
       let index = 0;

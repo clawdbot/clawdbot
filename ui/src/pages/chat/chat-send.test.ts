@@ -3908,6 +3908,10 @@ describe("handleSendChat", () => {
       chatRunId: "run-1",
       chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
+      chatStreamSegments: [{ text: "Checking the active run", ts: 1, itemId: "active-commentary" }],
+      chatToolMessages: [
+        { role: "toolResult", toolCallId: "active-tool", content: "still running" },
+      ],
       sessionKey: "agent:main:main",
       settings: { chatFollowUpMode: "steer" },
     });
@@ -3927,6 +3931,12 @@ describe("handleSendChat", () => {
     );
     expect(host.chatRunId).toBe("run-1");
     expect(host.chatStream).toBe("Working...");
+    expect(host.chatStreamSegments).toEqual([
+      { text: "Checking the active run", ts: 1, itemId: "active-commentary" },
+    ]);
+    expect(host.chatToolMessages).toEqual([
+      { role: "toolResult", toolCallId: "active-tool", content: "still running" },
+    ]);
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
         queueMode: "steer",
@@ -3945,11 +3955,15 @@ describe("handleSendChat", () => {
         "chat.send": { status: "started", runId: "started-run" },
       },
       chatMessage: "start through steer mode",
+      chatStreamSegments: [{ text: "stale commentary", ts: 1, itemId: "stale" }],
+      chatToolMessages: [{ role: "toolResult", toolCallId: "stale-tool", content: "stale output" }],
     });
 
     await handleSendChat(host, undefined, { followUpMode: "steer" });
 
     expect(host.chatRunId).toBe("started-run");
+    expect(host.chatStreamSegments).toEqual([]);
+    expect(host.chatToolMessages).toEqual([]);
   });
 
   it("sends a fresh mode-bearing row ahead of older outbox reconciliation", async () => {
@@ -5819,6 +5833,26 @@ describe("handleSendChat", () => {
       expect.objectContaining({ sendAttempts: 1, sendState: "waiting-reconnect" }),
     ]);
     expect(host.chatMessages).toStrictEqual([]);
+  });
+
+  it("queues identical messages from distinct user actions while coalescing re-entry", async () => {
+    const sent = createDeferred<unknown>();
+    const host = makeChatHost({
+      requestHandlers: { "chat.send": () => sent.promise },
+    });
+    const firstAction = new Event("submit");
+    const secondAction = new Event("submit");
+
+    const first = handleSendChat(host, "same prompt", undefined, firstAction);
+    const reentry = handleSendChat(host, "same prompt", undefined, firstAction);
+    const second = handleSendChat(host, "same prompt", undefined, secondAction);
+
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue).toHaveLength(2);
+    expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await Promise.all([first, reentry, second]);
   });
 
   it("keeps an acknowledged live send pending while durable history is briefly stale", async () => {

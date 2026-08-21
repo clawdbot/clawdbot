@@ -68,7 +68,11 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
-import { buildQaMockProfileId, stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import {
+  applyQaMockAuthProfileConfig,
+  buildQaMockProfileId,
+  stageQaMockAuthProfiles,
+} from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -175,6 +179,7 @@ function createQaPackagedMockApiKey(): string {
 
 async function stageQaPackagedMockAuthProfiles(params: {
   command: QaGatewayChildCommand;
+  configPath: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   providers: readonly string[];
@@ -196,7 +201,7 @@ async function stageQaPackagedMockAuthProfiles(params: {
           buildQaMockProfileId(provider),
         ],
         cwd: params.command.cwd ?? params.cwd,
-        env: params.env,
+        env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
         stdin: `${createQaPackagedMockApiKey()}\n`,
       });
     } catch (error) {
@@ -270,6 +275,7 @@ export async function startQaGatewayChild(params: {
     const xdgDataHome = path.join(tempRoot, "xdg-data");
     const xdgCacheHome = path.join(tempRoot, "xdg-cache");
     const configPath = path.join(tempRoot, "openclaw.json");
+    const packagedAuthConfigPath = path.join(stateDir, "qa-auth-bootstrap", "openclaw.json");
     const gatewayToken = `qa-suite-${randomUUID()}`;
     const transport = params.transport ?? createQaGatewayEmptyTransport();
     await seedQaAgentWorkspace({
@@ -352,7 +358,9 @@ export async function startQaGatewayChild(params: {
       });
       const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
       if (mockAuthProviders && mockAuthProviders.length > 0) {
-        if (!usesPackagedCandidate) {
+        if (usesPackagedCandidate) {
+          cfg = applyQaMockAuthProfileConfig({ cfg, providers: mockAuthProviders });
+        } else {
           cfg = await stageQaMockAuthProfiles({
             cfg,
             stateDir,
@@ -378,6 +386,7 @@ export async function startQaGatewayChild(params: {
     let cfg!: OpenClawConfig;
     let getChildFailure: (() => QaChildFailure | null) | null = null;
     let env: NodeJS.ProcessEnv | null = null;
+    let packagedMockAuthStaged = false;
     let migrationConvergenceRestartUsed = false;
     let reuseStartupLaunchState = false;
 
@@ -576,13 +585,29 @@ export async function startQaGatewayChild(params: {
           mode: 0o600,
         });
         const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
-        if (usesPackagedCandidate && gatewayCommand && mockAuthProviders?.length) {
+        if (
+          usesPackagedCandidate &&
+          gatewayCommand &&
+          mockAuthProviders?.length &&
+          !packagedMockAuthStaged
+        ) {
+          const canonicalConfig = await fs.readFile(configPath);
+          await fs.mkdir(path.dirname(packagedAuthConfigPath), { recursive: true, mode: 0o700 });
+          await fs.writeFile(packagedAuthConfigPath, canonicalConfig, {
+            flag: "wx",
+            mode: 0o600,
+          });
           await stageQaPackagedMockAuthProfiles({
             command: gatewayCommand,
+            configPath: packagedAuthConfigPath,
             cwd: gatewayCwd,
             env,
             providers: mockAuthProviders,
           });
+          if (!canonicalConfig.equals(await fs.readFile(configPath))) {
+            throw new Error("installed package mock auth bootstrap mutated canonical config");
+          }
+          packagedMockAuthStaged = true;
         }
       }
       if (!env) {

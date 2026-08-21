@@ -95,6 +95,8 @@ export const en = {
       tokenPlaceholder: "Needed for multi-machine or non-loopback access",
       tokenPrompt: "Gateway token",
       tokenPromptGenerate: "Gateway token (blank to generate)",
+      tokenStoreProvisioned:
+        "Generated a gateway token and stored it in the OpenClaw secret store as {name}. Config keeps only a reference; inspect it with `openclaw secrets store list`.",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {

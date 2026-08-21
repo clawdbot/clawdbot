@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectAmbiguousAutomaticMediaUrls,
   collectAutomaticDeliveredMediaUrls,
@@ -7,7 +6,7 @@ import {
   getGatewayAgentResult,
   hasCommittedOutboundDeliveryEvidence,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
-  hasVisibleAgentPayload,
+  hasExplicitlyVisibleAgentPayload,
   type AgentDeliveryEvidence,
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
 import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
@@ -71,24 +70,8 @@ async function deadLetterSessionDelivery(
   throw new SessionDeliveryDeadLetteredError(reason);
 }
 
-function hasQueuedVisiblePayload(payload: unknown): boolean {
-  if (isRecord(payload)) {
-    const visible = payload.visible;
-    if (typeof visible === "boolean") {
-      return visible;
-    }
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    },
-  );
-}
-
 function hasQueuedVisibleAgentPayload(result: Pick<AgentDeliveryEvidence, "payloads">): boolean {
-  return Array.isArray(result.payloads) && result.payloads.some(hasQueuedVisiblePayload);
+  return Array.isArray(result.payloads) && result.payloads.some(hasExplicitlyVisibleAgentPayload);
 }
 
 function hasUnexpectedRecoverySideEffects(result: AgentDeliveryEvidence): boolean {
@@ -110,7 +93,7 @@ function collectVisiblePayloadMediaUrls(result: AgentDeliveryEvidence): string[]
   const urls = new Set<string>();
   const payloads = Array.isArray(result.payloads) ? result.payloads : [];
   for (const payload of payloads) {
-    if (!hasQueuedVisiblePayload(payload)) {
+    if (!hasExplicitlyVisibleAgentPayload(payload)) {
       continue;
     }
     for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
@@ -152,7 +135,7 @@ function hasAutomaticVisibleSendEvidence(result: AgentDeliveryEvidence): boolean
     }
     const index =
       typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    return index !== undefined && hasQueuedVisiblePayload(payloads[index]);
+    return index !== undefined && hasExplicitlyVisibleAgentPayload(payloads[index]);
   });
 }
 

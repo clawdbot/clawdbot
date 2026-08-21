@@ -52,11 +52,16 @@ extension OnboardingView {
     }
 
     func startExistingCLIActivationIfNeeded() {
-        guard Self.shouldStartExistingCLIActivation(
-            isLocal: state.connectionMode == .local,
+        guard let setupMode = Self.existingCLISetupMode(
+            connectionMode: state.connectionMode,
             executableReady: cliExecutableReady,
             installing: installingCLI)
         else { return }
+        if setupMode == .remote {
+            cliInstalled = true
+            cliStatus = nil
+            return
+        }
         // Keep the CLI setup gate in the page order until its Gateway is reachable.
         cliInstalled = false
         installingCLI = true
@@ -67,12 +72,13 @@ extension OnboardingView {
         Task { @MainActor in await self.finishExistingCLIActivation() }
     }
 
-    static func shouldStartExistingCLIActivation(
-        isLocal: Bool,
+    static func existingCLISetupMode(
+        connectionMode: AppState.ConnectionMode,
         executableReady: Bool,
-        installing: Bool) -> Bool
+        installing: Bool) -> AppState.ConnectionMode?
     {
-        isLocal && executableReady && !installing
+        guard connectionMode != .unconfigured, executableReady, !installing else { return nil }
+        return connectionMode
     }
 
     static func shouldReviseCLIActivationFailure(

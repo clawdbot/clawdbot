@@ -23,7 +23,6 @@ import type {
   PluginHookChannelContext,
   PluginHookToolRequesterContext,
 } from "../plugins/hook-types.js";
-import { resolveMemoryFlushPlan } from "../plugins/memory-state.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -517,18 +516,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const codingRoot = sandboxRoot ?? runtimeRoot;
   const containmentRoot = sandboxRoot ?? sessionPermissionPolicy?.root ?? codingRoot;
   const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
-  // Flush exposes one append-only target; its fallback records inherited taint after success.
-  const memoryWriteProvenance = isMemoryFlushRun
-    ? undefined
-    : createMemoryWriteProvenanceObserver({
-        mutationRoot: sandboxRoot ?? workspaceRoot,
-        workspaceDir: workspaceRoot,
-        plan: resolveMemoryFlushPlan({ cfg: options?.config }) ?? {},
-        resolveOriginClass: () =>
-          options?.senderIsOwner === false || options?.isTurnTainted?.() === true
-            ? "untrusted"
-            : "agent",
-      });
+  const memoryWriteProvenance = createMemoryWriteProvenanceObserver({
+    mutationRoot: sandboxRoot ?? workspaceRoot,
+    workspaceDir: workspaceRoot,
+    resolveOriginClass: () =>
+      options?.senderIsOwner === false || options?.isTurnTainted?.() === true
+        ? "untrusted"
+        : "agent",
+  });
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
     includeBaseCodingTools: includeCoreTools,
@@ -880,6 +875,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           wrapToolMemoryFlushAppendOnlyWrite(tool, {
             root: memoryFlushWriteRoot,
             relativePath: memoryFlushWritePath,
+            memoryWriteProvenance,
             containerWorkdir: sandbox?.containerWorkdir,
             sandbox:
               sandboxRoot && sandboxFsBridge

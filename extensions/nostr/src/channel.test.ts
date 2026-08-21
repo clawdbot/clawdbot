@@ -158,10 +158,11 @@ function requireNostrResolveDmPolicy() {
   return resolveDmPolicy;
 }
 
-function createUnresolvedNostrPrivateKeyCfg() {
+function createUnresolvedNostrPrivateKeyCfg(defaultAccount?: string) {
   return {
     channels: {
       nostr: {
+        ...(defaultAccount ? { defaultAccount } : {}),
         privateKey: {
           source: "env" as const,
           provider: "default",
@@ -176,7 +177,7 @@ const unresolvedSecretRefPrivateKeyCases = [
   {
     name: "listNostrAccountIds",
     assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
+      expect(listNostrAccountIds(cfg)).toStrictEqual(["work"]);
     },
   },
   {
@@ -184,7 +185,8 @@ const unresolvedSecretRefPrivateKeyCases = [
     assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
       const account = resolveNostrAccount({ cfg });
 
-      expect(account.configured).toBe(false);
+      expect(account.accountId).toBe("work");
+      expect(account.configured).toBe(true);
       expect(account.privateKey).toBe("");
       expect(account.publicKey).toBe("");
       expect(account.config.privateKey).toEqual(cfg.channels.nostr.privateKey);
@@ -447,10 +449,10 @@ describe("nostr setup wizard", () => {
 
 describe("nostr unresolved SecretRef privateKey", () => {
   it.each(unresolvedSecretRefPrivateKeyCases)(
-    "$name does not treat unresolved SecretRef privateKey as configured",
+    "$name keeps an unresolved named SecretRef account configured without using ambient credentials",
     ({ assert }) => {
       withEnv({ NOSTR_PRIVATE_KEY: TEST_HEX_PRIVATE_KEY }, () => {
-        assert(createUnresolvedNostrPrivateKeyCfg());
+        assert(createUnresolvedNostrPrivateKeyCfg("work"));
       });
     },
   );
@@ -597,7 +599,7 @@ describe("nostr account helpers", () => {
   });
 
   describe("setup wizard", () => {
-    it("keeps unresolved SecretRef privateKey visible without marking the account configured", () => {
+    it("keeps unresolved SecretRef privateKey configured without exposing a materialized value", () => {
       const secretRef = {
         source: "env" as const,
         provider: "default",
@@ -618,7 +620,7 @@ describe("nostr account helpers", () => {
       expect(
         withoutNostrPrivateKey(() => credential.inspect({ cfg, accountId: "default" })),
       ).toEqual({
-        accountConfigured: false,
+        accountConfigured: true,
         hasConfiguredValue: true,
         resolvedValue: undefined,
         envValue: undefined,

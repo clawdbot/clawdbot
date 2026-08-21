@@ -4,7 +4,10 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import { isOutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import {
+  isOutboundDeliveryError,
+  isPlatformMessageRejectedError,
+} from "../../../infra/outbound/deliver-types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
@@ -127,50 +130,48 @@ function isTransientFailoverAnnounceError(error: unknown): boolean {
   );
 }
 
-function isTransientAnnounceDeliveryError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  const topLevelPermanent = Boolean(
-    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
-  );
-  if (topLevelPermanent && !isWriterClaimReboundAnnounceError(error)) {
-    return false;
-  }
-
-  const writerClaimRebound = hasWriterClaimReboundAnnounceError(error);
-  if (writerClaimRebound) {
-    return !hasAnnounceSendEvidence(error);
-  }
-
-  if (
-    hasAnnounceErrorMatch(
-      error,
-      (candidate) =>
-        Boolean(candidate && typeof candidate === "object") &&
-        (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
-        /cron run continuation/i.test(summarizeDeliveryError(candidate)),
-    )
-  ) {
-    return true;
-  }
-
-  if (!message) {
-    return false;
-  }
-  if (topLevelPermanent) {
-    return false;
-  }
-  return (
-    hasAnnounceErrorMatch(error, isTransientFailoverAnnounceError) ||
-    TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))
+function isPermanentNonWriterAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(
+    error,
+    (candidate) =>
+      isPlatformMessageRejectedError(candidate) ||
+      (!isWriterClaimReboundAnnounceError(candidate) &&
+        PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
+          pattern.test(summarizeDeliveryError(candidate)),
+        )),
   );
 }
 
+function isTransientAnnounceDeliveryError(error: unknown): boolean {
+  // Any committed platform send makes another attempt a possible duplicate;
+  // permanent owner rejections also override transient-looking wrapped causes.
+  if (hasAnnounceSendEvidence(error) || isPermanentNonWriterAnnounceError(error)) {
+    return false;
+  }
+
+  if (hasWriterClaimReboundAnnounceError(error)) {
+    return true;
+  }
+
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    if (isTransientFailoverAnnounceError(candidate)) {
+      return true;
+    }
+    const message = summarizeDeliveryError(candidate);
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+      /cron run continuation/i.test(message)
+    ) {
+      return true;
+    }
+    return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  });
+}
+
 export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  return (
-    (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
-    hasWriterClaimReboundAnnounceError(error)
-  );
+  return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {

@@ -263,8 +263,7 @@ export function createTaskRecord(params: {
     ...(params.detail !== undefined ? { detail: structuredClone(params.detail) } : {}),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    const cleanupAfter = resolveTaskCleanupAfter(record);
-    Object.assign(record, cleanupAfter === undefined ? {} : { cleanupAfter });
+    record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const deliveryState = requesterOrigin

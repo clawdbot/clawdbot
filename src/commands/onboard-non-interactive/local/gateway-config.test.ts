@@ -138,6 +138,53 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
+  it("stores an explicit password as a reference to the configured env provider", () => {
+    const result = applyGatewayConfig({
+      nextConfig: {
+        secrets: {
+          defaults: { env: "gatewayenv" },
+          providers: { gatewayenv: { source: "env" } },
+        },
+      },
+      opts: {
+        gatewayPassword: "gateway-password-from-env",
+        secretInputMode: "ref",
+      },
+      env: { OPENCLAW_GATEWAY_PASSWORD: "gateway-password-from-env" },
+    });
+
+    expect(result?.nextConfig.gateway?.auth).toMatchObject({
+      mode: "password",
+      password: {
+        source: "env",
+        provider: "gatewayenv",
+        id: "OPENCLAW_GATEWAY_PASSWORD",
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "an existing plaintext password",
+      password: "existing-password",
+    },
+    {
+      name: "an existing password SecretRef",
+      password: {
+        source: "env" as const,
+        provider: "default",
+        id: "EXISTING_GATEWAY_PASSWORD",
+      },
+    },
+  ])("preserves $name in reference mode without an explicit replacement", ({ password }) => {
+    const result = applyGatewayConfig({
+      nextConfig: { gateway: { auth: { mode: "password", password } } },
+      opts: { secretInputMode: "ref" },
+    });
+
+    expect(result?.nextConfig.gateway?.auth?.password).toEqual(password);
+  });
+
   it.each([
     { name: "an explicit auth mode", opts: { gatewayAuth: "token" as const } },
     { name: "an explicit token credential", opts: { gatewayToken: "flag-token" } },

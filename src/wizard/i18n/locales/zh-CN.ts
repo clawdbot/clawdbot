@@ -94,6 +94,8 @@ export const zh_CN = {
       tokenPlaceholder: "多机器或非 loopback 访问需要使用",
       tokenPrompt: "Gateway 令牌",
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",
+      tokenStoreProvisioned:
+        "已生成 Gateway 令牌并以 {name} 存入 OpenClaw 密钥存储。配置中只保留引用；可用 `openclaw secrets store list` 查看。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {

@@ -11,6 +11,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/index.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { loadCronJobsPage, type CronState } from "../../lib/cron/index.ts";
@@ -34,6 +35,8 @@ type TestAgentsPage = HTMLElement & {
   agentIdentityLoading: boolean;
   agentSkillsError: string | null;
   readonly agentsPanel: AgentsPanel;
+  readonly sessions: ApplicationContext["sessions"];
+  toolsEffectiveError: string | null;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
   chatModelCatalog: ModelCatalogEntry[];
@@ -205,6 +208,30 @@ function pageContext(
 }
 
 describe("AgentsPage gateway lifecycle", () => {
+  it("retires visible-session effective tools across a same-client reconnect", async () => {
+    const staleResult = deferred<ToolsEffectiveResult>();
+    const client = { request: vi.fn(() => staleResult.promise) } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = pageContext(
+      gateway(snapshot(client)),
+      agentsCapability(async () => files("main", "unused")),
+    );
+    page.routeData = { panel: "tools" } as AgentsRouteData;
+    setPageGateway(page, client);
+    page.agentsSelectedId = "main";
+
+    const pending = refreshVisibleToolsEffectiveForCurrentSession(page);
+    expect(page.toolsEffectiveLoading).toBe(true);
+    setPageGateway(page, client, false);
+    setPageGateway(page, client);
+    staleResult.resolve({ profile: "retired-connection" } as ToolsEffectiveResult);
+    await pending;
+
+    expect(page.toolsEffectiveResult).toBeNull();
+    expect(page.toolsEffectiveError).toBeNull();
+    expect(page.toolsEffectiveLoading).toBe(false);
+  });
+
   it("does not stage a default-agent change after a same-client reconnect", async () => {
     const loading = deferred<void>();
     const client = {} as GatewayBrowserClient;

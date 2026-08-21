@@ -94,6 +94,8 @@ export const zh_TW = {
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
+      tokenStoreProvisioned:
+        "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {

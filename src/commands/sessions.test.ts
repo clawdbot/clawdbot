@@ -148,7 +148,7 @@ describe("sessionsCommand", () => {
     );
   });
 
-  it("renders current context after a same-model runtime change", async () => {
+  it("renders recorded runtime with current context after a same-model runtime change", async () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
@@ -189,9 +189,8 @@ describe("sessionsCommand", () => {
     cleanupStore(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("OpenAI Codex");
+    expect(row).toContain("OpenClaw Default");
     expect(row).toContain("0.0k/1000k (0%)");
-    expect(row).not.toContain("272k");
   });
 
   it("shows placeholder rows when tokens are missing", async () => {

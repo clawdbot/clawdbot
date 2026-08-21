@@ -142,7 +142,7 @@ function createCronSubmitHarness(
     const result = await addCronJob(state);
     return { call: findRequestCall(request.mock.calls, method), result };
   };
-  return { state, submit };
+  return { request, state, submit };
 }
 
 function createCronEditHarness(job: CronJob) {
@@ -1330,6 +1330,46 @@ describe("cron controller", () => {
       bestEffort: true,
     });
   });
+
+  it.each(["cron.add", "cron.update"] as const)(
+    "preserves the trigger draft and inventory when %s rejects its syntax",
+    async (method) => {
+      const existingJob = createCronJob({
+        id: "job-condition-syntax",
+        name: "Conditional job",
+        trigger: { script: "return { fire: true }" },
+      });
+      const { request, state } = createCronSubmitHarness(existingJob.id, {
+        method,
+        jobs: [existingJob],
+        state: { cronCreateOpen: method === "cron.add" },
+        form: {
+          name: "Conditional job",
+          scheduleKind: "every",
+          everyAmount: "1",
+          everyUnit: "minutes",
+          payloadText: "run",
+          triggerEnabled: true,
+          triggerScript: "const x = ;",
+        },
+      });
+      const originalInventory = structuredClone(state.cronJobs);
+      const message =
+        "cron trigger script has a syntax error: Unexpected token (line 1, column 10)";
+      request.mockRejectedValue(new Error(message));
+
+      await expect(addCronJob(state)).resolves.toEqual({ saved: false });
+
+      expect(state.cronError).toBe(message);
+      expect(state.cronForm.triggerScript).toBe("const x = ;");
+      expect(state.cronJobs).toEqual(originalInventory);
+      expect(state.cronCreateOpen).toBe(method === "cron.add");
+      if (method === "cron.update") {
+        expect(state.cronEditingJobId).toBe(existingJob.id);
+        expect(state.cronEditingJob?.trigger).toEqual(existingJob.trigger);
+      }
+    },
+  );
 
   it("clears an existing condition trigger from cron.update", async () => {
     const job = createCronJob({

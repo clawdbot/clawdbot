@@ -5,6 +5,8 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codexCatalogHomeId } from "../session-catalog-home-id.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -2395,6 +2397,137 @@ describe("Codex plugin binding recovery", () => {
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it("records ownership before committing a newly created durable thread", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed.jsonl"),
+      path.join(tempDir, "workspace-managed"),
+    );
+    params.agentDir = path.join(tempDir, "agent");
+    const mark = vi.fn(async () => undefined);
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
+      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-managed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThreadImpl({
+      client: {
+        request,
+        getRuntimeIdentity: () => ({ codexHome: path.join(tempDir, "agent", "codex-home") }),
+      } as never,
+      params,
+      cwd: params.workspaceDir!,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      bindingStore,
+    });
+
+    expect(mark).toHaveBeenCalledOnce();
+    expect(mark).toHaveBeenCalledWith({
+      sourceHomeId: expect.stringMatching(/^[a-f0-9]{64}$/),
+      threadId: "thread-managed",
+    });
+    expect(stateStore.entries().map((entry) => entry.value)).toContainEqual(
+      expect.objectContaining({
+        state: "active",
+        binding: expect.objectContaining({ threadId: "thread-managed" }),
+      }),
+    );
+  });
+
+  it.each([
+    ["a different remote home", "remote"],
+    ["a local-looking remote path", "local-looking"],
+  ])("keys remote ownership to the selected catalog home for %s", async (_label, pathKind) => {
+    const rolloutPath =
+      pathKind === "remote"
+        ? "/remote/codex/sessions/2026/08/thread-managed-remote.jsonl"
+        : path.join(tempDir, "poison", "sessions", "2026", "08", "thread-managed-remote.jsonl");
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed-remote.jsonl"),
+      path.join(tempDir, "workspace-managed-remote"),
+    );
+    params.agentDir = path.join(tempDir, "agent");
+    const mark = vi.fn(async () => undefined);
+    const bindingStore = Object.assign(
+      createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
+      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        const result = threadStartResult("thread-managed-remote");
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const appServer = createThreadLifecycleAppServerOptions();
+    appServer.start = {
+      ...appServer.start,
+      transport: "websocket",
+      url: "wss://codex.example.test/app-server",
+    };
+    appServer.connectionClass = "remote";
+
+    await startOrResumeThreadImpl({
+      client: {
+        request,
+        getRuntimeIdentity: () => ({ codexHome: "/remote/codex" }),
+      } as never,
+      params,
+      cwd: params.workspaceDir!,
+      dynamicTools: [],
+      appServer,
+      bindingStore,
+    });
+
+    expect(mark).toHaveBeenCalledWith({
+      sourceHomeId: codexCatalogHomeId(resolveCodexAppServerHomeDir(params.agentDir)),
+      threadId: "thread-managed-remote",
+      rolloutPath,
+    });
+  });
+
+  it("starts a durable thread when catalog ownership bookkeeping fails", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed-failure.jsonl"),
+      path.join(tempDir, "workspace-managed-failure"),
+    );
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
+      managedThreads: {
+        mark: vi.fn(async () => {
+          throw new Error("managed ownership unavailable");
+        }),
+        snapshot: vi.fn(async () => new Map()),
+      },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-managed-without-index");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: {
+          request,
+          getRuntimeIdentity: () => ({ codexHome: path.join(tempDir, "codex-home") }),
+        } as never,
+        params,
+        cwd: params.workspaceDir!,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        bindingStore,
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-managed-without-index" });
   });
 
   it("does not rebuild a binding whose configured plugin is a settled negative", async () => {

@@ -124,7 +124,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    void import("../components/app-sidebar.ts");
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();

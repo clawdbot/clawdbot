@@ -207,9 +207,9 @@ export function createComposerKeyDownHandler({
       commitDraft(target.value);
       const steerImmediately = steerNowEnabled && (event.metaKey || event.ctrlKey) && !event.altKey;
       if (steerImmediately) {
-        props.onSend("steer");
+        props.onSend("steer", event);
       } else {
-        props.onSend();
+        props.onSend(undefined, event);
       }
       syncDraftAfterSend(target);
     }

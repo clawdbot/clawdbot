@@ -134,6 +134,9 @@ export function startManagedGatewayConfigReloader(
   } = createGatewayReloadHandlers({
     deps: params.deps,
     broadcast: params.broadcast,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
     getState: params.getState,
     setState: params.setState,
     getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,

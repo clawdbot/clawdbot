@@ -499,7 +499,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         "  rootHasFixture: root.content.includes('fixture'),",
         "  headerHasLookup: api.content.includes('function lookupNote'),",
         "  resultText: result.content?.[0]?.text,",
-        "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+        "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
         "};",
       ].join("\n"),
     });

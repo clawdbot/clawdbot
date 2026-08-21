@@ -275,22 +275,6 @@ describe("resolveDiscordMessageText", () => {
     ).toBe("Breaking\nDetails");
   });
 
-  it("preserves ordered text from all embeds while skipping textless embeds", () => {
-    expect(
-      resolveDiscordMessageText(
-        asMessage({
-          content: "",
-          embeds: [
-            { image: { url: "https://cdn.discordapp.com/image.png" } },
-            { title: "Breaking", description: "Details" },
-            {},
-            { description: "Follow-up" },
-          ],
-        }),
-      ),
-    ).toBe("Breaking\nDetails\nFollow-up");
-  });
-
   it("prefers message content over embed fallback text", () => {
     expect(
       resolveDiscordMessageText(

@@ -1282,6 +1282,19 @@ describe("gateway hot reload model state", () => {
     );
   });
 
+  it("keeps the gateway context resolver when hot reload rebuilds cron", async () => {
+    const resolveGatewayContext = vi.fn(() => undefined);
+    const { applyHotReload } = createGatewayReloadHandlers({ resolveGatewayContext });
+
+    await withGatewayRestartSignal(async () => {
+      await applyHotReload(createCronRestartPlan(), { cron: { enabled: true } });
+    });
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledWith(
+      expect.objectContaining({ resolveGatewayContext }),
+    );
+  });
+
   it("completes reload reconciliation when the replacement scheduler is disabled", async () => {
     const rebuiltCronState = {
       cron: { start: vi.fn(async () => {}), stop: vi.fn() },

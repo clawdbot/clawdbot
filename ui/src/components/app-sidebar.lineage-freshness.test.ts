@@ -76,7 +76,6 @@ describe("sidebar routed-lineage freshness", () => {
         },
       ),
     );
-    harness.reconcile.mockClear();
     harness.publishList({ result: result(offline) });
 
     expect(sidebar.sessionData.activeSessionLineageSelectedRow).toMatchObject({
@@ -84,17 +83,5 @@ describe("sidebar routed-lineage freshness", () => {
       derivedTitle: "My device session",
       lastMessagePreview: "Most recent message",
     });
-    await waitForFast(() =>
-      expect(harness.reconcile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          placement: expect.objectContaining({ runner: { kind: "device", status: "offline" } }),
-        }),
-        result(offline).defaults,
-        {
-          archivedFilter: "all",
-          sourceCanonicalListRevision: harness.sessions.canonicalListRevision,
-        },
-      ),
-    );
   });
 });

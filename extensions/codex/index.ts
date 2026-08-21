@@ -21,6 +21,11 @@ import { readCodexPluginConfig } from "./src/app-server/config.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import { setManagedCodexPluginRoot } from "./src/app-server/managed-binary.js";
 import {
+  CODEX_MANAGED_THREAD_MAX_ENTRIES,
+  CODEX_MANAGED_THREAD_NAMESPACE,
+  type StoredCodexManagedThread,
+} from "./src/app-server/managed-thread-store.js";
+import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createLazyCodexAppServerBindingStore,
@@ -109,6 +114,7 @@ export default definePluginEntry({
       );
     }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
+    let managedThreadStateStore: PluginStateSyncKeyedStore<StoredCodexManagedThread> | undefined;
     const openBindingStateStore = () =>
       (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -119,8 +125,9 @@ export default definePluginEntry({
     // store only when a proxied runtime performs the first binding operation.
     const lazyBindingStateStore: Pick<
       PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-      "entries" | "lookup" | "update"
+      "delete" | "entries" | "lookup" | "update"
     > = {
+      delete: (key) => openBindingStateStore().delete(key),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
       get update() {
@@ -128,7 +135,25 @@ export default definePluginEntry({
         return store.update?.bind(store);
       },
     };
-    const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
+    const openManagedThreadStateStore = () =>
+      (managedThreadStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexManagedThread>({
+        namespace: CODEX_MANAGED_THREAD_NAMESPACE,
+        maxEntries: CODEX_MANAGED_THREAD_MAX_ENTRIES,
+        // Catalog-only ownership may evict its oldest row. Modern rollouts/transcripts are
+        // rediscovered from provenance; very old markerless sessions may reappear after eviction.
+        overflowPolicy: "evict-oldest",
+      }));
+    const lazyManagedThreadStateStore: Pick<
+      PluginStateSyncKeyedStore<StoredCodexManagedThread>,
+      "entries" | "registerIfAbsent"
+    > = {
+      entries: () => openManagedThreadStateStore().entries(),
+      registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
+    };
+    const bindingStore = createLazyCodexAppServerBindingStore(
+      lazyBindingStateStore,
+      lazyManagedThreadStateStore,
+    );
     registerCodexCliMetadata(api);
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
       config: api.config as OpenClawConfig,
@@ -151,6 +176,7 @@ export default definePluginEntry({
           getPluginConfig: resolveCurrentPluginConfig,
           getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
         },
+        bindingStore,
       )) {
         api.registerNodeHostCommand(command);
       }

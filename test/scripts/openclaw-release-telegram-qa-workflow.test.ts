@@ -526,6 +526,25 @@ describe("release Telegram QA workflow", () => {
     ]);
   });
 
+  it("accepts only same-line extended-stable successors in both provenance blocks", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const accepted = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.35",
+        targetContextRef: "extended-stable/2026.7.33",
+      });
+      expect(accepted.status, `${provenanceBlock.stepName}: ${accepted.stderr}`).toBe(0);
+
+      for (const candidateVersion of ["2026.7.32", "2026.8.35", "2026.7.35-beta.1"]) {
+        const rejected = runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          targetContextRef: "extended-stable/2026.7.33",
+        });
+        expect(rejected.status, `${provenanceBlock.stepName}: ${candidateVersion}`).toBe(1);
+        expect(rejected.stderr).toContain("PATCH >= 33");
+      }
+    }
+  });
+
   it("accepts only strict signed frozen beta branch heads in both provenance blocks", () => {
     for (const provenanceBlock of PROVENANCE_BLOCKS) {
       const frozen = runCandidateProvenance(provenanceBlock, {
@@ -925,24 +944,22 @@ describe("release Telegram QA workflow", () => {
     );
     expect(createSut).not.toContain('chmod 0711 "$temp_root"');
     expect(createSut).not.toContain('chmod 1777 "$temp_root"');
+    expect(createSut).toContain('"${temp_root}/state/qa-auth-bootstrap/openclaw.json")');
+    expect(createSut).toContain(
+      '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
+    );
   });
 
-  it("adds an empty PS1 only after attested runtime environment verification", () => {
+  it("does not defer Bash startup cleanup to the privileged launcher", () => {
     const createSut = requireRun(
       "run_telegram",
       "Create isolated Telegram SUT identity and launcher",
     );
     const launcher = extractHereDocument(createSut, "LAUNCHER");
-    const verification = '[[ "$actual_env_keys_b64" == "$runtime_expected_env_keys_b64" ]]';
-    const ps1Export = "export PS1=";
-    const candidateExec = 'exec "$runtime_node_bin" "${runtime_node_args[@]}"';
 
-    expect(launcher.match(/export PS1=/gu)).toHaveLength(1);
-    expect(launcher.indexOf(verification)).toBeGreaterThan(-1);
-    expect(launcher.indexOf(ps1Export)).toBeGreaterThan(launcher.indexOf(verification));
-    expect(launcher.indexOf(candidateExec)).toBeGreaterThan(launcher.indexOf(ps1Export));
-    expect(launcher.match(/exec "\$runtime_node_bin"/gu)).toHaveLength(1);
-    expect(launcher).toContain('grep -Ev "^(PWD|SHLVL|_)$"');
+    expect(launcher).not.toContain("export PS1=");
+    expect(launcher).not.toContain("export -n BASHOPTS SHELLOPTS");
+    expect(launcher).not.toContain("unset BASH_ENV ENV");
   });
 
   it("mounts an isolated SUT-owned tmp without exposing the host tmp tree", () => {

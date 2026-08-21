@@ -142,6 +142,10 @@ export type GatewayPluginReloadResult = {
 export type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  /** Kept across cron rebuilds so a hot reload does not drop scheduler gateway context. */
+  resolveGatewayContext?: () =>
+    | import("./server-methods/types.js").GatewayRequestContext
+    | undefined;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;

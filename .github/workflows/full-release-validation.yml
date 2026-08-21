@@ -223,6 +223,7 @@ jobs:
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
           target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
+          extended_stable_line=""
           release_version_pattern=""
           expected_version=""
           identity_kind=""
@@ -236,7 +237,7 @@ jobs:
               exit 1
             fi
           elif [[ "$context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
-            expected_version="${BASH_REMATCH[1]}"
+            extended_stable_line="${BASH_REMATCH[1]%.33}"
             identity_kind="extended-stable branch"
           elif [[ "$context_ref" =~ ^v([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
             expected_version="${BASH_REMATCH[1]}"
@@ -245,7 +246,14 @@ jobs:
             echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
             exit 1
           fi
-          if [[ -n "$expected_version" &&
+          if [[ "$identity_kind" == "extended-stable branch" ]]; then
+            if [[ ! "$target_version" =~ ^([0-9]{4}\.([1-9]|1[0-2]))\.([1-9][0-9]*)$ ]] ||
+               [[ "${BASH_REMATCH[1]}" != "$extended_stable_line" ]] ||
+               (( 10#${BASH_REMATCH[3]} < 33 )); then
+              echo "Target package version ${target_version} does not belong to extended-stable branch ${context_ref}; expected a final ${extended_stable_line}.PATCH version with PATCH >= 33." >&2
+              exit 1
+            fi
+          elif [[ -n "$expected_version" &&
                 "$identity_kind" != "release branch" &&
                 "$target_version" != "$expected_version" ]]; then
             echo "Target package version ${target_version} does not match ${identity_kind} ${context_ref}; expected ${expected_version}." >&2

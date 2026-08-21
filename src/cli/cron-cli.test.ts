@@ -771,6 +771,23 @@ describe("cron cli", () => {
     });
   });
 
+  it.each(["", "not-a-url"])("rejects invalid cron add --webhook %j", async (value) => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "Webhook reminder",
+      "--at",
+      "20m",
+      "--system-event",
+      "Summarize the latest status",
+      "--webhook",
+      value,
+    ]);
+
+    expectRuntimeErrorContaining("--webhook must be a valid http(s) URL");
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
   it("accepts Hermes-style positional cron schedule and message on cron create", async () => {
     const params = await runCronAddAndGetParams([
       "0 2 * * *",

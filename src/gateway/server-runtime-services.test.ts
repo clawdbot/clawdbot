@@ -18,6 +18,7 @@ function waitForFast<T>(
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
+type StartHeartbeatRunner = typeof import("../infra/heartbeat-runner.js").startHeartbeatRunner;
 type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
@@ -32,7 +33,8 @@ const hoisted = vi.hoisted(() => {
   const stopSessionDeliveryRuntime = vi.fn();
   return {
     heartbeatRunner,
-    startHeartbeatRunner: vi.fn(() => heartbeatRunner),
+    startHeartbeatRunner: vi.fn<StartHeartbeatRunner>(() => heartbeatRunner),
+    runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
     startChannelHealthMonitor: vi.fn(() => ({
       stop: vi.fn(),
       shutdown: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
     { agentId: "main", heartbeat: cfg.agents?.defaults?.heartbeat },
   ],
   startHeartbeatRunner: hoisted.startHeartbeatRunner,
+  runHeartbeatOnce: hoisted.runHeartbeatOnce,
 }));
 
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
@@ -95,6 +98,11 @@ vi.mock("./channel-health-monitor.js", () => ({
   startChannelHealthMonitor: hoisted.startChannelHealthMonitor,
 }));
 
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+
 const {
   activateGatewayScheduledServices,
   runGatewayPostReadyMaintenance,
@@ -116,6 +124,7 @@ describe("server-runtime-services", () => {
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
     hoisted.startHeartbeatRunner.mockClear();
+    hoisted.runHeartbeatOnce.mockClear();
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startSessionUpstreamMonitor.mockClear();
     hoisted.stopSessionUpstreamMonitor.mockClear();
@@ -387,6 +396,36 @@ describe("server-runtime-services", () => {
       "recovered",
     );
     expect(hoisted.schedulePendingSessionDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives standalone scheduled heartbeats a resolvable gateway context", async () => {
+    vi.useFakeTimers();
+    const gatewayContext = {
+      terminalSessions: {},
+      resolveGatewayContext: () => gatewayContext,
+    } as never;
+    let observed: unknown = "never-ran";
+    let observedClient: unknown = "never-ran";
+    hoisted.runHeartbeatOnce.mockImplementationOnce(async () => {
+      const scope = getPluginRuntimeGatewayRequestScope();
+      observed = scope?.resolveGatewayContext?.();
+      observedClient = scope?.client;
+      return { status: "ran", durationMs: 1 };
+    });
+    const { services } = activateScheduledServicesForTest({
+      resolveGatewayContext: () => gatewayContext,
+    });
+    const runnerParams = hoisted.startHeartbeatRunner.mock.calls[0]?.[0] as
+      | { runOnce?: (opts: never) => Promise<unknown> }
+      | undefined;
+
+    await withPluginRuntimeGatewayRequestScope({ client: { id: "retired-request" } } as never, () =>
+      runnerParams?.runOnce?.({} as never),
+    );
+
+    expect(observed).toBe(gatewayContext);
+    expect(observedClient).toBeUndefined();
+    services.heartbeatRunner.stop();
   });
 
   it("waits for active startup recovery before its stop handle settles", async () => {

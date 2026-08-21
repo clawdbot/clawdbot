@@ -120,6 +120,8 @@ export type RunEmbeddedAgentParams = {
   scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
+  /** Sticky source-turn taint inherited by an internal maintenance run. */
+  initialTurnTainted?: boolean;
   /** Delivery target for topic/thread routing. */
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */

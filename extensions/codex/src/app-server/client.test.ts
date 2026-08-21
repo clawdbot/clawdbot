@@ -218,6 +218,7 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
     await expect(request).rejects.toHaveProperty("code", -32601);
     await expect(request).rejects.toHaveProperty("message", "Method not found");
+    await expect(request).rejects.toHaveProperty("method", "future/method");
   });
 
   it("retries transient app-server overload errors", async () => {
@@ -437,8 +438,6 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([
-    ["0.148.0-alpha.9", 0],
-    ["0.148.0-alpha.15", 0],
     ["0.148.0-alpha.23", 0],
     ["0.148.0", 0],
     ["1.0.0", 1],

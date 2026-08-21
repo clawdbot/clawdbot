@@ -185,6 +185,80 @@ afterEach(async () => {
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
+  it("keeps JSON-era ownership through shared writes until Doctor imports the credential", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:json-era": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-json-era",
+        },
+      },
+    });
+    const legacyDatabasePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    expect(fs.existsSync(legacyDatabasePath)).toBe(false);
+
+    const realExistsSync = fs.existsSync.bind(fs);
+    let legacyJsonProbes = 0;
+    const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+      if (path.resolve(String(pathname)) === path.resolve(authPath)) {
+        legacyJsonProbes += 1;
+      }
+      return realExistsSync(pathname);
+    });
+    try {
+      for (const key of ["sk-first-write", "sk-second-write"]) {
+        writePersistedAuthProfileStoreRaw({
+          version: 1,
+          profiles: {
+            "anthropic:written": {
+              type: "api_key",
+              provider: "anthropic",
+              key,
+            },
+          },
+        });
+      }
+      expect(legacyJsonProbes).toBe(1);
+    } finally {
+      existsSpy.mockRestore();
+    }
+
+    const beforeDoctor = openOpenClawStateDatabase({ env: state.env });
+    expect(
+      beforeDoctor.db
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("auth.sharedStore"),
+    ).toBeUndefined();
+    expect(fs.existsSync(legacyDatabasePath)).toBe(true);
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+      now: () => 123,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toMatchObject({
+      "openai:json-era": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-json-era",
+      },
+      "anthropic:written": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-second-write",
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+    expectMigratedArchive(authPath);
+  });
+
   it("migrates the inherited auth owner after it leaves the explicit roster", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(

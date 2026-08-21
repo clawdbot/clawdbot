@@ -14,6 +14,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as windowsEncoding from "../infra/windows-encoding.js";
+import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
@@ -23,11 +24,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-  type MemoryFlushPlan,
-} from "../plugins/memory-state.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -271,7 +267,6 @@ describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {
-    clearMemoryPluginState();
     resetGlobalHookRunner();
   });
 
@@ -2445,7 +2440,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("roots memory flush append-only writes in the workspace when cwd differs", async () => {
+  it("records restricted memory flush writes without an active memory provider", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-workspace-"));
     const taskCwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-cwd-"));
     const memoryRelativePath = "memory/2026-03-24.md";
@@ -2459,8 +2454,10 @@ describe("createOpenClawCodingTools", () => {
       const tools = createOpenClawCodingTools({
         workspaceDir,
         cwd: taskCwd,
+        config: { plugins: { slots: { memory: "none" } } },
         trigger: "memory",
         memoryFlushWritePath: memoryRelativePath,
+        senderIsOwner: false,
       });
       const writeExecute = requireToolExecute(requireTool(tools, "write"));
 
@@ -2473,6 +2470,9 @@ describe("createOpenClawCodingTools", () => {
         "seed\nnew durable note",
       );
       await expect(fs.stat(taskMemoryFile)).rejects.toThrow();
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir, relativePath: memoryRelativePath }),
+      ).resolves.toMatchObject({ originClass: "untrusted" });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(taskCwd, { recursive: true, force: true });
@@ -2481,21 +2481,6 @@ describe("createOpenClawCodingTools", () => {
 
   it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
-    const rollback = vi.fn(async () => {});
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => rollback,
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/2026-07-29.md",
-        recordWriteProvenance,
-      }),
-    });
     let tainted = false;
     try {
       const tools = createOpenClawCodingTools({
@@ -2526,18 +2511,16 @@ describe("createOpenClawCodingTools", () => {
         ].join("\n"),
       });
 
-      expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
-        "agent",
-        "untrusted",
-        "untrusted",
+      await expect(
+        Promise.all(
+          ["memory/2026-07-29.md", "memory/project.md"].map((relativePath) =>
+            readMemoryArtifactProvenance({ workspaceDir, relativePath }),
+          ),
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({ originClass: "untrusted" }),
       ]);
-      expect(recordWriteProvenance).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          relativePath: "memory/project.md",
-          contentBefore: "",
-          contentAfter: "network project note\n",
-        }),
-      );
       await expect(
         applyPatch("patch-existing-memory", {
           input: [
@@ -2548,7 +2531,9 @@ describe("createOpenClawCodingTools", () => {
           ].join("\n"),
         }),
       ).rejects.toThrow(/file already exists/i);
-      expect(rollback).toHaveBeenCalledOnce();
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/project.md" }),
+      ).resolves.toMatchObject({ originClass: "untrusted" });
       await expect(fs.readFile(path.join(workspaceDir, "memory/project.md"), "utf8")).resolves.toBe(
         "network project note\n",
       );
@@ -2559,23 +2544,6 @@ describe("createOpenClawCodingTools", () => {
 
   it("records agent provenance after an untainted same-turn delete and recreate", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-recreate-"));
-    let recordedOrigin: "agent" | "untrusted" | undefined;
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/recreated.md",
-        recordWriteProvenance: async (entry) => {
-          recordedOrigin = entry.originClass;
-        },
-        clearWriteProvenance: async () => {
-          recordedOrigin = undefined;
-        },
-      }),
-    });
     try {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "memory/recreated.md"), "old\n", "utf8");
@@ -2595,93 +2563,19 @@ describe("createOpenClawCodingTools", () => {
       await applyPatch("recreate-memory", {
         input: "*** Begin Patch\n*** Add File: memory/recreated.md\n+recreated\n*** End Patch",
       });
-      expect(recordedOrigin).toBe("agent");
+      await expect(
+        readMemoryArtifactProvenance({
+          workspaceDir,
+          relativePath: "memory/recreated.md",
+        }),
+      ).resolves.toMatchObject({ originClass: "agent" });
     } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("orders parallel apply_patch delete cleanup before a tainted recreate", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-race-"));
-    let recordedOrigin: "agent" | "untrusted" | undefined;
-    let releaseCleanup!: () => void;
-    let signalCleanupStarted!: () => void;
-    const cleanupRelease = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    const cleanupStarted = new Promise<void>((resolve) => {
-      signalCleanupStarted = resolve;
-    });
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async (entry) => {
-        recordedOrigin = entry.originClass;
-      },
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/raced.md",
-        recordWriteProvenance,
-        clearWriteProvenance: async () => {
-          signalCleanupStarted();
-          await cleanupRelease;
-          recordedOrigin = undefined;
-        },
-      }),
-    });
-    try {
-      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "memory/raced.md"), "old\n", "utf8");
-      const applyPatch = requireToolExecute(
-        requireTool(
-          createOpenClawCodingTools({
-            workspaceDir,
-            senderIsOwner: true,
-            isTurnTainted: () => true,
-          }),
-          "apply_patch",
-        ),
-      );
-      const deleting = applyPatch("delete-raced-memory", {
-        input: "*** Begin Patch\n*** Delete File: memory/raced.md\n*** End Patch",
-      });
-      await cleanupStarted;
-      const recreating = applyPatch("recreate-raced-memory", {
-        input: "*** Begin Patch\n*** Add File: memory/raced.md\n+network note\n*** End Patch",
-      });
-      await Promise.resolve();
-      expect(recordWriteProvenance).not.toHaveBeenCalled();
-      releaseCleanup();
-      await Promise.all([deleting, recreating]);
-
-      expect(recordedOrigin).toBe("untrusted");
-      expect(recordWriteProvenance).toHaveBeenCalledOnce();
-    } finally {
-      releaseCleanup();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
   it("records sandbox-backed memory writes before mutation", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"));
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => {},
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/2026-07-29.md",
-        recordWriteProvenance,
-      }),
-    });
     try {
       const sandbox = createAgentToolsSandboxContext({
         workspaceDir,
@@ -2699,14 +2593,12 @@ describe("createOpenClawCodingTools", () => {
         content: "sandbox network note\n",
       });
 
-      expect(recordWriteProvenance).toHaveBeenCalledWith(
-        expect.objectContaining({
+      await expect(
+        readMemoryArtifactProvenance({
+          workspaceDir,
           relativePath: "memory/2026-07-29.md",
-          originClass: "untrusted",
-          contentBefore: "",
-          contentAfter: "sandbox network note\n",
         }),
-      );
+      ).resolves.toMatchObject({ originClass: "untrusted" });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

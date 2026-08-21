@@ -444,6 +444,7 @@ export async function startCodexAttemptThread(params: {
                 params: params.buildAttemptParams(),
                 runtimeModelId: params.runtimeModelId,
                 agentId: params.sessionAgentId,
+                agentDir: params.agentDir,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,

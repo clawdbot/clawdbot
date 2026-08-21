@@ -431,7 +431,7 @@ extensions/discord/src/resolve-users.ts	1
 extensions/discord/src/security-audit.ts	12
 extensions/discord/src/send.components.ts	3
 extensions/discord/src/send.messages.ts	2
-extensions/discord/src/send.outbound.ts	3
+extensions/discord/src/send.outbound.ts	2
 extensions/discord/src/send.shared.ts	4
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
@@ -965,7 +965,7 @@ extensions/openrouter/stream.ts	8
 extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
-extensions/openshell/src/backend.ts	3
+extensions/openshell/src/backend.ts	2
 extensions/openshell/src/config.ts	1
 extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
@@ -1621,7 +1621,7 @@ packages/memory-host-sdk/src/host/post-json.ts	1
 packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
 packages/memory-host-sdk/src/host/secret-input-utils.ts	1
-packages/memory-host-sdk/src/host/session-files.ts	18
+packages/memory-host-sdk/src/host/session-files.ts	15
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/session-transcript-corpus.ts	1
 packages/memory-host-sdk/src/host/sqlite-vec.ts	3
@@ -1677,7 +1677,7 @@ src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-bundle-mcp-runtime.ts	9
-src/agents/agent-command-restart-recovery.ts	4
+src/agents/agent-command-restart-recovery.ts	3
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	19
 src/agents/agent-model-discovery.ts	5
@@ -2061,7 +2061,6 @@ src/agents/subagents/announce/subagent-announce-completion-delivery.ts	2
 src/agents/subagents/announce/subagent-announce-delivery-retry.ts	2
 src/agents/subagents/announce/subagent-announce-delivery.runtime.ts	2
 src/agents/subagents/announce/subagent-announce-delivery.ts	1
-src/agents/subagents/announce/subagent-announce-direct-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/announce/subagent-announce-output.ts	10
 src/agents/subagents/completion/subagent-completion-admission.store.ts	2
@@ -2179,7 +2178,7 @@ src/agents/worktrees/git.ts	2
 src/agents/worktrees/provisioned-files.ts	3
 src/agents/worktrees/registry.ts	12
 src/agents/worktrees/run-lease.ts	1
-src/audit/execution-identity-admission.ts	2
+src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
 src/auto-reply/chunk.ts	4
 src/auto-reply/command-auth.ts	5
@@ -2196,7 +2195,7 @@ src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-memory.ts	8
+src/auto-reply/reply/agent-runner-memory.ts	7
 src/auto-reply/reply/agent-runner-result-complete.ts	3
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
@@ -2555,7 +2554,6 @@ src/commands/doctor-sandbox-legacy-registry.ts	8
 src/commands/doctor-sandbox.ts	5
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
-src/commands/doctor-session-delivery-state.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
 src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
@@ -2862,7 +2860,7 @@ src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
 src/entry.compile-cache.ts	3
 src/entry.respawn.ts	1
-src/fleet/backup.runtime.ts	4
+src/fleet/backup.runtime.ts	3
 src/fleet/service-support.runtime.ts	1
 src/flows/channel-setup.prompts.ts	2
 src/flows/channel-setup.status.ts	2
@@ -3263,7 +3261,7 @@ src/infra/outbound/deliver-queue-state.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
 src/infra/outbound/delivery-queue-media-staging.ts	2
 src/infra/outbound/delivery-queue-preparation.ts	1
-src/infra/outbound/delivery-queue-storage.ts	10
+src/infra/outbound/delivery-queue-storage.ts	11
 src/infra/outbound/envelope.ts	2
 src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	4
@@ -3347,7 +3345,7 @@ src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	12
-src/infra/state-migrations.shared-auth-store.ts	2
+src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.source-snapshot.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.storage.ts	21
@@ -4192,6 +4190,7 @@ ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-sidebar-editor-menu.ts	2
 ui/src/pages/chat/components/chat-sidebar-region.runtime.ts	2
 ui/src/pages/chat/components/chat-swarm-progress.ts	3
+ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	7
 ui/src/pages/chat/components/chat-tool-cards.ts	2
 ui/src/pages/chat/components/chat-transcript-controller.ts	1

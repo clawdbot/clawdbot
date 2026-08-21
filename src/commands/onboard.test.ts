@@ -624,29 +624,26 @@ describe("setupWizardCommand", () => {
     },
   );
 
+  const tokenError =
+    "--gateway-token configures local gateway auth. Use --remote-token in remote mode.";
+  const refError =
+    "--gateway-token-ref-env configures local gateway auth. Use --remote-token with --secret-input-mode ref in remote mode.";
   it.each([
-    {
-      name: "simultaneous remote token and password credentials",
-      options: { remoteToken: "fixture-token", remotePassword: "fixture-password" },
-      message: "Use either --remote-token or --remote-password, not both.",
-    },
-    {
-      name: "an empty remote token",
-      options: { remoteToken: " " },
-      message: "Invalid --remote-token: value cannot be empty.",
-    },
-    {
-      name: "an empty remote password",
-      options: { remotePassword: " " },
-      message: "Invalid --remote-password: value cannot be empty.",
-    },
-    {
-      name: "a local gateway password in remote mode",
-      options: { gatewayPassword: "fixture-password" },
-      message:
-        "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
-    },
-  ])("rejects $name before resetting existing state", async ({ options, message }) => {
+    [
+      { remoteToken: "fixture-token", remotePassword: "fixture-password" },
+      "Use either --remote-token or --remote-password, not both.",
+    ],
+    [{ remoteToken: " " }, "Invalid --remote-token: value cannot be empty."],
+    [{ remotePassword: " " }, "Invalid --remote-password: value cannot be empty."],
+    [
+      { gatewayPassword: "fixture-password" },
+      "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
+    ],
+    [{ gatewayToken: "fixture-token" }, tokenError],
+    [{ gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" }, refError],
+    [{ nonInteractive: false, gatewayToken: "fixture-token" }, tokenError],
+    [{ nonInteractive: false, gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" }, refError],
+  ] as const)("rejects invalid remote credentials %j before reset", async (options, message) => {
     const runtime = makeRuntime();
 
     await setupWizardCommand(
@@ -666,6 +663,65 @@ describe("setupWizardCommand", () => {
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (
+      [
+        ["gatewayPassword", "OPENCLAW_GATEWAY_PASSWORD"],
+        ["remoteToken", "OPENCLAW_GATEWAY_TOKEN"],
+        ["remotePassword", "OPENCLAW_GATEWAY_PASSWORD"],
+      ] as const
+    ).flatMap(([optionName, envName]) =>
+      ["", "different-credential"].map((envValue) => ({ optionName, envName, envValue })),
+    ),
+  )(
+    "rejects $optionName with env value $envValue before reading or resetting config",
+    async ({ optionName, envName, envValue }) => {
+      vi.stubEnv(envName, envValue);
+      const runtime = makeRuntime();
+
+      await setupWizardCommand(
+        {
+          reset: true,
+          nonInteractive: true,
+          acceptRisk: true,
+          secretInputMode: "ref",
+          [optionName]: "expected-credential",
+          ...(optionName.startsWith("remote")
+            ? { mode: "remote", remoteUrl: "wss://gateway.example.invalid" }
+            : {}),
+        },
+        runtime,
+      );
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(envName));
+      if (envValue) {
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("does not match"));
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps interactive gateway reference selection independent of the default env var", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        acceptRisk: true,
+        gatewayPassword: "interactive-password",
+        secretInputMode: "ref",
+      },
+      runtime,
+    );
+
+    expect(mocks.runInteractiveSetup).toHaveBeenCalledOnce();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("validates dependent gateway options before reset", async () => {
@@ -937,6 +993,12 @@ describe("setupWizardCommand", () => {
     );
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous interactive provider flags before reset", async () => {
+    const runtime = makeRuntime();
+    await setupWizardCommand({ reset: true, nvidiaApiKey: "n", openaiApiKey: "o" }, runtime);
+    expect(mocks.handleReset).not.toHaveBeenCalled();
   });
 
   it("validates custom credential storage before reset", async () => {

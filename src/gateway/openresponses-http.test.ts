@@ -11,6 +11,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
@@ -1954,6 +1955,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
             openResponsesEnabled: true,
           });
 
+          const incognitoSessionKey = "agent:main:dashboard:incognito-openresponses-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: incognitoSessionKey },
+            {
+              sessionId: "session-incognito-openresponses-http",
+              updatedAt: 1,
+              incognito: true,
+              visibility: "shared",
+            },
+          );
+
           for (const stream of [false, true]) {
             for (const { scopes, senderIsOwner } of [
               { scopes: "operator.write", senderIsOwner: false },
@@ -1980,6 +1992,44 @@ describe("OpenResponses HTTP API (e2e)", () => {
               expect(firstAgentOpts().senderIsOwner).toBe(senderIsOwner);
             }
           }
+
+          const trustedProxyHeaders = {
+            "x-forwarded-for": "198.51.100.42",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": "operator@example.com",
+          };
+          for (const requestedSessionKey of [
+            incognitoSessionKey,
+            "dashboard:incognito-openresponses-http",
+          ]) {
+            agentCommandMock.mockClear();
+            const denied = await postResponses(
+              port,
+              { model: "openclaw", input: "hi" },
+              {
+                ...trustedProxyHeaders,
+                "x-openclaw-scopes": "operator.write",
+                "x-openclaw-session-key": requestedSessionKey,
+              },
+            );
+            expect(denied.status).toBe(403);
+            await ensureResponseConsumed(denied);
+            expect(agentCommandMock).not.toHaveBeenCalled();
+          }
+
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const allowed = await postResponses(
+            port,
+            { model: "openclaw", input: "hi" },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
+            },
+          );
+          expect(allowed.status).toBe(200);
+          await ensureResponseConsumed(allowed);
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
           agentCommandMock.mockClear();
           agentCommandMock.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
