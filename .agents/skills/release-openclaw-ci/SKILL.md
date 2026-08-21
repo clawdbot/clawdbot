@@ -96,6 +96,9 @@ and Release SHA separately in the lifecycle ledger.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- Retry release checks only through a concrete group: `install-smoke`,
+  `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, or `qa-live`. Never
+  use the removed `release-checks` aggregate handle.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
   requests it. Record the invalidating event.

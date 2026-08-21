@@ -5284,12 +5284,11 @@ describe("package artifact reuse", () => {
     ]);
     expect(dispatchStep.run).not.toContain("package_artifact");
     expectTextToIncludeAll(workflow, [
-      "child_rerun_group=all",
-      '-f rerun_group="$child_rerun_group"',
+      '-f rerun_group="$RERUN_GROUP"',
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
-      "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
+      "install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
       "cancel-in-progress: false",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
