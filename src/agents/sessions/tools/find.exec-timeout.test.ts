@@ -1,24 +1,28 @@
 import type { ChildProcess } from "node:child_process";
 // Find tool stall-timeout escalation tests run a real managed-bin stub that
-// ignores SIGTERM: the inactivity deadline must reject the tool call, the kill
-// escalation must still reap the child, and its stdio pipes must be destroyed.
+// ignores SIGTERM: the inactivity deadline (the runner's noOutputTimeoutMs)
+// must reject the tool call, the kill escalation must still reap the child,
+// and its stdio pipes must be released.
 // Fake timers keep the 60s stall window instantaneous; real timers return
 // before the process-reaping assertions that need the real event loop.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
-import { spawnCommand } from "../../../process/exec.js";
+import {
+  COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+  spawnCommandWithInvocation,
+} from "../../../process/exec-spawn.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { createFindToolDefinition } from "./find.js";
 
-// Keep the real exec module (real spawn) while capturing spawned children.
-vi.mock("../../../process/exec.js", async (importActual) => {
-  const actual = (await importActual()) as typeof import("../../../process/exec.js");
+// Keep the real spawn (the runner spawns through exec-spawn) while capturing
+// spawned children.
+vi.mock("../../../process/exec-spawn.js", async (importActual) => {
+  const actual = (await importActual()) as typeof import("../../../process/exec-spawn.js");
   return {
     ...actual,
-    spawnCommand: vi.fn(actual.spawnCommand),
+    spawnCommandWithInvocation: vi.fn(actual.spawnCommandWithInvocation),
   };
 });
 
@@ -70,20 +74,20 @@ type SpawnedChild = {
 };
 
 function lastSpawnedChild(): SpawnedChild {
-  const child = vi.mocked(spawnCommand).mock.results.at(-1)?.value as
+  const child = vi.mocked(spawnCommandWithInvocation).mock.results.at(-1)?.value?.child as
     | ({ pid?: number } & Partial<SpawnedChild>)
     | undefined;
   if (!child || typeof child.pid !== "number" || !child.nodeChildProcess) {
-    throw new Error("expected spawnCommand to have produced a child with a pid");
+    throw new Error("expected spawnCommandWithInvocation to have produced a child with a pid");
   }
   return child as SpawnedChild;
 }
 
 async function pumpUntilSpawned(): Promise<void> {
-  for (let i = 0; i < 50 && !vi.mocked(spawnCommand).mock.calls.length; i++) {
+  for (let i = 0; i < 50 && !vi.mocked(spawnCommandWithInvocation).mock.calls.length; i++) {
     await vi.advanceTimersByTimeAsync(1);
   }
-  expect(spawnCommand).toHaveBeenCalledOnce();
+  expect(spawnCommandWithInvocation).toHaveBeenCalledOnce();
 }
 
 async function expectProcessReaped(pid: number): Promise<void> {
@@ -101,12 +105,21 @@ async function expectProcessReaped(pid: number): Promise<void> {
   );
 }
 
+// The tool rejects only after the runner resolves post-kill, so pump the real
+// event loop until the SIGKILLed stub's exit propagates.
+async function pumpUntilSettled(isSettled: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !isSettled(); i++) {
+    await realDelay(10);
+    await vi.advanceTimersByTimeAsync(10);
+  }
+}
+
 describePosix("find tool stall-timeout escalation", () => {
   afterEach(() => {
     // Reap any stub that survived a failing run so the test process cannot
     // hang on open pipes.
-    for (const result of vi.mocked(spawnCommand).mock.results) {
-      const child = result.value as { pid?: number } | undefined;
+    for (const result of vi.mocked(spawnCommandWithInvocation).mock.results) {
+      const child = result.value?.child as { pid?: number } | undefined;
       if (typeof child?.pid === "number") {
         try {
           process.kill(child.pid, "SIGKILL");
@@ -127,19 +140,30 @@ describePosix("find tool stall-timeout escalation", () => {
     vi.useFakeTimers();
     const tool = createFindToolDefinition(dir);
     const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+    let settled = false;
+    void result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     const rejection = expect(result).rejects.toThrow(/fd timed out.*without output/);
     await pumpUntilSpawned();
     const child = lastSpawnedChild();
 
-    // The stub never emits output, so nothing re-arms the stall timer.
+    // The stub never emits output, so nothing re-arms the runner's stall timer.
     await vi.advanceTimersByTimeAsync(60_000);
+    // The stub ignores the runner's SIGTERM, so only execa's SIGKILL escalation
+    // can reap it; the grace timer is faked too, so advance past the grace
+    // window.
+    await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_TREE_KILL_GRACE_MS + 100);
+    await pumpUntilSettled(() => settled);
     await rejection;
-    // Stream cleanup is part of forced settlement: no pipes stay pinned.
+    // Stream cleanup is part of child exit: no pipes stay pinned.
     expect(child.stdout?.destroyed).toBe(true);
     expect(child.stderr?.destroyed).toBe(true);
-    // The stub ignores SIGTERM, so only the SIGKILL escalation can reap it;
-    // execa's grace timer is faked too, so advance past the grace window.
-    await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_TREE_KILL_GRACE_MS + 100);
     expect(child.nodeChildProcess.killed).toBe(true);
 
     vi.useRealTimers();

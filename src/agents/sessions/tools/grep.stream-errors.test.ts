@@ -1,19 +1,24 @@
-// Grep tool streaming tests cover result limits, cancellation, and subprocess errors.
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+// Grep tool streaming tests cover result limits, cancellation, and runner-reported
+// errors with the command runner mocked at its public contract; the runner owns
+// spawn, stall detection, and process termination.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawnCommand } from "../../../process/exec.js";
+import { runUtf8CommandWithTimeout, type SpawnResult } from "../../../process/exec.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { createGrepToolDefinition } from "./grep.js";
 
 vi.mock("../../../process/exec.js", () => ({
-  spawnCommand: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
 }));
 
 vi.mock("../../utils/tools-manager.js", () => ({
   ensureTool: vi.fn(),
 }));
+
+type RunnerOptions = {
+  signal?: AbortSignal;
+  noOutputTimeoutMs?: number;
+  onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => boolean | void;
+};
 
 afterEach(() => {
   // Restore fake timers even when a timeout test fails mid-way; leaked fake
@@ -22,26 +27,38 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-type MockChild = ChildProcessWithoutNullStreams & {
-  nodeChildProcess: ChildProcessWithoutNullStreams;
-  stdout: PassThrough;
-  stderr: PassThrough;
-};
+function spawnResult(overrides: Partial<SpawnResult>): SpawnResult {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    noOutputTimedOut: false,
+    ...overrides,
+  };
+}
 
-function createChild(): MockChild {
-  let killed = false;
-  const child = Object.assign(new EventEmitter(), {
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-  }) as unknown as MockChild;
-  Object.defineProperty(child, "killed", { get: () => killed });
-  child.kill = vi.fn(() => {
-    killed = true;
-    return true;
-  });
-  child.nodeChildProcess = child;
+// Stands in for the process the runner owns; kill() records that the runner
+// terminated it. The tool itself no longer holds a process handle.
+function createChild() {
+  const child = {
+    killed: false,
+    kill: vi.fn(() => {
+      child.killed = true;
+      return true;
+    }),
+  };
   return child;
+}
+
+function runnerOptions(): RunnerOptions {
+  const options = vi.mocked(runUtf8CommandWithTimeout).mock.calls[0]?.[1];
+  if (!options || typeof options !== "object") {
+    throw new Error("expected the tool to pass runner options");
+  }
+  return options as RunnerOptions;
 }
 
 function grepMatch(lineNumber: number): string {
@@ -67,7 +84,6 @@ describe("grep tool streaming", () => {
     {
       name: "keeps an exact-size result complete",
       matchCount: 2,
-      closeCode: 0,
       expectedText: "match.txt:1: foo\nmatch.txt:2: foo",
       expectedLimitReached: undefined,
       expectedKilled: false,
@@ -75,41 +91,49 @@ describe("grep tool streaming", () => {
     {
       name: "uses one extra match as the truncation sentinel",
       matchCount: 3,
-      closeCode: null,
       expectedText:
         "match.txt:1: foo\nmatch.txt:2: foo\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
       expectedLimitReached: 2,
       expectedKilled: true,
     },
-  ])(
-    "$name",
-    async ({ matchCount, closeCode, expectedText, expectedLimitReached, expectedKilled }) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
-      vi.mocked(ensureTool).mockResolvedValue("rg");
-
-      const tool = createGrepToolDefinition(process.cwd());
-      const resultPromise = tool.execute(
-        "call-limit",
-        { pattern: "foo", limit: 2 },
-        undefined,
-        undefined,
-        {} as never,
-      );
-      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  ])("$name", async ({ matchCount, expectedText, expectedLimitReached, expectedKilled }) => {
+    const child = createChild();
+    // Feed --json events through the runner's chunk observer; when the tool
+    // declines more output (limit sentinel), the runner stops the child and
+    // reports the kill.
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
+      const onOutputChunk = (options as RunnerOptions).onOutputChunk;
       for (let lineNumber = 1; lineNumber <= matchCount; lineNumber += 1) {
-        child.stdout.write(grepMatch(lineNumber));
+        if (onOutputChunk?.(Buffer.from(grepMatch(lineNumber)), "stdout") === false) {
+          child.kill();
+          return spawnResult({
+            code: null,
+            signal: "SIGTERM",
+            killed: true,
+            termination: "signal",
+            outputLimitExceeded: true,
+          });
+        }
       }
-      child.stdout.end();
-      child.stderr.end();
-      child.emit("close", closeCode);
+      return spawnResult({ code: 0 });
+    });
+    vi.mocked(ensureTool).mockResolvedValue("rg");
 
-      const result = await resultPromise;
-      expect(textContent(result)).toBe(expectedText);
-      expect(result.details?.matchLimitReached).toBe(expectedLimitReached);
-      expect(child.killed).toBe(expectedKilled);
-    },
-  );
+    const tool = createGrepToolDefinition(process.cwd());
+    const resultPromise = tool.execute(
+      "call-limit",
+      { pattern: "foo", limit: 2 },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
+
+    const result = await resultPromise;
+    expect(textContent(result)).toBe(expectedText);
+    expect(result.details?.matchLimitReached).toBe(expectedLimitReached);
+    expect(child.killed).toBe(expectedKilled);
+  });
 
   it("settles promptly when aborted while resolving rg", async () => {
     let resolveEnsureTool: ((value: string) => void) | undefined;
@@ -136,7 +160,7 @@ describe("grep tool streaming", () => {
 
     resolveEnsureTool?.("rg");
     await Promise.resolve();
-    expect(spawnCommand).not.toHaveBeenCalled();
+    expect(runUtf8CommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("does not spawn after an aborted search-path check later resolves", async () => {
@@ -167,12 +191,11 @@ describe("grep tool streaming", () => {
 
     resolveIsDirectory?.(true);
     await Promise.resolve();
-    expect(spawnCommand).not.toHaveBeenCalled();
+    expect(runUtf8CommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("removes the abort listener after normal settlement", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(spawnResult({ code: 1 }));
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const controller = new AbortController();
@@ -185,20 +208,27 @@ describe("grep tool streaming", () => {
       undefined,
       {} as never,
     );
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-    child.emit("close", 1);
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
     await expect(result).resolves.toMatchObject({
       content: [{ type: "text", text: "No matches found" }],
     });
     expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
     controller.abort();
-    expect(child.killed).toBe(false);
   });
 
   it("settles an abort when the spawned child never closes", async () => {
     const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    // The runner owns killing the child on abort; its promise only settles
+    // after a close that never comes here, so the tool must not wait on it.
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(
+      (_argv, options) =>
+        new Promise<SpawnResult>(() => {
+          (options as RunnerOptions).signal?.addEventListener("abort", () => child.kill(), {
+            once: true,
+          });
+        }),
+    );
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const controller = new AbortController();
@@ -210,7 +240,7 @@ describe("grep tool streaming", () => {
       undefined,
       {} as never,
     );
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
     controller.abort();
 
     await expect(result).rejects.toThrow("Operation aborted");
@@ -218,8 +248,10 @@ describe("grep tool streaming", () => {
   });
 
   it("preserves abort precedence during async match formatting", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
+      (options as RunnerOptions).onOutputChunk?.(Buffer.from(grepMatch(1)), "stdout");
+      return spawnResult({ code: 0 });
+    });
     vi.mocked(ensureTool).mockResolvedValue("rg");
     let resolveReadFile: ((value: string) => void) | undefined;
     const readFile = vi.fn(
@@ -240,29 +272,24 @@ describe("grep tool streaming", () => {
       undefined,
       {} as never,
     );
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-    child.stdout.write(
-      `${JSON.stringify({
-        type: "match",
-        data: { path: { text: "/tmp/match.txt" }, line_number: 1, lines: { text: "foo\n" } },
-      })}\n`,
-    );
-    child.emit("close", 0);
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledOnce());
 
     controller.abort();
     await expect(result).rejects.toThrow("Operation aborted");
-    expect(child.killed).toBe(false);
 
     resolveReadFile?.("foo\n");
     await Promise.resolve();
   });
 
   it.each(["stdout", "stderr"] as const)(
-    "rejects and terminates ripgrep when %s fails",
+    "rejects when the runner reports a %s failure",
     async (stream) => {
-      const child = createChild();
-      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      // The runner terminates and reports output stream failures through the
+      // outputErrorStream field on its sanitized error.
+      vi.mocked(runUtf8CommandWithTimeout).mockRejectedValue(
+        Object.assign(new Error(`${stream} EPIPE`), { outputErrorStream: stream }),
+      );
       vi.mocked(ensureTool).mockResolvedValue("rg");
 
       const tool = createGrepToolDefinition(process.cwd());
@@ -273,56 +300,76 @@ describe("grep tool streaming", () => {
         undefined,
         {} as never,
       );
-      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-      child[stream].emit("error", new Error(`${stream} EPIPE`));
+      const rejection = expect(resultPromise).rejects.toThrow(
+        `ripgrep ${stream} error: ${stream} EPIPE`,
+      );
+      await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-      await expect(resultPromise).rejects.toThrow(`${stream} EPIPE`);
-      expect(child.killed).toBe(true);
+      await rejection;
     },
   );
 
   it("rejects and kills ripgrep when the search stalls without output past the deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    // Simulate the runner contract: a silent child is killed at the no-output
+    // deadline and the result reports noOutputTimedOut.
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
+      await new Promise<void>((resolveWait) => {
+        setTimeout(
+          () => {
+            child.kill();
+            resolveWait();
+          },
+          (options as RunnerOptions).noOutputTimeoutMs,
+        );
+      });
+      return spawnResult({
+        code: 124,
+        signal: "SIGKILL",
+        killed: true,
+        termination: "no-output-timeout",
+        noOutputTimedOut: true,
+      });
+    });
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const tool = createGrepToolDefinition(process.cwd());
     // The child never writes output and never closes, mimicking ripgrep stalled
     // on a broken mount; the tool must reject instead of hanging for the outer abort.
     const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
+    expect(runnerOptions().noOutputTimeoutMs).toBe(60_000);
 
     const rejection = expect(result).rejects.toThrow(
       "ripgrep timed out after 60 seconds without output",
     );
     await vi.advanceTimersByTimeAsync(60_000);
     await rejection;
-    expect(child.killed).toBe(true);
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 
-  it("clears the stall timer when ripgrep exits normally", async () => {
+  it("leaves no timers behind when ripgrep exits normally", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(spawnResult({ code: 1 }));
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const tool = createGrepToolDefinition(process.cwd());
     const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-    child.emit("close", 1);
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
     await expect(result).resolves.toMatchObject({
       content: [{ type: "text", text: "No matches found" }],
     });
     expect(vi.getTimerCount()).toBe(0);
-    expect(child.killed).toBe(false);
   });
 
   it("does not time out while formatting context after ripgrep exits", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
+      (options as RunnerOptions).onOutputChunk?.(Buffer.from(grepMatch(1)), "stdout");
+      return spawnResult({ code: 0 });
+    });
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     let resolveReadFile: ((value: string) => void) | undefined;
@@ -342,52 +389,46 @@ describe("grep tool streaming", () => {
       undefined,
       {} as never,
     );
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-    child.stdout.write(grepMatch(1));
-    child.stdout.end();
-    child.stderr.end();
-    child.emit("close", 0);
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-    // Context formatting awaits readFile() after the child closed; holding it
-    // past the stall window must not reject a completed search, because the
-    // stall timer was cleared at close.
+    // Context formatting awaits readFile() after the runner resolved; holding
+    // it past the stall window must not reject a completed search, because no
+    // stall timer survives child exit.
     await vi.advanceTimersByTimeAsync(120_000);
     resolveReadFile?.("foo\n");
     const result = await resultPromise;
     expect(textContent(result)).toContain("match.txt:1: foo");
   });
 
-  it("keeps stdout guarded after a stderr failure closes readline", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+  it("reports the first output stream failure", async () => {
+    // The runner records the first failing stream; later stream errors do not
+    // replace it.
+    vi.mocked(runUtf8CommandWithTimeout).mockRejectedValue(
+      Object.assign(new Error("stderr first"), { outputErrorStream: "stderr" }),
+    );
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const tool = createGrepToolDefinition(process.cwd());
     const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    const rejection = expect(result).rejects.toThrow("ripgrep stderr error: stderr first");
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-    expect(() => {
-      child.stderr.emit("error", new Error("stderr first"));
-      child.stdout.emit("error", new Error("stdout later"));
-    }).not.toThrow();
-    await expect(result).rejects.toThrow("stderr first");
+    await rejection;
   });
 
-  it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+  it("keeps multibyte stderr intact in the rejection", async () => {
+    // Chunk-safe multibyte decoding now belongs to the runner capture; the tool
+    // must surface the decoded stderr verbatim.
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(
+      spawnResult({ stderr: "rg 错误：权限被拒绝\n", code: 2 }),
+    );
     vi.mocked(ensureTool).mockResolvedValue("rg");
 
     const tool = createGrepToolDefinition(process.cwd());
     const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-    const stderrBytes = Buffer.from("rg 错误：权限被拒绝\n");
-    child.stdout.end();
-    // Split inside the first multibyte character to mimic a pipe chunk boundary.
-    child.stderr.write(stderrBytes.subarray(0, 4));
-    child.stderr.end(stderrBytes.subarray(4));
-    child.emit("close", 2);
+    const rejection = expect(result).rejects.toThrow("rg 错误：权限被拒绝");
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-    await expect(result).rejects.toThrow("rg 错误：权限被拒绝");
+    await rejection;
   });
 });

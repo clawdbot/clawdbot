@@ -1,16 +1,16 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { EventEmitter } from "node:events";
+// Find tool fd tests cover exit-code/error mapping, cancellation, and result
+// limits with the command runner mocked at its public contract; the runner
+// owns spawn, stall detection, and process termination.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { spawnCommand } from "../../../process/exec.js";
+import { runUtf8CommandWithTimeout, type SpawnResult } from "../../../process/exec.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { createFindToolDefinition } from "./find.js";
 
 vi.mock("../../../process/exec.js", () => ({
-  spawnCommand: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
 }));
 
 vi.mock("../../utils/tools-manager.js", () => ({
@@ -18,11 +18,11 @@ vi.mock("../../utils/tools-manager.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type MockChild = ChildProcessWithoutNullStreams & {
-  nodeChildProcess: ChildProcessWithoutNullStreams;
-  stdout: PassThrough;
-  stderr: PassThrough;
-  killMock: ReturnType<typeof vi.fn>;
+
+type RunnerOptions = {
+  signal?: AbortSignal;
+  noOutputTimeoutMs?: number;
+  onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => boolean | void;
 };
 
 afterEach(() => {
@@ -32,18 +32,38 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function createChild(): MockChild {
-  const kill = vi.fn(() => true);
-  const child = Object.assign(new EventEmitter(), {
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
+function spawnResult(overrides: Partial<SpawnResult>): SpawnResult {
+  return {
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
     killed: false,
-    kill,
-    killMock: kill,
-  }) as unknown as MockChild;
-  child.nodeChildProcess = child;
+    termination: "exit",
+    noOutputTimedOut: false,
+    ...overrides,
+  };
+}
+
+// Stands in for the process the runner owns; kill() records that the runner
+// terminated it. The tool itself no longer holds a process handle.
+function createChild() {
+  const child = {
+    killed: false,
+    kill: vi.fn(() => {
+      child.killed = true;
+      return true;
+    }),
+  };
   return child;
+}
+
+function runnerOptions(): RunnerOptions {
+  const options = vi.mocked(runUtf8CommandWithTimeout).mock.calls[0]?.[1];
+  if (!options || typeof options !== "object") {
+    throw new Error("expected the tool to pass runner options");
+  }
+  return options as RunnerOptions;
 }
 
 function textContent(
@@ -54,87 +74,108 @@ function textContent(
 }
 
 it("rejects partial fd output when fd exits with an error", async () => {
-  const child = createChild();
-  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(
+    spawnResult({
+      stdout: "/workspace/partial.ts\n",
+      stderr: "fd failed while reading subtree\n",
+      code: 2,
+    }),
+  );
   vi.mocked(ensureTool).mockResolvedValue("fd");
 
   const tool = createFindToolDefinition("/workspace");
   const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
-  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end("/workspace/partial.ts\n");
-  child.stderr.end("fd failed while reading subtree\n");
-  child.emit("close", 2, null);
+  const rejection = expect(result).rejects.toThrow("fd failed while reading subtree");
+  await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-  await expect(result).rejects.toThrow("fd failed while reading subtree");
+  await rejection;
 });
 
-it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
-  const child = createChild();
-  vi.mocked(spawnCommand).mockReturnValue(child as never);
+it("keeps multibyte stderr intact in the rejection", async () => {
+  // Chunk-safe multibyte decoding now belongs to the runner capture; the tool
+  // must surface the decoded stderr verbatim.
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(
+    spawnResult({ stderr: "fd 失败：权限被拒绝\n", code: 2 }),
+  );
   vi.mocked(ensureTool).mockResolvedValue("fd");
 
   const tool = createFindToolDefinition("/workspace");
   const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
-  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  const stderrBytes = Buffer.from("fd 失败：权限被拒绝\n");
-  child.stdout.end();
-  // Split inside the first multibyte character to mimic a pipe chunk boundary.
-  child.stderr.write(stderrBytes.subarray(0, 5));
-  child.stderr.end(stderrBytes.subarray(5));
-  child.emit("close", 2, null);
+  const rejection = expect(result).rejects.toThrow("fd 失败：权限被拒绝");
+  await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-  await expect(result).rejects.toThrow("fd 失败：权限被拒绝");
+  await rejection;
 });
 
 it("rejects and kills fd when the search stalls without output past the deadline", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const child = createChild();
-  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  // Simulate the runner contract: a silent child is killed at the no-output
+  // deadline and the result reports noOutputTimedOut.
+  vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
+    await new Promise<void>((resolveWait) => {
+      setTimeout(
+        () => {
+          child.kill();
+          resolveWait();
+        },
+        (options as RunnerOptions).noOutputTimeoutMs,
+      );
+    });
+    return spawnResult({
+      code: 124,
+      signal: "SIGKILL",
+      killed: true,
+      termination: "no-output-timeout",
+      noOutputTimedOut: true,
+    });
+  });
   vi.mocked(ensureTool).mockResolvedValue("fd");
 
   const tool = createFindToolDefinition("/workspace");
   // The child never writes output and never closes, mimicking fd stalled on a
   // broken mount; the tool must reject instead of hanging for the outer abort.
   const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
-  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
+  expect(runnerOptions().noOutputTimeoutMs).toBe(60_000);
 
   const rejection = expect(result).rejects.toThrow("fd timed out after 60 seconds without output");
   await vi.advanceTimersByTimeAsync(60_000);
   await rejection;
-  expect(child.killMock).toHaveBeenCalledOnce();
+  expect(child.kill).toHaveBeenCalledOnce();
 });
 
-it("clears the stall timer when fd exits normally", async () => {
+it("leaves no timers behind when fd exits normally", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const child = createChild();
-  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(
+    spawnResult({ stdout: "/workspace/a.ts\n" }),
+  );
   vi.mocked(ensureTool).mockResolvedValue("fd");
 
   const tool = createFindToolDefinition("/workspace");
   const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
-  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end("/workspace/a.ts\n");
-  child.emit("close", 0, null);
+  await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
   await result;
 
   expect(vi.getTimerCount()).toBe(0);
-  expect(child.killMock).not.toHaveBeenCalled();
 });
 
 it.each(["stdout", "stderr"] as const)(
-  "rejects and stops fd when %s emits an error",
+  "rejects when the runner reports a %s failure",
   async (stream) => {
-    const child = createChild();
-    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    // The runner terminates and reports output stream failures through the
+    // outputErrorStream field on its sanitized error.
+    vi.mocked(runUtf8CommandWithTimeout).mockRejectedValue(
+      Object.assign(new Error(`${stream} EPIPE`), { outputErrorStream: stream }),
+    );
     vi.mocked(ensureTool).mockResolvedValue("fd");
 
     const tool = createFindToolDefinition("/workspace");
     const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
-    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-    child[stream].emit("error", new Error(`${stream} EPIPE`));
+    const rejection = expect(result).rejects.toThrow(`fd ${stream} error: ${stream} EPIPE`);
+    await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
-    await expect(result).rejects.toThrow(`${stream} EPIPE`);
-    expect(child.killMock).toHaveBeenCalledOnce();
+    await rejection;
   },
 );
 
@@ -149,8 +190,7 @@ it.each([
     await fs.writeFile(path.join(tempDir, ".git"), "gitdir: /tmp/example\n");
   }
 
-  const child = createChild();
-  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(spawnResult({}));
   vi.mocked(ensureTool).mockResolvedValue("fd");
   const tool = createFindToolDefinition(tempDir);
   const result = tool.execute(
@@ -160,13 +200,10 @@ it.each([
     undefined,
     {} as never,
   );
-  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end();
-  child.stderr.end();
-  child.emit("close", 0, null);
+  await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
   await result;
 
-  const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
+  const args = vi.mocked(runUtf8CommandWithTimeout).mock.calls[0]?.[0] as string[];
   expect(args.includes("--no-require-git")).toBe(expected);
 });
 
@@ -185,8 +222,9 @@ it.each([
     expectedLimitReached: 2,
   },
 ])("$name", async ({ paths, expectedText, expectedLimitReached }) => {
-  const child = createChild();
-  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(
+    spawnResult({ stdout: `${paths.join("\n")}\n` }),
+  );
   vi.mocked(ensureTool).mockResolvedValue("fd");
 
   const tool = createFindToolDefinition("/workspace");
@@ -197,13 +235,10 @@ it.each([
     undefined,
     {} as never,
   );
-  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end(`${paths.join("\n")}\n`);
-  child.stderr.end();
-  child.emit("close", 0, null);
+  await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
 
   const result = await resultPromise;
-  const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
+  const args = vi.mocked(runUtf8CommandWithTimeout).mock.calls[0]?.[0] as string[];
   expect(args).toEqual(expect.arrayContaining(["--max-results", "3"]));
   expect(textContent(result)).toBe(expectedText);
   expect(result.details?.resultLimitReached).toBe(expectedLimitReached);
