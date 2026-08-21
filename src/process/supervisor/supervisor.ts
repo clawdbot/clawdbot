@@ -208,7 +208,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         runId,
         startedAtMs,
         wait: async () => exit,
-        waitForExtinction: async () => undefined,
         cancel: () => undefined,
       };
     }
@@ -502,7 +501,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         startedAtMs,
         stdin: adapter.stdin,
         wait: async () => await waitPromise,
-        waitForExtinction: async () => await extinctionPromise,
+        ...(adapter.waitForExtinction && { waitForExtinction: () => extinctionPromise }),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },

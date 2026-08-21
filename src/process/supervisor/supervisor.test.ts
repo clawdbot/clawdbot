@@ -3,7 +3,14 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import type { ManagedRun, SpawnProcessAdapter } from "./types.js";
+import {
+  createSilentIdleArgv,
+  createStubChildAdapter,
+  createWriteStdoutArgv,
+  spawnChild,
+  type StubChildAdapter,
+} from "./supervisor.test-support.js";
+import type { ManagedRun } from "./types.js";
 
 const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock: vi.fn(),
@@ -20,91 +27,6 @@ vi.mock("./adapters/pty.js", () => ({
 
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
-type ProcessSupervisor = ReturnType<typeof createProcessSupervisor>;
-type SpawnOptions = Parameters<ProcessSupervisor["spawn"]>[0];
-type ChildSpawnOptions = Omit<Extract<SpawnOptions, { mode: "child" }>, "backendId" | "mode">;
-type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
-type StubChildAdapter = ChildAdapter & {
-  emitStdout: (chunk: string) => void;
-  emitStderr: (chunk: string) => void;
-  settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
-  killMock: ReturnType<typeof vi.fn>;
-  disposeMock: ReturnType<typeof vi.fn>;
-};
-
-function createWriteStdoutArgv(output: string): string[] {
-  if (process.platform === "win32") {
-    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
-  }
-  return ["/usr/bin/printf", "%s", output];
-}
-
-function createSilentIdleArgv(): string[] {
-  return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
-}
-
-function createStubChildAdapter(options?: {
-  pid?: number;
-  onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
-}): StubChildAdapter {
-  const stdoutListeners: Array<(chunk: string) => void> = [];
-  const stderrListeners: Array<(chunk: string) => void> = [];
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  const waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      resolveWait = resolve;
-    },
-  );
-  const killMock = vi.fn();
-  const disposeMock = vi.fn();
-  const adapter: StubChildAdapter = {
-    pid: options?.pid ?? 1234,
-    stdin: undefined,
-    onStdout: (listener) => {
-      stdoutListeners.push(listener);
-    },
-    onStderr: (listener) => {
-      stderrListeners.push(listener);
-    },
-    wait: async () => await waitPromise,
-    kill: (signal) => {
-      killMock(signal);
-      options?.onKill?.(signal, adapter);
-    },
-    dispose: () => {
-      disposeMock();
-    },
-    emitStdout: (chunk) => {
-      for (const listener of stdoutListeners) {
-        listener(chunk);
-      }
-    },
-    emitStderr: (chunk) => {
-      for (const listener of stderrListeners) {
-        listener(chunk);
-      }
-    },
-    settle: (code, signal = null) => {
-      resolveWait?.({ code, signal });
-      resolveWait = null;
-    },
-    killMock,
-    disposeMock,
-  };
-
-  return adapter;
-}
-
-async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
-  return supervisor.spawn({
-    ...options,
-    backendId: "test",
-    mode: "child",
-  });
-}
-
 describe("process supervisor", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -117,116 +39,6 @@ describe("process supervisor", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("spawns child runs and captures output", async () => {
-    const adapter = createStubChildAdapter();
-    adapter.oomScoreWrapperSelected = true;
-    const extinction = createDeferred();
-    adapter.waitForExtinction = async () => await extinction.promise;
-    createChildAdapterMock.mockResolvedValue(adapter);
-
-    const supervisor = createProcessSupervisor();
-    const run = await spawnChild(supervisor, {
-      sessionId: "s1",
-      argv: createWriteStdoutArgv("ok"),
-      timeoutMs: 1_000,
-      stdinMode: "pipe-closed",
-    });
-
-    extinction.resolve();
-    await Promise.resolve();
-    expect(adapter.disposeMock).not.toHaveBeenCalled();
-    adapter.emitStdout("ok");
-    adapter.settle(0);
-
-    const exit = await run.wait();
-    expect(exit.reason).toBe("exit");
-    expect(exit.exitCode).toBe(0);
-    expect(exit.stdout).toBe("ok");
-    expect(exit.oomScoreWrapperSelected).toBe(true);
-    expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    { outcome: "process-tree extinction", failure: false },
-    { outcome: "cleanup identity loss", failure: true },
-  ])("retains root-result cancellation ownership until $outcome", async ({ failure }) => {
-    const extinction = createDeferred();
-    const adapter = Object.assign(createStubChildAdapter(), {
-      waitForExtinction: () => extinction.promise,
-    });
-    createChildAdapterMock.mockResolvedValue(adapter);
-    const supervisor = createProcessSupervisor();
-    const run = await spawnChild(supervisor, {
-      sessionId: "root-result-before-extinction",
-      scopeKey: "scope:root-result-before-extinction",
-      argv: createSilentIdleArgv(),
-    });
-    adapter.emitStdout("authentic root output");
-    adapter.settle(23);
-    const root = await run.wait();
-
-    expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "authentic root output" });
-    expect(adapter.disposeMock).not.toHaveBeenCalled();
-    supervisor.cancelScope("scope:root-result-before-extinction");
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
-    expect(supervisor.getRecord(run.runId)).toMatchObject({
-      state: "exited",
-      terminationReason: "exit",
-      exitCode: 23,
-    });
-
-    if (failure) {
-      extinction.reject(new Error("cleanup identity lost"));
-      await expect(run.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
-    } else {
-      extinction.resolve();
-      await expect(run.waitForExtinction?.()).resolves.toBeUndefined();
-    }
-    expect(adapter.disposeMock).toHaveBeenCalledOnce();
-    await expect(run.wait()).resolves.toBe(root);
-    supervisor.cancel(run.runId);
-    expect(adapter.killMock).toHaveBeenCalledOnce();
-  });
-
-  it("drains cancelled startups and live siblings before reporting ownership failure", async () => {
-    const first = createStubChildAdapter();
-    const sibling = createStubChildAdapter({ pid: 4321 });
-    const [firstExtinction, siblingExtinction] = [createDeferred(), createDeferred()];
-    first.waitForExtinction = async () => await firstExtinction.promise;
-    sibling.waitForExtinction = async () => await siblingExtinction.promise;
-    const startup = createDeferred<StubChildAdapter>();
-    createChildAdapterMock.mockReturnValueOnce(startup.promise).mockResolvedValueOnce(sibling);
-
-    const supervisor = createProcessSupervisor();
-    const pending = ["failed-owner", "pending-owner"].map((sessionId) =>
-      spawnChild(supervisor, {
-        sessionId,
-        scopeKey: "scope:failed-drain",
-        argv: createSilentIdleArgv(),
-      }),
-    );
-    supervisor.cancelScope("scope:failed-drain");
-    const drain = supervisor.waitForScope("scope:failed-drain");
-    startup.resolve(first);
-    const runs = await Promise.all(pending);
-    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
-    expect(sibling.killMock).toHaveBeenCalledWith("SIGTERM");
-    first.settle(0);
-    sibling.settle(0);
-    await Promise.all(runs.map((run) => run.wait()));
-
-    const drained = vi.fn();
-    void drain.then(drained, drained);
-    firstExtinction.reject(new Error("first owner lost authority"));
-    await Promise.resolve();
-    expect(drained).not.toHaveBeenCalled();
-    expect(sibling.disposeMock).not.toHaveBeenCalled();
-
-    siblingExtinction.resolve();
-    await expect(drain).rejects.toThrow("first owner lost authority");
-    expect(sibling.disposeMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes private secret input and exact environment to the child adapter", async () => {
@@ -515,6 +327,7 @@ describe("process supervisor", () => {
     expect(createChildAdapterMock).toHaveBeenCalledTimes(2);
     expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(replacementRun.pid).toBeUndefined();
+    expect(replacementRun.waitForExtinction).toBeUndefined();
     expect(later.killMock).not.toHaveBeenCalled();
 
     later.settle(0);
