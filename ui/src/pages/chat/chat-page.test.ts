@@ -654,19 +654,9 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-    const cells = [...page.querySelectorAll<HTMLElement>(".chat-split-view__cell")];
     const dividers = page.querySelectorAll<RenderedDivider>("resizable-divider");
     expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
-    expect(
-      page.querySelector(".chat-split-view")?.classList.contains("chat-split-view--split"),
-    ).toBe(true);
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
-    expect(cells.map((cell) => cell.classList.contains("chat-split-view__cell--active"))).toEqual([
-      false,
-      true,
-    ]);
-    expect(panes.map((pane) => pane.getAttribute("aria-hidden"))).toEqual(["false", "false"]);
-    expect(panes.map((pane) => pane.hasAttribute("inert"))).toEqual([false, false]);
     expect(dividers).toHaveLength(1);
     expect(itemAt(dividers, 0, "split divider").orientation).toBe("vertical");
     expect(

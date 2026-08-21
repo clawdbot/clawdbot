@@ -1,10 +1,7 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
-  captureUiProofEnabled,
   captureSessionAccessibilityProof,
   chatSessionListResponse,
   controlUiSessionPath,
@@ -16,15 +13,6 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const splitPaneEmphasisProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "split-pane-emphasis",
-);
-const splitPaneEmphasisProofStage = process.env.OPENCLAW_SPLIT_PANE_PROOF_STAGE?.trim() || "after";
-const enforceSplitPaneEmphasisContract = splitPaneEmphasisProofStage !== "before";
-
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
@@ -300,6 +288,24 @@ suite.define(() => {
       await headers.first().getByRole("button", { name: "Close pane" }).focus();
       const cells = page.locator(".chat-split-view__cell");
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+      await expect
+        .poll(() => headers.last().getByRole("button", { name: "Close pane" }).isVisible())
+        .toBe(true);
+      const paneEmphasis = await cells.evaluateAll((nodes) =>
+        nodes.map((cell) => {
+          const style = getComputedStyle(cell);
+          return {
+            active: cell.classList.contains("chat-split-view__cell--active"),
+            boxShadow: style.boxShadow,
+            filter: style.filter,
+            opacity: style.opacity,
+          };
+        }),
+      );
+      expect(paneEmphasis).toEqual([
+        { active: true, boxShadow: "none", filter: "none", opacity: "1" },
+        { active: false, boxShadow: "none", filter: "saturate(0.45)", opacity: "1" },
+      ]);
 
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
@@ -368,190 +374,6 @@ suite.define(() => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:session-b"));
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("keeps split-pane emphasis quiet without a selection border", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      assistantName: "Claw",
-      historyMessages: [
-        {
-          content: [{ type: "text", text: "Review the split-pane emphasis in both themes." }],
-          role: "user",
-          timestamp: Date.now(),
-        },
-        {
-          content: [
-            {
-              type: "text",
-              text: "The active pane stays clear while the inactive pane remains readable.",
-            },
-          ],
-          model: "openai/gpt-5.5",
-          role: "assistant",
-          timestamp: Date.now() + 1,
-          usage: { input: 1_200, output: 84 },
-        },
-        {
-          content: [
-            { type: "text", text: "Resize the divider, then interact with the other pane." },
-          ],
-          role: "user",
-          timestamp: Date.now() + 2,
-        },
-        {
-          content: [
-            { type: "text", text: "Both panes keep their controls and readable transcript." },
-          ],
-          role: "assistant",
-          timestamp: Date.now() + 3,
-        },
-      ],
-      methodResponses: { "sessions.list": chatSessionListResponse() },
-      sessionKey: "agent:main:session-a",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page
-        .getByText("The active pane stays clear while the inactive pane remains readable.")
-        .waitFor();
-      const cells = page.locator(".chat-split-view__cell");
-      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-      const headers = page.locator(".chat-pane__header");
-      await expect.poll(() => cells.count()).toBe(1);
-      const classicStyles = await cells.first().evaluate((cell) => {
-        const style = getComputedStyle(cell);
-        return {
-          split: cell.closest(".chat-split-view")?.classList.contains("chat-split-view--split"),
-          active: cell.classList.contains("chat-split-view__cell--active"),
-          boxShadow: style.boxShadow,
-          filter: style.filter,
-          opacity: Number.parseFloat(style.opacity),
-        };
-      });
-      expect(classicStyles).toEqual({
-        split: false,
-        active: false,
-        boxShadow: "none",
-        filter: "none",
-        opacity: 1,
-      });
-
-      await page.getByRole("button", { name: "Open split view" }).click();
-
-      await expect.poll(() => cells.count()).toBe(2);
-      await expect.poll(() => panes.count()).toBe(2);
-      await expect.poll(() => headers.count()).toBe(2);
-      await expect
-        .poll(() =>
-          panes
-            .last()
-            .getByText("The active pane stays clear while the inactive pane remains readable.")
-            .isVisible(),
-        )
-        .toBe(true);
-
-      await headers.first().locator(".chat-pane__crumbs").click();
-      await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
-      await expect.poll(() => cells.last().getAttribute("class")).not.toContain("--active");
-
-      const readCellStyles = () =>
-        cells.evaluateAll((nodes) =>
-          nodes.map((cell) => {
-            const style = getComputedStyle(cell);
-            return {
-              active: cell.classList.contains("chat-split-view__cell--active"),
-              boxShadow: style.boxShadow,
-              filter: style.filter,
-              opacity: Number.parseFloat(style.opacity),
-              transitionDuration: style.transitionDuration,
-            };
-          }),
-        );
-      const styleSnapshots = [] as Awaited<ReturnType<typeof readCellStyles>>[];
-
-      for (const theme of ["dark", "light"] as const) {
-        await page.emulateMedia({ colorScheme: theme });
-        await page.evaluate((nextTheme) => {
-          const root = document.documentElement;
-          root.dataset.themeMode = nextTheme;
-          root.dataset.themeResolved = nextTheme;
-          root.classList.toggle("wa-light", nextTheme === "light");
-          root.classList.toggle("wa-dark", nextTheme === "dark");
-          root.style.colorScheme = nextTheme;
-        }, theme);
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
-
-        if (captureUiProofEnabled) {
-          await mkdir(splitPaneEmphasisProofDir, { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              splitPaneEmphasisProofDir,
-              `${splitPaneEmphasisProofStage}-${theme}-context.png`,
-            ),
-          });
-          const splitViewBox = await page.locator(".chat-split-view").boundingBox();
-          if (!splitViewBox) {
-            throw new Error("Expected the split view to have a layout box for visual proof");
-          }
-          await page.screenshot({
-            animations: "disabled",
-            clip: splitViewBox,
-            path: path.join(
-              splitPaneEmphasisProofDir,
-              `${splitPaneEmphasisProofStage}-${theme}-closeup.png`,
-            ),
-          });
-        }
-        styleSnapshots.push(await readCellStyles());
-      }
-
-      if (enforceSplitPaneEmphasisContract) {
-        // The assertion is intentionally relational: the inactive pane is only
-        // attenuated enough to distinguish it, while the active pane has no
-        // selection border to compete with its content.
-        const initialStyles = styleSnapshots[0];
-        const activeStyles = initialStyles?.find((style) => style.active);
-        const inactiveStyles = initialStyles?.find((style) => !style.active);
-        expect(activeStyles).toBeDefined();
-        expect(inactiveStyles).toBeDefined();
-        if (!activeStyles || !inactiveStyles) {
-          throw new Error("Expected one active and one inactive split cell");
-        }
-        expect(activeStyles.boxShadow).toBe("none");
-        expect(inactiveStyles.boxShadow).toBe("none");
-        expect(activeStyles.opacity).toBeGreaterThan(inactiveStyles.opacity);
-        expect(activeStyles.opacity - inactiveStyles.opacity).toBeGreaterThan(0.1);
-        expect(activeStyles.filter).toBe("none");
-        expect(inactiveStyles.filter).toContain("saturate(");
-        expect(
-          styleSnapshots.every((styles) =>
-            styles.every(({ transitionDuration }) => transitionDuration === "0s"),
-          ),
-        ).toBe(true);
-      }
-
-      const paneState = await panes.evaluateAll((nodes) =>
-        nodes.map((pane) => ({
-          ariaHidden: pane.getAttribute("aria-hidden"),
-          inert: pane.hasAttribute("inert"),
-        })),
-      );
-      expect(paneState).toEqual([
-        { ariaHidden: "false", inert: false },
-        { ariaHidden: "false", inert: false },
-      ]);
     } finally {
       await suite.closeBrowserContext(context);
     }

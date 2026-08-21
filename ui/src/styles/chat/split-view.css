@@ -44,34 +44,10 @@ openclaw-chat-pane {
   overflow: hidden;
 }
 
-.chat-split-view--split .chat-split-view__cell:not(.chat-split-view__cell--active) {
-  opacity: 0.81;
-  filter: saturate(0.68);
-}
-
-.chat-split-view--split
-  .chat-split-view__cell:not(.chat-split-view__cell--active)
-  .agent-chat__composer-shell {
-  opacity: 0.94;
-  filter: saturate(0.88);
-}
-
-.chat-split-view--split
-  .chat-split-view__cell:not(.chat-split-view__cell--active)
-  .chat-pane__header
-  :is(
-    .chat-pane__incognito,
-    openclaw-session-owner-chip,
-    .chat-pane__participants,
-    .chat-pane__placement-menu,
-    .chat-pane__presence,
-    .chat-pane__face-switch,
-    .chat-pane__sharing-menu,
-    .chat-pane__branches-menu,
-    .chat-pane__gateway-menu,
-    .chat-pane__actions
-  ) {
-  display: none;
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active) {
+  filter: saturate(0.45);
 }
 
 .chat-pane-cache {

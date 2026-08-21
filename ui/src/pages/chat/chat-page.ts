@@ -583,11 +583,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const activeLocation = findPane(layout, layout.activePaneId);
     const rightmostPane = this.narrow ? activeLocation?.pane : layout.columns.at(-1)?.panes.at(-1);
     return html`
-      <div
-        class="chat-split-view ${splitMode ? "chat-split-view--split" : ""} ${this.narrow
-          ? "chat-split-view--narrow"
-          : ""}"
-      >
+      <div class="chat-split-view ${this.narrow ? "chat-split-view--narrow" : ""}">
         ${repeat(
           layout.columns,
           (column) => column.id,
