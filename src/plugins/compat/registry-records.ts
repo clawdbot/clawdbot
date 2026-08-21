@@ -476,9 +476,8 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-07-23",
     deprecated: "2026-07-23",
     warningStarts: "2026-07-23",
-    removeAfter: "2026-08-30",
     replacement:
-      "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
+      "retain until supported published packages migrate to plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
     docsPath: "/plugins/sdk-migration#published-channel-setup-compatibility",
     surfaces: [
       "openclaw/plugin-sdk/bundled-channel-config-schema SlackConfigSchema",

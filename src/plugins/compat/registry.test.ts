@@ -7,6 +7,7 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "plugin-sdk-tool-plugin-public-demotion",
   "agent-harness-sdk-alias",
+  "plugin-sdk-shipped-channel-setup-exports",
 ]);
 const retiredPluginSdkSubpathCodes = [
   "plugin-sdk-channel-streaming-subpath",
@@ -223,9 +224,9 @@ describe("plugin compatibility registry", () => {
     expect(record).toMatchObject({
       status: "deprecated",
       replacement:
-        "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
+        "retain until supported published packages migrate to plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
     });
-    expect(record?.removeAfter).toBe("2026-08-30");
+    expect(record?.removeAfter).toBeUndefined();
   });
 
   it("keeps the removed memory embedding registrar as a migration tombstone", () => {
