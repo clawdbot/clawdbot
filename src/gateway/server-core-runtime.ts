@@ -186,6 +186,7 @@ export async function startGatewayCoreRuntime(input: {
         log,
         logDiscovery,
         nodeRegistry,
+        swapBonjourStop: kernel.swapBonjourStop,
         pluginRegistry: pluginRuntime.registry,
         broadcast,
         nodeSendToAllSubscribed,
@@ -226,10 +227,7 @@ export async function startGatewayCoreRuntime(input: {
   const discoveryResident = residentRegistry.register({
     name: "bonjour-discovery",
     start: startEarlyRuntime,
-    stop: async () => {
-      const earlyRuntime = await startEarlyRuntime();
-      await earlyRuntime.bonjourStop?.();
-    },
+    stop: async () => await kernel.swapBonjourStop(null)?.(),
   });
   const taskAndSkillsResident = residentRegistry.register({
     name: "task-and-skills-runtime",

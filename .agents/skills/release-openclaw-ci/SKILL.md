@@ -96,6 +96,12 @@ and Release SHA separately in the lifecycle ledger.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
+  `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
+  or `performance`. Never use the removed `release-checks` handle. `qa` is
+  only a direct-child manual aggregate, not a controller retry API.
+- Filtered retries fail closed unless the filter belongs to the selected group.
+  Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
   requests it. Record the invalidating event.

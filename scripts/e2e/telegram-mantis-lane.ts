@@ -20,17 +20,18 @@ import {
 } from "./telegram-mantis-sut.ts";
 
 const execFileAsync = promisify(execFile);
+const MAX_SESSION_MS = 15 * 60_000;
 const laneSchema = z.enum(["baseline", "candidate"]);
 const configSchema = z.object({
-  humanDelayFixedMs: z.number().int().positive().max(60_000).optional(),
-  linkPreview: z.boolean().optional(),
+  configPatch: z.record(z.string(), z.unknown()).optional(),
   mockResponse: z.string().min(1).max(100_000),
-  mockResponseChunkDelayMs: z.number().int().positive().max(60_000).optional(),
+  mockResponseChunkDelayMs: z.number().int().positive().max(MAX_SESSION_MS).optional(),
 });
 const mockResponseControlSchema = z.object({
-  chunkDelayMs: z.number().int().min(0).max(60_000),
+  chunkDelayMs: z.number().int().min(0).max(MAX_SESSION_MS).optional(),
+  events: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
   hold: z.boolean().optional(),
-  text: z.string().min(1).max(100_000),
+  text: z.string().min(1).max(100_000).optional(),
 });
 const credentialSchema = z.object({
   groupId: z.string().regex(/^-100\d+$/u),
@@ -107,15 +108,14 @@ type ObserverResponse = {
 
 const MAX_ATTEMPTS = 3;
 const MAX_SENDS = 12;
-const MAX_OBSERVE_SECONDS = 180;
-const MAX_SESSION_MS = 15 * 60_000;
+const MAX_OBSERVE_SECONDS = MAX_SESSION_MS / 1000;
 const MAX_RPC_BYTES = 4 * 1024 * 1024;
 const commandOptions: Record<string, readonly string[]> = {
   abort: ["--lane"],
   block: ["--lane", "--missing-primitive", "--reason"],
   delete: ["--lane", "--message-id"],
   finish: ["--lane", "--focus-message-id"],
-  mock: ["--lane", "--response-file", "--chunk-delay-ms"],
+  mock: ["--lane", "--response-file", "--response-events-file", "--chunk-delay-ms"],
   observe: ["--lane", "--seconds", "--since"],
   press: ["--lane", "--message-id", "--button"],
   requests: ["--lane"],
@@ -695,10 +695,9 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
     const [botResult, sutResult, recorderResult] = await Promise.allSettled([
       telegramBotApi(credential.sutToken, "getMe"),
       startMantisSut({
+        configPatch: config.configPatch,
         gatewayPort: ports.gateway,
         groupId: credential.groupId,
-        humanDelayFixedMs: config.humanDelayFixedMs,
-        linkPreview: config.linkPreview,
         mockPort: ports.mock,
         mockResponseChunkDelayMs: config.mockResponseChunkDelayMs,
         mockResponseText: config.mockResponse,
@@ -966,6 +965,27 @@ function updateMockResponse(
   values: Map<string, string>,
   outputRoot: string,
 ): Record<string, unknown> {
+  if (values.has("--response-events-file")) {
+    const eventsFile = readPublicFile(
+      outputRoot,
+      required(values, "--response-events-file"),
+      "--response-events-file",
+      MAX_RPC_BYTES,
+    );
+    const events = z
+      .array(z.record(z.string(), z.unknown()))
+      .min(1)
+      .parse(JSON.parse(eventsFile.text));
+    const current = readMockResponseControl(state);
+    writeJsonAtomic(state.sut.mockResponseControl, { events, hold: current.hold });
+    const eventsSha256 = createHash("sha256").update(eventsFile.text).digest("hex");
+    appendInvocation(state, "mock", {
+      bytes: Buffer.byteLength(eventsFile.text),
+      eventsFile: eventsFile.relative,
+      eventsSha256,
+    });
+    return { bytes: Buffer.byteLength(eventsFile.text), events: events.length, eventsSha256 };
+  }
   const responseFile = readPublicFile(
     outputRoot,
     required(values, "--response-file"),
@@ -977,7 +997,7 @@ function updateMockResponse(
     throw new Error("--response-file must contain 1 to 100000 characters.");
   }
   const chunkDelayMs = values.has("--chunk-delay-ms")
-    ? numberOption(values, "--chunk-delay-ms", 60_000)
+    ? numberOption(values, "--chunk-delay-ms", MAX_SESSION_MS)
     : 0;
   const current = readMockResponseControl(state);
   writeJsonAtomic(state.sut.mockResponseControl, { chunkDelayMs, hold: current.hold, text });

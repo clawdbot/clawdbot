@@ -1200,6 +1200,23 @@
   padding-block: 9px;
 }
 
+@keyframes chat-work-settle-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-group--work {
+    animation: chat-work-settle-in 200ms var(--ease-out) both;
+  }
+}
+
 .chat-work-group .chat-activity-group__label {
   color: inherit;
 }

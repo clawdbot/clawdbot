@@ -38,6 +38,19 @@ const RELEASE_CONTEXT_BRANCH_PATTERN =
 const RELEASE_TAG_PATTERN =
   /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
+const RERUN_GROUPS = new Set([
+  "all",
+  "ci",
+  "plugin-prerelease",
+  "install-smoke",
+  "cross-os",
+  "live-e2e",
+  "package",
+  "qa-parity",
+  "qa-live",
+  "npm-telegram",
+  "performance",
+]);
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
@@ -86,7 +99,9 @@ run. Child workflows collect independent failures by default; pass
 branch accepts only its final package version or a matching beta prerelease.
 Exact alpha tags remain supported for Tideclaw. The release profile defaults to
 beta for beta candidates and exact alpha tags, and stable otherwise; pass
--f release_profile=full for the broad advisory sweep.`);
+-f release_profile=full for the broad advisory sweep. Focused retries must use
+one controller rerun_group; the removed release-checks aggregate and the direct
+child's manual qa aggregate are not accepted.`);
 }
 
 function run(command: string, args: string[], options: CommandOptions = {}) {
@@ -218,6 +233,9 @@ export function parseArgs(argv: string[]) {
     !["beta", "stable", "full"].includes(args.inputs.release_profile)
   ) {
     throw new Error("release_profile must be beta, stable, or full");
+  }
+  if (!RERUN_GROUPS.has(args.inputs.rerun_group)) {
+    throw new Error(`rerun_group must be one of: ${[...RERUN_GROUPS].join(", ")}`);
   }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");

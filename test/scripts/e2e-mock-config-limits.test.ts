@@ -184,6 +184,25 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
+  it("accepts response-control delays above 60 seconds", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-delay-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(control, JSON.stringify({ chunkDelayMs: 60_001, text: "delayed response" }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "validate the configured delay", stream: false }),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("reloads the lane-owned response control between turns", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-"));
     const control = join(root, "response.json");
@@ -211,6 +230,33 @@ describe("mock OpenAI response markers", () => {
         expect(completion.choices?.[0]?.message?.content).toBe("first response");
         await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "second response" }));
         expect((await request()).output?.[0]?.content?.[0]?.text).toBe("second response");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("streams lane-owned raw Responses API events", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-events-"));
+    const control = join(root, "response.json");
+    const events = [
+      { delta: "< / internal", type: "response.reasoning_text.delta" },
+      { delta: "VISIBLE", type: "response.output_text.delta" },
+      { response: { output: [], status: "completed" }, type: "response.completed" },
+    ];
+    try {
+      await writeFile(control, JSON.stringify({ events }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "exercise raw events", stream: true }),
+        });
+        const body = await response.text();
+        expect(response.status).toBe(200);
+        for (const event of events) {
+          expect(body).toContain(`data: ${JSON.stringify(event)}`);
+        }
       });
     } finally {
       await rm(root, { force: true, recursive: true });

@@ -30,11 +30,14 @@ function readCurrentResponse() {
     return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs, hold: false };
   }
   const value = JSON.parse(readFileSync(responseControl, "utf8"));
+  if (Array.isArray(value.events) && value.events.length > 0) {
+    return { events: value.events, hold: value.hold ?? false };
+  }
   if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
     throw new Error("mock response control text is invalid");
   }
   const chunkDelayMs = value.chunkDelayMs ?? 0;
-  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 60_000) {
+  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 15 * 60_000) {
     throw new Error("mock response control chunkDelayMs is invalid");
   }
   if (value.hold !== undefined && typeof value.hold !== "boolean") {
@@ -620,6 +623,10 @@ const server = http.createServer((req, res) => {
         }
       }
       const response = await currentResponse();
+      if (response.events) {
+        writeResponsesEvents(res, body.stream, response.events);
+        return;
+      }
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {

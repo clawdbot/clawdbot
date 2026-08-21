@@ -838,6 +838,43 @@ describe("collapseCompletedTurnWork", () => {
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
   });
 
+  it("collapses completed pre-steer work before the steering message", () => {
+    const messages = [
+      userMessage("do it", 1_000, {
+        __openclaw: { idempotencyKey: "active-run:user", senderId: "operator" },
+      }),
+      assistantMessage("Checking…", 2_000),
+      toolResult("call-1", 3_000),
+      userMessage("queued follow-up", 3_500, {
+        __openclaw: { idempotencyKey: "queued-run:user", senderId: "peer" },
+      }),
+      userMessage("continue", 4_000, {
+        __openclaw: {
+          idempotencyKey: "steer-run:user",
+          senderId: "operator",
+          steerTargetRunId: "active-run",
+        },
+      }),
+      assistantMessage("All done.", 5_000),
+    ];
+
+    expect(
+      collapsedItems({ messages, runWorking: true }, true).some(
+        (item) => item.kind === "work-group",
+      ),
+    ).toBe(false);
+
+    const completed = collapsedItems({ messages });
+    expect(completed.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "group",
+      "group",
+      "group",
+    ]);
+    expect(requireWorkGroup(completed[1]).durationMs).toBe(4_000);
+  });
+
   it("keeps reply-less turns expanded after the run finishes", () => {
     const messages = [userMessage("do it", 1_000), toolResult("call-1", 2_000)];
 

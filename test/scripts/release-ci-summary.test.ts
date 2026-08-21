@@ -1595,6 +1595,23 @@ describe("release CI summary child correlation", () => {
     expect(manifest.rerunGroup).toBe("all");
   });
 
+  it.each([
+    [2, "release-checks"],
+    [2, "qa"],
+    [3, "release-checks"],
+    [3, "qa"],
+  ] as const)("keeps historical v%s %s manifests readable", (version, rerunGroup) => {
+    const workflowSha = version === 3 ? "b".repeat(40) : undefined;
+    const manifest = validateParentManifest(rawManifest({ rerunGroup, version, workflowSha }), {
+      runAttempt: 2,
+      runId: "29090000000",
+      workflowSha,
+    });
+
+    expect(manifest.rerunGroup).toBe(rerunGroup);
+    expect(manifest.version).toBe(version);
+  });
+
   it("binds v3 manifests to their immutable producer workflow SHA", () => {
     const workflowSha = "b".repeat(40);
     const manifest = validateParentManifest(rawManifest({ version: 3, workflowSha }), {
@@ -1677,6 +1694,12 @@ describe("release CI summary child correlation", () => {
   });
 
   it("requires the child mapped by rerunGroup and scans only selected in-progress workflows", () => {
+    expect(() => requiredChildKeysForRerunGroup("release-checks")).toThrow(
+      "release validation manifest rerun group is invalid: release-checks",
+    );
+    expect(() => requiredChildKeysForRerunGroup("qa")).toThrow(
+      "release validation manifest rerun group is invalid: qa",
+    );
     const focused = validateParentManifest(
       {
         ...rawManifest({ rerunGroup: "npm-telegram" }),

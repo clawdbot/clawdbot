@@ -82,16 +82,19 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
   ["all", ["normalCi", "releaseChecks", "pluginPrerelease", "productPerformance"]],
   ["ci", ["normalCi"]],
   ["plugin-prerelease", ["pluginPrerelease"]],
-  ["release-checks", ["releaseChecks"]],
   ["install-smoke", ["releaseChecks"]],
   ["cross-os", ["releaseChecks"]],
   ["live-e2e", ["releaseChecks"]],
   ["package", ["releaseChecks"]],
-  ["qa", ["releaseChecks"]],
   ["qa-parity", ["releaseChecks"]],
   ["qa-live", ["releaseChecks"]],
   ["npm-telegram", ["npmTelegram"]],
   ["performance", ["productPerformance"]],
+]);
+
+const HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS = new Map([
+  ["release-checks", ["releaseChecks"]],
+  ["qa", ["releaseChecks"]],
 ]);
 
 export function runReleaseCiGh(args, params = {}) {
@@ -203,6 +206,16 @@ export function requiredChildKeysForRerunGroup(rerunGroup, validationInputs = {}
     selectedKeys.add("npmTelegram");
   }
   return selectedKeys;
+}
+
+function requiredChildKeysForManifest(manifest) {
+  if (
+    [2, 3].includes(manifest.version) &&
+    HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS.has(manifest.rerunGroup)
+  ) {
+    return new Set(HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS.get(manifest.rerunGroup));
+  }
+  return requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs);
 }
 
 export function expectedSelectedChildDispatches(
@@ -453,7 +466,7 @@ export function validateParentManifest(value, expected) {
     workflowSha = normalizeSha(expected.workflowSha, "release validation workflow SHA");
   }
   const rerunGroup = String(value.rerunGroup ?? "");
-  requiredChildKeysForRerunGroup(rerunGroup);
+  requiredChildKeysForManifest({ rerunGroup, version: value.version });
   const releaseProfile = String(value.releaseProfile ?? "");
   if (!["beta", "stable", "full"].includes(releaseProfile)) {
     throw new Error("release validation manifest release profile is invalid");
@@ -1419,10 +1432,7 @@ export function validateReleaseRunEvidence(
       );
     }
   }
-  const selectedKeys = requiredChildKeysForRerunGroup(
-    rootEvidence.manifest.rerunGroup,
-    rootEvidence.manifest.validationInputs,
-  );
+  const selectedKeys = requiredChildKeysForManifest(rootEvidence.manifest);
   const expectedChildren = expectedSelectedChildDispatches(
     rootEvidence.manifest.runId,
     rootEvidence.manifest.runAttempt,
@@ -1807,10 +1817,7 @@ async function main() {
       );
     }
 
-    const selectedKeys = requiredChildKeysForRerunGroup(
-      sourceManifest.rerunGroup,
-      sourceManifest.validationInputs,
-    );
+    const selectedKeys = requiredChildKeysForManifest(sourceManifest);
     const expectedChildren = expectedSelectedChildDispatches(
       sourceManifest.runId,
       sourceManifest.runAttempt,

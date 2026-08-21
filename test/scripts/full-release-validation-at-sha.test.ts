@@ -221,6 +221,14 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["--", "-f"])).toThrow("-f requires a value");
   });
 
+  it("rejects retry groups that are not controller APIs", () => {
+    expect(() => parseArgs(["-f", "rerun_group=release-checks"])).toThrow(
+      "rerun_group must be one of",
+    );
+    expect(() => parseArgs(["-f", "rerun_group=qa"])).toThrow("rerun_group must be one of");
+    expect(parseArgs(["-f", "rerun_group=qa-parity"]).inputs.rerun_group).toBe("qa-parity");
+  });
+
   it("infers the release profile from the target package version", () => {
     const readVersion = (version: string) => () => JSON.stringify({ version });
 

@@ -375,6 +375,37 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
+  it("passes arbitrary Responses API events to the mock provider", async () => {
+    const harness = await setupHarness();
+    const eventsFile = path.join(harness.outputRoot, "response-events.json");
+    const events = [
+      { delta: "< / internal", type: "response.reasoning_text.delta" },
+      { delta: "VISIBLE", type: "response.output_text.delta" },
+      { response: { output: [], status: "completed" }, type: "response.completed" },
+    ];
+    fs.writeFileSync(eventsFile, JSON.stringify(events));
+    try {
+      const result = await runLane(harness.env, [
+        "mock",
+        "--lane",
+        "candidate",
+        "--response-events-file",
+        eventsFile,
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({ events: 3 });
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(path.dirname(harness.outputRoot), "mock-response.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({ events });
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("serializes commands across both lanes on the shared user session", async () => {
     const harness = await setupHarness();
     fs.writeFileSync(path.join(harness.sessionRoot, "harness.lock"), `${process.pid}\n`);

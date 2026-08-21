@@ -26,6 +26,7 @@ import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route
 import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -133,6 +134,45 @@ describe("canonical session message recovery", () => {
     expect(state.chatMessages[0]).toMatchObject({
       __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
     });
+  });
+
+  it("retires live commentary when its durable row arrives during an active run", () => {
+    const runId = "active-run";
+    const itemId = "commentary-1";
+    const text = "Checking the workspace.";
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [],
+      chatRunId: runId,
+      chatStream: null,
+      chatStreamSegments: [{ text, ts: 1, runId, itemId }],
+      chatToolMessages: [],
+    });
+
+    applySessionMessagePayload(
+      state,
+      {
+        sessionKey: state.sessionKey,
+        messageId: "commentary-message-1",
+        messageSeq: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          idempotencyKey: `codex-app-server:thread:turn:commentary:${itemId}`,
+          timestamp: 1,
+          openclawStreamFallback: {
+            replacementText: text,
+            source: "segment",
+            itemId,
+          },
+        },
+      },
+      true,
+      { kind: "history-delta" },
+    );
+
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
   });
 
   it("keeps cumulative assistant output split across an authoritative steer", () => {

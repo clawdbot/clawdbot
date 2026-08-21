@@ -30,13 +30,22 @@ parsers. The helper's JSON is factual evidence, not a semantic verdict. Run
 TypeScript scenarios with `$MANTIS_NODE_BIN --import tsx <scenario.ts>`.
 Install a failure trap that invokes `abort`; clear it only after `finish` or `block`.
 
-Each lane starts from a small harness config:
+Each lane starts from a public harness config:
 
 ```json
-{ "mockResponse": "the mock model response" }
+{
+  "mockResponse": "the mock model response",
+  "configPatch": {}
+}
 ```
 
-Optional fields: `mockResponseChunkDelayMs`, `humanDelayFixedMs`, `linkPreview`.
+`configPatch` accepts any OpenClaw root config merge patch, matching the local
+Telegram userbot. It is applied after the harness defaults, so it can replace any
+setting. Omit it unless the scenario needs a config change. Defaults already
+connect the leased QA user, SUT bot, Telegram proxy, and
+mock OpenAI endpoint; the QA user is the gateway owner, so owner commands such as
+`/send off` work without a patch.
+Optional field: `mockResponseChunkDelayMs`.
 
 ## Primitive CLI
 
@@ -45,6 +54,9 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 - `start --repo-root <prepared-root> --config <public-json>` (use
   `MANTIS_BASELINE_ROOT` or `MANTIS_CANDIDATE_ROOT` for that lane)
 - `mock --response-file <public-text> [--chunk-delay-ms N]` (change later turns)
+- `mock --response-events-file <public-json>` (replace a later Responses API turn
+  with a JSON array of raw response events; use for reasoning, tool calls, or any
+  stream shape that plain text cannot express)
 - `send --text <text>`; also `--text-file`, `--media` (document), `--reply-to`
 - `turn --text <text> --observe-seconds 15` (send + observe convenience)
 - `observe --seconds N [--since cursor]` (messages, edits, deletes, typing)
@@ -60,6 +72,12 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 `start` returns the exact command/budget list. No generic exec/eval or raw
 Telegram API exists. If a required action is absent, use `block`; do not route
 around the credential boundary.
+Raw response events must form a complete provider response; deltas alone do not
+produce a final answer. Copy the terminal item and completed-response structure
+from `responseEvents` in `scripts/e2e/mock-openai-server.mjs`, and use
+`packages/ai/src/transports/openai-responses-stream-parity.test.ts` for reasoning
+event examples. These harness sources are safe to read; prepared proof worktrees
+remain off limits.
 For normal group turns, address the current bot with `@{sut}`; the harness
 expands it to the live SUT username. Omit it only when an unmentioned message
 is intentionally part of the scenario.

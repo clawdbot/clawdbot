@@ -50,7 +50,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
-import { expandOsHomePrefix, resolveReadPath } from "./sessions/tools/path-utils.js";
+import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
 import { createBoundedReadTextPage, formatReadContinuationNotice } from "./sessions/tools/read.js";
 import {
   ReadToolContinuationSchema,
@@ -1080,7 +1080,7 @@ export function wrapReadToolWithSkillContent(
       root: cwd,
       containerWorkdir: options?.containerWorkdir,
     });
-    return resolveReadPath(mapped, cwd);
+    return resolveToCwd(mapped, cwd);
   };
   const instructionContent = new Map<string, string | undefined>(
     (options?.instructionPaths ?? []).map((filePath) => [
