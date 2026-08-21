@@ -240,13 +240,10 @@ export function loadPluginPublicArtifactModuleFromCandidatesSync<T extends objec
       artifactBasename,
     });
     if (modulePath) {
-      return loadValidatedPublicSurfaceModule({
-        modulePath,
-        boundaryRoot: path.resolve(params.pluginRoot),
-        boundaryLabel: "plugin root",
-        surfaceLabel: `plugin public surface ${artifactBasename}`,
-        origin: "global",
-      }) as T;
+      return loadPluginPublicArtifactModuleSync<T>({
+        pluginRoot: params.pluginRoot,
+        artifactBasename,
+      });
     }
   }
   return null;
