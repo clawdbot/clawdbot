@@ -4713,6 +4713,23 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves normal final delivery when stale-preview cleanup fails", async () => {
+    const draftStream = createDraftStreamStub();
+    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "Photo", mediaUrl: "https://example.com/a.png" },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the preview and sends media-only for TTS supplement finals", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -4917,8 +4934,53 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     ]);
   });
 
-  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+  it.each([false, true])(
+    "falls back with visible text when TTS supplement preview finalization fails (already delivered: %s)",
+    async (visibleTextAlreadyDelivered) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedReplyThreadTsSequence = [undefined];
+      const ttsSupplement = {
+        spokenText: "Spoken answer",
+        ...(visibleTextAlreadyDelivered ? { visibleTextAlreadyDelivered: true } : {}),
+      };
+      mockedDispatchSequence = [
+        {
+          kind: "final",
+          payload: {
+            mediaUrl: "https://example.com/tts.mp3",
+            audioAsVoice: true,
+            spokenText: "Spoken answer",
+            ttsSupplement,
+          },
+        },
+      ];
+
+      await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+      expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+      expect(draftStream.discardPending).toHaveBeenCalled();
+      expect(draftStream.clear).toHaveBeenCalledTimes(1);
+      const delivered = requireRecord(
+        requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+        "deliver replies params",
+      );
+      expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+      expect(delivered.replies).toEqual([
+        {
+          text: "Spoken answer",
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement,
+        },
+      ]);
+    },
+  );
+
+  it("preserves TTS preview fallback delivery when its cleanup fails", async () => {
     const draftStream = createDraftStreamStub();
+    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedReplyThreadTsSequence = [undefined];
     mockedDispatchSequence = [
@@ -4935,8 +4997,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
-    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
-    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     const delivered = requireRecord(
       requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
