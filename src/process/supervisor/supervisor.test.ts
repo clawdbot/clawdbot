@@ -122,6 +122,8 @@ describe("process supervisor", () => {
   it("spawns child runs and captures output", async () => {
     const adapter = createStubChildAdapter();
     adapter.oomScoreWrapperSelected = true;
+    const extinction = createDeferred();
+    adapter.waitForExtinction = async () => await extinction.promise;
     createChildAdapterMock.mockResolvedValue(adapter);
 
     const supervisor = createProcessSupervisor();
@@ -132,6 +134,9 @@ describe("process supervisor", () => {
       stdinMode: "pipe-closed",
     });
 
+    extinction.resolve();
+    await Promise.resolve();
+    expect(adapter.disposeMock).not.toHaveBeenCalled();
     adapter.emitStdout("ok");
     adapter.settle(0);
 
@@ -165,7 +170,7 @@ describe("process supervisor", () => {
     expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "authentic root output" });
     expect(adapter.disposeMock).not.toHaveBeenCalled();
     supervisor.cancelScope("scope:root-result-before-extinction");
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(supervisor.getRecord(run.runId)).toMatchObject({
       state: "exited",
       terminationReason: "exit",
@@ -183,6 +188,45 @@ describe("process supervisor", () => {
     await expect(run.wait()).resolves.toBe(root);
     supervisor.cancel(run.runId);
     expect(adapter.killMock).toHaveBeenCalledOnce();
+  });
+
+  it("drains cancelled startups and live siblings before reporting ownership failure", async () => {
+    const first = createStubChildAdapter();
+    const sibling = createStubChildAdapter({ pid: 4321 });
+    const [firstExtinction, siblingExtinction] = [createDeferred(), createDeferred()];
+    first.waitForExtinction = async () => await firstExtinction.promise;
+    sibling.waitForExtinction = async () => await siblingExtinction.promise;
+    const startup = createDeferred<StubChildAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise).mockResolvedValueOnce(sibling);
+
+    const supervisor = createProcessSupervisor();
+    const pending = ["failed-owner", "pending-owner"].map((sessionId) =>
+      spawnChild(supervisor, {
+        sessionId,
+        scopeKey: "scope:failed-drain",
+        argv: createSilentIdleArgv(),
+      }),
+    );
+    supervisor.cancelScope("scope:failed-drain");
+    const drain = supervisor.waitForScope("scope:failed-drain");
+    startup.resolve(first);
+    const runs = await Promise.all(pending);
+    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(sibling.killMock).toHaveBeenCalledWith("SIGTERM");
+    first.settle(0);
+    sibling.settle(0);
+    await Promise.all(runs.map((run) => run.wait()));
+
+    const drained = vi.fn();
+    void drain.then(drained, drained);
+    firstExtinction.reject(new Error("first owner lost authority"));
+    await Promise.resolve();
+    expect(drained).not.toHaveBeenCalled();
+    expect(sibling.disposeMock).not.toHaveBeenCalled();
+
+    siblingExtinction.resolve();
+    await expect(drain).rejects.toThrow("first owner lost authority");
+    expect(sibling.disposeMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes private secret input and exact environment to the child adapter", async () => {
