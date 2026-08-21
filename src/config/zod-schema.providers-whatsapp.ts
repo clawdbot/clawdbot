@@ -9,6 +9,7 @@ import {
   buildCommonChannelAccountShape,
 } from "./zod-schema.channel-messaging-common.js";
 import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
+import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
 
 const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
   omit: ["skills", "enabled", "allowFrom"],
@@ -44,6 +45,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     }),
     sendReadReceipts: ChannelSendReadReceiptsSchema,
     selfChatMode: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     groups: WhatsAppGroupsSchema,
     direct: WhatsAppDirectSchema,
     ...buildChannelReactionShape({
