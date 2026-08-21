@@ -428,12 +428,34 @@ describe("Gateway heartbeat session routing", () => {
         }
 
         const configuredRequestBaseline = providerRequests.length;
-        await expect(
-          client.request<{ enqueued: boolean; ok: boolean; runId: string }>("cron.run", {
-            id: monitor.id,
-            mode: "force",
-          }),
-        ).resolves.toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
+        const configuredRun = await client.request<{
+          enqueued: boolean;
+          ok: boolean;
+          runId: string;
+        }>("cron.run", {
+          id: monitor.id,
+          mode: "force",
+        });
+        expect(configuredRun).toMatchObject({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+        });
+        await expect
+          .poll(
+            async () => {
+              const history = await client.request<{
+                entries: Array<{ error?: string; runId?: string; status?: string }>;
+              }>("cron.runs", {
+                id: monitor.id,
+                runId: configuredRun.runId,
+                limit: 1,
+              });
+              return history.entries.find((entry) => entry.runId === configuredRun.runId);
+            },
+            { timeout: 15_000, interval: 50 },
+          )
+          .toMatchObject({ runId: configuredRun.runId, status: "ok" });
         await expect
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(configuredRequestBaseline);
@@ -445,6 +467,9 @@ describe("Gateway heartbeat session routing", () => {
             interval: 50,
           })
           .toBe(false);
+        await expect
+          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
+          .toHaveLength(1);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
           {
             accountId: "default",
@@ -453,6 +478,12 @@ describe("Gateway heartbeat session routing", () => {
             to: "configured-destination",
           },
         ]);
+        await expect
+          .poll(() => readSessionTranscript(configuredSessionKey).then(JSON.stringify), {
+            timeout: 15_000,
+            interval: 50,
+          })
+          .toContain(configuredReply);
         expect(
           loadSessionEntry({
             agentId: "main",
@@ -501,6 +532,9 @@ describe("Gateway heartbeat session routing", () => {
             { timeout: 15_000, interval: 50 },
           )
           .toBe(false);
+        await expect
+          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
+          .toHaveLength(2);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
           {
             accountId: "default",
@@ -515,6 +549,12 @@ describe("Gateway heartbeat session routing", () => {
             to: "explicit-destination",
           },
         ]);
+        await expect
+          .poll(() => readSessionTranscript(explicitSessionKey).then(JSON.stringify), {
+            timeout: 15_000,
+            interval: 50,
+          })
+          .toContain(explicitReply);
         expect(
           loadSessionEntry({
             agentId: "main",
