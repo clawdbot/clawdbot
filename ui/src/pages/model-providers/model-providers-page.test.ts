@@ -348,7 +348,12 @@ describe("ModelProvidersPage usage convergence", () => {
       ).toBe(2),
     );
     releaseOldLoad();
-    await vi.waitFor(() => expect(page.data?.providerUsage?.updatedAt).toBe(2));
+    await vi.waitFor(() =>
+      expect(page.data?.providerUsage).toMatchObject({
+        ok: true,
+        value: { updatedAt: 2 },
+      }),
+    );
   });
 });
 

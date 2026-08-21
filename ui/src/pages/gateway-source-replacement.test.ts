@@ -791,19 +791,19 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-usage-page", contextWithClient(client)) as TestPage & {
       usageResult: unknown;
-      providerUsage: unknown;
+      providerUsageSummary: unknown;
       usageSelectedSessions: string[];
     };
     document.body.append(page);
     await page.updateComplete;
     page.usageResult = { sessions: [{ key: "old" }] };
-    page.providerUsage = { ok: true, value: { providers: [{ provider: "old" }] } };
+    page.providerUsageSummary = { providers: [{ provider: "old" }] };
     page.usageSelectedSessions = ["old"];
 
     await replaceContext(page, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.providerUsage).toBeNull();
+    expect(page.providerUsageSummary).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });
 
