@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -29,10 +30,14 @@ import {
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const TEST_PHYSICAL_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
+// Memory detection is a process-global input. Freeze it for this suite so fake cgroup
+// fixtures prove only their declared hierarchy instead of inheriting the runner's RAM.
+vi.spyOn(os, "totalmem").mockReturnValue(TEST_PHYSICAL_MEMORY_BYTES);
 const NO_MEMORY_LIMIT = {
   cgroupMemoryLimitPaths: [],
   constrainedMemoryBytes: 0,
-  physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+  physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
 
