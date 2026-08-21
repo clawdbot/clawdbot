@@ -324,7 +324,7 @@
 }
 
 .cron-table__row:hover,
-.cron-table__row:focus-visible {
+.cron-table__row:focus-within {
   background: var(--bg-hover);
 }
 
@@ -338,9 +338,13 @@
   align-items: flex-start;
   gap: 10px;
   min-width: 0;
+  padding: 0;
+  border: 0;
   color: var(--text-strong);
+  background: transparent;
   font-size: 13px;
   font-weight: 600;
+  text-align: left;
 }
 
 .cron-table__state {

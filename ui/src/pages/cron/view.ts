@@ -728,7 +728,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
 function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
   return html`
     <div class="cron-table ${props.canManage ? "" : "cron-table--read-only"}">
-      <div class="cron-table__head" role="row">
+      <div class="cron-table__head">
         <span>${t("cron.jobs.name")}</span>
         <span>${t("cron.jobs.schedule")}</span>
         <span>${t("cron.jobs.nextRun")}</span>
@@ -775,18 +775,10 @@ function renderJobRow(job: CronJob, props: CronProps) {
   return html`
     <div
       class="cron-table__row ${job.enabled ? "" : "cron-table__row--paused"}"
-      role="button"
-      tabindex="0"
       data-test-id=${`cron-row-${job.id}`}
       @click=${() => props.onSelectJob(job)}
-      @keydown=${(e: KeyboardEvent) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          props.onSelectJob(job);
-        }
-      }}
     >
-      <span class="cron-table__name">
+      <button type="button" class="cron-table__name">
         ${renderJobStateIndicator(job)}
         <span class="cron-table__name-copy">
           <span class="cron-table__name-line">
@@ -814,17 +806,13 @@ function renderJobRow(job: CronJob, props: CronProps) {
               `
             : nothing}
         </span>
-      </span>
+      </button>
       ${renderJobCell("cron-table__schedule", t("cron.jobs.schedule"), formatCronSchedule(job))}
       ${renderJobCell("cron-table__next", t("cron.jobs.nextRun"), nextRun)}
       ${renderJobCell("cron-table__last", t("cron.jobs.lastRun"), renderLastRunCell(job))}
       ${props.canManage
         ? html`
-            <span
-              class="cron-table__actions"
-              @click=${(e: Event) => e.stopPropagation()}
-              @keydown=${(e: Event) => e.stopPropagation()}
-            >
+            <span class="cron-table__actions" @click=${(e: Event) => e.stopPropagation()}>
               <button
                 type="button"
                 class="btn btn--sm btn--ghost cron-row-run"
