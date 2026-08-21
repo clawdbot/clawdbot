@@ -616,7 +616,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__footer {
   flex-shrink: 0;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -626,6 +627,10 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 openclaw-settings-save-indicator {
   min-width: 0;
+}
+
+openclaw-settings-save-indicator:empty {
+  display: none;
 }
 
 .settings-save-indicator {
