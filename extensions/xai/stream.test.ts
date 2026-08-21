@@ -163,7 +163,7 @@ async function captureXaiResponsesPayloadWithThinking(
     );
     void stream.result().then(
       () => reject(new Error("provider payload callback was not invoked")),
-      (error) => reject(error),
+      (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
     );
   });
 
