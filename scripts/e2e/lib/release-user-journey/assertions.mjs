@@ -295,10 +295,11 @@ function assertChannelConfigured() {
 
 function assertChannelRunning() {
   const { channel, status } = readChannelStatus();
-  assert(
-    status.channels?.[channel]?.ok === true,
-    `${channel} is not running: ${JSON.stringify(status)}`,
-  );
+  const accounts = status.channelAccounts?.[channel];
+  const defaultAccount = Array.isArray(accounts)
+    ? accounts.find((account) => account?.accountId === "default")
+    : undefined;
+  assert(defaultAccount?.running === true, `${channel} is not running: ${JSON.stringify(status)}`);
 }
 
 async function postClickClackInbound() {

@@ -4,15 +4,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   runReleaseUserJourneyAssertion,
   waitForClickClackSocket,
 } from "../../scripts/e2e/lib/release-user-journey/assertions.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-user-journey/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function nodeOptionsWithoutExperimentalWarnings(extra?: string): string {
   const current = [process.env.NODE_OPTIONS, extra].filter(Boolean).join(" ");
@@ -176,54 +178,48 @@ describe("release user journey assertions", () => {
   });
 
   it("accepts a configured channel before Gateway startup", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const root = tempDirs.make("openclaw-release-user-assertions-");
     const statusPath = path.join(root, "status.json");
 
-    try {
-      writeJson(statusPath, { configuredChannels: ["clickclack"] });
+    writeJson(statusPath, { configuredChannels: ["clickclack"] });
 
-      await expect(
-        runReleaseUserJourneyAssertion("assert-channel-configured", ["clickclack", statusPath]),
-      ).resolves.toBeUndefined();
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    await expect(
+      runReleaseUserJourneyAssertion("assert-channel-configured", ["clickclack", statusPath]),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects a configured channel that failed after Gateway restart", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const root = tempDirs.make("openclaw-release-user-assertions-");
     const statusPath = path.join(root, "status.json");
 
-    try {
-      writeJson(statusPath, {
-        configuredChannels: ["clickclack"],
-        channels: { clickclack: { ok: false, error: "startup failed" } },
-      });
+    writeJson(statusPath, {
+      configuredChannels: ["clickclack"],
+      channels: { clickclack: { ok: true, label: "configured" } },
+      channelAccounts: {
+        clickclack: [{ accountId: "default", configured: true, running: false }],
+      },
+    });
 
-      await expect(
-        runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
-      ).rejects.toThrow("clickclack is not running");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    await expect(
+      runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
+    ).rejects.toThrow("clickclack is not running");
   });
 
   it("accepts a running channel after Gateway restart", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const root = tempDirs.make("openclaw-release-user-assertions-");
     const statusPath = path.join(root, "status.json");
 
-    try {
-      writeJson(statusPath, {
-        configuredChannels: ["clickclack"],
-        channels: { clickclack: { ok: true } },
-      });
+    writeJson(statusPath, {
+      configuredChannels: ["clickclack"],
+      channels: { clickclack: { ok: true } },
+      channelAccounts: {
+        clickclack: [{ accountId: "default", configured: true, running: true }],
+      },
+    });
 
-      await expect(
-        runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
-      ).resolves.toBeUndefined();
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    await expect(
+      runReleaseUserJourneyAssertion("assert-channel-running", ["clickclack", statusPath]),
+    ).resolves.toBeUndefined();
   });
 
   it("fails when uninstall leaves the managed plugin directory behind", () => {
