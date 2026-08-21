@@ -104,7 +104,7 @@ export type ChatThreadProps = {
   fetchLinkFavicon?: LinkFaviconFetcher;
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  typingActors?: readonly { id: string; label: string }[];
+  typingActors?: readonly { id: string; label: string; preview?: string }[];
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;

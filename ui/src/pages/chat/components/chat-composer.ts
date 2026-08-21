@@ -301,7 +301,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     syncComposerValue(target);
-    props.onTypingChange?.(Boolean(target.value.trim()));
+    props.onTypingChange?.(Boolean(target.value.trim()), target.value);
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
@@ -313,7 +313,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     syncComposerValue(event.target as HTMLTextAreaElement);
-    props.onTypingChange?.(Boolean((event.target as HTMLTextAreaElement).value.trim()));
+    const value = (event.target as HTMLTextAreaElement).value;
+    props.onTypingChange?.(Boolean(value.trim()), value);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;

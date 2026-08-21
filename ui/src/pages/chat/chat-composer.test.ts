@@ -50,7 +50,7 @@ describe("suggestion composer", () => {
     textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-    expect(onTypingChange).toHaveBeenNthCalledWith(1, true);
+    expect(onTypingChange).toHaveBeenNthCalledWith(1, true, "hello");
     expect(onTypingChange).toHaveBeenLastCalledWith(false);
   });
 });
