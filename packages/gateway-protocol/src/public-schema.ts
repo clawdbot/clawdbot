@@ -4,6 +4,7 @@ export {
   ConnectParamsSchema,
   GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlockerSchema,
+  GatewaySuspendWakeRequirementSchema,
   GatewaySuspendPrepareBusyResultSchema,
   GatewaySuspendPrepareParamsSchema,
   GatewaySuspendPrepareReadyResultSchema,

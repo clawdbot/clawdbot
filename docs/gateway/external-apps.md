@@ -103,11 +103,14 @@ IDs are trimmed, must contain a non-whitespace character, and are limited to
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
   "activeCount": 0,
-  "blockers": []
+  "blockers": [],
+  "wakeRequirement": { "kind": "at", "atMs": 1770003600000 }
 }
 ```
 
-Status returns `{"status":"running"}` or a ready result with `expiresAtMs`.
+`wakeRequirement` is either the earliest enabled cron timestamp above or
+`{"kind":"external-event-only"}`. Status returns `{"status":"running"}` or a
+ready result with `expiresAtMs` and the same wake requirement.
 Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
 after a successful resume returns `resumed: false`.
 

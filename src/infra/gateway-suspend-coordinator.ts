@@ -5,7 +5,9 @@ import type {
   GatewaySuspendPrepareResult as GatewaySuspendPrepareWireResult,
   GatewaySuspendResumeResult as GatewaySuspendResumeWireResult,
   GatewaySuspendStatusResult as GatewaySuspendStatusWireResult,
+  GatewaySuspendWakeRequirement,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { CronSuspendWakeSnapshot } from "../cron/service-contract.js";
 import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -57,6 +59,7 @@ type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
   expiresAtMs: number;
   snapshot: GatewayActiveWorkSnapshot;
   nowMs: () => number;
+  wakeRequirement: GatewaySuspendWakeRequirement;
 };
 
 type GatewaySchedulerRecovery = GatewaySuspendCoordinatorEntryBase & {
@@ -226,6 +229,7 @@ export function prepareGatewaySuspend(params: {
   pauseScheduling: () => void;
   resumeScheduling: () => void;
   inspect?: Partial<GatewayActiveWorkInspectors>;
+  inspectWakeRequirement?: () => CronSuspendWakeSnapshot;
   nowMs?: () => number;
   createSuspensionId?: () => string;
   warn?: (message: string) => void;
@@ -255,6 +259,7 @@ export function prepareGatewaySuspend(params: {
       expiresAtMs: existing.expiresAtMs,
       activeCount: existing.snapshot.counts.totalActive,
       blockers: existing.snapshot.blockers,
+      wakeRequirement: existing.wakeRequirement,
     };
   }
 
@@ -309,6 +314,34 @@ export function prepareGatewaySuspend(params: {
         blockers: snapshot.blockers,
       };
     }
+    const wakeSnapshot = params.inspectWakeRequirement?.() ?? {
+      complete: true,
+      nextWakeAtMs: null,
+    };
+    if (!wakeSnapshot.complete) {
+      const resumed = resumeSchedulingBeforeReopen({
+        owner,
+        resumeScheduling: params.resumeScheduling,
+        reopenAdmission: admission.rollback,
+        isInvalidated: () => suspensionInvalidated,
+        warn: params.warn,
+      });
+      schedulingPaused = false;
+      if (!resumed) {
+        return schedulerRecoveryResult();
+      }
+      return {
+        status: "busy",
+        reason: "lifecycle-incomplete",
+        retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
+        activeCount: 0,
+        blockers: [],
+      };
+    }
+    const wakeRequirement: GatewaySuspendWakeRequirement =
+      wakeSnapshot.nextWakeAtMs === null
+        ? { kind: "external-event-only" }
+        : { kind: "at", atMs: wakeSnapshot.nextWakeAtMs };
     if (!admission.commit()) {
       throw new Error("gateway suspension admission changed during preparation");
     }
@@ -325,6 +358,7 @@ export function prepareGatewaySuspend(params: {
       reopenAdmission: admission.release,
       resumeScheduling: params.resumeScheduling,
       nowMs: params.nowMs ?? Date.now,
+      wakeRequirement,
       warn: params.warn,
     });
     COORDINATOR_STATE.current = held;
@@ -334,6 +368,7 @@ export function prepareGatewaySuspend(params: {
       expiresAtMs,
       activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
+      wakeRequirement,
     };
   } catch (err) {
     if (schedulingPaused) {
@@ -371,7 +406,11 @@ export function getGatewaySuspendStatus(suspensionId: string): GatewaySuspendSta
   if (held.suspensionId !== suspensionId) {
     return { status: "conflict", expiresAtMs: held.expiresAtMs };
   }
-  return { status: "ready", expiresAtMs: held.expiresAtMs };
+  return {
+    status: "ready",
+    expiresAtMs: held.expiresAtMs,
+    wakeRequirement: held.wakeRequirement,
+  };
 }
 
 export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResumeResult {

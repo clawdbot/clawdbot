@@ -1,6 +1,10 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { GatewaySuspendBlockerSchema, validateGatewaySuspendPrepareParams } from "./index.js";
+import {
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareResultSchema,
+  validateGatewaySuspendPrepareParams,
+} from "./index.js";
 
 describe("gateway suspension protocol", () => {
   it("keeps prepare params closed and bounded", () => {
@@ -34,5 +38,27 @@ describe("gateway suspension protocol", () => {
         message: "1 open terminal session(s)",
       }),
     ).toBe(true);
+  });
+
+  it("requires an unambiguous wake obligation for every ready lease", () => {
+    expect(
+      Value.Check(GatewaySuspendPrepareResultSchema, {
+        status: "ready",
+        suspensionId: "suspension-1",
+        expiresAtMs: 100,
+        activeCount: 0,
+        blockers: [],
+        wakeRequirement: { kind: "external-event-only" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(GatewaySuspendPrepareResultSchema, {
+        status: "ready",
+        suspensionId: "suspension-1",
+        expiresAtMs: 100,
+        activeCount: 0,
+        blockers: [],
+      }),
+    ).toBe(false);
   });
 });

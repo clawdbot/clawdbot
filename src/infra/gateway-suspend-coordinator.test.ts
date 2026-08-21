@@ -63,6 +63,50 @@ afterEach(() => {
 });
 
 describe("gateway suspend coordinator", () => {
+  it("atomically returns the next cron wake or external-event-only", () => {
+    const withWake = prepareGatewaySuspend({
+      requestId: "request-with-wake",
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      inspect: inspectors(),
+      inspectWakeRequirement: () => ({ complete: true, nextWakeAtMs: 1_800_000_000_000 }),
+    });
+    expect(withWake).toMatchObject({
+      status: "ready",
+      wakeRequirement: { kind: "at", atMs: 1_800_000_000_000 },
+    });
+    if (withWake.status === "ready") {
+      expect(resumeGatewaySuspend(withWake.suspensionId)).toMatchObject({ ok: true });
+    }
+
+    const externalOnly = prepareGatewaySuspend({
+      requestId: "request-external-only",
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      inspect: inspectors(),
+      inspectWakeRequirement: () => ({ complete: true, nextWakeAtMs: null }),
+    });
+    expect(externalOnly).toMatchObject({
+      status: "ready",
+      wakeRequirement: { kind: "external-event-only" },
+    });
+  });
+
+  it("fails closed when the wake snapshot is incomplete", () => {
+    const resumeScheduling = vi.fn();
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-incomplete-wake",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+        inspectWakeRequirement: () => ({ complete: false }),
+      }),
+    ).toMatchObject({ status: "busy", reason: "lifecycle-incomplete" });
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
   it("lifecycle reset resumes a held scheduler before admission is cleared", () => {
     const resumeScheduling = vi.fn(() => {
       expect(isGatewayWorkAdmissionClosed()).toBe(true);

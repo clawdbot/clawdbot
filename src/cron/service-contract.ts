@@ -20,6 +20,10 @@ import type { CronJob, CronPayload } from "./types.js";
 
 type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
+export type CronSuspendWakeSnapshot =
+  | { complete: true; nextWakeAtMs: number | null }
+  | { complete: false };
+
 /** Result shape for direct/queued cron runs. */
 export type CronServiceRunResult = CronRunResult;
 export type CronServiceRunOptions = {
@@ -42,6 +46,8 @@ export interface CronServiceContract {
   start(): Promise<void>;
   stop(): void;
   status(): Promise<CronStatusSummary>;
+  /** Synchronous snapshot read only after suspension has paused scheduling. */
+  getSuspendWakeSnapshot(): CronSuspendWakeSnapshot;
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
   listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
   add(input: CronAddInput, opts?: CronAddOptions): Promise<CronAddResult>;
