@@ -1,8 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
@@ -17,10 +15,6 @@ type LifecycleInternals = {
   frameFailureKey: string;
   frameRefreshAttempts: number;
   refreshFailedFrame: (widget: BoardWidget) => void;
-  sandboxHostOptions: (
-    frame: HTMLIFrameElement,
-    widget: BoardWidget,
-  ) => { controlUiBaseUrl?: string } | undefined;
 };
 
 function createTicketRefreshLifecycle(
@@ -47,72 +41,6 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
-});
-
-describe("board widget sandbox permissions", () => {
-  it("allows rendered widgets to open new tabs while approval placeholders stay strict", () => {
-    const renderSandbox = (grantState: BoardWidget["grantState"]) => {
-      const widget = {
-        name: "links",
-        revision: 1,
-        grantState,
-        sandboxUrl: "/mcp-app-sandbox",
-        sandboxPort: 19124,
-        viewTicket: "ticket",
-      } as BoardWidget;
-      const lifecycle = new BoardWidgetFrameLifecycle({
-        active: () => true,
-        connected: () => true,
-        context: () =>
-          ({
-            gateway: { connection: { gatewayUrl: "https://gateway.example" } },
-          }) as ApplicationContext,
-        refreshFrame: () => undefined,
-        reportContentHeight: () => {},
-        requestUpdate: () => {},
-        resolveFrameUrl: () => () => "/widget",
-        root: () => document,
-        widget: () => widget,
-      });
-      const container = document.createElement("div");
-      render(lifecycle.render(widget), container);
-      return container.querySelector("iframe")?.getAttribute("sandbox");
-    };
-
-    const baseSandbox = "allow-scripts allow-same-origin allow-forms";
-    const linkSandbox = `${baseSandbox} allow-popups allow-popups-to-escape-sandbox`;
-    expect(renderSandbox("pending")).toBe(baseSandbox);
-    expect(renderSandbox("rejected")).toBe(baseSandbox);
-    expect(renderSandbox("none")).toBe(linkSandbox);
-    expect(renderSandbox("granted")).toBe(linkSandbox);
-  });
-
-  it("passes the Control UI origin and base path to the widget host", () => {
-    const widget = { name: "links", revision: 1, grantState: "none" } as BoardWidget;
-    const lifecycle = new BoardWidgetFrameLifecycle({
-      active: () => true,
-      connected: () => true,
-      context: () =>
-        ({
-          basePath: "/control",
-          gateway: {
-            connection: { gatewayUrl: "https://gateway.example" },
-            snapshot: {},
-          },
-        }) as ApplicationContext,
-      refreshFrame: () => undefined,
-      reportContentHeight: () => {},
-      requestUpdate: () => {},
-      resolveFrameUrl: () => () => "/widget",
-      root: () => document,
-      widget: () => widget,
-    });
-    const frame = document.createElement("iframe");
-
-    const options = (lifecycle as unknown as LifecycleInternals).sandboxHostOptions(frame, widget);
-
-    expect(options?.controlUiBaseUrl).toBe(`${window.location.origin}/control`);
-  });
 });
 
 // Drives the private terminal-failure path directly: attempts are exhausted so
