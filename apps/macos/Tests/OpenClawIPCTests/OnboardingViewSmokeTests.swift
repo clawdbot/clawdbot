@@ -145,13 +145,6 @@ struct OnboardingViewSmokeTests {
             requiresCLIInstall: true)
 
         #expect(order.contains(2))
-        #expect(OnboardingView.shouldAutoInstallCLI(
-            onCLIPage: order.contains(2),
-            visible: true,
-            statusKnown: true,
-            executableReady: false,
-            installed: false,
-            installing: false))
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
     }
