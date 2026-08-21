@@ -448,6 +448,13 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  const sourceReplyTarget = {
+    tool: "message",
+    provider: "discord",
+    to: "channel:C1",
+    text: "Still working",
+  };
+
   it("delivers a yield acknowledgment after accepting a child spawn", () => {
     const execution = createSettledExecution();
     if (execution.outcome.kind === "settled") {
@@ -496,6 +503,28 @@ describe("resolveFollowupDeliveryDecision", () => {
       kind: "deliver",
       payloads: [{ text: "Research started; results will follow." }],
     });
+  });
+
+  it("does not repeat a yield acknowledgment after visible progress delivery", () => {
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = {
+        durationMs: 0,
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      };
+      execution.outcome.result.messagingToolSentTargets = [
+        { ...sourceReplyTarget, sourceReplyFinal: false },
+      ];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting(),
+      }),
+    ).toEqual({ kind: "suppress", reason: "silent" });
   });
 
   it("keeps ambient room-event finals silent", () => {
@@ -762,6 +791,76 @@ describe("resolveFollowupDeliveryDecision", () => {
     expect(decision).toMatchObject({
       kind: "deliver",
       payloads: [{ text: "terminal failure", isError: true }],
+    });
+  });
+
+  it.each([
+    {
+      label: "progress-only target",
+      evidence: {
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [{ ...sourceReplyTarget, sourceReplyFinal: false }],
+      },
+      completed: false,
+    },
+    {
+      label: "progress-only source payload",
+      evidence: {
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSourceReplyPayloads: [{ text: "Still working", sourceReplyFinal: false }],
+      },
+      completed: false,
+    },
+    {
+      label: "final source reply",
+      evidence: {
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          { ...sourceReplyTarget, text: "Finished", sourceReplyFinal: true },
+        ],
+      },
+      completed: true,
+    },
+    {
+      label: "legacy source reply",
+      evidence: { didDeliverSourceReplyViaMessageTool: true },
+      completed: true,
+    },
+    {
+      label: "legacy outbound send",
+      evidence: { didSendViaMessagingTool: true },
+      completed: true,
+    },
+    {
+      label: "deterministic approval prompt",
+      evidence: { didSendDeterministicApprovalPrompt: true },
+      completed: true,
+    },
+  ])("accounts for a $label before suppressing an empty follow-up", ({ evidence, completed }) => {
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      Object.assign(execution.outcome.result, evidence);
+    }
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn: createTurn(),
+      execution,
+      accounting: createAccounting(),
+    });
+
+    if (completed) {
+      expect(decision).toEqual({ kind: "suppress", reason: "silent" });
+      return;
+    }
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [
+        {
+          text: expect.stringContaining("did not produce a visible reply"),
+          isError: true,
+        },
+      ],
     });
   });
 
