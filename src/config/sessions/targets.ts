@@ -620,7 +620,11 @@ export function resolveSessionStoreTargets(
   params: { env?: NodeJS.ProcessEnv; diagnostics?: string[] } = {},
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;
-  const hasAgent = Boolean(opts.agent?.trim());
+  const requestedAgent = opts.agent?.trim();
+  if (opts.agent !== undefined && !requestedAgent) {
+    throw new Error("--agent must not be blank");
+  }
+  const hasAgent = requestedAgent !== undefined;
   const allAgents = opts.allAgents === true;
   if (hasAgent && allAgents) {
     throw new Error("--agent and --all-agents cannot be used together");
@@ -638,7 +642,7 @@ export function resolveSessionStoreTargets(
     if (persistedStoreOwner.kind === "retired") {
       throw new Error(`Session store owner is retired: ${persistedStoreOwner.agentId}`);
     }
-    const requestedAgentId = hasAgent ? normalizeAgentId(opts.agent ?? "") : undefined;
+    const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
     if (
       requestedAgentId &&
       persistedStoreOwner.kind === "configured" &&
@@ -687,7 +691,7 @@ export function resolveSessionStoreTargets(
   }
 
   if (hasAgent) {
-    const requested = normalizeAgentId(opts.agent ?? "");
+    const requested = normalizeAgentId(requestedAgent);
     resolveConfiguredAgentId(cfg, requested);
     return [
       {

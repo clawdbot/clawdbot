@@ -876,11 +876,16 @@ describe("exec approvals CLI", () => {
     });
   });
 
-  it("defaults allowlist add to wildcard agent", async () => {
+  it.each([
+    { label: "by default", agentArgs: [] as string[], agentKey: "*" },
+    { label: "for the explicit wildcard", agentArgs: ["--agent", "*"], agentKey: "*" },
+    { label: "for a configured agent", agentArgs: ["--agent", "main"], agentKey: "main" },
+  ])("adds an allowlist entry $label", async ({ agentArgs, agentKey }) => {
+    readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();
 
-    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname"]);
+    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", ...agentArgs]);
 
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
@@ -889,11 +894,55 @@ describe("exec approvals CLI", () => {
     expect(updateExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: "hash-local" }),
     );
-    if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
-      throw new Error("Expected wildcard exec approval agent entry");
+    if (requireRecord(saved.agents, "saved agents")[agentKey] === undefined) {
+      throw new Error(`Expected ${agentKey} exec approval agent entry`);
     }
+    expect(readBestEffortConfig).toHaveBeenCalledTimes(agentKey === "main" ? 1 : 0);
     expect(loggedOutput()).toContain("Writing local approvals.");
   });
+
+  it.each(["add", "remove"])(
+    "rejects an unknown agent before allowlist %s persistence",
+    async (operation) => {
+      readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+      updateExecApprovals.mockClear();
+
+      await expect(
+        runApprovalsCommand([
+          "approvals",
+          "allowlist",
+          operation,
+          "/usr/bin/uname",
+          "--agent",
+          "nope-agent",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toStrictEqual([
+        'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      ]);
+      expect(updateExecApprovals).not.toHaveBeenCalled();
+      expect(localSnapshot.file.agents).toEqual({});
+      expect(loggedOutput()).not.toContain("Writing local approvals.");
+    },
+  );
+
+  it.each(["add", "remove"])(
+    "rejects a blank agent before allowlist %s persistence",
+    async (operation) => {
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+      updateExecApprovals.mockClear();
+
+      await expect(
+        runApprovalsCommand(["approvals", "allowlist", operation, "/usr/bin/uname", "--agent", ""]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toStrictEqual(["--agent must not be blank"]);
+      expect(updateExecApprovals).not.toHaveBeenCalled();
+      expect(localSnapshot.file.agents).toEqual({});
+    },
+  );
 
   it.each([
     {
