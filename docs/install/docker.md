@@ -225,6 +225,8 @@ If Docker reports `ResourceExhausted`, `cannot allocate memory`, or aborts durin
 OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096
 ```
 
+The explicit tsdown heap override is also the supported opt-in for attempting a build below the automatically detected safe minimum. That attempt may stall or fail.
+
 ### Source-built images with selected plugins
 
 `OPENCLAW_EXTENSIONS` selects plugin manifest ids from the source checkout;

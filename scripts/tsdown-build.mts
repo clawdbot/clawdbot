@@ -776,7 +776,6 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
  * native addon which --max-old-space-size does not govern at all.
  */
 const MEASURED_MIN_TSDOWN_HEAP_MB = 4352;
-const TSDOWN_ALLOW_SMALL_HEAP_ENV = "OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP";
 
 /**
  * Describes a host that cannot fit the build, or null when it can. Reported before any
@@ -795,15 +794,15 @@ export function describeInsufficientTsdownHeap(params: MemoryLimitParams = {}) {
     env[TSDOWN_MAX_OLD_SPACE_MB_ENV],
     TSDOWN_MAX_OLD_SPACE_MB_ENV,
   );
-  const fatal = explicitHeapMb === null && env[TSDOWN_ALLOW_SMALL_HEAP_ENV] !== "1";
+  const fatal = explicitHeapMb === null;
   const outcome = fatal
     ? [
         "Stopping before any build output is removed. Pick one:",
         "  - give this machine or container more memory",
-        `  - set ${TSDOWN_ALLOW_SMALL_HEAP_ENV}=1 to attempt the build anyway`,
+        `  - set ${TSDOWN_MAX_OLD_SPACE_MB_ENV}=<MB> to explicitly attempt the build anyway`,
       ]
     : [
-        `Continuing because ${explicitHeapMb === null ? `${TSDOWN_ALLOW_SMALL_HEAP_ENV}=1 permits a smaller heap` : `${TSDOWN_MAX_OLD_SPACE_MB_ENV} explicitly requests ${explicitHeapMb}MB`}. Existing build output will now be cleaned; the build may stall or fail.`,
+        `Continuing because ${TSDOWN_MAX_OLD_SPACE_MB_ENV} explicitly requests ${explicitHeapMb}MB. Existing build output will now be cleaned; the build may stall or fail.`,
       ];
   return {
     fatal,

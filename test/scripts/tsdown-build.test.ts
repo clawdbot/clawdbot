@@ -540,7 +540,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(shortfall?.fatal).toBe(true);
     expect(shortfall?.message).toContain("resolved OpenClaw build heap is 732MB");
-    expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP=1");
+    expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
   });
 
   it("refuses a host whose slice cannot hold the whole-build peak", () => {
@@ -556,19 +556,6 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(
       describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 }),
     ).toBeNull();
-  });
-
-  it("downgrades the refusal to a warning when the operator opts in", () => {
-    const shortfall = describeInsufficientTsdownHeap({
-      env: { OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP: "1" },
-      cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
-    });
-
-    expect(shortfall?.fatal).toBe(false);
-    expect(shortfall?.message).toContain(
-      "Continuing because OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP=1 permits a smaller heap",
-    );
-    expect(shortfall?.message).not.toContain("Stopping");
   });
 
   it("treats an explicit heap override as the operator's opt-in", () => {
