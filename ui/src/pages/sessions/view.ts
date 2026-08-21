@@ -90,6 +90,8 @@ export type SessionsProps = {
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   groupBy: SessionsGroupBy;
+  /** Multi-identity gateways only; hides the Person mode elsewhere. */
+  personGroupingAvailable: boolean;
   knownCategories: string[];
   page: number;
   pageSize: number;
@@ -1220,7 +1222,9 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
           @change=${(e: Event) =>
             props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
         >
-          ${SESSION_GROUP_MODES.map(
+          ${SESSION_GROUP_MODES.filter(
+            (mode) => mode !== "person" || props.personGroupingAvailable,
+          ).map(
             (mode) =>
               html`<option value=${mode} ?selected=${props.groupBy === mode}>
                 ${groupModeLabel(mode)}

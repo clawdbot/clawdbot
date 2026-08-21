@@ -49,6 +49,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     sortColumn: "updated",
     sortDir: "desc",
     groupBy: "none",
+    personGroupingAvailable: true,
     knownCategories: [],
     page: 0,
     pageSize: 10,
@@ -513,6 +514,24 @@ describe("sessions view", () => {
         label.textContent?.trim(),
       ),
     ).toEqual(["Ada Lovelace", "Ungrouped"]);
+  });
+
+  it("hides the person grouping option without the identity capability", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildResult({ key: "agent:main:a", kind: "direct", updatedAt: 1 })),
+        personGroupingAvailable: false,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const modes = [
+      ...container.querySelectorAll<HTMLOptionElement>(".session-groupby__select option"),
+    ].map((option) => option.value);
+    expect(modes).not.toContain("person");
+    expect(modes).toContain("category");
   });
 
   it("selects and names the current page size on first render", async () => {
