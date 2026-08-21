@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum GatewayDiscoveryPreferences {
@@ -27,7 +28,7 @@ enum GatewayDiscoveryPreferences {
         }
     }
 
-    static func preferredRouteBinding() -> String? {
+    static func preferredRouteBindingDigest() -> String? {
         let raw = AppDefaults.standard.string(forKey: self.preferredRouteBindingKey)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
@@ -36,16 +37,16 @@ enum GatewayDiscoveryPreferences {
     static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {
         self.setPreferredStableID(stableID)
         guard self.preferredStableID() != nil,
-              let routeBinding = self.normalized(routeBinding)
+              let routeBindingDigest = self.routeBindingDigest(routeBinding)
         else {
             AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return
         }
-        AppDefaults.standard.set(routeBinding, forKey: self.preferredRouteBindingKey)
+        AppDefaults.standard.set(routeBindingDigest, forKey: self.preferredRouteBindingKey)
     }
 
     /// Discovery ids name one concrete Gateway. Persist the non-secret fallback
-    /// route beside the id so an app-off config edit cannot reuse its receipts.
+    /// route fingerprint beside the id so an app-off config edit cannot reuse its receipts.
     static func routeBinding(
         connectionMode: AppState.ConnectionMode,
         remoteTransport: AppState.RemoteTransport,
@@ -100,8 +101,8 @@ enum GatewayDiscoveryPreferences {
             AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return false
         }
-        guard let stored = self.preferredRouteBinding(),
-              let current = self.normalized(currentRouteBinding),
+        guard let stored = self.preferredRouteBindingDigest(),
+              let current = self.routeBindingDigest(currentRouteBinding),
               stored == current
         else {
             self.setPreferredStableID(nil, routeBinding: nil)
@@ -113,5 +114,12 @@ enum GatewayDiscoveryPreferences {
     private static func normalized(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func routeBindingDigest(_ value: String?) -> String? {
+        guard let value = self.normalized(value) else { return nil }
+        return SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

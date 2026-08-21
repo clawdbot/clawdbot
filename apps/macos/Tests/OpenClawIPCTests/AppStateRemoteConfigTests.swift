@@ -4,19 +4,22 @@ import Testing
 
 private struct StoredGatewayPreference {
     let stableID: String?
-    let routeBinding: String?
+    let storedRouteBinding: Any?
 }
+
+private let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
 
 private func captureGatewayPreference() -> StoredGatewayPreference {
     StoredGatewayPreference(
         stableID: GatewayDiscoveryPreferences.preferredStableID(),
-        routeBinding: GatewayDiscoveryPreferences.preferredRouteBinding())
+        storedRouteBinding: AppDefaults.standard.object(forKey: preferredRouteBindingKey))
 }
 
 private func restoreGatewayPreference(_ preference: StoredGatewayPreference) {
-    GatewayDiscoveryPreferences.setPreferredStableID(
-        preference.stableID,
-        routeBinding: preference.routeBinding)
+    GatewayDiscoveryPreferences.setPreferredStableID(preference.stableID)
+    if let storedRouteBinding = preference.storedRouteBinding {
+        AppDefaults.standard.set(storedRouteBinding, forKey: preferredRouteBindingKey)
+    }
 }
 
 private actor GatewayConfigReadGate {
@@ -125,7 +128,21 @@ struct AppStateRemoteConfigTests {
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-b")
 
         #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-b")
-        #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+        #expect(GatewayDiscoveryPreferences.preferredRouteBindingDigest() == nil)
+    }
+
+    @Test
+    func `route binding persists only a matching fingerprint`() throws {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let routeBinding = "remote:direct:wss://gateway-a.example.test:443"
+
+        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a", routeBinding: routeBinding)
+
+        let stored = try #require(GatewayDiscoveryPreferences.preferredRouteBindingDigest())
+        #expect(stored != routeBinding)
+        #expect(stored.count == 64)
+        #expect(!GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(routeBinding))
     }
 
     @Test
@@ -666,7 +683,7 @@ struct AppStateRemoteConfigTests {
             #expect(state.remoteUrl == "wss://gateway-b.example.test")
             #expect(state._testReconcilePreferredGatewayRouteBinding())
             #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-            #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+            #expect(GatewayDiscoveryPreferences.preferredRouteBindingDigest() == nil)
         }
     }
 
@@ -712,7 +729,7 @@ struct AppStateRemoteConfigTests {
                 #expect(settings.identity == "/tmp/gateway-b-id")
                 #expect(state._testReconcilePreferredGatewayRouteBinding())
                 #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-                #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+                #expect(GatewayDiscoveryPreferences.preferredRouteBindingDigest() == nil)
             }
     }
 

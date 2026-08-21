@@ -8,19 +8,22 @@ import Testing
 
 private struct OnboardingStoredGatewayPreference {
     let stableID: String?
-    let routeBinding: String?
+    let storedRouteBinding: Any?
 }
+
+private let onboardingPreferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
 
 private func captureOnboardingGatewayPreference() -> OnboardingStoredGatewayPreference {
     OnboardingStoredGatewayPreference(
         stableID: GatewayDiscoveryPreferences.preferredStableID(),
-        routeBinding: GatewayDiscoveryPreferences.preferredRouteBinding())
+        storedRouteBinding: AppDefaults.standard.object(forKey: onboardingPreferredRouteBindingKey))
 }
 
 private func restoreOnboardingGatewayPreference(_ preference: OnboardingStoredGatewayPreference) {
-    GatewayDiscoveryPreferences.setPreferredStableID(
-        preference.stableID,
-        routeBinding: preference.routeBinding)
+    GatewayDiscoveryPreferences.setPreferredStableID(preference.stableID)
+    if let storedRouteBinding = preference.storedRouteBinding {
+        AppDefaults.standard.set(storedRouteBinding, forKey: onboardingPreferredRouteBindingKey)
+    }
 }
 
 private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
