@@ -621,6 +621,94 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.prompt).toBe("Done task");
   });
 
+  it.each([
+    {
+      label: "subagent completion",
+      runtime: "subagent",
+      progressSummary: "Subagent canonical result",
+      terminalSummary: "Subagent terminal status",
+      expected: "Subagent canonical result",
+    },
+    {
+      label: "ACP completion",
+      runtime: "acp",
+      progressSummary: "ACP canonical result",
+      terminalSummary: "ACP terminal status",
+      expected: "ACP canonical result",
+    },
+    {
+      label: "cron completion",
+      runtime: "cron",
+      progressSummary: "Cron stale progress",
+      terminalSummary: "Cron canonical result",
+      expected: "Cron canonical result",
+    },
+    {
+      label: "CLI completion",
+      runtime: "cli",
+      progressSummary: "CLI stale progress",
+      terminalSummary: "CLI canonical result",
+      expected: "CLI canonical result",
+    },
+    {
+      label: "CLI sanitized terminal result",
+      runtime: "cli",
+      progressSummary: "CLI stale progress",
+      terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
+      expected: "Command did not run: approval timed out.",
+    },
+    {
+      label: "cron progress fallback",
+      runtime: "cron",
+      progressSummary: "Cron fallback result",
+      terminalSummary: undefined,
+      expected: "Cron fallback result",
+    },
+    {
+      label: "cron blank-terminal fallback",
+      runtime: "cron",
+      progressSummary: "Cron blank-terminal fallback result",
+      terminalSummary: "",
+      preserveTerminalSummary: true,
+      expected: "Cron blank-terminal fallback result",
+    },
+    {
+      label: "CLI progress fallback",
+      runtime: "cli",
+      progressSummary: "CLI fallback result",
+      terminalSummary: undefined,
+      expected: "CLI fallback result",
+    },
+  ] as const)("returns the runtime-owned result for $label", async (fixture) => {
+    const task = createTaskRecord({
+      runtime: fixture.runtime,
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: fixture.label,
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      progressSummary: fixture.progressSummary,
+      terminalSummary: fixture.terminalSummary,
+    });
+    if ("preserveTerminalSummary" in fixture) {
+      expectDefined(
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status: "succeeded",
+          endedAt: Date.now(),
+          terminalSummary: fixture.terminalSummary,
+          preserveTerminalSummary: fixture.preserveTerminalSummary,
+        }),
+        "expected preserved terminal summary task",
+      );
+    }
+
+    const { payload } = await getTaskPayload(task.taskId);
+
+    expect(payload?.task?.result).toBe(fixture.expected);
+  });
+
   it("keeps bounded prompts lookup-only", async () => {
     const task = createTaskRecord({
       runtime: "cli",
