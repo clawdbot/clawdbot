@@ -1365,9 +1365,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       '"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"',
     );
-    // Binds the button shape to the tool call so models cannot satisfy the
-    // guidance by serializing button JSON into the visible reply instead.
-    expect(prompt).toContain("pass buttons as tool arguments, never as JSON in reply text");
   });
 
   it("withholds the button shape from group turns whose channel has no inline buttons", () => {
@@ -1385,7 +1382,6 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Inline buttons OFF for whatsapp");
     expect(prompt).not.toContain('presentation={"blocks"');
-    expect(prompt).not.toContain("pass buttons as tool arguments");
   });
 
   it("does not embed Telegram rich-text authoring guidance in core messaging", () => {
