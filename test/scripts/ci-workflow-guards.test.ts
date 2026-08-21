@@ -8421,7 +8421,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "Expected ${SHARD_COUNT} completed status and evidence files",
     );
     expect(aggregateStep.run).toContain("Timed-out QA shard cannot contribute partial evidence");
-    expect(aggregateStep.run).toContain("-mindepth 2 -maxdepth 2");
+    expect(aggregateStep.run).toContain("-mindepth 1 -maxdepth 2");
     expect(aggregateStep.run).toContain("aggregateQaProfileEvidenceShards");
     expect(aggregateStep.run).toContain("if jq -e '.timedOut == true'");
     expect(aggregateStep.env?.OUTPUT_DIR).toContain(
