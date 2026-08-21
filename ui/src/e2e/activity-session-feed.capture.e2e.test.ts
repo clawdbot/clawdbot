@@ -284,6 +284,12 @@ suite.define(() => {
         expect(await inspectRun.getAttribute("href")).toBe(
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
         );
+        const timeFilter = activityPage.locator(".activity-feed__time-filter");
+        expect(
+          await timeFilter
+            .locator(".settings-segmented__btn")
+            .evaluateAll((buttons) => buttons.map((button) => button.textContent?.trim())),
+        ).toEqual(["Last 24 hours", "Last 7 days", "Last 30 days", "All time"]);
         await page.screenshot({
           animations: "disabled",
           path: path.join(outputDir, "05-global-activity.png"),
@@ -304,6 +310,47 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           path: path.join(outputDir, "06-person-activity.png"),
+        });
+
+        await activityPage.locator(".activity-feed__people-clear").click();
+        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await page.setViewportSize({ height: 844, width: 390 });
+
+        const peopleControl = activityPage.locator(".activity-feed__people-control");
+        const timeButtonTops = await timeFilter
+          .locator(".settings-segmented__btn")
+          .evaluateAll((buttons) =>
+            buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
+          );
+        const [timeFilterBox, peopleControlBox] = await Promise.all([
+          timeFilter.boundingBox(),
+          peopleControl.boundingBox(),
+        ]);
+        expect(new Set(timeButtonTops)).toHaveLength(1);
+        expect(timeFilterBox).not.toBeNull();
+        expect(peopleControlBox).not.toBeNull();
+        expect(Math.abs(timeFilterBox!.y - peopleControlBox!.y)).toBeLessThan(2);
+        const automationGroupChildTops = await automationGroup
+          .locator(":scope > *")
+          .evaluateAll((children) =>
+            children.map((child) => Math.round(child.getBoundingClientRect().top)),
+          );
+        expect(
+          Math.max(...automationGroupChildTops) - Math.min(...automationGroupChildTops),
+        ).toBeLessThan(3);
+        expect(
+          await activityFeed.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              backgroundColor: style.backgroundColor,
+              borderTopWidth: style.borderTopWidth,
+            };
+          }),
+        ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(outputDir, "07-global-activity-mobile.png"),
         });
       },
     );
