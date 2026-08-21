@@ -7,9 +7,24 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
-import { writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "./runtime-snapshots.js";
+import { hasLocalAuthProfileStoreSource } from "./source-check.js";
+import {
+  inspectPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "./sqlite.js";
+import type { AuthProfileStore } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const persistedStore = {
+  version: 1,
+  profiles: {
+    "openai:test": { type: "api_key", provider: "openai", key: "test-key" },
+  },
+} satisfies AuthProfileStore;
 
 function makeStateEnv(): NodeJS.ProcessEnv {
   const stateDir = tempDirs.make("openclaw-shared-auth-store-");
@@ -22,6 +37,7 @@ describe("shared auth store path resolution", () => {
   });
 
   afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -44,10 +60,14 @@ describe("shared auth store path resolution", () => {
     );
 
     withEnv({ OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR, OPENCLAW_AGENT_DIR: undefined }, () => {
-      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, legacyDir);
+      writePersistedAuthProfileStoreRaw(persistedStore, legacyDir);
       const expectedPath = path.join(legacyDir, "openclaw-agent.sqlite");
       expect(resolveAuthStorePathForDisplay(legacyDir)).toBe(expectedPath);
       expect(resolveAuthStatePathForDisplay(legacyDir)).toBe(expectedPath);
+      expect(inspectPersistedAuthProfileStoreRaw(legacyDir)).toMatchObject({
+        status: "readable",
+        raw: persistedStore,
+      });
       expect(existsSync(expectedPath)).toBe(true);
     });
   });
@@ -62,7 +82,7 @@ describe("shared auth store path resolution", () => {
     expect(resolveSharedAuthStorePath(env)).toBe(resolveOpenClawStateSqlitePath(env));
 
     withEnv({ OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR, OPENCLAW_AGENT_DIR: undefined }, () => {
-      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} });
+      writePersistedAuthProfileStoreRaw(persistedStore);
       const agentDir = path.join(env.OPENCLAW_STATE_DIR ?? "", "agents", "helper", "agent");
       const expectedPath = resolveOpenClawStateSqlitePath(env);
       expect(resolveAuthStorePathForDisplay(agentDir)).toBe(expectedPath);
@@ -77,11 +97,34 @@ describe("shared auth store path resolution", () => {
     const agentDir = path.join(env.OPENCLAW_STATE_DIR ?? "", "agents", "helper", "agent");
 
     withEnv({ OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR, OPENCLAW_AGENT_DIR: undefined }, () => {
-      writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+      writePersistedAuthProfileStoreRaw(persistedStore, agentDir);
       const expectedPath = path.join(agentDir, "openclaw-agent.sqlite");
       expect(resolveAuthStorePathForDisplay(agentDir)).toBe(expectedPath);
       expect(resolveAuthStatePathForDisplay(agentDir)).toBe(expectedPath);
       expect(existsSync(expectedPath)).toBe(true);
+    });
+  });
+
+  it("ignores runtime-only external CLI profiles when displaying store ownership", async () => {
+    const env = makeStateEnv();
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+    const agentDir = path.join(env.OPENCLAW_STATE_DIR ?? "", "agents", "helper", "agent");
+
+    withEnv({ OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR, OPENCLAW_AGENT_DIR: undefined }, () => {
+      writePersistedAuthProfileStoreRaw(persistedStore);
+      setRuntimeAuthProfileStoreSnapshot(
+        {
+          ...persistedStore,
+          runtimeExternalProfileIds: ["openai:test"],
+          runtimeExternalCliProfileIds: ["openai:test"],
+        },
+        agentDir,
+      );
+
+      expect(hasLocalAuthProfileStoreSource(agentDir)).toBe(true);
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
+      expect(resolveAuthStorePathForDisplay(agentDir)).toBe(resolveOpenClawStateSqlitePath(env));
+      expect(resolveAuthStatePathForDisplay(agentDir)).toBe(resolveOpenClawStateSqlitePath(env));
     });
   });
 
