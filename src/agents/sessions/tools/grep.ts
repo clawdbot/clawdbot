@@ -355,8 +355,10 @@ export function createGrepToolDefinition(
                 },
               });
             } catch (error) {
-              const outputErrorStream = (error as { outputErrorStream?: unknown })
-                .outputErrorStream;
+              const outputErrorStream =
+                error instanceof Error && "outputErrorStream" in error
+                  ? error.outputErrorStream
+                  : undefined;
               const message = error instanceof Error ? error.message : String(error);
               if (outputErrorStream === "stdout" || outputErrorStream === "stderr") {
                 settle(() => reject(new Error(`ripgrep ${outputErrorStream} error: ${message}`)));
