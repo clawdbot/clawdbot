@@ -345,15 +345,7 @@ describe("authenticated GitHub identity sync", () => {
     });
   });
 
-  it.each([
-    {
-      name: "GitHub rate limit",
-      githubResult: githubResponse({ message: "rate limit" }, 403, {
-        "x-ratelimit-remaining": "0",
-      }),
-    },
-    { name: "GitHub network failure", githubError: new Error("network unavailable") },
-  ])("preserves prior identity after a $name", async ({ githubResult, githubError }) => {
+  it("does not reuse an email-linked identity for a different Access account id", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
@@ -366,25 +358,85 @@ describe("authenticated GitHub identity sync", () => {
         )
         .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
       const first = await cloudflareSync({})?.();
-      fetchMock.mockResolvedValueOnce(
-        githubResponse({
-          id: 58493,
-          email: "ada@example.com",
-          idp: { type: "github" },
-        }),
-      );
-      if (githubError) {
-        fetchMock.mockRejectedValueOnce(githubError);
-      } else {
-        fetchMock.mockResolvedValueOnce(githubResult!);
-      }
+      fetchMock
+        .mockResolvedValueOnce(
+          githubResponse({
+            id: 99999,
+            email: "ada@example.com",
+            idp: { type: "github" },
+          }),
+        )
+        .mockRejectedValueOnce(new Error("network unavailable"));
 
-      await expect(cloudflareSync({})?.()).rejects.toThrow();
+      await expect(cloudflareSync({})?.()).rejects.toMatchObject({ statusCode: 502 });
       expect(getUserProfileListItem(first!.profileId).githubIdentity).toMatchObject({
         login: "steipete",
       });
     });
   });
+
+  it.each([
+    {
+      name: "GitHub rate limit",
+      githubResult: githubResponse({ message: "rate limit" }, 403, {
+        "x-ratelimit-remaining": "0",
+      }),
+    },
+    { name: "GitHub network failure", githubError: new Error("network unavailable") },
+  ])(
+    "uses prior identity after a $name and retries later",
+    async ({ githubResult, githubError }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const fetchMock = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(
+            githubResponse({
+              id: 58493,
+              email: "ada@example.com",
+              idp: { type: "github" },
+            }),
+          )
+          .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
+        const first = await cloudflareSync({})?.();
+        fetchMock.mockResolvedValueOnce(
+          githubResponse({
+            id: 58493,
+            email: "ada@example.com",
+            idp: { type: "github" },
+          }),
+        );
+        if (githubError) {
+          fetchMock.mockRejectedValueOnce(githubError);
+        } else {
+          fetchMock.mockResolvedValueOnce(githubResult!);
+        }
+        fetchMock
+          .mockResolvedValueOnce(
+            githubResponse({
+              id: 58493,
+              email: "ada@example.com",
+              idp: { type: "github" },
+            }),
+          )
+          .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete-renamed" }));
+
+        const recoveringConnection = cloudflareSync({});
+        await expect(recoveringConnection?.()).resolves.toMatchObject({
+          profileId: first!.profileId,
+        });
+        expect(getUserProfileListItem(first!.profileId).githubIdentity).toMatchObject({
+          login: "steipete",
+        });
+
+        await expect(recoveringConnection?.()).resolves.toMatchObject({
+          profileId: first!.profileId,
+        });
+        expect(getUserProfileListItem(first!.profileId).githubIdentity).toMatchObject({
+          login: "steipete-renamed",
+        });
+      });
+    },
+  );
 
   it("redacts the Access assertion from network failures and retries on the same connection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

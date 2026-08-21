@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import { resolveStoredGitHubIdentityByAccountId } from "../state/user-profile-github-identity.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
 import { syncGitHubIdentity } from "../state/user-profiles.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
@@ -22,8 +23,11 @@ const ACCESS_ASSERTION_MAX_BYTES = 16 * 1024;
 const ACCESS_IDENTITY_MAX_BYTES = 64 * 1024;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
-type ResolvedGitHubUserIdentity = { accountId: number; login: string };
+type ResolvedGitHubUserIdentity = { accountId: number; login: string; retryLookup?: true };
 type AuthenticatedGitHubIdentitySyncResult = { profileId: string; updatedAt: number };
+type AuthenticatedGitHubIdentitySyncAttempt = AuthenticatedGitHubIdentitySyncResult & {
+  retryLookup?: true;
+};
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -149,6 +153,12 @@ async function resolveGitHubUserIdentityById(
   try {
     payload = await fetchGitHubJson(`${GITHUB_API_ORIGIN}/user/${accountId}`, fetch, undefined);
   } catch (error) {
+    const storedIdentity = resolveStoredGitHubIdentityByAccountId(accountId);
+    if (storedIdentity) {
+      // Access already verified this immutable account ID. Keep its durable profile usable,
+      // but let a later Profile refresh retry GitHub for a renamed canonical login.
+      return { ...storedIdentity, retryLookup: true };
+    }
     if (error instanceof ControlUiGitHubError) {
       throw error;
     }
@@ -165,7 +175,7 @@ async function resolveGitHubUserIdentityById(
 }
 
 function retryableConnectionSync(
-  sync: () => Promise<AuthenticatedGitHubIdentitySyncResult>,
+  sync: () => Promise<AuthenticatedGitHubIdentitySyncAttempt>,
 ): AuthenticatedGitHubIdentitySync {
   let inFlight: Promise<AuthenticatedGitHubIdentitySyncResult> | undefined;
   let completed: AuthenticatedGitHubIdentitySyncResult | undefined;
@@ -176,8 +186,10 @@ function retryableConnectionSync(
     if (inFlight) {
       return inFlight;
     }
-    const current = sync().then((result) => {
-      completed = result;
+    const current = sync().then(({ retryLookup, ...result }) => {
+      if (!retryLookup) {
+        completed = result;
+      }
       return result;
     });
     inFlight = current;
@@ -252,6 +264,10 @@ export function createAuthenticatedGitHubIdentitySync(params: {
       authenticationAlias: { kind: "email", email: access.principal },
       initialDisplayName: accessIdentity.initialDisplayName,
     });
-    return { profileId: profile.id, updatedAt: profile.updatedAt };
+    return {
+      profileId: profile.id,
+      updatedAt: profile.updatedAt,
+      ...(identity.retryLookup ? { retryLookup: true } : {}),
+    };
   });
 }

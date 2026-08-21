@@ -60,6 +60,28 @@ function selectStoredGitHubIdentities(
   );
 }
 
+export function resolveStoredGitHubIdentityByAccountId(
+  accountId: number,
+  options: OpenClawStateDatabaseOptions = {},
+): StoredGitHubIdentity | undefined {
+  if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+    throw new TypeError("GitHub account id must be a positive safe integer");
+  }
+  const database = openOpenClawStateDatabase(options);
+  ensureUserProfilesSchema(options, database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    userProfilesDb(database.db)
+      .selectFrom("user_profile_identities")
+      .select(["subject", "canonical_login"])
+      .where("provider", "=", GITHUB_PROVIDER)
+      .where("subject", "=", String(accountId))
+      .where("canonical_login", "is not", null),
+  );
+  const identity = row ? parseStoredGitHubIdentity(row) : null;
+  return identity?.accountId === accountId ? identity : undefined;
+}
+
 function deleteProfileGitHubIdentities(
   db: DatabaseSync,
   profileIds: readonly string[],
