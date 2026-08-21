@@ -23,7 +23,7 @@ export const whatsAppChannelConfigUiHints = {
   },
   implicitMentions: {
     label: "WhatsApp Implicit Mentions",
-    help: "Which reply/quote/thread facts count as an implicit mention. Set quotedBot or replyToBot to false to require an explicit @mention.",
+    help: "Whether a reply/quote to the bot counts as an implicit mention. Set quotedBot: false to require an explicit @mention in groups. WhatsApp only emits the quote trigger, so replyToBot and threadParticipation have no effect here.",
   },
   direct: {
     label: "WhatsApp Direct Chat Overrides",
