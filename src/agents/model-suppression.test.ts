@@ -8,11 +8,36 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   buildManifestBuiltInModelSuppressionResolver: vi.fn(),
+  resolvePluginControlPlaneFingerprint: vi.fn(),
+  resolvePluginMetadataEnvFingerprint: vi.fn(),
 }));
 
 vi.mock("../plugins/manifest-model-suppression.js", () => ({
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
 }));
+
+vi.mock("../plugins/plugin-control-plane-context.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/plugin-control-plane-context.js")>();
+  mocks.resolvePluginControlPlaneFingerprint.mockImplementation(
+    actual.resolvePluginControlPlaneFingerprint,
+  );
+  return {
+    ...actual,
+    resolvePluginControlPlaneFingerprint: mocks.resolvePluginControlPlaneFingerprint,
+  };
+});
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  mocks.resolvePluginMetadataEnvFingerprint.mockImplementation(
+    actual.resolvePluginMetadataEnvFingerprint,
+  );
+  return {
+    ...actual,
+    resolvePluginMetadataEnvFingerprint: mocks.resolvePluginMetadataEnvFingerprint,
+  };
+});
 
 import {
   getCurrentPluginMetadataSnapshot,
@@ -131,7 +156,7 @@ describe("model suppression", () => {
     expect(secondResolver).toHaveBeenCalledOnce();
   });
 
-  it("keeps concurrent scoped suppression resolvers isolated from process-current metadata", async () => {
+  it("reuses each concurrent generation's suppression resolver across A/B/A interleaving", async () => {
     const config = {} satisfies OpenClawConfig;
     const snapshotA = createPluginMetadataSnapshot({
       config,
@@ -165,7 +190,14 @@ describe("model suppression", () => {
         });
         markAReady();
         await holdA;
-        return result;
+        return [
+          result,
+          shouldSuppressBuiltInModelCore({
+            provider: "openai",
+            id: "generation-model",
+            config,
+          }),
+        ];
       },
     );
     await aReady;
@@ -181,8 +213,72 @@ describe("model suppression", () => {
     );
     releaseA();
 
-    await expect(resultA).resolves.toBe(true);
+    await expect(resultA).resolves.toEqual([true, true]);
     expect(resultB).toBe(false);
+    expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledTimes(2);
+  });
+
+  it("keys generation resolvers by config identity and workspace", () => {
+    const configA = {} satisfies OpenClawConfig;
+    const configB = {} satisfies OpenClawConfig;
+    const snapshot = createPluginMetadataSnapshot({
+      config: configA,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValue(() => undefined);
+
+    const check = (config: OpenClawConfig, workspaceDir: string) =>
+      withPluginRuntimeGenerationScope({ config, metadataSnapshot: snapshot }, () =>
+        shouldSuppressBuiltInModelCore({
+          provider: "openai",
+          id: "generation-model",
+          config,
+          workspaceDir,
+        }),
+      );
+
+    expect(check(configA, "/workspace/a")).toBe(false);
+    expect(check(configB, "/workspace/a")).toBe(false);
+    expect(check(configA, "/workspace/b")).toBe(false);
+    expect(check(configA, "/workspace/a")).toBe(false);
+    expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not recompute content fingerprints on a stable generation cache hit", () => {
+    const config = {} satisfies OpenClawConfig;
+    const snapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValue(() => undefined);
+
+    withPluginRuntimeGenerationScope({ config, metadataSnapshot: snapshot }, () => {
+      shouldSuppressBuiltInModelCore({ provider: "openai", id: "gpt-5.3", config });
+      mocks.resolvePluginControlPlaneFingerprint.mockClear();
+      mocks.resolvePluginMetadataEnvFingerprint.mockClear();
+
+      shouldSuppressBuiltInModelCore({ provider: "anthropic", id: "claude-4", config });
+
+      expect(mocks.resolvePluginControlPlaneFingerprint.mock.calls.length).toBe(0);
+      expect(mocks.resolvePluginMetadataEnvFingerprint.mock.calls.length).toBe(0);
+    });
+  });
+
+  it("rebuilds a generation resolver after plugin metadata lifecycle caches clear", () => {
+    const config = {} satisfies OpenClawConfig;
+    const snapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValue(() => undefined);
+
+    withPluginRuntimeGenerationScope({ config, metadataSnapshot: snapshot }, () => {
+      shouldSuppressBuiltInModelCore({ provider: "openai", id: "gpt-5.3", config });
+      clearPluginMetadataLifecycleCaches();
+      shouldSuppressBuiltInModelCore({ provider: "anthropic", id: "claude-4", config });
+    });
+
+    expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes manifest suppression resolver when process env plugin metadata inputs change", () => {
