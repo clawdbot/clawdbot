@@ -13,20 +13,24 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { collectClawHubPublishablePluginPackages } from "../../scripts/lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
 import {
   canonicalReleasePlanLockJson,
   createReleasePlanLock,
+  type ReleasePlan,
+  type ReleasePlanLock,
 } from "../../scripts/release-plan-contract.mjs";
 import {
   deriveReleasePlanPolicy,
-  produceReleasePlan,
-  verifyReleasePlanLock,
+  runReleasePlanProducerOperation,
+} from "../../scripts/release-plan-producer-core.mts";
+import {
+  produceReleasePlan as trustedCheckoutProduceReleasePlan,
+  verifyReleasePlanLock as trustedCheckoutVerifyReleasePlanLock,
   type MainQualificationValidationIntent,
   type ReleasePlanIntent,
   type ReleasePlanSource,
@@ -40,6 +44,7 @@ const TOOLING_CLOSURE = [
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/index.ts",
   "scripts/release-plan-producer.mts",
+  "scripts/release-plan-producer-core.mts",
   "scripts/release-plan-contract.mjs",
   "scripts/release-validation-intent.mjs",
   "scripts/release-tooling-identity.mjs",
@@ -279,11 +284,39 @@ function trustedToolingGh(toolingFullRef: string, toolingSha: string) {
   };
 }
 
+function runCoreOperation(
+  request:
+    | { operation: "produce"; params: ReleasePlanSource }
+    | { operation: "verify-lock"; lockJson: string; params: ReleasePlanSource },
+) {
+  const { runGh, ...params } = request.params;
+  return runReleasePlanProducerOperation(
+    { ...request, params },
+    {
+      runGh:
+        runGh ??
+        (() => {
+          throw new Error("unexpected GitHub API request");
+        }),
+      parseYamlDocuments: (sources) =>
+        sources.map((source) => parse(source)) as [unknown, unknown, unknown],
+    },
+  );
+}
+
+function produceReleasePlan(params: ReleasePlanSource) {
+  return runCoreOperation({ operation: "produce", params }) as ReleasePlan;
+}
+
+function verifyReleasePlanLock(lockJson: string, params: ReleasePlanSource) {
+  return runCoreOperation({ operation: "verify-lock", lockJson, params }) as ReleasePlanLock;
+}
+
 type YamlPackageHarnessParams = {
   fixture: ReturnType<typeof createFixtureRepo>;
   packageRoot: string;
   sentinelPath: string;
-  snapshotRoot: string;
+  tempRoot: string;
 };
 
 function runYamlPackageSubprocess(
@@ -293,6 +326,8 @@ function runYamlPackageSubprocess(
     mutate?: (params: YamlPackageHarnessParams) => void;
     mutateTooling?: (fixture: ReturnType<typeof createFixtureRepo>) => void;
     beforeImport?: (params: YamlPackageHarnessParams) => string;
+    executionHead?: (fixture: ReturnType<typeof createFixtureRepo>) => string;
+    remoteToolingSha?: (params: YamlPackageHarnessParams) => string;
   } = {},
 ) {
   let fixture = createFixtureRepo();
@@ -308,9 +343,9 @@ function runYamlPackageSubprocess(
   const packageRoot = join(fixture.root, "node_modules/yaml");
   cpSync(realpathSync(resolve("node_modules/yaml")), packageRoot, { recursive: true });
   const sentinelPath = join(fixture.root, "yaml-executed");
-  const snapshotRoot = join(fixture.root, "yaml-snapshots");
-  mkdirSync(snapshotRoot);
-  const params = { fixture, packageRoot, sentinelPath, snapshotRoot };
+  const tempRoot = join(fixture.root, "yaml-temp");
+  mkdirSync(tempRoot);
+  const params = { fixture, packageRoot, sentinelPath, tempRoot };
   options.mutate?.(params);
   writeFixture(
     fixture.root,
@@ -331,7 +366,7 @@ produceReleasePlan({
   toolingFullRef,
   runGh: () => JSON.stringify({
     ref: toolingFullRef,
-    object: { type: "commit", sha: toolingSha },
+    object: { type: "commit", sha: ${JSON.stringify(options.remoteToolingSha?.(params) ?? fixture.toolingSha)} },
   }),
 });
 const moduleApi = await import("node:module");
@@ -342,35 +377,58 @@ const leakedSnapshotCache = Object.keys(harnessRequire.cache).filter(path =>
 if (leakedSnapshotCache.length > 0) {
   throw new Error("verified yaml snapshot leaked into parent require.cache");
 }
-`,
+    `,
   );
-  const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+  if (options.executionHead) {
+    execFileSync("git", ["update-ref", "HEAD", options.executionHead(fixture)], {
+      cwd: fixture.root,
+    });
+  }
   return {
-    result: spawnSync(
-      process.execPath,
-      ["--import", tsxImport, join(fixture.root, "yaml-package-harness.mts")],
-      {
-        cwd: fixture.root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          TMPDIR: snapshotRoot,
-          ...options.environment?.(params),
-        },
+    result: spawnSync(process.execPath, [join(fixture.root, "yaml-package-harness.mts")], {
+      cwd: fixture.root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        TMPDIR: tempRoot,
+        ...options.environment?.(params),
       },
-    ),
+    }),
     fixture,
     packageRoot,
     sentinelPath,
-    snapshotRoot,
+    tempRoot,
   };
 }
 
-function yamlSnapshotEntries(root: string) {
+function yamlTempEntries(root: string) {
   return readdirSync(root).filter((name) => name.startsWith("openclaw-release-yaml-"));
 }
 
 describe("release plan producer", () => {
+  it("rejects invalid identity through the verified child dispatcher", () => {
+    expect(() =>
+      runReleasePlanProducerOperation(
+        {
+          operation: "produce",
+          params: {
+            candidateRef: "refs/tags/v2026.8.1-beta.2",
+            candidateSha: "not-a-sha",
+            intent: "publish",
+            toolingFullRef: "refs/heads/main",
+            toolingSha: "f".repeat(40),
+          },
+        },
+        {
+          parseYamlDocuments: () => [{}, {}, {}],
+          runGh: () => {
+            throw new Error("unexpected GitHub request");
+          },
+        },
+      ),
+    ).toThrow("candidate SHA must be an exact lowercase 40-character commit SHA");
+  });
+
   it("derives purpose, profile, tag, and soak from the canonical version parser", () => {
     expect(deriveReleasePlanPolicy("publish", "2026.8.1-beta.2")).toEqual({
       intent: "release-beta",
@@ -623,19 +681,108 @@ describe("release plan producer", () => {
   });
 
   it("rejects a caller producer that differs from the exact tooling commit", () => {
-    const fixture = createFixtureRepo();
-    writeFixture(fixture.root, "scripts/release-plan-producer.mts", "// placeholder producer\n");
-    const toolingSha = commit(fixture.root, "different producer");
-    const toolingFullRef = `refs/tags/release-publish/${toolingSha.slice(0, 12)}-2`;
+    const { result } = runYamlPackageSubprocess({
+      mutate: ({ fixture }) => {
+        const producerPath = join(fixture.root, "scripts/release-plan-producer.mts");
+        writeFileSync(producerPath, `${readFileSync(producerPath, "utf8")}\n// ambient mismatch\n`);
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tooling bootstrap differs from tooling SHA");
+  });
 
-    expect(() =>
-      produceReleasePlan({
-        ...sourceParams(fixture),
-        toolingSha,
-        toolingFullRef,
-        runGh: trustedToolingGh(toolingFullRef, toolingSha),
-      }),
-    ).toThrow("tooling import closure differs from tooling SHA");
+  it("rejects a byte-identical bootstrap launched from the candidate checkout", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess({
+      executionHead: (fixture) => fixture.candidateSha,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tooling bootstrap checkout HEAD must equal tooling SHA");
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("exports bootstrap operations for trusted-checkout callers", () => {
+    expect(trustedCheckoutProduceReleasePlan).toBeTypeOf("function");
+    expect(trustedCheckoutVerifyReleasePlanLock).toBeTypeOf("function");
+  });
+
+  it("rejects a forged remote tooling SHA before executing ambient tooling", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess({
+      mutate: ({ fixture, sentinelPath: sentinel }) => {
+        writeFixture(
+          fixture.root,
+          "scripts/release-plan-producer-core.mts",
+          `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "ambient-core");\n`,
+        );
+      },
+      remoteToolingSha: ({ fixture }) => fixture.candidateSha,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "protected release tooling tag is missing, moved, annotated, or bound to the wrong SHA",
+    );
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("ignores uncommitted ambient tooling after verifying the exact tooling commit", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess({
+      mutate: ({ fixture, sentinelPath: sentinel }) => {
+        writeFixture(
+          fixture.root,
+          "scripts/release-plan-producer-core.mts",
+          `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "ambient-core");\n`,
+        );
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("rejects a symlinked tooling closure before executing its target", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess({
+      mutateTooling: (fixture) => {
+        const targetPath = join(fixture.root, "scripts/release-plan-producer-core.mts");
+        const sentinelTarget = join(fixture.root, "scripts/release-plan-producer-evil.mts");
+        writeFileSync(
+          sentinelTarget,
+          `require("node:fs").writeFileSync(${JSON.stringify(join(fixture.root, "yaml-executed"))}, "linked-core");\n`,
+        );
+        unlinkSync(targetPath);
+        symlinkSync("release-plan-producer-evil.mts", targetPath);
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tooling closure path must be a regular Git blob");
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("rejects package imports in the retained tooling closure before execution", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess({
+      mutateTooling: (fixture) => {
+        const corePath = join(fixture.root, "scripts/release-plan-producer-core.mts");
+        writeFileSync(
+          corePath,
+          `import "yaml";\nrequire("node:fs").writeFileSync(${JSON.stringify(join(fixture.root, "yaml-executed"))}, "bare-import");\n${readFileSync(corePath, "utf8")}`,
+        );
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tooling closure contains an unowned import");
+    expect(existsSync(sentinelPath)).toBe(false);
+  });
+
+  it("rejects ambiguous tooling aliases before execution", () => {
+    const { result, sentinelPath } = runYamlPackageSubprocess({
+      mutateTooling: (fixture) => {
+        writeFixture(
+          fixture.root,
+          "scripts/lib/release-version.mts",
+          `require("node:fs").writeFileSync(${JSON.stringify(join(fixture.root, "yaml-executed"))}, "ambiguous-alias");\n`,
+        );
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tooling import must resolve to one unambiguous file");
+    expect(existsSync(sentinelPath)).toBe(false);
   });
 
   it("rejects foreign yaml resolved from a distinct execution root", () => {
@@ -696,54 +843,49 @@ produceReleasePlan({
 });
 `,
     );
-    const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", tsxImport, join(fixture.root, "foreign-yaml-harness.mts")],
-      {
-        cwd: fixture.root,
-        encoding: "utf8",
-      },
-    );
+    const result = spawnSync(process.execPath, [join(fixture.root, "foreign-yaml-harness.mts")], {
+      cwd: fixture.root,
+      encoding: "utf8",
+    });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml snapshot digest mismatch");
+    expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
   });
 
   it("accepts the complete installed yaml package tree", () => {
-    const { result, snapshotRoot } = runYamlPackageSubprocess();
+    const { result, tempRoot } = runYamlPackageSubprocess();
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(yamlSnapshotEntries(snapshotRoot)).toEqual([]);
+    expect(yamlTempEntries(tempRoot)).toEqual([]);
   });
 
   it("rejects a changed yaml entry before executing it", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
-      mutate: ({ packageRoot, sentinelPath }) => {
+      mutate: ({ packageRoot, sentinelPath: sentinel }) => {
         const entryPath = join(packageRoot, "dist/index.js");
         writeFileSync(
           entryPath,
-          `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n${readFileSync(entryPath, "utf8")}`,
+          `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "executed");\n${readFileSync(entryPath, "utf8")}`,
         );
       },
     });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml snapshot digest mismatch");
+    expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
     expect(existsSync(sentinelPath)).toBe(false);
   });
 
   it("rejects a changed yaml transitive module before execution", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
-      mutate: ({ packageRoot, sentinelPath }) => {
+      mutate: ({ packageRoot, sentinelPath: sentinel }) => {
         const transitivePath = join(packageRoot, "dist/public-api.js");
         writeFileSync(
           transitivePath,
-          `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n${readFileSync(transitivePath, "utf8")}`,
+          `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "executed");\n${readFileSync(transitivePath, "utf8")}`,
         );
       },
     });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml snapshot digest mismatch");
+    expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
     expect(existsSync(sentinelPath)).toBe(false);
   });
 
@@ -766,7 +908,7 @@ produceReleasePlan({
       },
     });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml snapshot digest mismatch");
+    expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
   });
 
   it("rejects missing yaml transitive files through tree attestation", () => {
@@ -776,13 +918,13 @@ produceReleasePlan({
       },
     });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml snapshot digest mismatch");
+    expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
     expect(result.stderr).not.toContain("MODULE_NOT_FOUND");
   });
 
   it("ignores poisoned direct yaml require cache entries", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
-      beforeProduce: ({ sentinelPath }) => `
+      beforeProduce: ({ sentinelPath: sentinel }) => `
 const cacheModule = await import("node:module");
 const cacheFs = await import("node:fs");
 const cacheRequire = cacheModule.createRequire(import.meta.url);
@@ -790,7 +932,7 @@ const ambientEntry = cacheRequire.resolve("yaml");
 cacheRequire(ambientEntry);
 cacheRequire.cache[ambientEntry].exports = {
   parse() {
-    cacheFs.writeFileSync(${JSON.stringify(sentinelPath)}, "direct-cache");
+    cacheFs.writeFileSync(${JSON.stringify(sentinel)}, "direct-cache");
     return {};
   }
 };
@@ -802,7 +944,7 @@ cacheRequire.cache[ambientEntry].exports = {
 
   it("ignores poisoned transitive yaml require cache entries", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
-      beforeProduce: ({ sentinelPath }) => `
+      beforeProduce: ({ sentinelPath: sentinel }) => `
 const cacheModule = await import("node:module");
 const cacheFs = await import("node:fs");
 const cachePath = await import("node:path");
@@ -812,7 +954,7 @@ cacheRequire(ambientEntry);
 const publicApiPath = cachePath.join(cachePath.dirname(ambientEntry), "public-api.js");
 cacheRequire.cache[publicApiPath].exports = {
   parse() {
-    cacheFs.writeFileSync(${JSON.stringify(sentinelPath)}, "transitive-cache");
+    cacheFs.writeFileSync(${JSON.stringify(sentinel)}, "transitive-cache");
     return {};
   },
   parseAllDocuments() {},
@@ -828,13 +970,13 @@ delete cacheRequire.cache[ambientEntry];
 
   it("ignores parent yaml Module extension hooks", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
-      beforeProduce: ({ sentinelPath }) => `
+      beforeProduce: ({ sentinelPath: sentinel }) => `
 const hookModule = (await import("node:module")).createRequire(import.meta.url)("node:module");
 const hookFs = await import("node:fs");
 const originalJsLoader = hookModule._extensions[".js"];
 hookModule._extensions[".js"] = function(module, filename) {
   if (filename.includes("/yaml/") || filename.includes("openclaw-release-yaml-")) {
-    hookFs.writeFileSync(${JSON.stringify(sentinelPath)}, "extension-hook");
+    hookFs.writeFileSync(${JSON.stringify(sentinel)}, "extension-hook");
   }
   return originalJsLoader(module, filename);
 };
@@ -846,20 +988,20 @@ hookModule._extensions[".js"] = function(module, filename) {
 
   it("does not inherit yaml NODE_OPTIONS or NODE_PATH loaders", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
-      mutate: ({ fixture, sentinelPath }) => {
+      mutate: ({ fixture, sentinelPath: sentinel }) => {
         writeFixture(
           fixture.root,
           "yaml-preload.cjs",
           `
-if (process.argv.some(value => value.includes("openclaw-release-yaml-"))) {
-  require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "node-options");
+if (process.argv.some(value => value.includes("__openclaw_verified_yaml__"))) {
+  require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "node-options");
 }
 `,
         );
         writeFixture(
           fixture.root,
           "evil-node-path/yaml/index.js",
-          `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "node-path");`,
+          `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "node-path");`,
         );
       },
       environment: ({ fixture }) => ({
@@ -871,9 +1013,8 @@ if (process.argv.some(value => value.includes("openclaw-release-yaml-"))) {
     expect(existsSync(sentinelPath)).toBe(false);
   });
 
-  it("accepts exact-byte yaml hardlinks and writes an independent snapshot", () => {
-    const nlinkPath = "snapshot-nlink";
-    const { result, fixture } = runYamlPackageSubprocess({
+  it("accepts exact-byte yaml hardlinks without creating a snapshot", () => {
+    const { result, tempRoot } = runYamlPackageSubprocess({
       mutate: ({ fixture, packageRoot }) => {
         const targetPath = join(packageRoot, "dist/public-api.js");
         const linkSource = join(fixture.root, "public-api-hardlink-source.js");
@@ -882,73 +1023,51 @@ if (process.argv.some(value => value.includes("openclaw-release-yaml-"))) {
         linkSync(linkSource, targetPath);
         expect(statSync(targetPath).nlink).toBe(2);
       },
-      beforeImport: ({ fixture }) => `
-const hardlinkModule = await import("node:module");
-const hardlinkFs = await import("node:fs");
-const hardlinkPath = await import("node:path");
-const hardlinkChildProcess = hardlinkModule.createRequire(import.meta.url)("node:child_process");
-const originalSpawnSync = hardlinkChildProcess.spawnSync;
-hardlinkChildProcess.spawnSync = function(command, args, options) {
-  const snapshotRoot = args?.[2];
-  if (typeof snapshotRoot === "string" && snapshotRoot.includes("openclaw-release-yaml-")) {
-    const nlink = hardlinkFs.statSync(
-      hardlinkPath.join(snapshotRoot, "dist/public-api.js")
-    ).nlink;
-    hardlinkFs.writeFileSync(
-      ${JSON.stringify(join(fixture.root, nlinkPath))},
-      String(nlink)
-    );
-  }
-  return originalSpawnSync(command, args, options);
-};
-hardlinkModule.syncBuiltinESMExports();
-`,
     });
     expect(result.status).toBe(0);
-    expect(readFileSync(join(fixture.root, nlinkPath), "utf8")).toBe("1");
+    expect(yamlTempEntries(tempRoot)).toEqual([]);
   });
 
-  it("rejects a same-size changed yaml snapshot before require", () => {
-    const mutationPath = "snapshot-mutated";
-    const { result, sentinelPath, snapshotRoot } = runYamlPackageSubprocess({
-      beforeImport: ({ fixture, sentinelPath }) => `
+  it("ignores a same-size ambient yaml replacement after byte retention", () => {
+    const mutationPath = "ambient-mutated";
+    const { result, sentinelPath, tempRoot } = runYamlPackageSubprocess({
+      beforeImport: ({ fixture, packageRoot, sentinelPath: sentinel }) => `
 const mutateModule = await import("node:module");
 const mutateFs = await import("node:fs");
-const mutatePath = await import("node:path");
 const mutateChildProcess = mutateModule.createRequire(import.meta.url)("node:child_process");
-const originalSpawnSync = mutateChildProcess.spawnSync;
-mutateChildProcess.spawnSync = function(command, args, options) {
-  const snapshotRoot = args?.[2];
-  if (typeof snapshotRoot === "string" && snapshotRoot.includes("openclaw-release-yaml-")) {
-    const entryPath = mutatePath.join(snapshotRoot, "dist/index.js");
+const originalExecFileSync = mutateChildProcess.execFileSync;
+mutateChildProcess.execFileSync = function(command, args, options) {
+  if (command === process.execPath && args?.[0] === "--input-type=module") {
+    const entryPath = ${JSON.stringify(join(packageRoot, "dist/index.js"))};
     const original = mutateFs.readFileSync(entryPath, "utf8");
     const malicious =
-      'require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "snapshot");' +
+      'require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "ambient");' +
       "module.exports={parse:JSON.parse};";
-    mutateFs.chmodSync(entryPath, 0o600);
     mutateFs.writeFileSync(entryPath, malicious.padEnd(original.length, " "));
     mutateFs.writeFileSync(${JSON.stringify(join(fixture.root, mutationPath))}, "done");
   }
-  return originalSpawnSync(command, args, options);
+  return originalExecFileSync(command, args, options);
 };
 mutateModule.syncBuiltinESMExports();
 `,
     });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml snapshot digest mismatch");
+    expect(result.status).toBe(0);
+    expect(existsSync(join(result.status === 0 ? dirname(sentinelPath) : "", mutationPath))).toBe(
+      true,
+    );
     expect(existsSync(sentinelPath)).toBe(false);
-    expect(yamlSnapshotEntries(snapshotRoot)).toEqual([]);
+    expect(yamlTempEntries(tempRoot)).toEqual([]);
   });
 
-  it("fails malformed combined yaml parsing and cleans the snapshot", () => {
-    const { result, snapshotRoot } = runYamlPackageSubprocess({
+  it("fails malformed combined yaml parsing without creating a snapshot", () => {
+    const { result, tempRoot } = runYamlPackageSubprocess({
       mutateTooling: (fixture) => {
         writeFixture(fixture.root, ".github/workflows/full-release-validation.yml", "on: [\n");
       },
     });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("verified yaml parser child failed");
-    expect(yamlSnapshotEntries(snapshotRoot)).toEqual([]);
+    expect(result.stderr).toContain("Flow sequence in block collection");
+    expect(yamlTempEntries(tempRoot)).toEqual([]);
   });
 
   it("rejects malformed publishable plugins while producing the plan", () => {

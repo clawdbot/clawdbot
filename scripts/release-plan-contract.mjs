@@ -7,9 +7,9 @@ import {
 } from "./release-validation-intent.mjs";
 
 export const RELEASE_PLAN_SCHEMA = "openclaw.release-plan.v1";
-export const RELEASE_PLAN_LOCK_SCHEMA = "openclaw.release-plan-lock.v1";
+const RELEASE_PLAN_LOCK_SCHEMA = "openclaw.release-plan-lock.v1";
 export const RELEASE_PLAN_CANONICALIZATION = "ascii-sorted-compact-json-trailing-newline-v1";
-export const RELEASE_PLAN_MAX_BYTES = 32 * 1024;
+const RELEASE_PLAN_MAX_BYTES = 32 * 1024;
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
@@ -148,8 +148,10 @@ function canonicalAsciiJson(value) {
 }
 
 function assertNoDuplicateJsonKeys(text) {
-  const tokenPattern =
-    /"(?:\\(?:["\\/bfnrt]|u[a-fA-F0-9]{4})|[^"\\\u0000-\u001f])*"|[{}\[\],:]|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|\s+/guy;
+  const tokenPattern = new RegExp(
+    String.raw`"(?:\\(?:["\\/bfnrt]|u[a-fA-F0-9]{4})|[^"\\\u0000-\u001f])*"|[{}\[\],:]|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|\s+`,
+    "guy",
+  );
   const stack = [];
   for (let index = 0; index < text.length;) {
     tokenPattern.lastIndex = index;
@@ -384,7 +386,7 @@ export function canonicalReleasePlanJson(value) {
   return canonicalAsciiJson(validateReleasePlan(value));
 }
 
-export function releasePlanDigest(value) {
+function releasePlanDigest(value) {
   return `sha256:${createHash("sha256").update(canonicalReleasePlanJson(value), "ascii").digest("hex")}`;
 }
 
@@ -397,7 +399,7 @@ export function createReleasePlanLock(value) {
   };
 }
 
-export function validateReleasePlanLock(value) {
+function validateReleasePlanLock(value) {
   canonicalize(value);
   if (!isRecord(value)) {
     fail("release plan lock must be an object");

@@ -34,13 +34,13 @@ const childProcessMock = vi.hoisted(() => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const execFileSync = ((...args: unknown[]) => {
+  const mockedExecFileSync = ((...args: unknown[]) => {
     const implementation = (childProcessMock.execFileSyncOverride ?? actual.execFileSync) as (
       ...args: unknown[]
     ) => unknown;
     return implementation(...args);
   }) as ExecFileSync;
-  return { ...actual, execFileSync };
+  return { ...actual, execFileSync: mockedExecFileSync };
 });
 
 const tempDirs: string[] = [];
@@ -793,12 +793,16 @@ describe("resolveSelectedPublishablePluginPackages", () => {
   });
 
   it("rejects duplicate selected package provenance instead of choosing the last entry", () => {
+    const firstPlugin = publishablePlugins[0];
+    if (!firstPlugin) {
+      throw new Error("publishable plugin fixture is missing");
+    }
     expect(() =>
       resolveSelectedPublishablePluginPackages({
         plugins: [
-          publishablePlugins[0],
+          firstPlugin,
           {
-            ...publishablePlugins[0],
+            ...firstPlugin,
             extensionId: "feishu-shadow",
             packageDir: "extensions/feishu-shadow",
           },

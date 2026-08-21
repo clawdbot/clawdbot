@@ -21,19 +21,15 @@ export type ReleaseValidationIntentPolicy = {
   soak: boolean;
 };
 
-export const RELEASE_VALIDATION_INTENTS: Readonly<
-  Record<ReleaseValidationIntent, Readonly<Omit<ReleaseValidationIntentPolicy, "intent">>>
->;
-
 export function resolveReleaseValidationIntent(
-  intent: ReleaseValidationIntent | string,
+  intent: string,
   assertions?: {
-    profile?: ReleaseValidationProfile | string;
+    profile?: string;
     soak?: boolean;
   },
 ): ReleaseValidationIntentPolicy;
 
 export function releaseValidationIntentForPurpose(
-  purpose: ReleaseValidationPurpose | string,
-  requestedIntent?: ReleaseValidationIntent | string,
+  purpose: string,
+  requestedIntent?: string,
 ): ReleaseValidationIntent;

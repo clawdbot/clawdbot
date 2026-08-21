@@ -39,13 +39,9 @@ export type ReleasePlanLock = {
 };
 
 export const RELEASE_PLAN_SCHEMA: "openclaw.release-plan.v1";
-export const RELEASE_PLAN_LOCK_SCHEMA: "openclaw.release-plan-lock.v1";
 export const RELEASE_PLAN_CANONICALIZATION: "ascii-sorted-compact-json-trailing-newline-v1";
-export const RELEASE_PLAN_MAX_BYTES: number;
 export function validateReleasePlan(value: unknown): ReleasePlan;
 export function canonicalReleasePlanJson(value: unknown): string;
-export function releasePlanDigest(value: unknown): string;
 export function createReleasePlanLock(value: unknown): ReleasePlanLock;
-export function validateReleasePlanLock(value: unknown): ReleasePlanLock;
 export function canonicalReleasePlanLockJson(value: unknown): string;
 export function parseReleasePlanLockJson(text: string): ReleasePlanLock;

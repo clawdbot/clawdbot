@@ -49,7 +49,7 @@ export type PublishablePluginPackageCandidate<
   readmeText?: string;
 };
 
-export type RequiredLatestDependency = {
+type RequiredLatestDependency = {
   packageName: string;
   version: string;
 };
@@ -72,7 +72,7 @@ export type PublishablePluginPackageFilters = {
   rootVersion?: string;
 };
 
-export type PublishablePluginPackageSource = Pick<
+type PublishablePluginPackageSource = Pick<
   PublishablePluginPackage,
   "extensionId" | "packageDir" | "packageName"
 >;
@@ -81,13 +81,13 @@ export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/o
 const SAFE_CLAWHUB_EXTENSION_ID = /^[a-z0-9][a-z0-9._-]*$/;
 
 /** Explicit core ownership defers staged external publication until the plugin is externalized. */
-export function isPluginExternalPublicationDeferred(packageJson: {
+function isPluginExternalPublicationDeferred(packageJson: {
   openclaw?: { build?: { bundledDist?: unknown } };
 }): boolean {
   return packageJson.openclaw?.build?.bundledDist === true;
 }
 
-export function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
+function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
   errors: string[];
 } {
@@ -139,7 +139,7 @@ export function collectRequiredLatestDependencies(packageJson: PluginPackageJson
   return { dependencies, errors };
 }
 
-export function resolvePublishablePluginVersion(params: {
+function resolvePublishablePluginVersion(params: {
   extensionId: string;
   packageJson: Pick<PluginPackageJson, "version">;
   validationErrors: string[];
@@ -213,7 +213,7 @@ export function collectPublishablePluginPackageErrors(
   return errors;
 }
 
-export function collectConflictingPluginPackageSourceErrors(
+function collectConflictingPluginPackageSourceErrors(
   sources: readonly PublishablePluginPackageSource[],
 ): string[] {
   const sourcesByPackageName = new Map<string, Map<string, PublishablePluginPackageSource>>();

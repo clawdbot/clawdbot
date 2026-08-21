@@ -1,4 +1,4 @@
-export const RELEASE_VALIDATION_INTENTS = Object.freeze({
+const RELEASE_VALIDATION_INTENTS = Object.freeze({
   "release-beta": Object.freeze({ profile: "beta", publishable: true, soak: false }),
   "release-stable": Object.freeze({ profile: "stable", publishable: true, soak: true }),
   "main-daily": Object.freeze({ profile: "beta", publishable: false, soak: false }),

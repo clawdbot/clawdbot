@@ -20,16 +20,9 @@ import { collectReleaseVersionFloorErrors } from "./release-version.mjs";
 
 export {
   collectPublishablePluginPackageErrors,
-  collectRequiredLatestDependencies,
-  isPluginExternalPublicationDeferred,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-  resolvePublishablePluginVersion,
 } from "./plugin-publication-collector.ts";
-export { collectExtensionPackageJsonCandidates } from "./plugin-publication-candidates.ts";
-export type {
-  PublishablePluginPackage,
-  RequiredLatestDependency,
-} from "./plugin-publication-collector.ts";
+export type { PublishablePluginPackage } from "./plugin-publication-collector.ts";
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
@@ -48,7 +41,7 @@ export type GitRangeSelection = {
   headRef: string;
 };
 
-export type PluginNpmGitRangeSelection = {
+type PluginNpmGitRangeSelection = {
   authorityChanged: boolean;
   changedExtensionIds: string[];
 };
