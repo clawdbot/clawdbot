@@ -348,6 +348,22 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.invocations).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
   });
 
+  it("applies admission to the unfiltered canonical config but not a package-only selector", () => {
+    const full = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts"],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+    const packages = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts", "--filter", TSDOWN_PACKAGE_CONFIG_GROUP],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(full.heapShortfall?.fatal).toBe(true);
+    expect(packages.heapShortfall).toBeNull();
+  });
+
   it.each([
     ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
     ["CLI override", ["--no-dts"], {}],

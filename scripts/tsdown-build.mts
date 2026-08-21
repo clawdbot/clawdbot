@@ -961,14 +961,14 @@ export function resolveTsdownBuildInvocation(
   };
 }
 
-function selectsMainUnifiedBuild(args: string[]) {
+function selectsMainConfig(args: string[]) {
   const config = readForwardedOption(args, ["--config", "-c"]);
+  return config !== undefined && path.resolve(config) === path.resolve("tsdown.config.ts");
+}
+
+function selectsMainUnifiedBuild(args: string[]) {
   const filter = readForwardedOption(args, ["--filter", "-F"]);
-  return (
-    config !== undefined &&
-    path.resolve(config) === path.resolve("tsdown.config.ts") &&
-    filter === TSDOWN_UNIFIED_CONFIG_GROUP
-  );
+  return selectsMainConfig(args) && filter === TSDOWN_UNIFIED_CONFIG_GROUP;
 }
 
 /** Builds declarations in dependency order without overlapping the largest graphs. */
@@ -1044,7 +1044,10 @@ function isFullTsdownBuildPlan(args: string[], env: NodeJS.ProcessEnv) {
   if (!declarationsEnabled) {
     return false;
   }
-  return (!args.some(isConfigArg) && !args.some(isFilterArg)) || selectsMainUnifiedBuild(args);
+  const filter = readForwardedOption(args, ["--filter", "-F"]);
+  const selectsCompleteMainConfig =
+    selectsMainConfig(args) && (filter === undefined || filter === TSDOWN_UNIFIED_CONFIG_GROUP);
+  return (!args.some(isConfigArg) && !args.some(isFilterArg)) || selectsCompleteMainConfig;
 }
 
 export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
