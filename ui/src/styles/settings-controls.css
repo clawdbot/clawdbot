@@ -90,6 +90,13 @@ wa-radio-group.settings-segmented::part(radios) {
   cursor: not-allowed;
 }
 
+@media (forced-colors: active) {
+  .settings-segmented__btn.settings-segmented__btn--active {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
 input.settings-input,
 select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
