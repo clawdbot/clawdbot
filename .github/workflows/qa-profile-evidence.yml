@@ -894,8 +894,8 @@ jobs:
         working-directory: selected
         run: |
           set -euo pipefail
-          mapfile -t status_paths < <(find .artifacts/qa-profile-shards -mindepth 2 -maxdepth 2 -type f -name qa-profile-run-status.json | sort)
-          mapfile -t evidence_paths < <(find .artifacts/qa-profile-shards -mindepth 2 -maxdepth 2 -type f -name qa-evidence.json | sort)
+          mapfile -t status_paths < <(find .artifacts/qa-profile-shards -mindepth 1 -maxdepth 2 -type f -name qa-profile-run-status.json | sort)
+          mapfile -t evidence_paths < <(find .artifacts/qa-profile-shards -mindepth 1 -maxdepth 2 -type f -name qa-evidence.json | sort)
           if [[ "${#status_paths[@]}" -ne "$SHARD_COUNT" || "${#evidence_paths[@]}" -ne "$SHARD_COUNT" ]]; then
             echo "Expected ${SHARD_COUNT} completed status and evidence files; found ${#status_paths[@]} statuses and ${#evidence_paths[@]} evidence files." >&2
             exit 1
