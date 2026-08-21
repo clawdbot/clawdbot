@@ -384,7 +384,7 @@ describe("resolveTsdownBuildInvocation", () => {
   it.each([
     ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
     ["CLI override", ["--no-dts"], {}],
-  ])("does not apply the declaration-build threshold to a %s runtime plan", (_label, args, env) => {
+  ])("applies the unified-runtime threshold to a %s plan", (_label, args, env) => {
     const result = resolveTsdownBuildPlan({
       args,
       platform: "linux",
@@ -395,7 +395,7 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.maxOldSpaceMb).toBe(1280);
-    expect(result.heapShortfall).toBeNull();
+    expect(result.heapShortfall?.fatal).toBe(true);
     expect(result.invocations).toHaveLength(2);
   });
 

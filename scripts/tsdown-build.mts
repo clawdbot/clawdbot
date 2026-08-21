@@ -765,9 +765,9 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
 /**
  * Measured against this repo by running the full eleven-invocation build inside real cgroups.
  * A 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
- * and a 2816MiB slice (2048MB heap) are both killed partway through the third invocation, so the
- * binding constraint is the whole-build peak rather than any single pass. Roughly 380MiB of that
- * peak is rolldown, a native addon, which --max-old-space-size does not govern at all.
+ * and a 2816MiB slice (2048MB heap) are both killed in the third, unified-runtime invocation,
+ * which also runs when declarations are disabled. Roughly 380MiB of the peak is rolldown, a
+ * native addon which --max-old-space-size does not govern at all.
  */
 const MEASURED_MIN_TSDOWN_HEAP_MB = 4352;
 const TSDOWN_ALLOW_SMALL_HEAP_ENV = "OPENCLAW_TSDOWN_ALLOW_SMALL_HEAP";
@@ -1063,14 +1063,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   return invocations;
 }
 
-function isFullTsdownBuildPlan(args: string[], env: NodeJS.ProcessEnv) {
-  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  const declarationsEnabled = dtsArg
-    ? dtsArg === "--dts"
-    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
-  if (!declarationsEnabled) {
-    return false;
-  }
+function isFullTsdownBuildPlan(args: string[]) {
   const filter = readForwardedOption(args, ["--filter", "-F"]);
   const selectsCompleteMainConfig =
     selectsMainConfig(args) && (filter === undefined || filter === TSDOWN_UNIFIED_CONFIG_GROUP);
@@ -1085,7 +1078,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
   };
   return {
     maxOldSpaceMb,
-    heapShortfall: isFullTsdownBuildPlan(params.args ?? [], params.env ?? process.env)
+    heapShortfall: isFullTsdownBuildPlan(params.args ?? [])
       ? describeInsufficientTsdownHeap(preparedParams)
       : null,
     invocations: resolveTsdownBuildInvocations(preparedParams),
