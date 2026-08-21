@@ -10,6 +10,7 @@ import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-reg
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -2713,6 +2714,110 @@ describe("buildGatewayCronService", () => {
         sessionKey: undefined,
         heartbeat: undefined,
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("defaults monitor wakes to heartbeat.session without overriding explicit wake sessions", () => {
+    const cfg = {
+      ...createCronConfig("server-cron-heartbeat-session"),
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "5m",
+            session: "ops-heartbeat",
+          },
+        },
+        entries: {
+          primary: { default: true },
+        },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              requestHeartbeat?: (opts?: {
+                source?: string;
+                agentId?: string;
+                sessionKey?: string | null;
+              }) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      cronDeps?.requestHeartbeat?.({
+        source: "interval",
+        agentId: "primary",
+      });
+
+      const monitorWake = requireRecord(
+        callArg(requestHeartbeatMock, 0, 0, "monitor heartbeat request"),
+        "monitor heartbeat request",
+      );
+      expect(monitorWake).toMatchObject({
+        source: "interval",
+        agentId: "primary",
+        sessionKey: undefined,
+      });
+      expect(
+        resolveHeartbeatSession(
+          cfg,
+          "primary",
+          cfg.agents?.defaults?.heartbeat,
+          monitorWake.sessionKey as string | undefined,
+        ).sessionKey,
+      ).toBe("agent:primary:ops-heartbeat");
+
+      requestHeartbeatMock.mockClear();
+      cronDeps?.requestHeartbeat?.({ source: "cron", agentId: "primary" });
+      const cronEventWake = requireRecord(
+        callArg(requestHeartbeatMock, 0, 0, "cron event heartbeat request"),
+        "cron event heartbeat request",
+      );
+      expect(cronEventWake).toMatchObject({
+        source: "cron",
+        agentId: "primary",
+        sessionKey: "agent:primary:main",
+      });
+
+      requestHeartbeatMock.mockClear();
+      expect(
+        state.cron.wake({
+          mode: "now",
+          text: "wake now",
+          agentId: "primary",
+          sessionKey: "user-session",
+        }),
+      ).toEqual({ ok: true });
+
+      const explicitWake = requireRecord(
+        callArg(requestHeartbeatMock, 0, 0, "explicit heartbeat request"),
+        "explicit heartbeat request",
+      );
+      expect(explicitWake).toMatchObject({
+        source: "manual",
+        agentId: "primary",
+        sessionKey: "agent:primary:user-session",
+      });
+      expect(
+        resolveHeartbeatSession(
+          cfg,
+          "primary",
+          cfg.agents?.defaults?.heartbeat,
+          explicitWake.sessionKey as string,
+        ).sessionKey,
+      ).toBe("agent:primary:user-session");
     } finally {
       state.cron.stop();
     }
