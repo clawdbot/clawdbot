@@ -481,10 +481,15 @@ export function projectChatTranscript(
         : item.kind === "agent-run-frame"
           ? agentRunFrameActiveStatusParts(item)
           : undefined;
+    const activeStatusRunId =
+      item.kind === "stream-run" || item.kind === "agent-run-frame" ? item.runId : undefined;
     if (
       previous?.kind !== "group" ||
       !activeStatusParts ||
-      !assistantGroupCanOwnActiveRunStatus(previous)
+      !assistantGroupCanOwnActiveRunStatus(previous) ||
+      (previous.runId !== undefined &&
+        activeStatusRunId !== undefined &&
+        previous.runId !== activeStatusRunId)
     ) {
       return true;
     }

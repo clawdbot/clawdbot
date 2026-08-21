@@ -1,9 +1,5 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -15,34 +11,15 @@ import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
+  isKeyedAssistantStreamFallbackMessage,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
+import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations } from "./stream-causal-boundary.ts";
-import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
-
-export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
-  const record = asRecord(message);
-  if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return false;
-  }
-  const fallback = asRecord(record?.openclawStreamFallback);
-  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
-}
-
-function transcriptRunId(message: unknown): string | undefined {
-  const identity = readSessionMessageIdentity(message);
-  if (identity?.runId) {
-    return identity.runId;
-  }
-  const record = asRecord(message);
-  return (
-    readLiveTerminalRunId(message) ??
-    normalizeOptionalString(record?.runId) ??
-    normalizeOptionalString(asRecord(record?.openclawStreamFallback)?.runId)
-  );
-}
 
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,

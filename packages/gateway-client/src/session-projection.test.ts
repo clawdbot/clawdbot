@@ -106,6 +106,20 @@ describe("readSessionMessageIdentity", () => {
     expect(normalizeSessionProjectionRunId(input)).toBe(expected);
   });
 
+  it("recovers the originating run from a persisted CLI assistant send key", () => {
+    expect(
+      readSessionMessageIdentity({
+        role: "assistant",
+        api: "cli",
+        content: "Done",
+        idempotencyKey: "cli-assistant:run-cli-1",
+      }),
+    ).toMatchObject({
+      idempotencyKey: "cli-assistant:run-cli-1",
+      runId: "run-cli-1",
+    });
+  });
+
   it("requires every imported source component before claiming provider identity", () => {
     const identity = readSessionMessageIdentity(
       createMessage("user", "imported", {

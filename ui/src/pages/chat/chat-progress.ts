@@ -143,19 +143,26 @@ export function resolveWorkingProgress(
   runId: string | null,
   streamStartedAt: number | null,
   queue: ChatQueueItem[],
-  streamSegments: Array<{ ts: number }>,
+  streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
   const queuedProgress =
     queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
     queue.find(shouldRenderQueuedSendInThread);
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
-    .find(
+  const segmentRunId = streamSegments
+    .map((segment) => segment.runId)
+    .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const explicitRunId = queuedRunId ?? runId ?? toolRunId;
+  const toolRunId = toolMessages
+    .map((message) => (message as Record<string, unknown> | null)?.runId)
+    .findLast(
+      (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+    );
+  // Stream and tool facts describe work already observed in this row. Queue
+  // identity is only a pre-run fallback and must not claim an active tail.
+  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;

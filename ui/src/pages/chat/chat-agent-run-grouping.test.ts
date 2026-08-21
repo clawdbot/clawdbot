@@ -206,6 +206,39 @@ describe("coalesceAgentRunFrames", () => {
     expect(items).toContain(divider);
   });
 
+  it("gives a restored run segment a unique key after a hard boundary", () => {
+    const runId = "run-1";
+    const notice = { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 };
+    const restoredStream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:restored",
+      runId,
+      boundaryId: "send:send-1",
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:restored",
+          startedAt: 3,
+          runId,
+          boundaryId: "send:send-1",
+        },
+      ],
+    };
+    const items = coalesceAgentRunFrames([
+      userBoundary(),
+      group("assistant", "before", runId),
+      notice,
+      restoredStream,
+    ]);
+    const frames = items.filter(
+      (item): item is AgentRunFrameRenderItem => item.kind === "agent-run-frame",
+    );
+
+    expect(frames).toHaveLength(2);
+    expect(frames[0]?.key).not.toBe(frames[1]?.key);
+    expect(frames[1]?.key).toContain("notice");
+  });
+
   it("marks active frames active and tool-only terminal frames terminal", () => {
     const runId = "run-1";
     const activeStream: StreamRunRenderItem = {

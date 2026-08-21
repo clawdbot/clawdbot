@@ -36,25 +36,8 @@ function itemGroups(item: AgentRunFramePart): MessageGroup[] {
   return [];
 }
 
-function cliPersistedRunId(group: MessageGroup): string | undefined {
-  const firstMessage = group.messages[0]?.message;
-  const message = asRecord(firstMessage);
-  const identity = readSessionMessageIdentity(firstMessage);
-  // CLI transcript persistence namespaces its idempotency key; only its marked
-  // assistant shape may recover the originating live Gateway run identity.
-  return message?.api === "cli" && identity?.idempotencyKey?.startsWith("cli-assistant:")
-    ? identity.idempotencyKey.slice("cli-assistant:".length).trim() || undefined
-    : undefined;
-}
-
 function groupRunId(group: MessageGroup): string | undefined {
-  const runId = group.runId;
-  const cliRunId = cliPersistedRunId(group);
-  if (!runId || !cliRunId) {
-    return runId;
-  }
-  const identity = readSessionMessageIdentity(group.messages[0]?.message);
-  return runId === identity?.runId || runId === cliRunId ? cliRunId : runId;
+  return group.runId;
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
@@ -93,7 +76,7 @@ function groupBoundaryId(group: MessageGroup): string | undefined {
   if (!chatItemStartsUserTurn(group)) {
     return undefined;
   }
-  const runId = cliPersistedRunId(group) ?? identity?.runId;
+  const runId = identity?.runId;
   if (runId) {
     return `send:${runId}`;
   }
@@ -109,8 +92,8 @@ function itemBoundaryGroup(item: AgentRunFramePart): MessageGroup | undefined {
   return first && chatItemStartsUserTurn(first) ? first : undefined;
 }
 
-function frameKey(runId: string, boundaryId: string): string {
-  return `agent-run:${JSON.stringify([runId, boundaryId])}`;
+function frameKey(runId: string, boundaryId: string, segmentId: string | undefined): string {
+  return `agent-run:${JSON.stringify(segmentId ? [runId, boundaryId, segmentId] : [runId, boundaryId])}`;
 }
 
 export function agentRunFrameGroups(frame: AgentRunFrameRenderItem): MessageGroup[] {
@@ -160,6 +143,7 @@ export function coalesceAgentRunFrames(
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
   let boundaryId: string | undefined;
+  let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
   const flush = () => {
@@ -168,7 +152,7 @@ export function coalesceAgentRunFrames(
     }
     result.push({
       kind: "agent-run-frame",
-      key: frameKey(runId, boundaryId),
+      key: frameKey(runId, boundaryId, segmentId),
       runId,
       boundaryId,
       state: parts.some(itemIsActive) ? "active" : "terminal",
@@ -182,12 +166,14 @@ export function coalesceAgentRunFrames(
       flush();
       result.push(item);
       boundaryId = undefined;
+      segmentId = item.key;
       continue;
     }
     const candidate = item;
     const boundaryGroup = itemBoundaryGroup(candidate);
     if (boundaryGroup) {
       flush();
+      segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
       if (isExternalBoundary(boundaryGroup) || !nextBoundaryId) {
         result.push(item);
@@ -206,6 +192,7 @@ export function coalesceAgentRunFrames(
       flush();
       result.push(item);
       boundaryId = undefined;
+      segmentId = item.key;
       continue;
     }
     if (runId && runId !== candidateRunId) {

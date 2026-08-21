@@ -1667,17 +1667,18 @@ describe("buildCachedChatItems working spark", () => {
     const items = buildCachedChatItems(
       createProps({
         sessionKey: "agent:main:active-with-future-queue",
-        runId: "active-run",
         runWorking: true,
         stream: "Current run output.",
+        streamSegments: [{ text: "", ts: 1_000, runId: "active-run", boundaryMarker: true }],
         queue: [
           {
             id: "future-send",
             text: "Run this next.",
             createdAt: 2_000,
             sendRunId: "future-run",
-            sendState: "waiting-idle",
+            sendState: "waiting-reconnect",
             sendSubmittedAtMs: 1,
+            sendAttempts: 1,
           },
         ],
       }),
