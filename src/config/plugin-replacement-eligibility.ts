@@ -7,7 +7,7 @@ import {
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { isBundledChannelEnabledByChannelConfig } from "../plugins/config-normalization-shared.js";
 import { normalizePluginId } from "../plugins/config-state.js";
-import { resolveSlotSelection } from "../plugins/slots.js";
+import { normalizeSlotValue, resolveSlotSelection } from "../plugins/slots.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -124,15 +124,21 @@ export function isPluginExplicitlySelectedByAlias(
     return true;
   }
   // Both capability slots are explicit-selection causes in the activation contract, and activation
-  // reads entry disablement before it reaches those branches. Resolve them the way activation does
-  // rather than reading the written value, so an unset slot resolving to its default plugin is
-  // treated the same on both sides.
+  // reads entry disablement before it reaches those branches.
+  //
+  // The two slots differ on an unset value and startup is the contract to match, not
+  // `resolveSlotSelection`: `resolveMemorySlotStartupPluginId` falls back to the resolved default
+  // when nothing is authored, while `resolveContextEngineSlotStartupPluginId` returns undefined.
+  // Promoting the unset context-engine default marked whichever plugin carries that id explicitly
+  // selected and suppressed a replacement's edge for a plugin startup never selects.
   const slots = cfg.plugins?.slots;
-  for (const slotKey of ["memory", "contextEngine"] as const) {
-    const selection = resolveSlotSelection(slotKey, slots?.[slotKey]);
-    if (selection.kind !== "off" && canonicalId(selection.pluginId) === target) {
-      return true;
-    }
+  const memorySelection = resolveSlotSelection("memory", slots?.memory);
+  if (memorySelection.kind !== "off" && canonicalId(memorySelection.pluginId) === target) {
+    return true;
+  }
+  const authoredContextEngine = normalizeSlotValue(slots?.contextEngine);
+  if (authoredContextEngine && canonicalId(authoredContextEngine) === target) {
+    return true;
   }
   const allow = cfg.plugins?.allow;
   if (

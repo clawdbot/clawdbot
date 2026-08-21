@@ -39,14 +39,19 @@ function createConfigGetResponse(
 /** Reads and projects config.get once per watcher-owned runtime and plugin-schema revision. */
 export async function readConfigGetResponse(params: {
   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
-  loadUiHints: () => Parameters<typeof redactConfigSnapshot>[1];
+  // Takes the snapshot's own config: redaction hints depend on which plugin owns each channel,
+  // which the config decides, so a hint set built without it can describe the previous owner.
+  loadUiHints: (config: ConfigFileSnapshot["sourceConfig"]) => Parameters<
+    typeof redactConfigSnapshot
+  >[1];
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
   const getHotReloadStatus = params.getHotReloadStatus;
   if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
+    const snapshot = await readConfigFileSnapshot();
     return createConfigGetResponse(
-      await readConfigFileSnapshot(),
-      params.loadUiHints(),
+      snapshot,
+      params.loadUiHints(snapshot.sourceConfig),
       params.revisionProjector,
     );
   }
@@ -63,12 +68,14 @@ export async function readConfigGetResponse(params: {
     return await configGetResponseCache.promise;
   }
 
-  const promise = (async () =>
-    createConfigGetResponse(
-      await readConfigFileSnapshot(),
-      params.loadUiHints(),
+  const promise = (async () => {
+    const snapshot = await readConfigFileSnapshot();
+    return createConfigGetResponse(
+      snapshot,
+      params.loadUiHints(snapshot.sourceConfig),
       params.revisionProjector,
-    ))();
+    );
+  })();
   configGetResponseCache = {
     getHotReloadStatus,
     revisionProjector: params.revisionProjector,

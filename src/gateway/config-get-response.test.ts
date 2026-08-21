@@ -164,3 +164,22 @@ describe("config.get response cache", () => {
     expect(loadUiHints).toHaveBeenCalledTimes(2);
   });
 });
+
+// Codex review P1 on #123209: the schema this redacts with is chosen by the config, since the
+// config decides which plugin owns a channel. Handing the loader nothing let it answer from a
+// cache keyed on plugin registry version alone, which a `channels.<id>` hot reload never changes.
+describe("config.get redaction hint source", () => {
+  it("builds hints from the config it is about to redact", async () => {
+    const seen: unknown[] = [];
+    await readConfigGetResponse({
+      getHotReloadStatus: disabledWatcher,
+      loadUiHints: (config) => {
+        seen.push(config);
+        return undefined;
+      },
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeDefined();
+  });
+});

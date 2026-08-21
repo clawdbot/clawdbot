@@ -193,6 +193,47 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     ).toBe(true);
   });
 
+  // Codex review P2 on #123209: my first version of the slot arm resolved both slots through
+  // `resolveSlotSelection`, which answers with the slot default when nothing is authored. Startup
+  // does that for memory (`resolveMemorySlotStartupPluginId` falls back to the resolved default)
+  // but NOT for the context engine, which returns undefined when the slot is blank. Promoting the
+  // unset context-engine default marked a plugin named `legacy` explicitly selected, suppressing a
+  // replacement's edge for a plugin startup never selects.
+  it("does not promote the unset context-engine default", () => {
+    const legacyRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "legacy", origin: "workspace", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        {} as OpenClawConfig,
+        "legacy",
+        createManifestPluginAliasResolver(legacyRegistry),
+        legacyRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  it("still honours an authored context-engine slot", () => {
+    const legacyRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "legacy", origin: "workspace", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      plugins: { slots: { contextEngine: "legacy" } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "legacy",
+        createManifestPluginAliasResolver(legacyRegistry),
+        legacyRegistry,
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat an unrelated slot pin as selection", () => {
     const config = {
       plugins: { slots: { memory: "someone-else" } },

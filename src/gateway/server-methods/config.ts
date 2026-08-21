@@ -511,7 +511,13 @@ function parseValidateConfigFromRawOrRespond(
     return null;
   }
   const schema = loadSchemaWithPlugins();
-  const restored = restoreRedactedValues(parsedRes.parsed, snapshot.config, schema.uiHints);
+  // Sentinels are restored against this snapshot, so the hints must describe it. The cached schema
+  // is keyed on plugin registry version alone and can still describe the previous channel owner.
+  const restored = restoreRedactedValues(
+    parsedRes.parsed,
+    snapshot.config,
+    buildRuntimeConfigSchemaForConfig(snapshot.config).uiHints,
+  );
   if (!restored.ok) {
     respond(
       false,
@@ -913,7 +919,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       await readConfigGetResponse({
         getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
-        loadUiHints: () => loadSchemaWithPlugins().uiHints,
+        loadUiHints: (config) => buildRuntimeConfigSchemaForConfig(config).uiHints,
         revisionProjector: context.configRevisionProjector,
       }),
       undefined,
@@ -1126,8 +1132,11 @@ export const configHandlers: GatewayRequestHandlers = {
       mergeObjectArraysById: true,
       replaceArrayPaths: replacePaths,
     });
-    const schemaPatch = loadSchemaWithPlugins();
-    const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
+    const restoredMerge = restoreRedactedValues(
+      merged,
+      snapshot.config,
+      buildRuntimeConfigSchemaForConfig(snapshot.config).uiHints,
+    );
     if (!restoredMerge.ok) {
       respond(
         false,
@@ -1168,7 +1177,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: snapshot.config,
-        uiHints: schemaPatch.uiHints,
+        uiHints: buildRuntimeConfigSchemaForConfig(snapshot.config).uiHints,
         actor,
         context,
         respond,
@@ -1203,7 +1212,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: validatedConfig,
-        uiHints: schemaPatch.uiHints,
+        uiHints: buildRuntimeConfigSchemaForConfig(validatedConfig).uiHints,
         actor,
         context,
         respond,
