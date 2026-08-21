@@ -576,7 +576,15 @@ export function schedulePairingQrExpiryRefresh(
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
+  for (const {
+    path: mediaPath,
+    mediaType,
+    fileName,
+    sizeBytes,
+    durationMs,
+    width,
+    height,
+  } of readTranscriptMediaEntries(message)) {
     if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
@@ -592,6 +600,10 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
         kind,
         label: fileName?.trim() || labelForMediaPath(mediaPath),
         ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(width !== undefined ? { width } : {}),
+        ...(height !== undefined ? { height } : {}),
       },
     });
   }

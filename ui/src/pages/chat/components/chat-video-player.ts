@@ -6,6 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
@@ -13,8 +14,10 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property() src = "";
   @property() sourceIdentity = "";
   @property() label = "";
+  @property() mimeType = "";
   @property() playback: ChatMediaPlaybackMode = "native";
   @property() authToken: string | null = null;
+  @property({ type: Number }) sizeBytes: number | undefined;
   @property({ type: Number }) mediaWidth: number | undefined;
   @property({ type: Number }) mediaHeight: number | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
@@ -98,21 +101,14 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         ?data-metadata-loaded=${this.metadataLoaded}
         ?data-unplayable=${this.sourceController.readiness === "unavailable"}
       >
-        <div class="chat-assistant-attachment-card__header">
-          <span class="chat-assistant-attachment-card__title">${this.label}</span>
-          ${downloadHref
-            ? html`<a
-                class="chat-assistant-attachment-card__download"
-                href=${downloadHref}
-                download=${this.label}
-                target="_blank"
-                rel="noreferrer"
-                aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
-                title=${t("chat.mediaPlayer.download", { filename: this.label })}
-                >${icons.download}</a
-              >`
-            : null}
-        </div>
+        ${renderAttachmentCardHeader({
+          kind: "video",
+          label: this.label,
+          mimeType: this.mimeType,
+          sizeBytes: this.sizeBytes,
+          downloadHref,
+          showExpandAction: true,
+        })}
         ${preparing
           ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
               ${t("chat.mediaPlayer.preparing")}
@@ -124,7 +120,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           >
           <video
             controls
-            preload="metadata"
+            preload="auto"
             ${ref(this.setMedia)}
             @loadedmetadata=${() => {
               if (!this.media) {
@@ -157,16 +153,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           <div class="chat-assistant-attachment-card__reason">
             ${t("chat.mediaPlayer.videoUnavailable")}
           </div>
-          ${downloadHref
-            ? html`<a
-                class="chat-assistant-attachment-card__link"
-                href=${downloadHref}
-                download=${this.label}
-                target="_blank"
-                rel="noreferrer"
-                >${t("chat.mediaPlayer.download", { filename: this.label })}</a
-              >`
-            : null}
         </div>
       </div>
     `;

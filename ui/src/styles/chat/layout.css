@@ -1333,6 +1333,10 @@ openclaw-chat-page {
   min-height: 42px;
 }
 
+.chat-image-frame--managed {
+  overflow: visible;
+}
+
 .chat-image-actions {
   position: absolute;
   z-index: 1;
@@ -1342,24 +1346,21 @@ openclaw-chat-page {
   gap: 4px;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-2px);
-  transition:
-    opacity 120ms ease-out,
-    transform 120ms ease-out;
+  visibility: hidden;
 }
 
 .chat-image-frame:hover .chat-image-actions,
 .chat-image-frame:focus-within .chat-image-actions {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(0);
+  visibility: visible;
 }
 
 @media (hover: none) {
   .chat-image-actions {
     opacity: 1;
     pointer-events: auto;
-    transform: translateY(0);
+    visibility: visible;
   }
 }
 
@@ -1409,6 +1410,12 @@ openclaw-chat-page {
 
 .chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
+}
+
+/* The managed image action bar is an interactive sibling of the preview. Keep
+ * the preview geometry fixed while the pointer crosses into that sibling. */
+.chat-image-frame--managed .chat-message-image-button:hover .chat-message-image {
+  transform: none;
 }
 
 /* User message images align right */
@@ -1472,18 +1479,40 @@ openclaw-chat-video-player {
   margin-bottom: 8px;
 }
 
+.chat-assistant-attachment-card__identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-assistant-attachment-card__details {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
 .chat-assistant-attachment-card__title,
 .chat-assistant-attachment-card__link {
   color: var(--text);
   font-size: 13px;
   text-decoration: none;
-  word-break: break-word;
 }
 
 .chat-assistant-attachment-card__title {
   min-width: 0;
   flex: 1;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-assistant-attachment-card__meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1502,6 +1531,8 @@ openclaw-chat-video-player {
   width: 28px;
   height: 28px;
   flex: none;
+  gap: 5px;
+  padding: 0;
   border-radius: 999px;
   color: var(--muted);
   border: 1px solid transparent;
@@ -1525,6 +1556,20 @@ openclaw-chat-video-player {
 .chat-assistant-attachment-card__download svg {
   width: 15px;
   height: 15px;
+}
+
+.chat-assistant-attachment-card__download--labeled {
+  width: auto;
+  padding: 0 10px;
+  border-color: var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-assistant-attachment-card__download--labeled:hover {
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
 .chat-assistant-attachment-card--document .chat-assistant-attachment-card__link {
@@ -1690,6 +1735,32 @@ openclaw-chat-video-player {
   line-height: 1;
 }
 
+.chat-audio-player__volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--muted);
+}
+
+.chat-audio-player__volume-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+}
+
+.chat-audio-player__volume-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-audio-player__volume input {
+  width: 54px;
+  height: 4px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .chat-audio-player__media {
   display: none;
 }
@@ -1719,13 +1790,8 @@ openclaw-chat-video-player {
   max-width: 100%;
   max-height: 200px;
   object-fit: contain;
-  opacity: 0;
-  background: color-mix(in srgb, var(--bg) 92%, var(--text));
-  transition: opacity 120ms ease;
-}
-
-.chat-assistant-attachment-card--video[data-metadata-loaded] .chat-assistant-video-frame video {
   opacity: 1;
+  background: color-mix(in srgb, var(--bg) 92%, var(--text));
 }
 
 .chat-assistant-video-frame__placeholder {
@@ -1734,6 +1800,8 @@ openclaw-chat-video-player {
   display: grid;
   place-items: center;
   color: color-mix(in srgb, var(--muted) 55%, transparent);
+  z-index: 2;
+  pointer-events: none;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--card) 78%, transparent), transparent),
     color-mix(in srgb, var(--bg) 84%, var(--card));

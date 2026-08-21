@@ -6,6 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -84,6 +85,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @property() src = "";
   @property() sourceIdentity = "";
   @property() label = "";
+  @property() mimeType = "";
   @property() playback: ChatMediaPlaybackMode = "native";
   @property() authToken: string | null = null;
   @property({ type: Number }) sizeBytes: number | undefined;
@@ -95,6 +97,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private duration = 0;
   @state() private buffered = 0;
   @state() private playing = false;
+  @state() private volume = 1;
   @state() private waveformPeaks: readonly number[] | null = null;
 
   private media: HTMLAudioElement | null = null;
@@ -162,6 +165,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
 
   private setMedia = (element: Element | undefined) => {
     this.media = element instanceof HTMLAudioElement ? element : null;
+    if (this.media) {
+      this.media.volume = this.volume;
+    }
     this.syncSource();
   };
 
@@ -374,6 +380,13 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
   }
 
+  private setVolume(nextVolume: number): void {
+    this.volume = Math.max(0, Math.min(1, nextVolume));
+    if (this.media) {
+      this.media.volume = this.volume;
+    }
+  }
+
   private handlePlayerKeydown(event: KeyboardEvent): void {
     if (event.target !== event.currentTarget) {
       return;
@@ -445,43 +458,18 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const failed = this.sourceController.readiness === "unavailable";
     return html`
       <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
-        <div class="chat-assistant-attachment-card__header">
-          <span class="chat-assistant-attachment-card__title">${this.label}</span>
-          <span class="chat-assistant-attachment-card__actions">
-            ${this.voiceNote
-              ? html`<span class="chat-assistant-attachment-badge"
-                  >${t("chat.messages.voiceNote")}</span
-                >`
-              : null}
-            ${downloadHref && !failed
-              ? html`<!-- The download attribute is ignored for cross-origin URLs (rare here — attachment
-                  hrefs are same-origin gateway routes); those open in a new tab instead. -->
-                  <a
-                    class="chat-assistant-attachment-card__download"
-                    href=${downloadHref}
-                    download=${this.label}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label=${t("chat.mediaPlayer.download", { filename: this.label })}
-                    title=${t("chat.mediaPlayer.download", { filename: this.label })}
-                    >${icons.download}</a
-                  >`
-              : null}
-          </span>
-        </div>
+        ${renderAttachmentCardHeader({
+          kind: "audio",
+          label: this.label,
+          mimeType: this.mimeType,
+          sizeBytes: this.sizeBytes,
+          downloadHref,
+          showExpandAction: true,
+          voiceNote: this.voiceNote,
+        })}
         ${failed
           ? html`<div class="chat-assistant-attachment-card__reason">
               ${t("chat.mediaPlayer.videoUnavailable")}
-              ${downloadHref
-                ? html`<a
-                    class="chat-assistant-attachment-card__link"
-                    href=${downloadHref}
-                    download=${this.label}
-                    target="_blank"
-                    rel="noreferrer"
-                    >${t("chat.mediaPlayer.download", { filename: this.label })}</a
-                  >`
-                : null}
             </div> `
           : this.sourceController.readiness === "preparing"
             ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -509,6 +497,19 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                     <span>${formatChatMediaTime(this.duration)}</span>
                   </div>
                 </div>
+                <label class="chat-audio-player__volume">
+                  <span class="chat-audio-player__volume-icon" aria-hidden="true">${icons.volume2}</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    .value=${String(this.volume)}
+                    aria-label=${t("chat.mediaPlayer.volume")}
+                    @input=${(event: Event) =>
+                      this.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
+                  />
+                </label>
               </div>`}
         <audio
           class="chat-audio-player__media"

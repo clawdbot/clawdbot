@@ -1,9 +1,9 @@
 import { html, nothing } from "lit";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -376,10 +376,9 @@ export function renderAssistantAttachments(
             ? (assistantAvailability.sizeBytes ?? attachment.sizeBytes)
             : attachment.sizeBytes;
         const serverDurationMs =
-          isLocalAssistantAttachmentSource(attachment.url) &&
           assistantAvailability.status === "available"
-            ? assistantAvailability.durationMs
-            : undefined;
+            ? (assistantAvailability.durationMs ?? attachment.durationMs)
+            : attachment.durationMs;
         const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
           ? (authToken ?? null)
           : null;
@@ -431,6 +430,7 @@ export function renderAssistantAttachments(
               .src=${attachmentUrl}
               .sourceIdentity=${attachment.url}
               .label=${attachment.label}
+              .mimeType=${attachment.mimeType ?? ""}
               .playback=${playback}
               .authToken=${playbackAuthToken}
               .sizeBytes=${sizeBytes}
@@ -457,8 +457,10 @@ export function renderAssistantAttachments(
               .src=${attachmentUrl}
               .sourceIdentity=${attachment.url}
               .label=${attachment.label}
+              .mimeType=${attachment.mimeType ?? ""}
               .playback=${playback}
               .authToken=${playbackAuthToken}
+              .sizeBytes=${sizeBytes}
               .mediaWidth=${assistantAvailability.status === "available"
                 ? (assistantAvailability.width ?? attachment.width)
                 : attachment.width}
@@ -487,36 +489,15 @@ export function renderAssistantAttachments(
           : null;
         return html`
           <div class="chat-assistant-attachment-card chat-assistant-attachment-card--document">
-            <div class="chat-assistant-attachment-card__header">
-              <span class="chat-assistant-attachment-card__icon"
-                >${texty ? icons.fileText : icons.paperclip}</span
-              >
-              ${downloadHref
-                ? html`<a
-                    class="chat-assistant-attachment-card__link"
-                    href=${downloadHref}
-                    target="_blank"
-                    rel="noreferrer"
-                    >${attachment.label}</a
-                  >`
-                : html`<span class="chat-assistant-attachment-card__title"
-                    >${attachment.label}</span
-                  >`}
-              <span class="chat-assistant-attachment-card__actions">
-                ${downloadHref
-                  ? html`<a
-                      class="chat-assistant-attachment-card__download"
-                      href=${downloadHref}
-                      download=${attachment.label}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label=${t("chat.mediaPlayer.download", { filename: attachment.label })}
-                      title=${t("chat.mediaPlayer.download", { filename: attachment.label })}
-                      >${icons.download}</a
-                    >`
-                  : null}
-              </span>
-            </div>
+            ${renderAttachmentCardHeader({
+              kind: "document",
+              label: attachment.label,
+              mimeType: attachment.mimeType,
+              sizeBytes,
+              titleHref: downloadHref,
+              downloadHref,
+              showDownloadLabel: true,
+            })}
             ${previewText !== null && previewText !== undefined
               ? html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`
               : null}
