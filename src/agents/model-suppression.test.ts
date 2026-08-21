@@ -8,42 +8,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   buildManifestBuiltInModelSuppressionResolver: vi.fn(),
-  resolvePluginControlPlaneFingerprint: vi.fn(),
-  resolvePluginMetadataEnvFingerprint: vi.fn(),
 }));
 
 vi.mock("../plugins/manifest-model-suppression.js", () => ({
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
 }));
 
-vi.mock("../plugins/plugin-control-plane-context.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/plugin-control-plane-context.js")>();
-  mocks.resolvePluginControlPlaneFingerprint.mockImplementation(
-    actual.resolvePluginControlPlaneFingerprint,
-  );
-  return {
-    ...actual,
-    resolvePluginControlPlaneFingerprint: mocks.resolvePluginControlPlaneFingerprint,
-  };
-});
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  mocks.resolvePluginMetadataEnvFingerprint.mockImplementation(
-    actual.resolvePluginMetadataEnvFingerprint,
-  );
-  return {
-    ...actual,
-    resolvePluginMetadataEnvFingerprint: mocks.resolvePluginMetadataEnvFingerprint,
-  };
-});
-
 import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
+import * as pluginControlPlaneContext from "../plugins/plugin-control-plane-context.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import * as pluginMetadataSnapshot from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   buildShouldSuppressBuiltInModelCore,
@@ -59,6 +36,7 @@ describe("model suppression", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     setCurrentPluginMetadataSnapshot(undefined);
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -251,16 +229,21 @@ describe("model suppression", () => {
       manifestRegistry: { plugins: [], diagnostics: [] },
     });
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValue(() => undefined);
+    const controlPlaneFingerprint = vi.spyOn(
+      pluginControlPlaneContext,
+      "resolvePluginControlPlaneFingerprint",
+    );
+    const envFingerprint = vi.spyOn(pluginMetadataSnapshot, "resolvePluginMetadataEnvFingerprint");
 
     withPluginRuntimeGenerationScope({ config, metadataSnapshot: snapshot }, () => {
       shouldSuppressBuiltInModelCore({ provider: "openai", id: "gpt-5.3", config });
-      mocks.resolvePluginControlPlaneFingerprint.mockClear();
-      mocks.resolvePluginMetadataEnvFingerprint.mockClear();
+      controlPlaneFingerprint.mockClear();
+      envFingerprint.mockClear();
 
       shouldSuppressBuiltInModelCore({ provider: "anthropic", id: "claude-4", config });
 
-      expect(mocks.resolvePluginControlPlaneFingerprint.mock.calls.length).toBe(0);
-      expect(mocks.resolvePluginMetadataEnvFingerprint.mock.calls.length).toBe(0);
+      expect(controlPlaneFingerprint).not.toHaveBeenCalled();
+      expect(envFingerprint).not.toHaveBeenCalled();
     });
   });
 
