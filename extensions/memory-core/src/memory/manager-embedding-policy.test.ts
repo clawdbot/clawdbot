@@ -5,6 +5,8 @@ import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
+  isSplittableMemoryEmbeddingError,
+  isSplittableMemoryEmbeddingProviderError,
   isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
@@ -209,6 +211,71 @@ describe("memory embedding policy", () => {
     expect(
       isSplittableMemoryEmbeddingTransportError("embedding validation failed at item 4312"),
     ).toBe(false);
+  });
+
+  it("recognizes provider item-count 400s as splittable", () => {
+    const volcArkError =
+      'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"The parameter input specified in the request are not valid: Embeddings API input limit exceeded: max 10, got 33. Request id: 021787028597364bb9ebb4b6644457884a01efaa0fed63392b6fd","param":"input","type":"BadRequest"}}';
+    const qianfanError =
+      'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"The parameter input specified in the request are not valid: ... Request id: abc","param":"input","type":"BadRequest"}}';
+    const openAiOversizedInputArray =
+      "openai embeddings failed: 400 input array is too long: max 2048";
+
+    expect(isSplittableMemoryEmbeddingProviderError(volcArkError)).toBe(true);
+    expect(isSplittableMemoryEmbeddingProviderError(qianfanError)).toBe(true);
+    expect(isSplittableMemoryEmbeddingProviderError(openAiOversizedInputArray)).toBe(true);
+    expect(isSplittableMemoryEmbeddingError(volcArkError)).toBe(true);
+    expect(isSplittableMemoryEmbeddingError(qianfanError)).toBe(true);
+
+    // Unrelated permanent errors must not be treated as splittable.
+    expect(isSplittableMemoryEmbeddingProviderError("embedding validation failed")).toBe(false);
+    expect(
+      isSplittableMemoryEmbeddingProviderError("openai embeddings failed: 401 unauthorized"),
+    ).toBe(false);
+    expect(
+      isSplittableMemoryEmbeddingProviderError(
+        '{"error":{"code":"InvalidParameter","param":"model"}}',
+      ),
+    ).toBe(false);
+  });
+
+  it("bisects provider item-count 400s until each sub-batch fits under the cap", async () => {
+    // Simulates 火山方舟 doubao-embedding-vision (per-request cap of 10 items).
+    const providerItemCap = 10;
+    const providerError = new Error(
+      'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"Embeddings API input limit exceeded: max 10, got 33","param":"input","type":"BadRequest"}}',
+    );
+    const run = vi.fn(async (items: string[]) => {
+      if (items.length > providerItemCap) {
+        throw providerError;
+      }
+      return items.map((item) => [item.charCodeAt(0)]);
+    });
+
+    const items = Array.from({ length: 33 }, (_, i) => String.fromCharCode(65 + (i % 26)));
+    const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      items,
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isSplittableMemoryEmbeddingError,
+      waitForRetry: async () => {},
+      maxAttempts: 1,
+      baseDelayMs: 500,
+    });
+
+    // A full result of 33 items proves bisection converged — mocks only return for
+    // batches under the provider's cap, so every item must have been embedded via a
+    // sub-batch small enough to succeed.
+    expect(result).toHaveLength(33);
+    expect(result.map(([code]) => String.fromCharCode(code ?? 0)).join("")).toBe(items.join(""));
+    // Initial call sends all 33 items and fails; bisection must recurse at least once.
+    expect(run.mock.calls.length).toBeGreaterThan(1);
+    expect(run.mock.calls[0]?.[0].length).toBe(items.length);
+    const acceptedBatchSizes = run.mock.calls
+      .map(([callItems]) => callItems.length)
+      .filter((size) => size <= providerItemCap);
+    // Successful sub-batches together account for every input item.
+    expect(acceptedBatchSizes.reduce((sum, size) => sum + size, 0)).toBe(items.length);
   });
 
   it("retries too-many-tokens-per-day errors", async () => {
