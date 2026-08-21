@@ -789,7 +789,7 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun realtimeAudioFramesStreamUntilPlaybackStarts() {
+  fun realtimeAudioFramesStreamUntilPlaybackOrCancellationStarts() {
     val manager = createManager()
 
     assertFalse(shouldAppendRealtimeCapturedFrame(manager, 0))
@@ -802,6 +802,10 @@ class TalkModeManagerTest {
 
     setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() - 1)
 
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setPrivateField(manager, "pendingRealtimeOutputClear", null)
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
   }
 
@@ -845,6 +849,43 @@ class TalkModeManagerTest {
       assertTrue(manager.isEnabled.value)
       assertFalse(stoppedByRelay)
     }
+
+  @Test
+  fun outputCancellationResultPreservesLegacyAndRecognizedRaceOutcomes() {
+    val accepted =
+      listOf(
+        """{"ok":true}""" to null,
+        """{"ok":true,"status":"applied"}""" to "applied",
+        """{"ok":true,"turnId":"turn-1"}""" to null,
+        """{"ok":true,"status":"applied","turnId":"turn-1"}""" to "applied",
+        """{"ok":true,"status":"stale"}""" to "stale",
+        """{"ok":true,"status":"idle"}""" to "idle",
+      )
+
+    accepted.forEach { (response, status) ->
+      assertEquals(status, requireAcceptedRealtimeOutputCancellation(response, "turn-1").status)
+    }
+    assertEquals(
+      "turn-from-server",
+      requireAcceptedRealtimeOutputCancellation(
+        """{"ok":true,"status":"applied","turnId":"turn-from-server"}""",
+        null,
+      ).turnId,
+    )
+  }
+
+  @Test
+  fun malformedOutputCancellationResultFailsClosed() {
+    listOf(
+      """{"ok":true,"status":"applied","turnId":"turn-2"}""",
+      """{"status":"stale"}""",
+      """{"ok":false}""",
+      """{"ok":true,"status":"unknown"}""",
+      """{"ok":true,"extra":1}""",
+    ).forEach { response ->
+      assertTrue(runCatching { requireAcceptedRealtimeOutputCancellation(response, "turn-1") }.isFailure)
+    }
+  }
 
   @Test
   fun stalePushToTalkCompletionCannotResumeNewerPause() =

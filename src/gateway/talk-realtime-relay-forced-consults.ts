@@ -63,12 +63,6 @@ export function buildAlreadyDeliveredToolResult(): Record<string, string> {
   };
 }
 
-export function cancelForcedConsults(session: RelaySession): void {
-  for (const handle of session.harness.forcedConsults.handles()) {
-    session.harness.forcedConsults.markCancelled(handle);
-  }
-}
-
 export function submitRelayAgentControlProviderResults(
   session: RelaySession,
   result: RealtimeVoiceAgentControlResult,
@@ -228,28 +222,34 @@ function drainForcedTerminalProviderResults(
   handle: RealtimeVoiceForcedConsultHandle,
   terminal: ForcedTerminalProviderResult,
 ): void | Promise<void> {
-  if (session.forcedTerminalProviderResults.get(handle.id) !== terminal) {
+  const isCurrent = () =>
+    relaySessions.get(session.id) === session &&
+    session.toolResultEpoch === terminal.epoch &&
+    session.forcedTerminalProviderResults.get(handle.id) === terminal;
+  if (!isCurrent()) {
     return;
   }
-  const submissions = session.harness.forcedConsults
-    .nativeCallIds(handle)
-    .map((callId) =>
-      submitForcedConsultProviderResult(session, callId, terminal.result, terminal.options),
-    );
-  const pending = submissions.filter(
-    (submission): submission is Promise<void> => submission !== undefined,
-  );
-  if (pending.length > 0) {
-    return Promise.all(pending).then(() =>
-      drainForcedTerminalProviderResults(session, handle, terminal),
-    );
+  const callIds = () =>
+    terminal.nativeCallIds ?? session.harness.forcedConsults.nativeCallIds(handle);
+  const submitPending = () =>
+    callIds()
+      .filter((callId) => !session.toolCalls.isProviderCompleted(callId))
+      .map((callId) =>
+        submitForcedConsultProviderResult(session, callId, terminal.result, terminal.options),
+      )
+      .filter((submission): submission is Promise<void> => submission !== undefined);
+  const submissions = submitPending();
+  if (submissions.length === 0) {
+    return;
   }
-  const hasUnsubmittedCall = session.harness.forcedConsults
-    .nativeCallIds(handle)
-    .some((callId) => !session.toolCalls.isProviderCompleted(callId));
-  if (hasUnsubmittedCall) {
-    return drainForcedTerminalProviderResults(session, handle, terminal);
-  }
+  const settle = (pending: Promise<void>[]) =>
+    terminal.nativeCallIds ? Promise.allSettled(pending) : Promise.all(pending);
+  return settle(submissions).then(async () => {
+    if (!isCurrent()) {
+      return;
+    }
+    await settle(submitPending());
+  });
 }
 
 function drainForcedTerminalProviderResultsAfterPending(
@@ -257,16 +257,17 @@ function drainForcedTerminalProviderResultsAfterPending(
   handle: RealtimeVoiceForcedConsultHandle,
   terminal: ForcedTerminalProviderResult,
 ): void | Promise<void> {
-  const pending = session.harness.forcedConsults
-    .nativeCallIds(handle)
+  const pending = (terminal.nativeCallIds ?? session.harness.forcedConsults.nativeCallIds(handle))
     .map((callId) => session.pendingProviderToolResults.get(callId))
     .filter((submission): submission is Promise<void> => submission !== undefined);
   if (pending.length === 0) {
     return drainForcedTerminalProviderResults(session, handle, terminal);
   }
-  return Promise.allSettled(pending).then(() =>
-    drainForcedTerminalProviderResults(session, handle, terminal),
-  );
+  return Promise.allSettled(pending).then(() => {
+    if (relaySessions.get(session.id) === session && session.toolResultEpoch === terminal.epoch) {
+      return drainForcedTerminalProviderResults(session, handle, terminal);
+    }
+  });
 }
 
 export function submitRealtimeAgentConsultWorkingResponse(
@@ -322,12 +323,16 @@ export function submitForcedTalkRealtimeRelayToolResult(
     const providerResult = buildRealtimeVoiceAgentCancelProviderResult(
       "OpenClaw cancelled this consult before completion. Do not restart it.",
     );
-    const terminal: ForcedTerminalProviderResult = {
-      result: providerResult,
-      options: suppressedToolResultOptions(session),
-      turnId,
-      epoch: session.toolResultEpoch,
-    };
+    const existing = session.forcedTerminalProviderResults.get(forcedConsult.id);
+    const terminal: ForcedTerminalProviderResult =
+      existing?.epoch === session.toolResultEpoch
+        ? existing
+        : {
+            result: providerResult,
+            options: suppressedToolResultOptions(session),
+            turnId,
+            epoch: session.toolResultEpoch,
+          };
     session.forcedTerminalProviderResults.set(forcedConsult.id, terminal);
     const clearTerminal = () => {
       if (session.forcedTerminalProviderResults.get(forcedConsult.id) === terminal) {
