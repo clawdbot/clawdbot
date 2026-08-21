@@ -223,7 +223,9 @@ export function registerCronEditCommand(cron: Command) {
             );
           }
           const webhookUrl =
-            typeof opts.webhook === "string" ? normalizeHttpWebhookUrl(opts.webhook) : null;
+            typeof opts.webhook === "string"
+              ? (normalizeHttpWebhookUrl(opts.webhook) ?? undefined)
+              : undefined;
           if (typeof opts.webhook === "string" && !webhookUrl) {
             throw new Error("--webhook must be a valid http(s) URL");
           }
@@ -419,7 +421,7 @@ export function registerCronEditCommand(cron: Command) {
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob),
+            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob, webhookUrl),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

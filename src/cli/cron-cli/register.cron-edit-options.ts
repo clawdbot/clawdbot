@@ -1,7 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronJob } from "../../cron/types.js";
-import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
@@ -25,6 +24,7 @@ const assignIf = (
 export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
+  webhookUrl: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -87,14 +87,6 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Invalid --script-tool-budget (must be a positive integer).");
   }
 
-  // Presence alone is not enough: blank/malformed --webhook used to flip
-  // delivery.mode to "webhook" with no URL (gateway then rejects after merge
-  // cleared the previous chat destination). Align with normalizeHttpWebhookUrl.
-  const webhookUrl =
-    typeof opts.webhook === "string" ? normalizeHttpWebhookUrl(opts.webhook) : null;
-  if (typeof opts.webhook === "string" && !webhookUrl) {
-    throw new Error("--webhook must be a valid http(s) URL");
-  }
   const hasWebhookDelivery = Boolean(webhookUrl);
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
