@@ -62,14 +62,18 @@ type IsExecutable = (candidate: string) => boolean;
 
 export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
-function requirePositiveDuration(value: unknown, key: string): string {
+function requirePositiveDuration(
+  value: unknown,
+  key: string,
+): { duration: string; milliseconds: number } {
   const duration = nonEmptyString(value);
-  if (!duration || parsePositiveGoDurationNanoseconds(duration) === undefined) {
+  const nanoseconds = duration ? parsePositiveGoDurationNanoseconds(duration) : undefined;
+  if (!duration || nanoseconds === undefined) {
     throw new WorkerProviderError(
       `Crabbox profile ${key} must be a positive Go duration such as 60m`,
     );
   }
-  return duration;
+  return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
@@ -122,9 +126,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (!machineClass) {
     throw new WorkerProviderError("Crabbox profile class must be a non-empty string");
   }
-  const ttl = requirePositiveDuration(profile.ttl, "ttl");
-  const idleTimeout = requirePositiveDuration(profile.idleTimeout, "idleTimeout");
-  const idleTimeoutMs = Number(parsePositiveGoDurationNanoseconds(idleTimeout)) / 1_000_000;
+  const { duration: ttl } = requirePositiveDuration(profile.ttl, "ttl");
+  const { duration: idleTimeout, milliseconds: idleTimeoutMs } = requirePositiveDuration(
+    profile.idleTimeout,
+    "idleTimeout",
+  );
   const binaryValue = profile.binary;
   const binary = binaryValue === undefined ? undefined : nonEmptyString(binaryValue);
   if (binaryValue !== undefined && !binary) {
