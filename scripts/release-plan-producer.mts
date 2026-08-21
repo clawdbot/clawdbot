@@ -23,6 +23,12 @@ import {
   type ReleasePlanPurpose,
 } from "./release-plan-contract.mjs";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
+import {
+  releaseValidationIntentForPurpose,
+  resolveReleaseValidationIntent,
+  type ReleaseValidationIntent,
+  type ReleaseValidationProfile,
+} from "./release-validation-intent.mjs";
 
 export type ReleasePlanIntent = "publish" | "postpublish-confidence" | "main-qualification";
 
@@ -233,7 +239,9 @@ export function deriveReleasePlanPolicy(
   intent: ReleasePlanIntent,
   version: string,
 ): {
-  profile: "beta" | "stable" | "full";
+  intent: ReleaseValidationIntent;
+  profile: ReleaseValidationProfile;
+  publishable: boolean;
   purpose: ReleasePlanPurpose;
   soak: boolean;
   tag: string | null;
@@ -243,19 +251,27 @@ export function deriveReleasePlanPolicy(
     throw new Error(`unsupported release version: ${version}`);
   }
   if (intent === "main-qualification") {
-    return { profile: "full", purpose: "main-qualification", soak: true, tag: null };
+    const purpose = "main-qualification";
+    return {
+      ...resolveReleaseValidationIntent(releaseValidationIntentForPurpose(purpose)),
+      purpose,
+      tag: null,
+    };
   }
   if (intent === "postpublish-confidence") {
+    const purpose = "postpublish-confidence";
     return {
-      profile: "full",
-      purpose: "postpublish-confidence",
-      soak: true,
+      ...resolveReleaseValidationIntent(releaseValidationIntentForPurpose(purpose)),
+      purpose,
       tag: `v${version}`,
     };
   }
-  return parsed.channel === "stable"
-    ? { profile: "stable", purpose: "stable-publish", soak: true, tag: `v${version}` }
-    : { profile: "beta", purpose: "beta-publish", soak: false, tag: `v${version}` };
+  const purpose = parsed.channel === "stable" ? "stable-publish" : "beta-publish";
+  return {
+    ...resolveReleaseValidationIntent(releaseValidationIntentForPurpose(purpose)),
+    purpose,
+    tag: `v${version}`,
+  };
 }
 
 function collectAllowedGroups(workflowText: string): string[] {
@@ -535,6 +551,7 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
       sha: toolingSha,
     },
     validation: {
+      intent: policy.intent,
       profile: policy.profile,
       soak: policy.soak,
       allowed_groups: collectAllowedGroups(validationWorkflow),

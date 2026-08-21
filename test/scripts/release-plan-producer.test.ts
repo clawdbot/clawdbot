@@ -24,6 +24,7 @@ const TOOLING_CLOSURE = [
   "packages/plugin-package-contract/src/index.ts",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-contract.mjs",
+  "scripts/release-validation-intent.mjs",
   "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
@@ -256,16 +257,36 @@ function trustedToolingGh(toolingFullRef: string, toolingSha: string) {
 describe("release plan producer", () => {
   it("derives purpose, profile, tag, and soak from the canonical version parser", () => {
     expect(deriveReleasePlanPolicy("publish", "2026.8.1-beta.2")).toEqual({
+      intent: "release-beta",
       profile: "beta",
+      publishable: true,
       purpose: "beta-publish",
       soak: false,
       tag: "v2026.8.1-beta.2",
     });
     expect(deriveReleasePlanPolicy("publish", "2026.8.1")).toEqual({
+      intent: "release-stable",
       profile: "stable",
+      publishable: true,
       purpose: "stable-publish",
       soak: true,
       tag: "v2026.8.1",
+    });
+    expect(deriveReleasePlanPolicy("postpublish-confidence", "2026.8.1-beta.2")).toEqual({
+      intent: "diagnostic-full",
+      profile: "full",
+      publishable: false,
+      purpose: "postpublish-confidence",
+      soak: true,
+      tag: "v2026.8.1-beta.2",
+    });
+    expect(deriveReleasePlanPolicy("main-qualification", "2026.8.1-beta.2")).toEqual({
+      intent: "main-weekly",
+      profile: "full",
+      publishable: false,
+      purpose: "main-qualification",
+      soak: true,
+      tag: null,
     });
     expect(() => deriveReleasePlanPolicy("publish", "2026.08.1")).toThrow(
       "unsupported release version",
@@ -315,7 +336,12 @@ describe("release plan producer", () => {
       ref: fixture.toolingFullRef,
       sha: fixture.toolingSha,
     });
-    expect(plan.validation.allowed_groups).toEqual(["all", "ci", "package"]);
+    expect(plan.validation).toEqual({
+      allowed_groups: ["all", "ci", "package"],
+      intent: "release-beta",
+      profile: "beta",
+      soak: false,
+    });
     expect(plan.inventory.packages).toEqual([
       { name: "@openclaw/ai", targets: ["npm"], version: "2026.8.1-beta.2" },
       { name: "@openclaw/gateway-client", targets: ["npm"], version: "2026.8.1-beta.2" },
@@ -353,6 +379,11 @@ describe("release plan producer", () => {
     expect(produceReleasePlan(sourceParams(fixture, "postpublish-confidence"))).toMatchObject({
       purpose: "postpublish-confidence",
       target_context_ref: fixture.candidateRef,
+      validation: {
+        intent: "diagnostic-full",
+        profile: "full",
+        soak: true,
+      },
     });
   });
 

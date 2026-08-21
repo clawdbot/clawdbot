@@ -63,6 +63,7 @@ describe("release plan contract", () => {
         purpose: "stable-publish",
         validation: {
           allowed_groups: ["all", "ci", "package"],
+          intent: "release-stable",
           profile: "stable",
           soak: true,
         },
@@ -76,6 +77,7 @@ describe("release plan contract", () => {
         target_context_ref: "refs/tags/null",
         validation: {
           allowed_groups: ["all", "ci", "package"],
+          intent: "main-weekly",
           profile: "full",
           soak: true,
         },
@@ -87,6 +89,36 @@ describe("release plan contract", () => {
         tag: "v2026.8.1-beta.3",
       }),
     ).toThrow("exact version tag context");
+  });
+
+  it("binds purpose, intent, profile, and soak to one authoritative policy", () => {
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        validation: {
+          ...(sourceFixture.validation as Record<string, unknown>),
+          intent: "release-stable",
+        },
+      }),
+    ).toThrow("beta-publish validation intent must be release-beta");
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        validation: {
+          ...(sourceFixture.validation as Record<string, unknown>),
+          profile: "full",
+        },
+      }),
+    ).toThrow("profile assertion conflicts");
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        validation: {
+          ...(sourceFixture.validation as Record<string, unknown>),
+          soak: true,
+        },
+      }),
+    ).toThrow("soak assertion conflicts");
   });
 
   it("rejects unknown authority, invalid ordering, and unsupported versions", () => {
@@ -151,6 +183,7 @@ describe("release plan contract", () => {
         },
         validation: {
           allowed_groups: ["all", "ci", "package"],
+          intent: "main-weekly",
           profile: "full",
           soak: true,
         },

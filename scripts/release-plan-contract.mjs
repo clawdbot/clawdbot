@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { parseDocument } from "yaml";
 import { isRecord } from "./lib/record-shared.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import {
+  releaseValidationIntentForPurpose,
+  resolveReleaseValidationIntent,
+} from "./release-validation-intent.mjs";
 
 export const RELEASE_PLAN_SCHEMA = "openclaw.release-plan.v1";
 export const RELEASE_PLAN_LOCK_SCHEMA = "openclaw.release-plan-lock.v1";
@@ -13,13 +17,6 @@ const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const ASCII_PATTERN = /^[\x20-\x7e]+$/u;
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
-const PURPOSES = new Set([
-  "beta-publish",
-  "stable-publish",
-  "postpublish-confidence",
-  "main-qualification",
-]);
-const PROFILES = new Set(["beta", "stable", "full"]);
 const PACKAGE_TARGETS = new Set(["clawhub", "npm"]);
 const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -216,9 +213,7 @@ export function validateReleasePlan(value) {
     fail(`release plan schema must be ${RELEASE_PLAN_SCHEMA}`);
   }
   const purpose = asciiString(value.purpose, "release plan purpose");
-  if (!PURPOSES.has(purpose)) {
-    fail(`unsupported release plan purpose: ${purpose}`);
-  }
+  const expectedIntent = releaseValidationIntentForPurpose(purpose);
   const version = asciiString(value.version, "release plan version");
   const releaseId = asciiString(value.release_id, "release plan release_id");
   if (releaseId !== version) {
@@ -229,12 +224,6 @@ export function validateReleasePlan(value) {
   const targetContextRef = asciiString(value.target_context_ref, "release plan target_context_ref");
   validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, version });
 
-  const expectedPolicy = {
-    "beta-publish": { profile: "beta", soak: false },
-    "stable-publish": { profile: "stable", soak: true },
-    "postpublish-confidence": { profile: "full", soak: true },
-    "main-qualification": { profile: "full", soak: true },
-  }[purpose];
   if (!isRecord(value.tooling)) {
     fail("release plan tooling must be an object");
   }
@@ -246,17 +235,23 @@ export function validateReleasePlan(value) {
   if (!isRecord(value.validation)) {
     fail("release plan validation must be an object");
   }
-  exactKeys(value.validation, ["profile", "soak", "allowed_groups"], "release plan validation");
-  const profile = asciiString(value.validation.profile, "release plan validation profile");
-  if (!PROFILES.has(profile)) {
-    fail(`unsupported release plan validation profile: ${profile}`);
+  exactKeys(
+    value.validation,
+    ["intent", "profile", "soak", "allowed_groups"],
+    "release plan validation",
+  );
+  const intent = asciiString(value.validation.intent, "release plan validation intent");
+  if (intent !== expectedIntent) {
+    fail(`release plan ${purpose} validation intent must be ${expectedIntent}`);
   }
+  const profile = asciiString(value.validation.profile, "release plan validation profile");
   if (typeof value.validation.soak !== "boolean") {
     fail("release plan validation soak must be boolean");
   }
-  if (profile !== expectedPolicy.profile || value.validation.soak !== expectedPolicy.soak) {
-    fail(`release plan ${purpose} validation policy is invalid`);
-  }
+  const validationPolicy = resolveReleaseValidationIntent(intent, {
+    profile,
+    soak: value.validation.soak,
+  });
   if (!isRecord(value.inventory)) {
     fail("release plan inventory must be an object");
   }
@@ -276,8 +271,9 @@ export function validateReleasePlan(value) {
       sha: sha(value.tooling.sha, "release plan tooling SHA"),
     },
     validation: {
-      profile,
-      soak: value.validation.soak,
+      intent: validationPolicy.intent,
+      profile: validationPolicy.profile,
+      soak: validationPolicy.soak,
       allowed_groups: sortedUniqueStrings(
         value.validation.allowed_groups,
         "release plan validation allowed_groups",

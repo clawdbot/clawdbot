@@ -1,8 +1,10 @@
-export type ReleasePlanPurpose =
-  | "beta-publish"
-  | "stable-publish"
-  | "postpublish-confidence"
-  | "main-qualification";
+import type {
+  ReleaseValidationIntent,
+  ReleaseValidationProfile,
+  ReleaseValidationPurpose,
+} from "./release-validation-intent.mjs";
+
+export type ReleasePlanPurpose = ReleaseValidationPurpose;
 
 export type ReleasePlan = {
   schema: "openclaw.release-plan.v1";
@@ -19,7 +21,8 @@ export type ReleasePlan = {
     sha: string;
   };
   validation: {
-    profile: "beta" | "stable" | "full";
+    intent: ReleaseValidationIntent;
+    profile: ReleaseValidationProfile;
     soak: boolean;
     allowed_groups: string[];
   };
