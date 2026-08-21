@@ -207,11 +207,14 @@ export class CodexToolTranscriptProjection {
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
-    this.recordToolCall({
-      id: params.callId,
-      name: params.tool,
-      arguments: sanitizeCodexToolArguments(params.arguments),
-    });
+    this.recordToolCall(
+      {
+        id: params.callId,
+        name: params.tool,
+        arguments: sanitizeCodexToolArguments(params.arguments),
+      },
+      { progressItemId: `tool:${params.callId}` },
+    );
   }
 
   recordDynamicToolResult(
@@ -224,14 +227,17 @@ export class CodexToolTranscriptProjection {
     },
     resultContentSource?: "network",
   ): void {
-    this.recordToolResult({
-      id: params.callId,
-      name: params.tool,
-      text: collectDynamicToolContentText(params.contentItems),
-      isError: !params.success,
-      details: params.details,
-      ...(resultContentSource ? { resultContentSource } : {}),
-    });
+    this.recordToolResult(
+      {
+        id: params.callId,
+        name: params.tool,
+        text: collectDynamicToolContentText(params.contentItems),
+        isError: !params.success,
+        details: params.details,
+        ...(resultContentSource ? { resultContentSource } : {}),
+      },
+      { progressItemId: `tool:${params.callId}` },
+    );
   }
 
   recordNativeToolCall(item: CodexThreadItem | undefined): void {
@@ -594,13 +600,16 @@ export class CodexToolTranscriptProjection {
     );
   }
 
-  private recordToolCall(params: ToolTranscriptCallInput): void {
+  private recordToolCall(
+    params: ToolTranscriptCallInput,
+    options?: { progressItemId?: string },
+  ): void {
     if (!params.id || !params.name || this.callIds.has(params.id)) {
       return;
     }
     this.callIds.add(params.id);
     this.namesById.set(params.id, params.name);
-    this.progress.recordTranscriptCall(params);
+    this.progress.recordTranscriptCall(params, options);
     this.messages.push(
       attachCodexMirrorIdentity(
         this.createToolCallMessage(params),
@@ -609,12 +618,15 @@ export class CodexToolTranscriptProjection {
     );
   }
 
-  private recordToolResult(params: ToolTranscriptResultInput): void {
+  private recordToolResult(
+    params: ToolTranscriptResultInput,
+    options?: { progressItemId?: string },
+  ): void {
     if (!params.id || !params.name || this.resultIds.has(params.id)) {
       return;
     }
     this.resultIds.add(params.id);
-    this.progress.recordTranscriptResult(params);
+    this.progress.recordTranscriptResult(params, options);
     this.messages.push(
       attachCodexMirrorIdentity(
         this.createToolResultMessage(params),

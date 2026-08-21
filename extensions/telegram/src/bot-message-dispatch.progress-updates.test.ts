@@ -370,6 +370,151 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("merges dynamic tool summary and full output into its structured progress row", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({
+        name: "memory_search",
+        phase: "start",
+        toolCallId: "dynamic-call-1",
+        args: { query: "retention policy" },
+      });
+      await replyOptions?.onToolResult?.({
+        text: "🧠 Memory Search: retained policy details",
+        channelData: { openclawProgressItemId: "tool:dynamic-call-1" },
+      });
+      await replyOptions?.onToolResult?.({
+        text: "🧠 Memory Search: retained policy details\n```txt\nfull result\n```",
+        channelData: { openclawProgressItemId: "tool:dynamic-call-1" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text ?? "";
+    expect(lastPreview.match(/Memory Search/gu)).toHaveLength(1);
+    expect(lastPreview).toContain("full result");
+  });
+
+  it("merges a structured dynamic tool row into an earlier tagged summary", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolResult?.({
+        text: "🧠 Memory Search: retained policy details",
+        channelData: { openclawProgressItemId: "tool:dynamic-call-1" },
+      });
+      await replyOptions?.onToolStart?.({
+        name: "memory_search",
+        phase: "start",
+        toolCallId: "dynamic-call-1",
+        args: { query: "retention policy" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text ?? "";
+    expect(lastPreview.split("<br>")).toHaveLength(2);
+    expect(lastPreview).not.toContain("retained policy details");
+  });
+
+  it("keeps identical dynamic tool summaries distinct when call ids differ", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      for (const toolCallId of ["dynamic-call-1", "dynamic-call-2"]) {
+        await replyOptions?.onToolStart?.({
+          name: "memory_search",
+          phase: "start",
+          toolCallId,
+          args: { query: "retention policy" },
+        });
+        await replyOptions?.onToolResult?.({
+          text: "🧠 Memory Search: retained policy details",
+          channelData: { openclawProgressItemId: `tool:${toolCallId}` },
+        });
+      }
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text ?? "";
+    expect(lastPreview.split("<br>")).toHaveLength(3);
+    expect(lastPreview.match(/retained policy details/gu)).toHaveLength(2);
+  });
+
+  it("keeps replayed tagged summaries for one dynamic call idempotent", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({
+        name: "memory_search",
+        phase: "start",
+        toolCallId: "dynamic-call-1",
+        args: { query: "retention policy" },
+      });
+      const summary = {
+        text: "🧠 Memory Search: retained policy details",
+        channelData: { openclawProgressItemId: "tool:dynamic-call-1" },
+      };
+      await replyOptions?.onToolResult?.(summary);
+      await replyOptions?.onToolResult?.(summary);
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text ?? "";
+    expect(lastPreview.split("<br>")).toHaveLength(2);
+    expect(lastPreview.match(/retained policy details/gu)).toHaveLength(1);
+  });
+
+  it("preserves legacy untagged tool results as separate progress rows", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({
+        name: "memory_search",
+        phase: "start",
+        toolCallId: "dynamic-call-1",
+        args: { query: "retention policy" },
+      });
+      await replyOptions?.onToolResult?.({ text: "legacy result without an identity" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text ?? "";
+    expect(lastPreview.split("<br>")).toHaveLength(3);
+    expect(lastPreview).toContain("legacy result without an identity");
+  });
+
   it("reopens progress drafts for queued followups after the source dispatch settles", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

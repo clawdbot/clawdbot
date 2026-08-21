@@ -145,7 +145,64 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🧩 Lcm Grep: `inProgress text`",
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
+  });
+
+  it("tags dynamic tool summaries with their structured progress identity", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "dynamic-call-1",
+          namespace: null,
+          tool: "memory_search",
+          arguments: { query: "retention policy" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: expect.stringContaining("Memory Search"),
+      channelData: { openclawProgressItemId: "tool:dynamic-call-1" },
+    });
+  });
+
+  it("tags a result-first dynamic tool summary and full output with the same identity", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "dynamic-call-1",
+      tool: "memory_search",
+      success: true,
+      contentItems: [{ type: "inputText", text: "retained policy details" }],
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    for (const [payload] of onToolResult.mock.calls) {
+      expect(payload).toEqual(
+        expect.objectContaining({
+          channelData: { openclawProgressItemId: "tool:dynamic-call-1" },
+        }),
+      );
+    }
+    expect(onToolResult.mock.calls[1]?.[0]?.text).toContain("retained policy details");
   });
 
   it("hides command arguments from dynamic tool summaries unless verbose is full", async () => {
@@ -172,7 +229,10 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       }),
     );
 
-    expect(onToolResult).toHaveBeenCalledWith({ text: "🧩 Server.exec" });
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🧩 Server.exec",
+      channelData: { openclawProgressItemId: "tool:tool-command-1" },
+    });
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
@@ -203,9 +263,11 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
       text: "📖 Read: `from README.md`",
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
   });
 
@@ -236,6 +298,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "🛠️ `list files in /tmp/missing`\n```txt\nNo such file or directory\n```",
       isError: true,
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
   });
 
@@ -265,6 +328,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n````txt\nline\n```\nMEDIA:/tmp/secret.png\n````",
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
   });
 

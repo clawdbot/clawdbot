@@ -1760,8 +1760,11 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     const onRunAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
     params.timeoutMs = 60_000;
     params.onAgentEvent = onRunAgentEvent;
+    params.verboseLevel = "full";
+    params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     const request = {
@@ -1828,6 +1831,15 @@ describe("runCodexAppServerAttempt", () => {
       .filter((event) => event.stream === "tool")
       .map((event) => event.data?.phase);
     expect(toolPhases).toEqual(["start", "result"]);
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    for (const [payload] of onToolResult.mock.calls) {
+      expect(payload).toEqual(
+        expect.objectContaining({
+          channelData: { openclawProgressItemId: "tool:call-1" },
+        }),
+      );
+    }
+    expect(onToolResult.mock.calls[1]?.[0]?.text).toContain("Unknown OpenClaw tool: python");
   });
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     for (const [index, deliveryHint] of MESSAGE_TOOL_DELIVERY_HINTS.entries()) {
@@ -4493,9 +4505,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
       text: "📖 Read: `from README.md`",
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+      channelData: { openclawProgressItemId: "tool:tool-1" },
     });
   });
 

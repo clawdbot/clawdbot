@@ -334,6 +334,7 @@ export class CodexToolProgressProjection {
     this.emitToolResultMessage({
       itemId: item.id,
       text: formatToolSummary(toolName, meta),
+      progressItemId: item.type === "dynamicToolCall" ? `tool:${item.id}` : undefined,
     });
   }
 
@@ -354,6 +355,7 @@ export class CodexToolProgressProjection {
       text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
       finalOutput: true,
       isError: isNonSuccessItemStatus(itemStatus(item)),
+      progressItemId: item.type === "dynamicToolCall" ? `tool:${item.id}` : undefined,
     });
   }
 
@@ -389,18 +391,24 @@ export class CodexToolProgressProjection {
     });
   }
 
-  recordTranscriptCall(params: ToolTranscriptCallInput): void {
+  recordTranscriptCall(
+    params: ToolTranscriptCallInput,
+    options?: { progressItemId?: string },
+  ): void {
     this.transcriptArgumentsById.set(params.id, params.arguments);
     if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       this.transcriptProgressSuppressedIds.add(params.id);
     } else {
       this.transcriptProgressSuppressedIds.delete(params.id);
     }
-    this.emitTranscriptToolCallProgress(params);
+    this.emitTranscriptToolCallProgress(params, options);
   }
 
-  recordTranscriptResult(params: ToolTranscriptResultInput): void {
-    this.emitTranscriptToolResultProgress(params);
+  recordTranscriptResult(
+    params: ToolTranscriptResultInput,
+    options?: { progressItemId?: string },
+  ): void {
+    this.emitTranscriptToolResultProgress(params, options);
   }
 
   matchesEcho(text: string): boolean {
@@ -443,6 +451,7 @@ export class CodexToolProgressProjection {
     text: string;
     finalOutput?: boolean;
     isError?: boolean;
+    progressItemId?: string;
   }): void {
     const rawText = params.text.trim();
     const text = truncateToolTranscriptText(rawText);
@@ -458,6 +467,9 @@ export class CodexToolProgressProjection {
         this.params.onToolResult?.({
           text,
           ...(params.isError === true ? { isError: true } : {}),
+          ...(params.progressItemId
+            ? { channelData: { openclawProgressItemId: params.progressItemId } }
+            : {}),
         }),
       ).catch(() => {});
     } catch {
@@ -477,7 +489,10 @@ export class CodexToolProgressProjection {
       : this.params.verboseLevel === "full";
   }
 
-  private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
+  private emitTranscriptToolCallProgress(
+    params: ToolTranscriptCallInput,
+    options?: { progressItemId?: string },
+  ): void {
     if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
       return;
     }
@@ -501,10 +516,14 @@ export class CodexToolProgressProjection {
     this.emitToolResultMessage({
       itemId: params.id,
       text: formatToolSummary(params.name, meta),
+      progressItemId: options?.progressItemId,
     });
   }
 
-  private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
+  private emitTranscriptToolResultProgress(
+    params: ToolTranscriptResultInput,
+    options?: { progressItemId?: string },
+  ): void {
     if (
       this.transcriptProgressSuppressedIds.has(params.id) ||
       !shouldEmitTranscriptToolProgress(params.name, this.transcriptArgumentsById.get(params.id))
@@ -512,7 +531,10 @@ export class CodexToolProgressProjection {
       return;
     }
     if (!this.transcriptProgressCallIds.has(params.id)) {
-      this.emitTranscriptToolCallProgress({ id: params.id, name: params.name, arguments: {} });
+      this.emitTranscriptToolCallProgress(
+        { id: params.id, name: params.name, arguments: {} },
+        options,
+      );
     }
     if (
       !this.params.onToolResult ||
@@ -529,6 +551,7 @@ export class CodexToolProgressProjection {
         text: formatToolOutput(params.name, undefined, text),
         finalOutput: true,
         isError: params.isError,
+        progressItemId: options?.progressItemId,
       });
     }
   }
