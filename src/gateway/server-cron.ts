@@ -1440,6 +1440,7 @@ export function buildGatewayCronService(params: {
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
     const generation = streamWatcherGeneration;
+    await exitWatchersStopPromise;
     await startCron();
     if (generation !== streamWatcherGeneration) {
       return;

@@ -120,6 +120,34 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     }
   });
 
+  it("waits for prior exit watchers to settle before restarting the scheduler", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher-restart");
+
+    try {
+      original.state.cron.stop();
+      let restarted = false;
+      const restart = original.state.cron.start().then(() => {
+        restarted = true;
+      });
+
+      await vi.waitFor(() => expect(cancelAllMock).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(restarted).toBe(false);
+
+      exitWatcherDrain.resolve(undefined);
+      await restart;
+      expect(restarted).toBe(true);
+    } finally {
+      exitWatcherDrain.resolve(undefined);
+      await cleanGatewayCron(original);
+    }
+  });
+
   it("unregisters a stopped scheduler when stream draining fails and permits retry", async () => {
     stopAllMock.mockRejectedValueOnce(new Error("stream drain failed"));
     stopAllMock.mockResolvedValue(undefined);
