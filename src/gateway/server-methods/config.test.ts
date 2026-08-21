@@ -142,6 +142,21 @@ async function invokeConfigPatch(args: {
   return harness;
 }
 
+async function invokeConfigSet(args: { raw: unknown; baseHash?: string }) {
+  const harness = createConfigHandlerHarness({
+    method: "config.set",
+    params: {
+      raw: JSON.stringify(args.raw),
+      ...(args.baseHash ? { baseHash: args.baseHash } : {}),
+    },
+  });
+  await expectDefined(
+    configHandlers["config.set"],
+    'configHandlers["config.set"] test invariant',
+  )(harness.options);
+  return harness;
+}
+
 async function invokeConfigSchema() {
   const harness = createConfigHandlerHarness({ method: "config.schema" });
   await expectDefined(
@@ -298,6 +313,36 @@ describe("write acknowledgement redaction", () => {
     const harness = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "lobster" } } } });
 
     const lastCall = expectDefined(harness.respond.mock.calls.at(-1), "config.patch respond call");
+    const payload = lastCall[1] as { config: { ui: { prefs: { theme: string } } } };
+    expect(payload.config.ui.prefs.theme).toBe("__OPENCLAW_REDACTED__");
+  });
+
+  // config.set must reach the same answer as config.patch. Its pre-write hints once came from the
+  // schema cache, which is keyed on plugin registry version alone; ownership can change through a
+  // config reload without touching that key, leaving the cache describing the previous claimant and
+  // dropping the only hint that marks the retained value sensitive.
+  it("redacts that field on config.set too, with the schema cache describing the old claimant", async () => {
+    storedConfig = { ui: { prefs: { theme: "claw" } } };
+    buildRuntimeConfigSchemaForConfigMock.mockImplementation((config: unknown) => {
+      const theme = (config as { ui?: { prefs?: { theme?: string } } } | undefined)?.ui?.prefs
+        ?.theme;
+      const uiHints: Record<string, { sensitive?: boolean }> =
+        theme === "claw" ? { "ui.prefs.theme": { sensitive: true } } : {};
+      return { schema: { type: "object" }, uiHints, version: "test-schema" };
+    });
+    // The cached schema knows nothing about the departing claimant's field.
+    loadGatewayRuntimeConfigSchemaMock.mockReturnValue({
+      schema: { type: "object" },
+      uiHints: {},
+      version: "test-schema",
+    });
+
+    const harness = await invokeConfigSet({
+      raw: { ui: { prefs: { theme: "lobster" } } },
+      baseHash: storedHash,
+    });
+
+    const lastCall = expectDefined(harness.respond.mock.calls.at(-1), "config.set respond call");
     const payload = lastCall[1] as { config: { ui: { prefs: { theme: string } } } };
     expect(payload.config.ui.prefs.theme).toBe("__OPENCLAW_REDACTED__");
   });

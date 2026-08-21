@@ -1020,8 +1020,13 @@ export const configHandlers: GatewayRequestHandlers = {
           : {}),
         config: redactConfigObject(
           writeResult.config,
+          // Rebuild the pre-write hints from the config that was actually on disk, as the
+          // patch and apply paths do. The parsed schema comes from a cache keyed on plugin
+          // registry version alone, and ownership can move through a config reload without
+          // advancing that key, which would leave the departing claimant's only sensitive
+          // hint out of the union and return its retained value here.
           unionRedactionUiHints(
-            parsed.schema.uiHints,
+            buildRuntimeConfigSchemaForConfig(snapshot.config).uiHints,
             buildRuntimeConfigSchemaForConfig(writeResult.config).uiHints,
           ),
         ),
