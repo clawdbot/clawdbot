@@ -1,9 +1,12 @@
 // Startup host-link repair must precede plugin-owned state migration imports.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMaybeRepairPluginOpenClawHostLinksMock,
   startupCheckpointOptions,
   type StateMigrationResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
+
+const maybeRepairPluginOpenClawHostLinks = getMaybeRepairPluginOpenClawHostLinksMock();
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
   vi.fn(
@@ -56,14 +59,6 @@ const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
 );
 const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
   vi.fn(async () => ({ targets: [], warnings: [] })),
-);
-const maybeRepairPluginOpenClawHostLinks = vi.hoisted(() =>
-  vi.fn(
-    async (_params: {
-      env: NodeJS.ProcessEnv;
-      prompter: { shouldRepair: boolean };
-    }): Promise<boolean> => false,
-  ),
 );
 const needsStateMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
 const needsStartupMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
@@ -124,10 +119,6 @@ vi.mock("./doctor-state-migrations.js", () => ({
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
   collectCronCodexRuntimePolicyTargetsReadOnly,
   repairLegacyCronStoreWithoutPrompt,
-}));
-
-vi.mock("./doctor-plugin-host-links.js", () => ({
-  maybeRepairPluginOpenClawHostLinks,
 }));
 
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
