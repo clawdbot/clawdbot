@@ -602,6 +602,8 @@ describe("Codex paired-device exec-server carrier", () => {
         await stopChild(node);
         node = startNodeProcess(gatewayPort, nodeEnv);
         await approvePairing(gateway, "node", nodeId);
+        await stopChild(node);
+        node = startNodeProcess(gatewayPort, nodeEnv);
         await vi.waitFor(async () => {
           const approved = (await readNode(gateway!, nodeId)) as
             | {
