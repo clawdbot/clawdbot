@@ -62,8 +62,11 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     envSnapshot.restore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     gatewayReachableState.mock = undefined;
+    const { resetSecretRedactionRegistryForTest } =
+      await import("../logging/secret-redaction-registry.test-support.js");
+    resetSecretRedactionRegistryForTest();
     testConfigStore.clear();
     capturedReplaceConfigFileCalls.length = 0;
     configWritePluginLeaseDepths.length = 0;
@@ -609,10 +612,17 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("emits structured JSON diagnostics when daemon health fails", async () => {
     await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
+      const registeredSecret = "qa-onboarding-health-secret";
+      const { registerSecretValueForRedaction } =
+        await import("../logging/secret-redaction-registry.js");
+      registerSecretValueForRedaction(registeredSecret);
       gatewayReachableState.mock = vi.fn(async () => ({
         ok: false,
-        detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        detail: `gateway closed (1006 abnormal closure (no close frame)): ${registeredSecret}`,
       }));
+      readLastGatewayErrorLineMock.mockResolvedValueOnce(
+        `Gateway failed to start: required secrets are unavailable: ${registeredSecret}`,
+      );
 
       const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
       await expectOnboardLocalJsonSetupFailure({
@@ -651,6 +661,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
       expect(parsed.diagnostics?.service?.pid).toBe(4242);
       expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
+      expect(readCapturedJson()).not.toContain(registeredSecret);
     });
   }, 60_000);
 
@@ -694,12 +705,22 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("routes thrown health-check errors through the onboarding failure owner", async () => {
     await withStateDir("state-local-health-failure-text-", async (stateDir) => {
+      const registeredSecret = "qa-onboarding-health-secret";
+      const { registerSecretValueForRedaction } =
+        await import("../logging/secret-redaction-registry.js");
+      registerSecretValueForRedaction(registeredSecret);
       gatewayReachableState.mock = vi.fn(async () => ({ ok: true }));
-      healthCommandMock.mockRejectedValueOnce(new Error("health request timed out"));
+      healthCommandMock.mockRejectedValueOnce(
+        new Error(`health request timed out: ${registeredSecret}`),
+      );
 
-      await expect(
-        runNonInteractiveSetup(createOnboardLocalDaemonOptions(stateDir), runtime),
-      ).rejects.toThrow(/health check failed[\s\S]*health request timed out/);
+      const failure = await runNonInteractiveSetup(
+        createOnboardLocalDaemonOptions(stateDir),
+        runtime,
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toMatch(/health check failed[\s\S]*health request timed out/);
+      expect(String(failure)).not.toContain(registeredSecret);
     });
   }, 60_000);
 
