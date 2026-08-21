@@ -26,6 +26,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   createRunningTaskRun,
@@ -425,6 +426,20 @@ describe("subagent registry seam flow", () => {
   let mod: RegistryHarness;
   const findRequesterRun = (runId: string) =>
     mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
+  // Read the child's signal log the way sessions.status does: its whole
+  // `stateChanges` block comes from listSessionStateEventsSince, so this is the
+  // observer-visible projection rather than a spy on the producer call.
+  const observerTerminalSignals = (runId: string) =>
+    listSessionStateEventsSince("agent:main:subagent:child", "main", 0, 200)
+      .events.filter(
+        (event) =>
+          event.runId === runId && (event.kind === "run_failed" || event.kind === "run_completed"),
+      )
+      .map((event) => ({
+        kind: event.kind,
+        summary: event.summary,
+        outcome: (event.payload as { outcome?: string } | undefined)?.outcome,
+      }));
   const mockPendingAgentWait = () =>
     mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
   const mockSingleCollectorConcurrency = () =>
@@ -2444,6 +2459,77 @@ describe("subagent registry seam flow", () => {
     expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalled();
   });
 
+  it("publishes no durable terminal signal for an unconfirmed child until an observed stop promotes it", async () => {
+    // Regression (openclaw-odqn round 3): the terminal-signal projection sits
+    // BEFORE the deferred-cleanup guard round 2 added, so an unconfirmed expiry
+    // still recorded a durable `run_failed` / "child run timed out" event. The
+    // signal log inserts on a `run-terminal:<runId>` dedupe key with
+    // conflict-do-nothing, so that first write is permanent: authoritative
+    // promotion afterwards cannot replace it, and an observer keeps being told a
+    // possibly-live child died. This reads back through
+    // listSessionStateEventsSince — the single source sessions.status uses to
+    // build its `stateChanges` block — so it asserts the observer surface, not
+    // just the producer call.
+    const startedAt = Date.now();
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt,
+        status: "running",
+        sessionId: "sess-terminal-signal",
+        lifecycleRevision: "rev-terminal-signal",
+      }),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-unconfirmed-terminal-signal",
+      task: "unconfirmed child publishes no terminal signal",
+      cleanup: "keep",
+      runTimeoutSeconds: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForFast(() => {
+      expect(
+        findRequesterRun("run-unconfirmed-terminal-signal")?.execution.outcome?.timeoutDisposition,
+      ).toBe("child-unconfirmed");
+    });
+    // The parent is still woken; only the durable death claim is withheld.
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    expect(observerTerminalSignals("run-unconfirmed-terminal-signal")).toEqual([]);
+
+    // The child records its own stop. That is authoritative evidence, so
+    // promotion re-drives the withheld terminal effects — including this
+    // projection, whose claim is now earned rather than guessed.
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt + 30_000,
+        endedAt: startedAt + 30_000,
+        status: "done",
+        sessionId: "sess-terminal-signal",
+        lifecycleRevision: "rev-terminal-signal",
+      }),
+    );
+    vi.setSystemTime(startedAt + 40_000);
+    await mod.testing.sweepOnceForTests();
+
+    // This half is also the anti-vacuity control: it proves the signal log is
+    // live and readable in this harness, so the empty assertion above is a real
+    // absence rather than an unreachable database.
+    await waitForFast(() => {
+      expect(observerTerminalSignals("run-unconfirmed-terminal-signal")).toEqual([
+        { kind: "run_failed", summary: "child run timed out", outcome: "timeout" },
+      ]);
+    });
+  });
+
   it("skips silent-cleanup session deletion for an unconfirmed child but keeps it for an observed stop", async () => {
     const sessionStore = () =>
       createSessionStore({
@@ -2931,6 +3017,8 @@ describe("subagent registry seam flow", () => {
         "published unconfirmed timeout outcome",
       );
     });
+    // Round 3: while unconfirmed, no durable terminal signal reaches an observer.
+    expect(observerTerminalSignals("run-timeout-late-lifecycle-timeout")).toEqual([]);
 
     const lifecycleHandler = getLifecycleHandler();
 
@@ -2967,6 +3055,12 @@ describe("subagent registry seam flow", () => {
         "promoted lifecycle timeout outcome",
       );
       expect(run?.execution.endedAt).toBe(startedAt + 1_010);
+      // Round 3: promotion is also what publishes the terminal signal. This is
+      // the push route (a late lifecycle event); the sweeper pull route is
+      // covered separately, and both must land the claim exactly once.
+      expect(observerTerminalSignals("run-timeout-late-lifecycle-timeout")).toEqual([
+        { kind: "run_failed", summary: "child run timed out", outcome: "timeout" },
+      ]);
     });
     // Promotion settles cleanup; it does not re-notify the parent.
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);

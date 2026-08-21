@@ -346,11 +346,18 @@ export async function completeTerminalEffects(
   const isProvisionalKill = entry.killReconciliation !== undefined;
   // Record only the current, non-superseded callback with a committed outcome; the
   // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
-  // would permanently mislabel the signal-log terminal kind.
+  // would permanently mislabel the signal-log terminal kind. A `child-unconfirmed`
+  // timeout is provisional in exactly that sense: no stop was ever observed, so
+  // publishing "child run timed out" would tell every signal-log observer
+  // (sessions.status) that a possibly-live child died, and first-write-wins means
+  // a later authoritative promotion could not replace it. Promotion re-enters this
+  // path with an observed disposition, which is where the true terminal state
+  // is published from.
   const outcomeStatus = entry.execution.outcome?.status;
   if (
     !suppressSessionEffects &&
     !isProvisionalKill &&
+    !shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
     outcomeStatus &&
     outcomeStatus !== "unknown"
   ) {
