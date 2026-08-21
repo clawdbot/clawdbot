@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
+import { withTimeout } from "./fs-safe.js";
 import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-response-body-timeout.js";
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
@@ -16,6 +17,26 @@ export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
 export async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
   if (response && !response.bodyUsed) {
     await response.body?.cancel().catch(() => undefined);
+  }
+}
+
+/** Settles an unused terminal response within its request deadline, then releases its guard. */
+export async function releaseGuardedResponse(params: {
+  response: Response;
+  release: () => Promise<void>;
+  deadlineAtMs: number;
+  label: string;
+}): Promise<void> {
+  try {
+    if (!params.response.bodyUsed) {
+      await withTimeout(
+        cancelUnreadResponseBody(params.response),
+        Math.max(1, params.deadlineAtMs - Date.now()),
+        params.label,
+      ).catch(() => undefined);
+    }
+  } finally {
+    await params.release();
   }
 }
 

@@ -3,9 +3,8 @@ import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { withTimeout } from "../infra/fs-safe.js";
 // Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { readResponseWithLimit, releaseGuardedResponse } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
 import { resolveTimeoutMs } from "../media-understanding/resolve.js";
@@ -113,21 +112,12 @@ async function fetchLinkContent(params: {
     }
     return { content, finalUrl };
   } finally {
-    // Guard release closes the dispatcher, not an unread response stream.
-    // Error pages leave the body unread; settle it before releasing, but
-    // keep the settle inside the request deadline so a stream whose cancel
-    // never settles cannot retain the dispatcher.
-    if (!response.bodyUsed) {
-      const cancellation = response.body?.cancel();
-      if (cancellation) {
-        await withTimeout(
-          cancellation,
-          Math.max(1, requestDeadlineAtMs - Date.now()),
-          "link-understanding response cleanup",
-        ).catch(() => undefined);
-      }
-    }
-    await release();
+    await releaseGuardedResponse({
+      response,
+      release,
+      deadlineAtMs: requestDeadlineAtMs,
+      label: "link-understanding response cleanup",
+    });
   }
 }
 

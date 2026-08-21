@@ -4,8 +4,7 @@ import {
 } from "@openclaw/model-catalog-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
-import { withTimeout } from "../infra/fs-safe.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { readResponseWithLimit, releaseGuardedResponse } from "../infra/http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
@@ -197,21 +196,12 @@ export async function refreshRemoteModelCatalog(params: {
         ...bundleCounts(bundle),
       };
     } finally {
-      // Guard release closes the dispatcher, not an unread response stream.
-      // Error pages leave the body unread; settle it before releasing, but
-      // keep the settle inside the request deadline so a stream whose cancel
-      // never settles cannot retain the dispatcher.
-      if (!guarded.response.bodyUsed) {
-        const cancellation = guarded.response.body?.cancel();
-        if (cancellation) {
-          await withTimeout(
-            cancellation,
-            Math.max(1, requestDeadlineAtMs - Date.now()),
-            "remote-catalog response cleanup",
-          ).catch(() => undefined);
-        }
-      }
-      await guarded.release();
+      await releaseGuardedResponse({
+        response: guarded.response,
+        release: guarded.release,
+        deadlineAtMs: requestDeadlineAtMs,
+        label: "remote-catalog response cleanup",
+      });
     }
   } catch (error) {
     return { status: "error", error: String(error), providers: 0, models: 0 };

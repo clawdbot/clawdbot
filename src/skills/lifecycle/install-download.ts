@@ -9,6 +9,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { isWindowsDrivePath } from "../../infra/archive-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { releaseGuardedResponse } from "../../infra/http-body.js";
 import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { isWithinDir } from "../../infra/path-safety.js";
@@ -27,18 +28,6 @@ async function loadExtractModule() {
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
-}
-
-async function cancelIgnoredResponseBody(response: Response): Promise<void> {
-  const body = response.body as unknown;
-  const cancel =
-    body && typeof (body as { cancel?: unknown }).cancel === "function"
-      ? (body as { cancel: () => Promise<void> | void }).cancel
-      : undefined;
-  if (!cancel) {
-    return;
-  }
-  await Promise.resolve(cancel.call(body)).catch(() => undefined);
 }
 
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
@@ -98,13 +87,14 @@ async function downloadFile(params: {
     boundaryLabel: "skill tools directory",
   });
   const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
+  const requestTimeoutMs = Math.max(1_000, params.timeoutMs);
+  const requestDeadlineAtMs = Date.now() + requestTimeoutMs;
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
-    timeoutMs: Math.max(1_000, params.timeoutMs),
+    timeoutMs: requestTimeoutMs,
   });
   try {
     if (!response.ok || !response.body) {
-      await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
     const file = fs.createWriteStream(tempPath);
@@ -119,7 +109,12 @@ async function downloadFile(params: {
     return { bytes: stat.size };
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-    await release();
+    await releaseGuardedResponse({
+      response,
+      release,
+      deadlineAtMs: requestDeadlineAtMs,
+      label: "skill download response cleanup",
+    });
   }
 }
 

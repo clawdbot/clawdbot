@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
+import { readResponseWithLimit, releaseGuardedResponse } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { runNodeHost } from "../node-host/runner.js";
@@ -53,9 +53,10 @@ function parseJoinTarget(target: string): URL | null {
 
 async function fetchJoinPayload(target: URL): Promise<PairingSetupPayload> {
   const expectedHost = normalizeHostname(target.hostname);
-  let release: () => Promise<void> = async () => {};
+  const requestDeadlineAtMs = Date.now() + JOIN_FETCH_TIMEOUT_MS;
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
   try {
-    const guarded = await fetchWithSsrFGuard({
+    guarded = await fetchWithSsrFGuard({
       url: target.toString(),
       auditContext: "openclaw-connect-join",
       maxRedirects: 0,
@@ -67,10 +68,8 @@ async function fetchJoinPayload(target: URL): Promise<PairingSetupPayload> {
         hostnameAllowlist: [expectedHost],
       },
     });
-    release = guarded.release;
-    const response = guarded.response;
+    const { response } = guarded;
     if (!response.ok || !response.headers.get("content-type")?.startsWith("application/json")) {
-      await cancelUnreadResponseBody(response);
       throw new Error("Gateway join code was not found or has expired.");
     }
     const body = await readResponseWithLimit(response, MAX_JOIN_PAYLOAD_BYTES);
@@ -87,7 +86,14 @@ async function fetchJoinPayload(target: URL): Promise<PairingSetupPayload> {
     }
     throw new Error("Could not fetch the Gateway join payload securely.", { cause: error });
   } finally {
-    await release();
+    if (guarded) {
+      await releaseGuardedResponse({
+        response: guarded.response,
+        release: guarded.release,
+        deadlineAtMs: requestDeadlineAtMs,
+        label: "connect join response cleanup",
+      });
+    }
   }
 }
 

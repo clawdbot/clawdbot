@@ -6,6 +6,7 @@ import {
   readResponseTextPrefix,
   readResponseTextSnippet,
   readResponseWithLimit,
+  releaseGuardedResponse,
 } from "./http-body.js";
 
 function makeStream(chunks: Uint8Array[], delayMs?: number) {
@@ -132,6 +133,34 @@ describe("cancelUnreadResponseBody", () => {
     await cancelUnreadResponseBody(undefined);
 
     expect(cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseGuardedResponse", () => {
+  it("releases after a never-settling cancellation reaches the request deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const response = new Response(
+        new ReadableStream({ cancel: () => new Promise<void>(() => {}) }),
+      );
+      const cleanup = releaseGuardedResponse({
+        response,
+        release,
+        deadlineAtMs: Date.now() + 50,
+        label: "test response cleanup",
+      });
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(release).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await cleanup;
+
+      expect(release).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

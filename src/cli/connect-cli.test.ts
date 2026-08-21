@@ -124,4 +124,30 @@ describe("connect cli", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(mocks.runNodeHost).not.toHaveBeenCalled();
   });
+
+  it("releases failed join fetches when body cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const response = new Response(
+        new ReadableStream({ cancel: () => new Promise<void>(() => {}) }),
+        { status: 404 },
+      );
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response,
+        finalUrl: `https://gateway.example/j/${"a".repeat(22)}`,
+        release,
+      });
+
+      const run = runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await run;
+
+      expect(release).toHaveBeenCalledOnce();
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -13,7 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { readResponseWithLimit, releaseGuardedResponse } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
@@ -206,6 +206,7 @@ async function fetchWithGuard(params: {
   policy?: SsrFPolicy;
   auditContext?: string;
 }): Promise<InputFetchResult> {
+  const requestDeadlineAtMs = Date.now() + params.timeoutMs;
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     maxRedirects: params.maxRedirects,
@@ -217,19 +218,11 @@ async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
-      await discardIgnoredResponseBody(response);
       throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
     }
 
-    let contentLength: number | null;
-    try {
-      contentLength = parseMediaContentLength(response.headers.get("content-length"));
-    } catch (err) {
-      await discardIgnoredResponseBody(response);
-      throw err;
-    }
+    const contentLength = parseMediaContentLength(response.headers.get("content-length"));
     if (contentLength !== null && contentLength > params.maxBytes) {
-      await discardIgnoredResponseBody(response);
       throw new Error(
         `Content too large: ${contentLength} bytes (limit: ${params.maxBytes} bytes)`,
       );
@@ -240,19 +233,12 @@ async function fetchWithGuard(params: {
     const contentType = response.headers.get("content-type") ?? undefined;
     return { buffer, contentType };
   } finally {
-    await release();
-  }
-}
-
-async function discardIgnoredResponseBody(response: Response): Promise<void> {
-  const body = response.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
+    await releaseGuardedResponse({
+      response,
+      release,
+      deadlineAtMs: requestDeadlineAtMs,
+      label: "input source response cleanup",
+    });
   }
 }
 

@@ -22,7 +22,7 @@ import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { cancelUnreadResponseBody } from "../../infra/http-body.js";
+import { releaseGuardedResponse } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
@@ -138,6 +138,7 @@ function getToolPath(tool: "fd" | "rg"): string | null {
 
 // Fetch latest release version from GitHub
 async function getLatestVersion(repo: string): Promise<string> {
+  const requestDeadlineAtMs = Date.now() + NETWORK_TIMEOUT_MS;
   const guarded = await fetchWithSsrFGuard({
     url: `https://api.github.com/repos/${repo}/releases/latest`,
     timeoutMs: NETWORK_TIMEOUT_MS,
@@ -150,7 +151,6 @@ async function getLatestVersion(repo: string): Promise<string> {
 
   try {
     if (!response.ok) {
-      await cancelUnreadResponseBody(response);
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
@@ -159,11 +159,17 @@ async function getLatestVersion(repo: string): Promise<string> {
     });
     return data.tag_name.replace(/^v/, "");
   } finally {
-    await guarded.release();
+    await releaseGuardedResponse({
+      response,
+      release: guarded.release,
+      deadlineAtMs: requestDeadlineAtMs,
+      label: "tool release response cleanup",
+    });
   }
 }
 
 async function downloadFile(url: string, dest: string, maxBytes: number): Promise<void> {
+  const requestDeadlineAtMs = Date.now() + DOWNLOAD_TIMEOUT_MS;
   const guarded = await fetchWithSsrFGuard({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -173,7 +179,6 @@ async function downloadFile(url: string, dest: string, maxBytes: number): Promis
 
   try {
     if (!response.ok) {
-      await cancelUnreadResponseBody(response);
       throw new Error(`Failed to download: ${response.status}`);
     }
 
@@ -187,7 +192,6 @@ async function downloadFile(url: string, dest: string, maxBytes: number): Promis
       if (CONTENT_LENGTH_RE.test(contentLength)) {
         const declaredBytes = Number(contentLength);
         if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
-          await cancelUnreadResponseBody(response);
           throw new Error(`Download exceeds the ${maxBytes}-byte archive limit`);
         }
       }
@@ -220,7 +224,12 @@ async function downloadFile(url: string, dest: string, maxBytes: number): Promis
       }
     }
   } finally {
-    await guarded.release();
+    await releaseGuardedResponse({
+      response,
+      release: guarded.release,
+      deadlineAtMs: requestDeadlineAtMs,
+      label: "tool download response cleanup",
+    });
   }
 }
 
