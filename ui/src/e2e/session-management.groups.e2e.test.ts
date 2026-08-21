@@ -963,7 +963,7 @@ suite.define(() => {
     }
   });
 
-  it("explains empty gateway groups for the selected agent", async () => {
+  it("keeps empty gateway groups compact for the selected agent", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -1011,22 +1011,40 @@ suite.define(() => {
 
       const emptyGroups = page.locator('[data-session-section^="category:"]');
       await expect.poll(() => emptyGroups.count()).toBe(2);
-      await captureUiProof(page, "sidebar-empty-cross-agent-groups.png");
+
+      for (const name of ["Email intake", "Customer replies"]) {
+        const group = page.locator(`[data-session-section="category:${name}"]`);
+        await group.waitFor({ state: "visible" });
+        await expect
+          .poll(() => group.locator(":scope > .sidebar-recent-sessions__head").count())
+          .toBe(1);
+        const toggle = group.getByRole("button", { name, exact: true });
+        await toggle.waitFor({ state: "visible" });
+        await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+      }
+
+      await expect.poll(() => emptyGroups.locator(".sidebar-session-empty-hint").count()).toBe(0);
       await expect
-        .poll(() => emptyGroups.locator(".sidebar-session-empty-placeholder").allTextContents())
-        .toEqual(["No sessions found for this agent", "No sessions found for this agent"]);
+        .poll(() => emptyGroups.locator(".sidebar-recent-sessions__list").count())
+        .toBe(0);
+
       const firstEmptyGroup = emptyGroups.first();
-      const textLeft = (selector: string) =>
-        firstEmptyGroup.locator(selector).evaluate((element) => {
-          const range = document.createRange();
-          range.selectNodeContents(element);
-          return range.getBoundingClientRect().x;
-        });
-      const [titleLeft, placeholderLeft] = await Promise.all([
-        textLeft(".sidebar-recent-sessions__label-text"),
-        textLeft(".sidebar-session-empty-placeholder"),
-      ]);
-      expect(placeholderLeft).toBeCloseTo(titleLeft, 0);
+      const groupHeight = () =>
+        firstEmptyGroup.evaluate((element) => element.getBoundingClientRect().height);
+      await expect.poll(groupHeight).toBeGreaterThan(0);
+      const expandedHeight = await groupHeight();
+      await captureUiProof(page, "sidebar-empty-cross-agent-groups.png");
+
+      const toggle = firstEmptyGroup.locator(".sidebar-session-group-toggle");
+      await toggle.click();
+      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(groupHeight).toBe(expandedHeight);
+      await expect
+        .poll(() => firstEmptyGroup.locator(".sidebar-session-empty-hint").count())
+        .toBe(0);
+      await expect
+        .poll(() => firstEmptyGroup.locator(".sidebar-recent-sessions__list").count())
+        .toBe(0);
     } finally {
       await context.close();
     }

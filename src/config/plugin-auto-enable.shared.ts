@@ -684,6 +684,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
       config: params.config,
       env: params.env,
       pluginIds: setupPluginIds,
+      manifestRegistry: params.registry,
     })) {
       changes.push({
         pluginId: entry.pluginId,

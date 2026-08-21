@@ -219,6 +219,11 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
+      const pluginSubagentToolsAllow =
+        params.client?.internal?.agentRunTracking === "plugin_subagent" &&
+        Array.isArray(params.client.internal.pluginSubagentToolsAllow)
+          ? [...params.client.internal.pluginSubagentToolsAllow]
+          : undefined;
       const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
         collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
         isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
@@ -320,7 +325,7 @@ export function startAgentRunExecution(params: {
               }),
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-              toolsAllow: params.restoredCronContinuation?.toolsAllow,
+              toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
               runtimePluginToolGrant,
               trustedInternalHandoff: prepared.trustedInternalHandoff,
               toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,

@@ -532,12 +532,14 @@ export class DraftPlaceState {
 
   selectCloudProfile(profileId: string) {
     const snapshot = this.read();
+    const profile = this.gateway.cloudProfiles.find((candidate) => candidate.id === profileId);
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
       !this.isAdmin() ||
       !this.worktreeAvailable() ||
-      !this.gateway.cloudProfiles.some((profile) => profile.id === profileId)
+      !profile ||
+      Boolean(this.modelControl.cloudRuntimeUnsupportedReason(profile))
     ) {
       return;
     }
@@ -572,6 +574,17 @@ export class DraftPlaceState {
   }
 
   restorePreferenceSelections() {
+    const selectedCloudProfile = this.gateway.cloudProfiles.find(
+      (profile) => profile.id === this.cloudProfileIdValue,
+    );
+    if (
+      selectedCloudProfile &&
+      this.modelControl.cloudRuntimeUnsupportedReason(selectedCloudProfile) &&
+      !this.read().pendingPlacementSessionKey
+    ) {
+      this.selectDevice("");
+      return;
+    }
     let changed = false;
     const preferredWhere = this.whereSelectedByUser ? null : this.preferredWhereRestore;
     let preferredProject = this.projectSelectedByUser ? "" : this.preferredProjectRestore;
@@ -598,8 +611,11 @@ export class DraftPlaceState {
       this.preferredWhereRestore = null;
       changed = true;
     } else if (preferredWhere?.kind === "cloud" && this.gateway.cloudProfilesReady) {
-      const profileAvailable = this.gateway.cloudProfiles.some(
+      const preferredProfile = this.gateway.cloudProfiles.find(
         (profile) => profile.id === preferredWhere.id,
+      );
+      const profileAvailable = Boolean(
+        preferredProfile && !this.modelControl.cloudRuntimeUnsupportedReason(preferredProfile),
       );
       const projectReady = !preferredProject || this.browser.projectId === preferredProject;
       if (this.isAdmin() && profileAvailable && projectReady && this.worktreeAvailable()) {

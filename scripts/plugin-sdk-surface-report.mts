@@ -305,7 +305,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
       // -1: remove the test-only channel activity reset export.
       // +1: named bounded structured-input surface for native harness protocol adapters.
-      4336,
+      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
+      // -2: retire the uncalled secret-plan target resolver and its result type.
+      4335,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -392,6 +394,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     runtimes render the same guidance instead of diverging prompt copies.
       // +1: shared harness visible-source-reply guidance.
       // -1: remove the test-only channel activity reset export.
+      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
+      // -1: retire the uncalled secret-plan target resolver.
       2577,
       env,
     ),

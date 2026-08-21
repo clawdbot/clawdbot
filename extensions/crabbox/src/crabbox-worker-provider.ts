@@ -256,7 +256,7 @@ async function waitForProvisionReady(
     return inspect;
   } catch (error) {
     if (error instanceof WorkerProviderError) {
-      await stopProvisionInspect({ ...params, inspect });
+      return await failProvisionAfterCleanup({ ...params, id: inspect.id }, error);
     }
     throw error;
   }
@@ -302,15 +302,13 @@ async function runProvisionSetup(
       ),
     });
   } catch (error) {
-    await stopProvisionInspect(params);
-    throw error;
+    return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
   }
   if (result.termination === "exit" && result.code === 0) {
     return;
   }
   const error = permanentCrabboxCommandError("setup", result);
-  await stopProvisionInspect(params);
-  throw error;
+  return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
 }
 
 async function runProvisionSetupAndWaitReady(
@@ -327,10 +325,6 @@ async function runProvisionSetupAndWaitReady(
   return await waitForProvisionReady({ ...params, refresh: true });
 }
 
-async function stopProvisionInspect(params: ProvisionInspectContext): Promise<void> {
-  await stopProvisionId({ ...params, id: params.inspect.id });
-}
-
 async function stopProvisionId(params: {
   binary: string;
   id: string;
@@ -345,6 +339,18 @@ async function stopProvisionId(params: {
     // Cleanup gets its own budget so an exhausted provision deadline cannot leak a lease.
     timeoutMs: CRABBOX_LIFECYCLE_TIMEOUT_MS,
   });
+}
+
+async function failProvisionAfterCleanup(
+  params: LeaseCommandContext & { runCommand: CrabboxCommandRunner },
+  provisionError: unknown,
+): Promise<never> {
+  try {
+    await stopProvisionId(params);
+  } catch (cleanupError) {
+    throw WorkerProviderError.cleanupIndeterminate(params.id, provisionError, cleanupError);
+  }
+  throw provisionError;
 }
 
 function transientAwsProfileCleanupError(
@@ -386,6 +392,9 @@ async function rejectAwsProfileAfterLeaseReconciliation(
   try {
     await stopCrabboxLease({ ...context, runCommand });
   } catch (error) {
+    if (!invalidInspect && inspected?.status === "found") {
+      throw WorkerProviderError.cleanupIndeterminate(context.id, profileError, error);
+    }
     const detail = invalidInspect
       ? new AggregateError([invalidInspect, error], "invalid inspect and stop failed")
       : error;
@@ -549,7 +558,10 @@ export function createCrabboxWorkerProvider(
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.
         if (error instanceof WorkerProviderError) {
-          await stopProvisionId({ binary, id: leaseId, provider: parsed.provider, runCommand });
+          return await failProvisionAfterCleanup(
+            { binary, id: leaseId, provider: parsed.provider, runCommand },
+            error,
+          );
         }
         throw error;
       }
@@ -565,8 +577,10 @@ export function createCrabboxWorkerProvider(
         runCommand,
       };
       if (isUnusableProvisionState(inspected.inspect.state)) {
-        await stopProvisionInspect(inspectedParams);
-        throw new WorkerProviderError("Crabbox warmup lease entered a terminal state");
+        return await failProvisionAfterCleanup(
+          { ...inspectedParams, id: leaseId },
+          new WorkerProviderError("Crabbox warmup lease entered a terminal state"),
+        );
       }
       inspectedParams.inspect = await waitForProvisionReady({ ...inspectedParams, sleep });
       inspectedParams.deadline = setupDeadline;
@@ -586,15 +600,19 @@ export function createCrabboxWorkerProvider(
       }
       const beginNodeEnrollment = options?.beginNodeEnrollment;
       if (!beginNodeEnrollment) {
-        await stopProvisionInspect(inspectedParams);
-        throw new Error("Crabbox worker node enrollment is unavailable");
+        return await failProvisionAfterCleanup(
+          { ...inspectedParams, id: leaseId },
+          new Error("Crabbox worker node enrollment is unavailable"),
+        );
       }
       let enrollment: CrabboxWorkerNodeEnrollment;
       try {
         enrollment = await beginNodeEnrollment();
       } catch (error) {
-        await stopProvisionInspect(inspectedParams);
-        throw error;
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
+        return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
       const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
@@ -610,8 +628,11 @@ export function createCrabboxWorkerProvider(
       try {
         deviceId = await enrollment.waitForDeviceId();
       } catch (error) {
-        await stopProvisionInspect(inspectedParams);
-        throw error;
+        // Gateway shutdown cancels its wait, not the fixed operation-owned provider lease.
+        if (enrollment.signal?.aborted) {
+          throw error;
+        }
+        return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
       heartbeats.start({
         binary,

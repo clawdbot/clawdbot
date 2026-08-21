@@ -1,6 +1,7 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -114,7 +115,22 @@ export async function exportTrajectoryCommand(
     runtime.exit(1);
     return;
   }
-  const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
+  const requestedAgent = resolvedOpts.agent?.trim();
+  if (resolvedOpts.agent !== undefined && !requestedAgent) {
+    runtime.error("--agent must not be blank");
+    runtime.exit(1);
+    return;
+  }
+  let targetAgentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (requestedAgent) {
+    try {
+      targetAgentId = resolveConfiguredAgentId(getRuntimeConfig(), requestedAgent);
+    } catch (error) {
+      runtime.error(formatErrorMessage(error));
+      runtime.exit(1);
+      return;
+    }
+  }
   let storePath = resolvedOpts.store
     ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
     : resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: targetAgentId });

@@ -184,11 +184,18 @@ export async function handleToolExecutionEnd(
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  const terminate =
+    result !== null &&
+    typeof result === "object" &&
+    "terminate" in result &&
+    result.terminate === true;
   ctx.state.toolMetas.push({
     toolName,
+    toolCallId,
     meta,
     replaySafe: callSummary.replaySafe,
     isError: observerIsError,
+    ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -239,7 +246,6 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
-  ctx.state.lastToolRecovery = terminal.lastToolRecovery;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;

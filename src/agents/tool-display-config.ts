@@ -359,6 +359,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "GitHub Publish",
       detailKeys: ["title"],
     },
+    github_identity_status: {
+      emoji: "🔐",
+      title: "GitHub Identity Status",
+      detailKeys: [],
+    },
     sessions: {
       emoji: "🗂️",
       title: "Session Settings",

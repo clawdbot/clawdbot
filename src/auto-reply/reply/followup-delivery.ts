@@ -5,9 +5,11 @@ import {
   hasCompletedSourceReplyDeliveryEvidence,
   hasCompletedTerminalDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
-  hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasDeliberateSilentTerminalReply,
+  hasIntentionalTerminalCompletion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -200,10 +202,6 @@ export function resolveFollowupDeliveryDecision(params: {
       resolved: runtimeResolved,
     };
   }
-  const hasCommittedDelivery =
-    hasVisibleOutboundDeliveryEvidence(result) ||
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    result.didSendDeterministicApprovalPrompt === true;
   const fallbackPayload = accounting.terminalFailurePayload
     ? isInteractive && !hasCompletedTerminalDeliveryEvidence(result)
       ? sourcePolicy.sourceReplyDeliveryMode === "message_tool_only"
@@ -234,7 +232,8 @@ export function resolveFollowupDeliveryDecision(params: {
         hasPendingContinuation:
           result.meta?.yielded === true || (result.meta?.pendingToolCalls?.length ?? 0) > 0,
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
-        hasCommittedDelivery,
+        hasCommittedDelivery: hasCompletedTerminalDeliveryEvidence(result),
+        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(result),
         sessionCtx: {
           ChatType: turn.queued.originatingChatType,
           Provider: turn.queued.run.messageProvider,

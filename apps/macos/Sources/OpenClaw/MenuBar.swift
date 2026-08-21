@@ -746,45 +746,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.applicationTerminationReply(sender, true)
     }
 
-    static func shouldPresentScheduledFirstRunOnboarding(
-        expectedConnectionMode: AppState.ConnectionMode,
-        currentConnectionMode: AppState.ConnectionMode,
-        expectedRouteIdentity: String?,
-        currentRouteIdentity: String?,
-        onboardingSeen: Bool) -> Bool
-    {
-        !onboardingSeen &&
-            expectedConnectionMode == currentConnectionMode &&
-            expectedRouteIdentity == currentRouteIdentity
+    static func shouldPresentScheduledFirstRunOnboarding(onboardingSeen: Bool) -> Bool {
+        !onboardingSeen
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
         let connectionMode = AppStateStore.shared.connectionMode
-        let expectedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
         let onboardingSeen = AppStateStore.shared.onboardingSeen
         if connectionMode != .unconfigured, onboardingSeen {
             OnboardingController.markComplete()
             return
         }
-        self.scheduleFirstRunOnboardingPresentation(
-            expectedConnectionMode: connectionMode,
-            expectedRouteIdentity: expectedRouteIdentity)
+        self.scheduleFirstRunOnboardingPresentation()
     }
 
-    private func scheduleFirstRunOnboardingPresentation(
-        expectedConnectionMode: AppState.ConnectionMode,
-        expectedRouteIdentity: String?)
-    {
+    private func scheduleFirstRunOnboardingPresentation() {
         let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            let currentRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity()
             guard Self.shouldPresentScheduledFirstRunOnboarding(
-                expectedConnectionMode: expectedConnectionMode,
-                currentConnectionMode: AppStateStore.shared.connectionMode,
-                expectedRouteIdentity: expectedRouteIdentity,
-                currentRouteIdentity: currentRouteIdentity,
                 onboardingSeen: AppStateStore.shared.onboardingSeen)
             else { return }
             OnboardingController.shared.show()

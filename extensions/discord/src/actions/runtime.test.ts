@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
@@ -81,7 +82,6 @@ const discordSendMocks = {
   searchMessagesDiscord: vi.fn(async () => ({})),
   sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
-  sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
   sendVoiceMessageDiscord: vi.fn(async () => ({})),
   setChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
@@ -123,7 +123,6 @@ const {
   searchMessagesDiscord,
   sendDiscordComponentMessage,
   sendMessageDiscord,
-  sendPollDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
   timeoutMemberDiscord,
@@ -180,6 +179,7 @@ function handleMessagingAction(
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
   options?: {
+    reply?: ChannelMessageActionContext["reply"];
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -1190,31 +1190,6 @@ describe("handleDiscordMessagingAction", () => {
         disabledActions,
       ),
     ).rejects.toThrow(/Discord reactions are disabled/);
-  });
-
-  it("parses string booleans for poll options", async () => {
-    await handleMessagingAction(
-      "poll",
-      {
-        to: "channel:123",
-        question: "Lunch?",
-        answers: ["Pizza", "Sushi"],
-        allowMultiselect: "true",
-        durationHours: "24",
-      },
-      enableAllActions,
-    );
-
-    expect(sendPollDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      {
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 2,
-        durationHours: 24,
-      },
-      { cfg: DISCORD_TEST_CFG, content: undefined },
-    );
   });
 
   it("rejects Discord permission reads for non-allowlisted target channels", async () => {
@@ -2244,6 +2219,49 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
+
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+      replyToId: "source-1",
+      expected: { messageId: "source-1", scope: "first" },
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+      replyToId: "explicit-1",
+      expected: { messageId: "explicit-1", scope: "all" },
+    },
+    {
+      label: "raw custom plugin reply",
+      reply: undefined,
+      replyToId: "custom-1",
+      expected: { messageId: "custom-1", scope: "all" },
+    },
+  ])(
+    "preserves the host-owned or custom $label for component sends",
+    async ({ reply, replyToId, expected }) => {
+      sendDiscordComponentMessage.mockClear();
+
+      await handleMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "hello",
+          components: { blocks: [{ type: "text", text: "Pick one" }] },
+          replyTo: replyToId,
+        },
+        enableAllActions,
+        DISCORD_TEST_CFG,
+        reply ? { reply } : undefined,
+      );
+
+      expect(
+        mockObjectArg(sendDiscordComponentMessage, "sendDiscordComponentMessage", 0, 2),
+      ).toMatchObject({ reply: expected });
+    },
+  );
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();

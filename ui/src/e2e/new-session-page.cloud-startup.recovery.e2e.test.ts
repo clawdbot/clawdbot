@@ -7,6 +7,7 @@ import {
   installMockGateway,
   pollLocatorText,
   replaceGatewayClient,
+  waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -311,15 +312,15 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
+      await waitForCommittedChatRoute(page);
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
 
-      await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
-      await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
-        "send outcome unknown",
-      );
+      const alert = page.locator('.chat-cloud-startup-error[role="alert"]');
+      await pollLocatorText(alert).toContain("send outcome unknown");
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await replaceGatewayClient(page);
       await expect.poll(async () => (await gateway.getRequests("sessions.send")).length).toBe(2);
 

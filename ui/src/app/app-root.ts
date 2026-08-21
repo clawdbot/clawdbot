@@ -47,10 +47,6 @@ function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is Route
   return "type" in result && result.type === "notFound";
 }
 
-export function resolveTerminalThemeMode(): "dark" | "light" {
-  return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
-}
-
 function renderConnectingSplash(status?: string) {
   return html`
     <main
@@ -119,12 +115,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => (this.terminalOnly ? this.context?.agentSelection : undefined),
         (selection, notify) => selection.subscribe(notify),
       )
+      .watch(
+        () => (this.terminalOnly ? this.context?.theme : undefined),
+        (theme, notify) => theme.subscribe(notify),
+      )
       .effect(() => this.ownerDocument, installNativeTitleGuard);
   }
 
   override connectedCallback() {
     super.connectedCallback();
-    void import("../components/app-sidebar.ts");
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
@@ -456,7 +455,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
           .agentId=${terminalAgentId}
-          .themeMode=${resolveTerminalThemeMode()}
+          .themeMode=${context.theme.resolvedMode}
           fullscreen
         ></openclaw-terminal-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null

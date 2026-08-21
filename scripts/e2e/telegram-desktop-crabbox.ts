@@ -580,6 +580,7 @@ export async function createMotionPreview(params: {
 }
 
 export async function createCroppedMotionPreview(params: {
+  crabboxBin: string;
   crop: TelegramCrop;
   croppedGifPath: string;
   croppedVideoPath: string;
@@ -591,40 +592,39 @@ export async function createCroppedMotionPreview(params: {
   const run = params.run ?? runCommand;
   const crop = `crop=${params.crop.width}:${params.crop.height}:${params.crop.x}:${params.crop.y}`;
   const scale = `scale=${params.crop.cropWidth}:-2:flags=lanczos`;
-  await run({
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-vf",
-      `${crop},${scale}`,
-      "-pix_fmt",
-      "yuv420p",
-      params.croppedVideoPath,
-    ],
-    command: "ffmpeg",
-    cwd: params.cwd,
-    stdio: "inherit",
-  });
-  await run({
-    args: [
-      "-y",
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-i",
-      params.videoPath,
-      "-filter_complex",
-      `${crop},fps=${params.fps},${scale},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
-      params.croppedGifPath,
-    ],
-    command: "ffmpeg",
-    cwd: params.cwd,
-    stdio: "inherit",
-  });
+  const croppedSourcePath = `${params.croppedVideoPath}.source.mp4`;
+  try {
+    await run({
+      args: [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-i",
+        params.videoPath,
+        "-vf",
+        `${crop},${scale}`,
+        "-pix_fmt",
+        "yuv420p",
+        croppedSourcePath,
+      ],
+      command: "ffmpeg",
+      cwd: params.cwd,
+      stdio: "inherit",
+    });
+    await createMotionPreview({
+      crabboxBin: params.crabboxBin,
+      cwd: params.cwd,
+      fps: params.fps,
+      gifPath: params.croppedGifPath,
+      run,
+      trimmedVideoPath: params.croppedVideoPath,
+      videoPath: croppedSourcePath,
+      width: params.crop.cropWidth,
+    });
+  } finally {
+    fs.rmSync(croppedSourcePath, { force: true });
+  }
   return { crop, fps: params.fps, outputWidth: params.crop.cropWidth };
 }
 
@@ -687,11 +687,14 @@ export async function stopRemoteRecording(params: {
   });
 }
 
-export function telegramPrivatePostLink(groupId: string, messageId: string): string {
+export function telegramPrivatePostLink(groupId: string, messageId?: string): string {
   if (!/^-100\d+$/u.test(groupId)) {
     throw new Error(`Telegram privatepost links require a -100 group id, got ${groupId}.`);
   }
-  return `tg://privatepost?channel=${groupId.slice(4)}&post=${messageId}`;
+  // tdesktop's ResolvePrivatePost only requires channel; an absent post opens the chat
+  // itself, which is all the recorder needs to keep the account's chat list off screen.
+  const chatLink = `tg://privatepost?channel=${groupId.slice(4)}`;
+  return messageId ? `${chatLink}&post=${messageId}` : chatLink;
 }
 
 export function renderTelegramViewCommand(params: {
@@ -719,5 +722,7 @@ fi
 wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
 wmctrl -ir "$win" -e 0,${TELEGRAM_DESKTOP_WINDOW.x},${TELEGRAM_DESKTOP_WINDOW.y},${TELEGRAM_DESKTOP_WINDOW.width},${TELEGRAM_DESKTOP_WINDOW.height}
 ${openLink}
+xdotool windowmap "$win"
+xdotool windowactivate --sync "$win"
 wmctrl -lxG | awk 'tolower($0) ~ /telegramdesktop/'`;
 }

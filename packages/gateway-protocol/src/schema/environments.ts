@@ -128,11 +128,18 @@ export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, 
   maxItems: 32,
 });
 
+/** Placement execution modes shared by runtime requirements and worker providers. */
+export const WorkerExecutionModeSchema = Type.Union([
+  Type.Literal("worker-turn"),
+  Type.Literal("remote-exec"),
+]);
+
 /** Configured worker target exposed without provider settings or credentials. */
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
   trust: Type.Optional(EnvironmentTrustSchema),
+  executionMode: Type.Optional(WorkerExecutionModeSchema),
   machines: Type.Optional(WorkerMachineOptionsSchema),
 });
 
@@ -199,6 +206,7 @@ export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
 export type WorkerSlotSummary = Static<typeof WorkerSlotSummarySchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
+export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;

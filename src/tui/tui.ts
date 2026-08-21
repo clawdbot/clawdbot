@@ -49,6 +49,7 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
+import { createTuiAuthChildOwner } from "./tui-auth-child.js";
 import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -800,6 +801,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   let dynamicSlashCommandsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let exitRequested = false;
   let exitResult: TuiResult = { exitReason: "exit" };
+  const authChild = createTuiAuthChildOwner();
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
   let lastActivityStatus = "idle";
@@ -1035,12 +1037,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return name ? `${id} (${name})` : id;
   };
 
-  const resolveSessionSelection = (raw?: string) => {
+  const resolveSessionSelection = (raw?: string, agentId = state.currentAgentId) => {
     return resolveTuiSessionSelection({
       raw,
       cfg: config,
       sessionScope: state.sessionScope,
-      currentAgentId: state.currentAgentId,
+      currentAgentId: agentId,
       sessionMainKey: state.sessionMainKey,
     });
   };
@@ -1319,14 +1321,16 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     try {
       return await work();
     } finally {
-      if (isLocalMode) {
-        setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+      if (!exitRequested) {
+        if (isLocalMode) {
+          setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+        }
+        tui.start();
+        tui.setFocus(editor);
+        updateHeader();
+        updateFooter();
+        tui.requestRender(true);
       }
-      tui.start();
-      tui.setFocus(editor);
-      updateHeader();
-      updateFooter();
-      tui.requestRender(true);
     }
   };
 
@@ -1342,32 +1346,26 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
               ? await resolveCodexCliBin()
               : null;
 
-          return await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
-            (resolve, reject) => {
-              let command: string;
-              let args: string[];
-              let cwd: string;
-              if (codexBin) {
-                command = codexBin;
-                args = ["login"];
-                cwd = resolveUsableCwd();
-              } else {
-                const invocation = resolveTuiLocalAuthCliInvocation({ provider });
-                ({ command, args, cwd } = invocation);
-              }
+          let command: string;
+          let args: string[];
+          let cwd: string;
+          if (codexBin) {
+            command = codexBin;
+            args = ["login"];
+            cwd = resolveUsableCwd();
+          } else {
+            const invocation = resolveTuiLocalAuthCliInvocation({ provider });
+            ({ command, args, cwd } = invocation);
+          }
 
-              const invocation = resolveLocalAuthSpawnInvocation({ command, args });
-              const child = spawn(invocation.command, invocation.args, {
-                cwd,
-                env: process.env,
-                stdio: "inherit",
-                ...invocation.options,
-              });
-              child.once("error", reject);
-              child.once("exit", (exitCode, signal) => {
-                resolve({ exitCode, signal });
-              });
-            },
+          const invocation = resolveLocalAuthSpawnInvocation({ command, args });
+          return await authChild.spawnAndWait(() =>
+            spawn(invocation.command, invocation.args, {
+              cwd,
+              env: process.env,
+              stdio: "inherit",
+              ...invocation.options,
+            }),
           );
         })
     : undefined;
@@ -1521,6 +1519,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     exitRequested = true;
+    authChild.close();
     // Exit owns the input boundary before transport teardown can race a buffered submit.
     disposeSubmitBurst();
     connectionGeneration += 1;

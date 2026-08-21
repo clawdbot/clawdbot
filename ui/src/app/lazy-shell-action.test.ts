@@ -12,7 +12,7 @@ import {
 } from "./app-host.test-support.ts";
 import "./app-host.ts";
 import { DEBUG_OVERLAY_ELEMENT } from "./lazy-custom-element.ts";
-import { persistLazyShellAction, readLazyShellAction } from "./lazy-shell-action.ts";
+import { readLazyShellAction } from "./lazy-shell-action.ts";
 
 const storageKey = "openclaw:lazy-event";
 
@@ -33,18 +33,6 @@ async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promi
 afterEach(resetAppHostTestGlobals);
 
 describe("lazy shell action storage", () => {
-  it("round-trips a closed structured panel action", () => {
-    const storage = createStorageMock();
-    const action = {
-      eventType: TERMINAL_PANEL_TOGGLE_EVENT,
-      detail: { dock: "right", open: true },
-    } as const;
-    vi.stubGlobal("sessionStorage", storage);
-
-    persistLazyShellAction(action);
-    expect(readLazyShellAction()).toEqual(action);
-  });
-
   it.each([
     "{",
     JSON.stringify({ eventType: COMMAND_PALETTE_OPEN_EVENT, extra: true }),

@@ -72,7 +72,6 @@ import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
-
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
@@ -282,6 +281,7 @@ class AgentsPage
   }
 
   override disconnectedCallback() {
+    this.githubIdentity.dispose();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -336,13 +336,15 @@ class AgentsPage
     void this.selectDefaultAgentFile(agentId);
   }
 
-  private async selectDefaultAgentFile(agentId: string) {
+  private async selectDefaultAgentFile(agentId: string, force = false) {
     const files = this.agentFilesList?.files ?? [];
     if (!this.agentFileActive || !files.some((file) => file.name === this.agentFileActive)) {
       this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
     if (this.agentFileActive) {
-      await loadAgentFileContent(this, agentId, this.agentFileActive);
+      await loadAgentFileContent(this, agentId, this.agentFileActive, {
+        force,
+      });
     }
   }
 
@@ -369,8 +371,7 @@ class AgentsPage
     this.agentSkillsLoading = false;
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
-    this.toolsEffectiveLoading = false;
-    this.toolsEffectiveLoadingKey = null;
+    resetToolsEffectiveState(this);
     this.cron = {
       ...this.cron,
       cronLoading: false,
@@ -530,7 +531,7 @@ class AgentsPage
       }
       this.loadEffectiveToolsForAgent(agentId);
       if (
-        this.githubIdentity.supported &&
+        this.githubIdentity.statusReadable &&
         !this.githubIdentity.status &&
         !this.githubIdentity.loading &&
         !this.githubIdentity.error
@@ -558,13 +559,21 @@ class AgentsPage
   }
 
   private syncGitHubIdentity(agentId: string | null) {
+    const snapshot = this.context.gateway.snapshot;
+    const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
+      canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
     this.githubIdentity.sync({
       client: this.client,
       connected: this.connected,
       agentId,
       config: currentConfigObject(this.context.runtimeConfig.state),
-      supported: this.canCall("tools.github.status", "operator.read"),
-      configurable: this.canCall("tools.github.configure", "operator.admin"),
+      statusReadable: hasScope("tools.github.status", "operator.read"),
+      configurable: hasScope("tools.github.configure", "operator.admin"),
+      authorizable: [
+        "tools.github.authorize.start",
+        "tools.github.authorize.poll",
+        "tools.github.authorize.cancel",
+      ].every((method) => hasScope(method, "operator.admin")),
       clientRevision: this.requestGeneration,
     });
   }
@@ -669,7 +678,7 @@ class AgentsPage
       }
     }
     if (this.isCurrentRequest(client, generation, agentId, { agents })) {
-      await this.selectDefaultAgentFile(agentId);
+      await this.selectDefaultAgentFile(agentId, force);
     }
   }
 

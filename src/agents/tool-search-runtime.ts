@@ -30,6 +30,7 @@ import {
 } from "./tool-search-catalog.js";
 import {
   buildLexicalIndex,
+  readParameterText,
   scoreLexical,
   tokenizeDocument,
   tokenizeQuery,
@@ -75,30 +76,6 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
   return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
-}
-
-/** Collects property names and descriptions from a JSON-Schema-shaped value. */
-function readParameterText(parameters: unknown, depth = 0): string {
-  if (depth > 4 || !isRecord(parameters)) {
-    return "";
-  }
-  const parts: string[] = [];
-  const description = parameters.description;
-  if (typeof description === "string") {
-    parts.push(description);
-  }
-  const properties = parameters.properties;
-  if (isRecord(properties)) {
-    for (const [name, child] of Object.entries(properties)) {
-      parts.push(name);
-      parts.push(readParameterText(child, depth + 1));
-    }
-  }
-  const items = parameters.items;
-  if (items !== undefined) {
-    parts.push(readParameterText(items, depth + 1));
-  }
-  return parts.filter(Boolean).join(" ");
 }
 
 function tokenizeLookupValue(input: string): Set<string> {
@@ -155,8 +132,8 @@ function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "code-mode"
       ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
-      : options.recoverySurface === "tools"
-        ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
+      : options.recoverySurface === "catalog"
+        ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
         : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;
@@ -322,6 +299,10 @@ type CachedToolSearchIndex = {
   >;
   index: ReturnType<typeof buildLexicalIndex<ToolSearchCatalogEntry>>;
 };
+type ToolSearchIndexCache = Map<
+  boolean | NonNullable<CatalogVisibilityOptions["allowedIds"]>,
+  CachedToolSearchIndex
+>;
 
 function matchesCachedToolSearchIndex(
   cached: CachedToolSearchIndex,
@@ -474,11 +455,9 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   private callSequence = 0;
+  private readonly terminalTargetBatchByParent = new Map<string, boolean>();
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
-  private readonly searchIndexes = new WeakMap<
-    ToolSearchCatalogSession,
-    Map<boolean, CachedToolSearchIndex>
-  >();
+  private readonly searchIndexes = new WeakMap<ToolSearchCatalogSession, ToolSearchIndexCache>();
 
   constructor(
     private readonly ctx: ToolSearchToolContext,
@@ -502,13 +481,13 @@ export class ToolSearchRuntime {
     if (limit === 1 && exactMatches.length === 1) {
       return exactMatches.slice(0, limit).map((entry) => compactToolSearchCatalogEntry(entry));
     }
-    const includeMcp = options?.includeMcp !== false;
+    const indexKey = options?.allowedIds ?? options?.includeMcp !== false;
     let catalogIndexes = this.searchIndexes.get(catalog);
     if (!catalogIndexes) {
       catalogIndexes = new Map();
       this.searchIndexes.set(catalog, catalogIndexes);
     }
-    let cachedIndex = catalogIndexes.get(includeMcp);
+    let cachedIndex = catalogIndexes.get(indexKey);
     if (!cachedIndex || !matchesCachedToolSearchIndex(cachedIndex, entries)) {
       const indexedEntries = entries.map((entry) => ({
         entry,
@@ -529,7 +508,7 @@ export class ToolSearchRuntime {
           })),
         ),
       };
-      catalogIndexes.set(includeMcp, cachedIndex);
+      catalogIndexes.set(indexKey, cachedIndex);
     }
     const ranked = scoreLexical(cachedIndex.index, tokenizeQuery(query))
       .toSorted(
@@ -594,6 +573,16 @@ export class ToolSearchRuntime {
     return parentToolCallId
       ? this.networkInvocations.has(parentToolCallId)
       : this.networkInvocations.size > 0;
+  }
+
+  takeTerminalTargetBatch(parentToolCallId?: string): boolean {
+    const parent =
+      parentToolCallId ??
+      (this.terminalTargetBatchByParent.size === 1
+        ? (this.terminalTargetBatchByParent.keys().next().value ?? "")
+        : "");
+    const terminal = this.terminalTargetBatchByParent.get(parent) === true;
+    return this.terminalTargetBatchByParent.delete(parent) && terminal;
   }
 
   isReplaySafeExactId = (id: string): boolean => {
@@ -713,6 +702,14 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
+    const parentToolCallId = options?.parentToolCallId;
+    if (parentToolCallId) {
+      this.terminalTargetBatchByParent.set(
+        parentToolCallId,
+        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+          acceptedResult.terminate === true,
+      );
+    }
     return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
   };
 
@@ -726,18 +723,22 @@ export function formatToolSearchControlResult<T>(
   payload: T,
   runtime: ToolSearchRuntime | undefined,
   parentToolCallId?: string,
+  terminalBatchStatus?: "waiting" | "completed" | "failed",
 ): AgentToolResult<T> {
-  const result = jsonResult(payload);
+  let result: AgentToolResult<T> = jsonResult(payload);
   const content = result.content[0];
-  if (!runtime?.hasNetworkContent(parentToolCallId) || content?.type !== "text") {
-    return result;
+  if (runtime?.hasNetworkContent(parentToolCallId) && content?.type === "text") {
+    const bounded = truncateSanitizedExternalContent(content.text, 20_000);
+    const modelText = bounded.truncated
+      ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
+      : bounded.text;
+    const text = wrapExternalContent(modelText, { source: "api" });
+    result = { ...result, content: [{ ...content, text }] };
   }
-  const bounded = truncateSanitizedExternalContent(content.text, 20_000);
-  const modelText = bounded.truncated
-    ? `${truncateSanitizedExternalContent(content.text, 19_988).text}\n[truncated]`
-    : bounded.text;
-  const text = wrapExternalContent(modelText, { source: "api" });
-  return { ...result, content: [{ ...content, text }] };
+  const terminal =
+    terminalBatchStatus !== "waiting" &&
+    runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
+  return terminalBatchStatus !== "failed" && terminal ? { ...result, terminate: true } : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

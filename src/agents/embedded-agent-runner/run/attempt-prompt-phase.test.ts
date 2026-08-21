@@ -261,6 +261,7 @@ function createFixture() {
       setFinalPromptText,
       markBeforeAgentRunBlocked,
       markYieldAborted,
+      isRunBudgetTimeoutAbort: () => false,
       readYieldState: () => yieldState,
       stopAcceptingSteerMessages,
       takePendingMidTurnPrecheckRequest: () => undefined,
@@ -407,6 +408,36 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
       expect.objectContaining({ leaseId: "lease-1", runIds: ["run-1"] }),
     );
+  });
+
+  it("keeps a run-budget timeout failure-free for partial-output salvage", async () => {
+    const fixture = createFixture();
+    const timeoutAbort = new Error("request timed out");
+    mocks.submitPrompt.mockRejectedValueOnce(timeoutAbort);
+    mocks.handlePromptError.mockResolvedValueOnce({
+      promptFailure: { error: timeoutAbort, source: "prompt" },
+    });
+    fixture.input.lifecycle.isRunBudgetTimeoutAbort = (error) => error === timeoutAbort;
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBeNull();
+    expect(fixture.state.promptErrorSource).toBeNull();
+  });
+
+  it("records a provider failure that races a run-budget timeout", async () => {
+    const fixture = createFixture();
+    const providerError = new Error("provider failed");
+    mocks.submitPrompt.mockRejectedValueOnce(providerError);
+    mocks.handlePromptError.mockResolvedValueOnce({
+      promptFailure: { error: providerError, source: "prompt" },
+    });
+    fixture.input.lifecycle.isRunBudgetTimeoutAbort = () => false;
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBe(providerError);
+    expect(fixture.state.promptErrorSource).toBe("prompt");
   });
 
   it("releases steering when preflight skips provider submission", async () => {

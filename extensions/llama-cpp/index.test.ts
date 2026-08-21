@@ -2,7 +2,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
@@ -19,6 +18,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  discoverServer: vi.fn(),
   ensureModel: vi.fn(),
   prepareServer: vi.fn(),
   inspectRuntime: vi.fn(),
@@ -37,6 +37,11 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
+vi.mock("./src/external-server/discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/external-server/discovery.js")>()),
+  discoverLlamaServer: mocks.discoverServer,
+}));
+
 import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
@@ -53,6 +58,7 @@ let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
+  mocks.discoverServer.mockReset();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
   mocks.prepareServer.mockResolvedValue({});
   mocks.inspectRuntime.mockResolvedValue({
@@ -76,18 +82,12 @@ beforeEach(() => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   vi.clearAllMocks();
 });
 
-function captureTextRegistration(): {
-  providers: ProviderPlugin[];
-  catalogProviders: Array<Parameters<OpenClawPluginApi["registerModelCatalogProvider"]>[0]>;
-} {
+function captureTextRegistration(): { providers: ProviderPlugin[] } {
   const providers: ProviderPlugin[] = [];
-  const catalogProviders: Array<Parameters<OpenClawPluginApi["registerModelCatalogProvider"]>[0]> =
-    [];
   llamaCppPlugin.register(
     createTestPluginApi({
       id: LLAMA_CPP_PROVIDER_ID,
@@ -97,10 +97,9 @@ function captureTextRegistration(): {
       pluginConfig: {},
       runtime: {} as never,
       registerProvider: (provider) => providers.push(provider),
-      registerModelCatalogProvider: (provider) => catalogProviders.push(provider),
     }),
   );
-  return { providers, catalogProviders };
+  return { providers };
 }
 
 function registerTextProvider(): ProviderPlugin {
@@ -155,7 +154,7 @@ describe("llama.cpp provider plugin", () => {
   });
 
   it("uses the normal OpenAI-compatible text transport", () => {
-    const { providers, catalogProviders } = captureTextRegistration();
+    const { providers } = captureTextRegistration();
     const provider = expectDefined(providers[0], "llama.cpp provider");
 
     expect(providers.map((registered) => registered.id)).toEqual([LLAMA_CPP_PROVIDER_ID]);
@@ -177,9 +176,23 @@ describe("llama.cpp provider plugin", () => {
       "llama-cpp-existing-server",
     ]);
     expect(provider).not.toHaveProperty("createStreamFn");
-    expect(catalogProviders).toEqual([
-      expect.objectContaining({ provider: LLAMA_CPP_PROVIDER_ID, kinds: ["text"] }),
-    ]);
+  });
+
+  it("never discovers external models for a managed local service", async () => {
+    const provider = registerTextProvider();
+    const prepareDynamicModel = expectDefined(provider.prepareDynamicModel, "dynamic model hook");
+    const { config } = configuredOptions();
+
+    await expect(
+      prepareDynamicModel({
+        config,
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: "gemma-4-e4b-it-q4_k_m",
+        modelRegistry: {} as never,
+        providerConfig: config.models.providers[LLAMA_CPP_PROVIDER_ID],
+      }),
+    ).resolves.toBeUndefined();
+    expect(mocks.discoverServer).not.toHaveBeenCalled();
   });
 
   it("registers local embeddings through the generic provider contract", () => {

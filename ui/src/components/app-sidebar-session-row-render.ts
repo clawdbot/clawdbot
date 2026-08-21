@@ -41,6 +41,7 @@ import {
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import "./elapsed-time.ts";
+import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
@@ -231,7 +232,9 @@ export function renderRecentSession(params: {
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
-  const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
+  const menuTooltip = t("chat.sidebar.openSessionMenu");
+  const menuLabel = `${menuTooltip}: ${label}`;
+  const menuOpen = host.sidebarMenus.sessionMenu?.session.key === session.key;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
@@ -426,22 +429,23 @@ export function renderRecentSession(params: {
               >
                 ${icons.pin}
               </button>`}
-          <button
-            class="session-action"
-            data-session-menu="true"
-            type="button"
-            title=${menuLabel}
-            aria-label=${menuLabel}
-            aria-haspopup="menu"
-            aria-expanded=${String(host.sidebarMenus.sessionMenu?.session.key === session.key)}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              const trigger = event.currentTarget as HTMLElement;
-              host.toggleSessionMenu(session, trigger);
-            }}
-          >
-            ${icons.moreHorizontal}
-          </button>
+          <openclaw-tooltip .content=${menuTooltip} .describe=${false} .disabled=${menuOpen}>
+            <button
+              class="session-action"
+              data-session-menu="true"
+              type="button"
+              aria-label=${menuLabel}
+              aria-haspopup="menu"
+              aria-expanded=${String(menuOpen)}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                const trigger = event.currentTarget as HTMLElement;
+                host.toggleSessionMenu(session, trigger);
+              }}
+            >
+              ${icons.moreHorizontal}
+            </button>
+          </openclaw-tooltip>
         </span>
       </span>
     </div>

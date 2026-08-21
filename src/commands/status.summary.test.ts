@@ -2,7 +2,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
-import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
+import {
+  clearActiveCredentialDegradedOwner,
+  setActiveCredentialDegradedOwner,
+  setActiveDegradedSecretOwners,
+} from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
@@ -219,6 +223,7 @@ describe("getStatusSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setActiveDegradedPlugins([]);
+    clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
     statusSummaryMocks.taskRegistrySummary = {
       total: 0,
@@ -406,28 +411,44 @@ describe("getStatusSummary", () => {
     });
   });
 
-  it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
+  it("reports stale snapshot and cold credential owners without exposing ref identifiers", async () => {
     setActiveDegradedSecretOwners([
       {
-        ownerKind: "account",
-        ownerId: "discord:ops",
+        ownerKind: "provider",
+        ownerId: "openai",
         state: "unavailable",
-        degradationState: "cold",
-        paths: ["channels.discord.accounts.ops.token"],
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
         refKeys: ["env:default:PRIVATE_REF_ID"],
         reason: "provider SecretRef is unresolved (env:default:PRIVATE_REF_ID)",
       },
     ]);
+    setActiveCredentialDegradedOwner({
+      ownerKind: "account",
+      ownerId: "telegram:work",
+      state: "unavailable",
+      paths: ["channels.telegram.accounts.work.tokenFile"],
+      refKeys: [],
+      reason: "credential failure includes PRIVATE_REF_ID",
+    });
 
     const summary = await getStatusSummary();
 
     expect(summary.degradedSecretOwners).toEqual([
       {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        degradationState: "stale",
+        paths: ["models.providers.openai.apiKey"],
+        reason: "secret resolution failed",
+      },
+      {
         ownerKind: "account",
-        ownerId: "discord:ops",
+        ownerId: "telegram:work",
         state: "unavailable",
         degradationState: "cold",
-        paths: ["channels.discord.accounts.ops.token"],
+        paths: ["channels.telegram.accounts.work.tokenFile"],
         reason: "secret resolution failed",
       },
     ]);

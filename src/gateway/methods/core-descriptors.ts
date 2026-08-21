@@ -599,6 +599,27 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { controlPlaneWrite: true },
   ],
   [
+    "tools.github.authorize.start",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "tools.github.authorize.poll",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "tools.github.authorize.cancel",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
     "sessions.github.publish",
     "sessions-github",
     "operator.write",

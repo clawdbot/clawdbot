@@ -169,10 +169,13 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         const entryFastMode = isModeSource ? true : isModeTarget ? undefined : fastMode;
         const entryVerboseLevel = isModeSource ? "full" : isModeTarget ? undefined : verboseLevel;
         const entryTraceLevel = isModeSource ? "raw" : isModeTarget ? modeTargetTraceLevel : undefined;
-        const entryReasoningLevel = isModeSource ? "stream" : undefined;
         return {
           key,
-          displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main",
+          ...(isModeSource
+            ? { displayName: "Production incident" }
+            : isModeTarget
+              ? {}
+              : { displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main" }),
           model: currentModel,
           modelProvider: "fixture-provider",
           contextTokens: 128,
@@ -180,7 +183,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
           ...(entryVerboseLevel ? { verboseLevel: entryVerboseLevel } : {}),
           ...(entryTraceLevel ? { traceLevel: entryTraceLevel } : {}),
-          ...(entryReasoningLevel ? { reasoningLevel: entryReasoningLevel } : {}),
+          ...(isModeSource ? { reasoningLevel: "stream" } : {}),
           thinkingLevels,
         };
       }

@@ -78,11 +78,12 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
 }
 
 export const getCronChannelOptions = () => {
-  // Keep help truthful even before the plugin registry is bootstrapped.
+  // Keep help truthful even before the plugin registry is bootstrapped. The fallback names the
+  // channel plugin id the runtime resolves, not a per-conversation platform channel identifier.
   const pluginIds = listChannelPlugins()
     .map((plugin) => plugin.id)
     .filter(Boolean);
-  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-plugin-id>";
 };
 
 function toLocalIsoTime(value: unknown): string | undefined {

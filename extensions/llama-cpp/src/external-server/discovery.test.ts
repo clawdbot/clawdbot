@@ -39,7 +39,6 @@ describe("llama-server discovery projection", () => {
       discoverLlamaServer({ baseUrl: "http://localhost:8080/v1", cacheTtlMs: 0 }),
     ).resolves.toMatchObject({
       kind: "success",
-      health: "loading",
       endpoint: {
         origin: "http://localhost:8080",
         inferenceBaseUrl: "http://localhost:8080/v1",

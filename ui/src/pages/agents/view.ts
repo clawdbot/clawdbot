@@ -330,6 +330,7 @@ export function renderAgents(props: AgentsProps) {
               )}
               <div
                 id="agent-panel"
+                class="settings-stack"
                 role="tabpanel"
                 aria-labelledby=${`agents-tab-${props.activePanel}`}
               >

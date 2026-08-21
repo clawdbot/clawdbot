@@ -10,10 +10,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/se
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import {
-  buildAgentRunTerminalOutcomeFromWaitResult,
-  classifyAgentRunTerminalOutcome,
-} from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import {
@@ -21,6 +18,7 @@ import {
   selectDeliverableSessionsReply,
 } from "../../tools/sessions-send-tokens.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,
@@ -356,7 +354,7 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so apply the canonical classification here instead
   // of re-enumerating reason groups.
   if (terminalOutcome) {
-    switch (classifyAgentRunTerminalOutcome(terminalOutcome)) {
+    switch (classifySubagentTerminalOutcome(terminalOutcome)) {
       case "timeout":
         outcome = { status: "timeout" };
         break;

@@ -21,9 +21,7 @@ import {
 import { normalizeLlamaServerProviderConfig } from "./external-server/endpoint.js";
 import {
   discoverLlamaServerProvider,
-  listLlamaServerCatalog,
-  prepareLlamaServerDynamicModels,
-  resolveLlamaServerDynamicModel,
+  prepareLlamaServerDynamicModel,
 } from "./external-server/provider.js";
 import {
   configureLlamaServerNonInteractive,
@@ -37,14 +35,6 @@ import { ensureManagedLlamaServerForChat } from "./managed-server.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
-  api.registerModelCatalogProvider({
-    provider: LLAMA_CPP_PROVIDER_ID,
-    kinds: ["text"],
-    liveCatalog: async (ctx) =>
-      ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
-        ? []
-        : await listLlamaServerCatalog(ctx),
-  });
   api.registerProvider({
     id: LLAMA_CPP_PROVIDER_ID,
     label: LLAMA_CPP_PROVIDER_LABEL,
@@ -128,15 +118,10 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       providerConfig.localService
         ? providerConfig
         : normalizeLlamaServerProviderConfig(providerConfig),
-    prepareDynamicModel: async (ctx) => {
-      if (!ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService) {
-        await prepareLlamaServerDynamicModels(ctx);
-      }
-    },
-    resolveDynamicModel: (ctx) =>
+    prepareDynamicModel: async (ctx) =>
       ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
         ? undefined
-        : resolveLlamaServerDynamicModel(ctx),
+        : await prepareLlamaServerDynamicModel(ctx),
     wrapStreamFn: (ctx) => {
       const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
       if (!providerConfig?.localService) {

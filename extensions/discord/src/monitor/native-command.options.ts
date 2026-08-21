@@ -28,7 +28,7 @@ export function truncateDiscordCommandDescription(params: {
   if (value.length <= DISCORD_COMMAND_DESCRIPTION_MAX) {
     return value;
   }
-  log.warn(
+  log.debug(
     `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
   );
   return truncateUtf16Safe(value, DISCORD_COMMAND_DESCRIPTION_MAX);

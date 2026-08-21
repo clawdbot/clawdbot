@@ -140,7 +140,7 @@ export const healthHandlers: GatewayRequestHandlers = {
           context.getRuntimeSnapshot(),
         );
       } catch {
-        cachedDiffersFromRuntime = false;
+        cachedDiffersFromRuntime = true;
       }
     }
     if (

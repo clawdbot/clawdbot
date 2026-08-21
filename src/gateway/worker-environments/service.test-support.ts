@@ -170,6 +170,7 @@ export function createService(
       | "ensureNodeWorkerBundle"
       | "prepareNodeEnrollment"
       | "retireNodeEnrollment"
+      | "stopNodeEnrollmentWaits"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"

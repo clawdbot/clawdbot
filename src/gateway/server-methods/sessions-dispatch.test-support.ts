@@ -159,6 +159,7 @@ export async function invokeSessionMove(
   context: GatewayRequestContext,
   params: {
     expected: { generation: number; environmentId: string; ownerEpoch: number };
+    abandonSource?: true;
     target:
       | { kind: "gateway" }
       | { kind: "profile"; profileId: string; machineClass?: string }

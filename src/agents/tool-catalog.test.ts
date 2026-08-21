@@ -35,6 +35,8 @@ describe("tool-catalog", () => {
       listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
 
     expect(ids()).not.toContain("github_publish");
+    expect(ids()).not.toContain("github_identity_status");
+    expect(ids({ githubPublicationAvailable: false })).toContain("github_identity_status");
     expect(ids({ githubPublicationAvailable: true })).toContain("github_publish");
   });
 
@@ -62,6 +64,7 @@ describe("tool-catalog", () => {
       "conversations_turn",
       "sessions_send",
       "sessions_spawn",
+      "github_identity_status",
       "github_publish",
       "agents_wait",
       "sessions_yield",

@@ -1,10 +1,12 @@
 import path from "node:path";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import {
   callGatewayFromCli,
   isImplicitLocalGatewayTargetFromCli,
   type GatewayRpcOpts,
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { CronJob } from "../cron/types.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -56,9 +58,18 @@ function buildScheduledArgv(
   redactSecrets: boolean,
 ): string[] {
   const agent = options.agent?.trim();
+  if (options.agent !== undefined && !agent) {
+    throw new Error("--agent must not be blank");
+  }
   if (options.globalOnly && agent) {
     throw new Error("Use either --global-only or --agent <id>, not both.");
   }
+  const agentId = agent
+    ? resolveConfiguredAgentId(
+        getRuntimeConfig({ skipPluginValidation: true }),
+        normalizeAgentId(agent),
+      )
+    : undefined;
   return [
     "openclaw",
     "backup",
@@ -66,11 +77,7 @@ function buildScheduledArgv(
     "create",
     "--repository",
     repositoryPath,
-    ...(options.globalOnly
-      ? ["--global"]
-      : agent
-        ? ["--agent", normalizeAgentId(agent)]
-        : ["--all"]),
+    ...(options.globalOnly ? ["--global"] : agentId ? ["--agent", agentId] : ["--all"]),
     ...(options.push ? ["--push"] : []),
     ...(redactSecrets ? ["--exclude-secrets"] : []),
   ];

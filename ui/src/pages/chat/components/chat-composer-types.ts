@@ -1,7 +1,7 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { TemplateResult, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { SessionsListResult } from "../../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
@@ -92,6 +92,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  modelCatalog: readonly ModelCatalogEntry[];
+  modelSwitching: boolean;
   sessions: SessionsListResult | null;
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: CapabilityMenuProps;
@@ -120,13 +122,13 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   suggestionComposer?: boolean;
-  onTypingChange?: (typing: boolean) => void;
+  onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: (followUpModeOverride?: "steer") => void;
+  onSend: (followUpModeOverride?: "steer", submissionAction?: Event) => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;

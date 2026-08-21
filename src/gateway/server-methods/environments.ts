@@ -229,17 +229,20 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
   const summaries = listWorkerProfiles(context);
   return await Promise.all(
     summaries.map(async (summary) => {
+      const executionMode = (["worker-turn", "remote-exec"] as const).find(
+        (mode) =>
+          context.workerEnvironmentService?.supportsExecutionMode?.(summary.id, mode) === true,
+      );
+      const resolvedSummary = Object.assign(summary, executionMode ? { executionMode } : {});
       try {
         const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
         const machines = options ?? [];
-        return machines.length > 0
-          ? { id: summary.id, providerId: summary.providerId, machines }
-          : summary;
+        return machines.length > 0 ? Object.assign(resolvedSummary, { machines }) : resolvedSummary;
       } catch (error) {
         context.logGateway.warn(
           `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,
         );
-        return summary;
+        return resolvedSummary;
       }
     }),
   );

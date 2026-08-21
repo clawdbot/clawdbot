@@ -11,8 +11,8 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
-  listAgentIds,
   resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId,
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
@@ -78,11 +78,12 @@ type HooksReportTarget = {
 
 function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
   const requested = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
   const requestedAgentId = requested ? normalizeAgentId(requested) : undefined;
-  if (requestedAgentId && !listAgentIds(config).includes(requestedAgentId)) {
-    throw new Error(
-      `Unknown agent id "${requested}". Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
-    );
+  if (requestedAgentId) {
+    resolveConfiguredAgentId(config, requestedAgentId);
   }
   const agentId =
     requestedAgentId ??
@@ -619,6 +620,9 @@ export function registerHooksCli(program: Command): void {
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
     const parentAgent = hooks.opts<{ agent?: string }>().agent;
+    if (parentAgent !== undefined && !parentAgent.trim()) {
+      throw new Error("--agent must not be blank");
+    }
     if (
       parentAgent &&
       actionCommand !== hooks &&

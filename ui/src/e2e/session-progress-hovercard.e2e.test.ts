@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -79,6 +79,79 @@ async function emitPullRequestSnapshot(
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([
+    {
+      open: async (_page: Page, row: Locator) => {
+        await row.locator("[data-session-menu]").click();
+      },
+      source: "More",
+    },
+    {
+      open: async (_page: Page, row: Locator) => {
+        await row.click({ button: "right" });
+      },
+      source: "context menu",
+    },
+    {
+      open: async (page: Page, row: Locator) => {
+        await row.locator(".sidebar-recent-session__link").focus();
+        await page.keyboard.press("Shift+F10");
+      },
+      source: "keyboard",
+    },
+  ])("dismisses the session hovercard before opening its menu from $source", async ({ open }) => {
+    const selectedSessionKey = "agent:main:selected-menu";
+    const sessionKey = "agent:main:hovered-menu";
+
+    await suite.withPage(
+      {
+        hasTouch: false,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              {
+                key: selectedSessionKey,
+                kind: "direct",
+                label: "Selected session",
+                updatedAt: 2,
+              },
+              {
+                key: sessionKey,
+                kind: "direct",
+                label: "Hovered session",
+                updatedAt: 1,
+              },
+            ]),
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        const trigger = row.locator("[data-session-menu]");
+        const card = page.locator(".session-progress-hovercard");
+        const menu = page.getByRole("menu", { name: "Actions for Hovered session" });
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        await card.waitFor({ state: "visible" });
+
+        await open(page, row);
+
+        await menu.waitFor({ state: "visible" });
+        await expect.poll(() => card.count()).toBe(0);
+        await expect.poll(() => menu.isVisible()).toBe(true);
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+      },
+    );
+  });
+
   it("renders safe progress markdown and refreshes the hovered card after a change event", async () => {
     const now = Date.now();
     const selectedSessionKey = "agent:main:selected";

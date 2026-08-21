@@ -316,10 +316,9 @@ export function renderMarkdownCodeBlock(
   if (!shouldRenderCodeBlockInteraction(env)) {
     return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
-  const hiddenLineCount = Math.max(
-    0,
-    markdownCodeBlockCopyText(text).split("\n").length - CODE_PREVIEW_LINE_COUNT,
-  );
+  const hiddenLineCount = ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
+    ? 0
+    : Math.max(0, markdownCodeBlockCopyText(text).split("\n").length - CODE_PREVIEW_LINE_COUNT);
   const hiddenCount = { count: String(hiddenLineCount) };
   const expandLabel = t(
     hiddenLineCount === 1 ? "chat.codeBlock.showHiddenLine" : "chat.codeBlock.showHiddenLines",

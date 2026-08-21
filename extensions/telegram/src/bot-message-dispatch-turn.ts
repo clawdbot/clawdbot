@@ -241,7 +241,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               beginDraftQueuedFollowup(turn);
               turn.finalAnswerDeliveryStarted = false;
               turn.finalAnswerDelivered = false;
-              turn.sawProgressFinal = false;
               turn.progressCompositor.beginNewTurn({ force: true });
             },
             onQueuedFollowupSettled: async () => {
@@ -314,9 +313,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
-    if (hasFinalInboundReplyDispatch(turnResult.dispatchResult)) {
-      turn.sawProgressFinal = true;
-    }
     turn.suppressSilentReplyFallback =
       turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     return true;

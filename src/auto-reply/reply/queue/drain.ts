@@ -280,6 +280,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.skipProviderRuntimeHints === true,
     execution.silentExpected === true,
     execution.allowEmptyAssistantReplyAsSilent === true,
+    execution.terminalReplyExpectation ?? "",
     execution.suppressNextUserMessagePersistence === true,
     execution.suppressTranscriptOnlyAssistantPersistence === true,
     execution.blockReplyBreak,

@@ -44,8 +44,30 @@ openclaw-chat-pane {
   overflow: hidden;
 }
 
-.chat-split-view__cell--active {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active) {
+  filter: saturate(0.45);
+}
+
+.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header
+  :is(
+    .chat-pane__nav-toggle,
+    .chat-pane__incognito,
+    openclaw-session-owner-chip,
+    .chat-pane__participants,
+    .chat-pane__presence,
+    .chat-pane__face-switch,
+    .chat-pane__sharing-menu,
+    .chat-pane__draft-indicator,
+    .chat-pane__branches-menu,
+    .chat-pane__gateway-menu,
+    .chat-pane__actions
+  ) {
+  display: none;
 }
 
 .chat-pane-cache {
@@ -84,11 +106,6 @@ openclaw-chat-pane {
 .chat-split-view--narrow .chat-split-view__column--narrow-hidden,
 .chat-split-view--narrow resizable-divider {
   display: none;
-}
-
-/* Narrow mode shows only the active pane; a focus ring is pure noise there. */
-.chat-split-view--narrow .chat-split-view__cell--active {
-  box-shadow: none;
 }
 
 .chat-split-view__drop-indicator {
@@ -330,6 +347,13 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__placement-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .chat-pane__placement-menu::part(menu) {
   width: 250px;
   padding: 6px;
@@ -360,6 +384,17 @@ openclaw-chat-pane {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.chat-pane__placement-note {
+  max-width: 320px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-radius: 6px;
+  background: var(--warn-subtle);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .chat-pane__gateway-menu {
@@ -722,6 +757,43 @@ openclaw-chat-pane {
 
 .chat-header-session-menu--compact .session-menu__item {
   min-height: 44px;
+}
+
+.chat-header-session-menu__trigger {
+  position: relative;
+}
+
+.chat-header-session-menu__status-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--chat-surface);
+  border-radius: 999px;
+  background: var(--info);
+}
+
+.chat-header-session-menu__status-dot[data-tone="warn"],
+.chat-header-session-menu__status-icon[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.chat-header-session-menu__status-dot[data-tone="warn"] {
+  background: var(--warn);
+}
+
+.chat-header-session-menu__status-dot[data-tone="danger"],
+.chat-header-session-menu__status-icon[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.chat-header-session-menu__status-dot[data-tone="danger"] {
+  background: var(--danger);
+}
+
+.chat-header-session-menu__status-icon[data-tone="info"] {
+  color: var(--info);
 }
 
 .chat-header-session-menu--compact .session-menu__back {

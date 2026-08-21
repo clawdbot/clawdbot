@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345578,
-  "reason": "GitHub publication controls: lazy request chunk and branch-row state",
-  "updatedAt": "2026-08-19"
+  "startupJsGzipBytes": 344531,
+  "reason": "canonical cross-runtime gzip sidecars",
+  "updatedAt": "2026-08-20"
 }

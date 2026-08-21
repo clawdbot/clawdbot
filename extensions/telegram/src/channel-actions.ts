@@ -245,6 +245,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   handleAction: async ({
     action,
     params,
+    reply,
     cfg,
     accountId,
     mediaAccess,
@@ -265,6 +266,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       conversationReadOrigin: _modelConversationReadOrigin,
       mediaAccess: _modelMediaAccess,
       requesterAccountId: _modelRequesterAccountId,
+      reply: _modelReply,
       toolContext: _modelToolContext,
       ...runtimeParams
     } = params;
@@ -291,6 +293,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         gatewayClientScopes,
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
+        ...(reply ? { reply } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

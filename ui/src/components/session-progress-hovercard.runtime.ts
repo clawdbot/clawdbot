@@ -20,6 +20,7 @@ import { createPortaledHovercard, PortaledHovercardController } from "./portaled
 import { renderSessionHovercard } from "./session-hovercard.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
+  SESSION_MENU_OPEN_EVENT,
   sessionProgressHoverPlacementForTarget,
   sessionProgressHoverTargetFromEvent,
 } from "./session-progress-hovercard-target.ts";
@@ -99,6 +100,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.addEventListener("focusin", this.handleFocusIn);
     this.addEventListener("focusout", this.handleFocusOut);
     this.addEventListener("keydown", this.handleKeyDown);
+    this.addEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.connect();
     this.connectStore();
   }
@@ -109,6 +111,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.removeEventListener("focusin", this.handleFocusIn);
     this.removeEventListener("focusout", this.handleFocusOut);
     this.removeEventListener("keydown", this.handleKeyDown);
+    this.removeEventListener(SESSION_MENU_OPEN_EVENT, this.handleSessionMenuOpen);
     this.sessionLinkTitler.disconnect();
     this.disconnectStore();
     this.close();
@@ -206,6 +209,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (first) {
       event.preventDefault();
       first.focus();
+    }
+  };
+
+  private readonly handleSessionMenuOpen = (event: Event) => {
+    if (sessionProgressHoverTargetFromEvent(event) === this.activeTarget) {
+      this.close();
     }
   };
 

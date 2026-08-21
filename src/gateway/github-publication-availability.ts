@@ -6,6 +6,7 @@ import {
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 function publicationConfigSnapshot() {
@@ -24,6 +25,7 @@ export function currentGitHubPublicationConfig() {
 export async function prepareCurrentGitHubPublicationIdentity(
   agentId: string,
 ): Promise<PreparedGitHubPublicationIdentity> {
+  await requestCurrentGitHubOAuthRefresh(agentId);
   const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationIdentity({
     config: snapshot.config,

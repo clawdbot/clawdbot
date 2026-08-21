@@ -133,6 +133,19 @@ describe("chat pane sidebar layout", () => {
     expect(closed.open).toBe(false);
   });
 
+  it("does not reactivate projected Board chat over the selected side-panel tab", () => {
+    const selectedSideChat = openSlot(openSlot({ columns: [] }, "chat"), "companion");
+
+    const layout = resolveSidebarLayoutForBoard({
+      board: board("right"),
+      layout: selectedSideChat,
+      paneWidth: 1_400,
+    });
+
+    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["chat", "companion"]);
+    expect(layout.columns[0]?.activePanelId).toBe("companion");
+  });
+
   it("keeps bottom and hidden board chat outside the side panel", () => {
     for (const dock of ["bottom", "hidden"] as const) {
       const layout = resolveSidebarLayoutForBoard({

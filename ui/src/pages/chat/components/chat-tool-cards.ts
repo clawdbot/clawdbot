@@ -2,9 +2,11 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
+import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
 import type {
   ToolApprovalReview,
@@ -697,12 +699,7 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
   return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
 }
 
-function renderTerminalBlock(
-  command: string,
-  output: string | undefined,
-  outcome: ToolCardOutcome,
-  exitCode?: number,
-) {
+function renderTerminalBlock(command: string, output: string | undefined) {
   return html`
     <div class="chat-tool-term">
       <div class="chat-tool-term__cmd">
@@ -712,8 +709,43 @@ function renderTerminalBlock(
       ${output?.trim()
         ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
         : nothing}
-      ${renderToolOutcome(outcome, exitCode)}
     </div>
+  `;
+}
+
+function renderToolCardModes(
+  card: ToolCard,
+  diff: NonNullable<ToolCallView["diff"]>,
+  outcome: ToolCardOutcome,
+  isError: boolean,
+) {
+  const active = isError ? "raw" : "diff";
+  const modeLabel = t("chat.toolCards.viewMode");
+  return html`
+    <wa-tab-group
+      class="chat-tool-card__modes"
+      aria-label=${modeLabel}
+      .active=${active}
+      activation="auto"
+      without-scroll-controls
+      ${ref((element) => syncTabGroupLabel(element, modeLabel))}
+    >
+      <wa-tab slot="nav" id=${`${card.id}-diff-tab`} panel="diff" ?active=${active === "diff"}>
+        ${t("chat.toolCards.diff")}
+      </wa-tab>
+      <wa-tab slot="nav" id=${`${card.id}-raw-tab`} panel="raw" ?active=${active === "raw"}>
+        ${t("chat.toolCards.raw")}
+      </wa-tab>
+      <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
+        ${renderDiffBlock(diff, outcome)}
+      </wa-tab-panel>
+      <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
+        ${renderToolDataBlock({
+          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+          text: card.outputText!,
+        })}
+      </wa-tab-panel>
+    </wa-tab-group>
   `;
 }
 
@@ -1016,14 +1048,15 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText, outcome, card.exitCode)}
+        ${renderTerminalBlock(view.command, card.outputText)}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
 
-  // Edits and writes with a resolvable diff render it inline; the raw tool
-  // output stays reachable behind the raw-details toggle.
+  // Edits and writes with a resolvable diff render it inline. When raw output
+  // also exists, the shared tab primitive owns both views and their semantics.
   if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
@@ -1035,12 +1068,10 @@ export function renderExpandedToolCardContent(
           )}
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
-        ${renderDiffBlock(view.diff, outcome)} ${renderToolOutcome(outcome, card.exitCode)}
-        ${isError && hasOutput
-          ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
-          : hasOutput
-            ? renderRawOutputToggle(card.outputText!)
-            : nothing}
+        ${hasOutput
+          ? renderToolCardModes(card, view.diff, outcome, isError)
+          : renderDiffBlock(view.diff, outcome)}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }

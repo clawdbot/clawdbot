@@ -50,7 +50,82 @@ function activePlacementSession(
   };
 }
 
+function offlineDeviceSession(): GatewaySessionRow & { placement: ActivePlacement } {
+  const session = activePlacementSession("agent:main:offline-device");
+  return {
+    ...session,
+    label: "Offline device session",
+    hasActiveRun: true,
+    placement: {
+      ...session.placement,
+      runner: { kind: "device", status: "offline" },
+    },
+  };
+}
+
 describe("chat pane placement", () => {
+  it("disables offline Stop while keeping Continue enabled, then restores ordinary actions", () => {
+    const { pane } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move", "sessions.reclaim"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    } as never;
+    const offline = { ...offlineDeviceSession(), hasActiveRun: false };
+    const available = {
+      ...offline,
+      placement: {
+        ...offline.placement,
+        runner: { kind: "device" as const, status: "available" as const },
+      },
+    };
+
+    expect(
+      resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        movingKey: null,
+        reclaimingKey: null,
+        row: offline,
+      }),
+    ).toEqual({
+      moving: false,
+      moveDisabledReason: undefined,
+      reclaimDisabledReason:
+        "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
+    });
+    expect(
+      resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        movingKey: null,
+        reclaimingKey: null,
+        row: available,
+      }),
+    ).toEqual({
+      moving: false,
+      moveDisabledReason: undefined,
+      reclaimDisabledReason: undefined,
+    });
+  });
+
+  it("does not issue reclaim for an offline device placement", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.reclaim"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    } as never;
+
+    await pane.reclaimHeaderPlacement({ ...offlineDeviceSession(), hasActiveRun: false });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(document.body.querySelector("dialog[open]")).toBeNull();
+  });
+
   it("reclaims a provisioning placement through its session", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
@@ -272,6 +347,86 @@ describe("chat pane placement", () => {
       },
       target: { kind: "profile", profileId: "aws", machineClass: "beast" },
     });
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
+  it("cancels offline-device continuation without opening a picker or sending an RPC", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    } as never;
+
+    const moving = pane.moveHeaderPlacement(offlineDeviceSession());
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain(
+      "Unsynced device files and in-flight work may be lost",
+    );
+    expect(document.body.textContent).toContain("last Gateway-synced state");
+    answerConfirmDialog(actions, "cancel");
+    await moving;
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("continues an offline device placement on the Gateway with exact abandonment", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    } as never;
+    const session = offlineDeviceSession();
+
+    const moving = pane.moveHeaderPlacement(session);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await moving;
+
+    expect(request).toHaveBeenCalledWith("sessions.move", {
+      key: session.key,
+      agentId: "main",
+      expected: {
+        generation: session.placement.generation,
+        environmentId: session.placement.environmentId,
+        ownerEpoch: session.placement.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
+    expect(request).not.toHaveBeenCalledWith("environments.list", expect.anything());
+    expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
+    expect(refreshReplacement).toHaveBeenCalledWith("main");
+  });
+
+  it("keeps the offline placement visible when continuation fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("device teardown is still pending; retry Continue on Gateway");
+    });
+    const refreshReplacement = vi.fn(async () => undefined);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { refreshReplacement } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.move"] },
+      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    } as never;
+    const session = offlineDeviceSession();
+
+    const moving = pane.moveHeaderPlacement(session);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await moving;
+
+    expect(session.placement.runner).toEqual({ kind: "device", status: "offline" });
+    expect(state.lastError).toContain("retry Continue on Gateway");
     expect(refreshReplacement).toHaveBeenCalledWith("main");
   });
 

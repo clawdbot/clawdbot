@@ -1,6 +1,6 @@
 /** Shared helpers for model commands that read or mutate model config. */
 
-import { resolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveSoleAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
@@ -161,7 +161,7 @@ export function resolveModelsTargetAgent(
   const requestedAgentId = requested ? resolveKnownAgentId(cfg, requested) : undefined;
   const resolvedAgentId =
     mode.kind === "read"
-      ? resolveSystemAgentTargetAgentId(cfg, requestedAgentId, {
+      ? resolveAmbientOwnerAgentId(cfg, requestedAgentId, {
           surface: "model inspection",
           hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
         })

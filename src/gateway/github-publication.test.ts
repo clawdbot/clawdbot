@@ -520,6 +520,10 @@ describe("Gateway GitHub publication", () => {
       idempotencyKey: "publication-config-snapshot",
     });
 
+    expect(mocks.refreshIdentity).toHaveBeenCalledWith("main");
+    expect(mocks.refreshIdentity.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.prepareIdentity.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(mocks.prepareIdentity).toHaveBeenCalledWith({
       config: resolved,
       sourceConfig: source,

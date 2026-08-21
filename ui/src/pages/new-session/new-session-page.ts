@@ -404,6 +404,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
       deviceId: this.place.deviceId,
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
+      cloudProfileDisabledReason: (profile) =>
+        this.place.modelControl.cloudRuntimeUnsupportedReason(profile),
       submitting,
       pendingPlacement,
       isAdmin: this.place.isAdmin(),

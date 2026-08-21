@@ -39,7 +39,7 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "approval" | "board" | "swarm" | "workboard";
+  fixture?: "approval" | "board" | "code-fences" | "swarm" | "workboard";
   host: string;
   operatorScopes?: string[];
   port: number;
@@ -169,7 +169,13 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "approval" && value !== "board" && value !== "swarm" && value !== "workboard") {
+  if (
+    value !== "approval" &&
+    value !== "board" &&
+    value !== "code-fences" &&
+    value !== "swarm" &&
+    value !== "workboard"
+  ) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -1147,6 +1153,25 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   return messages;
 }
 
+function buildCodeFenceChatHistory(baseTime: number): unknown[] {
+  const proseFence = (language: string, label: string) => {
+    const lines = Array.from({ length: 16 }, (_, index) => `${label} line ${index + 1}`);
+    return `\`\`\`${language}\n${lines.join("\n")}\n\`\`\``;
+  };
+  const jsonLines = Array.from({ length: 18 }, (_, index) => `  "item-${index + 1}",`);
+  jsonLines[jsonLines.length - 1] = `  "item-${jsonLines.length}"`;
+  return [
+    chatHistoryMessage("assistant", proseFence("text", "Plain text"), baseTime),
+    chatHistoryMessage("assistant", proseFence("md", "Markdown alias"), baseTime + 1_000),
+    chatHistoryMessage("assistant", proseFence("markdown", "Markdown"), baseTime + 2_000),
+    chatHistoryMessage(
+      "assistant",
+      `\`\`\`json\n[\n${jsonLines.join("\n")}\n]\n\`\`\``,
+      baseTime + 3_000,
+    ),
+  ];
+}
+
 function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
@@ -1613,7 +1638,10 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
-  const historyMessages = buildScrollableChatHistory(baseTime);
+  const historyMessages =
+    fixture === "code-fences"
+      ? buildCodeFenceChatHistory(baseTime)
+      : buildScrollableChatHistory(baseTime);
   const planSessionInfo = {
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,

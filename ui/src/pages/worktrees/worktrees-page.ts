@@ -478,7 +478,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         ${!this.canAdmin
           ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
           : nothing}
-        ${this.error ? html`<div class="callout danger">${this.error}</div>` : nothing}
+        ${this.error ? html`<div class="callout danger" role="alert">${this.error}</div>` : nothing}
         ${renderSettingsSection(
           { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },
           rows,

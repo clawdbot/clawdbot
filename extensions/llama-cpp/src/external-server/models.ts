@@ -22,19 +22,13 @@ type LlamaServerModelStatus =
 type LlamaServerModelWire = Record<string, unknown> & {
   id?: unknown;
   object?: unknown;
-  owned_by?: unknown;
   status?: {
     value?: unknown;
     failed?: unknown;
-    exit_code?: unknown;
   };
   architecture?: {
     input_modalities?: unknown;
-    output_modalities?: unknown;
   };
-  meta?: {
-    n_ctx_train?: unknown;
-  } | null;
 };
 
 type LlamaServerPropsWire = Record<string, unknown> & {
@@ -46,20 +40,14 @@ type LlamaServerPropsWire = Record<string, unknown> & {
       n_predict?: unknown;
     };
   };
-  total_slots?: unknown;
   chat_template_caps?: Record<string, unknown>;
   modalities?: Record<string, unknown>;
-  build_info?: unknown;
-  is_sleeping?: unknown;
 };
 
 export type LlamaServerDiscoveredModel = {
   config: ModelDefinitionConfig;
   status: LlamaServerModelStatus;
   failed: boolean;
-  exitCode?: number;
-  buildInfo?: string;
-  totalSlots?: number;
 };
 
 function normalizeStatus(value: unknown): LlamaServerModelStatus {
@@ -132,8 +120,6 @@ export function mapLlamaServerModel(
     return null;
   }
   const contextWindow = resolveContextWindow(props);
-  const buildInfo = typeof props?.build_info === "string" ? props.build_info.trim() : "";
-  const exitCode = asPositiveSafeInteger(row.status?.exit_code);
   return {
     config: {
       id,
@@ -148,11 +134,6 @@ export function mapLlamaServerModel(
     },
     status: normalizeStatus(row.status?.value),
     failed: row.status?.failed === true,
-    ...(exitCode !== undefined ? { exitCode } : {}),
-    ...(buildInfo ? { buildInfo } : {}),
-    ...(asPositiveSafeInteger(props?.total_slots) !== undefined
-      ? { totalSlots: asPositiveSafeInteger(props?.total_slots) }
-      : {}),
   };
 }
 

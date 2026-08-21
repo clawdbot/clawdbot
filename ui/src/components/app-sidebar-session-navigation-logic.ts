@@ -557,7 +557,7 @@ export function resolveSidebarAgentResumeKey(
 }
 
 export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
-  if (latest?.hasActiveRun) {
+  if (latest && isSessionRunActive(latest)) {
     return t("agentChip.working");
   }
   return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");

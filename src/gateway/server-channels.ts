@@ -283,7 +283,9 @@ export type ChannelManager = {
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
-export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
+export function createChannelManager(opts: ChannelManagerOptions): ChannelManager & {
+  resolveRuntimeAccountId: (channelId: ChannelId, accountId: string) => string | undefined;
+} {
   const {
     getRuntimeConfig,
     channelLogs,
@@ -490,6 +492,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         continue;
       }
       store.runtimes.delete(id);
+      clearActiveCredentialDegradedOwner("account", restartKey(channelId, normalizeAccountId(id)));
       store.pluginCommandCatalogOwners.delete(id);
       restarts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
@@ -1429,6 +1432,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
+    resolveRuntimeAccountId: (channelId, accountId) => {
+      const matches = [...(channelStores.get(channelId)?.runtimes.keys() ?? [])].filter(
+        (id) => normalizeAccountId(id) === accountId,
+      );
+      return matches.length === 1 ? matches[0] : undefined;
+    },
     isAutoRestartScheduled,
     resetRestartAttempts,
     isHealthMonitorEnabled,

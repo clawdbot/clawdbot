@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,11 +18,23 @@ import {
   backupSqliteVerifyCommand,
 } from "./backup-sqlite.js";
 
+const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
 
 beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  configMocks.getRuntimeConfig.mockReset().mockReturnValue({
+    agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+  });
 });
 
 afterEach(() => {
@@ -255,6 +267,24 @@ describe("SQLite backup commands", () => {
         repository: "/tmp/snapshots",
       }),
     ).rejects.toThrow("Choose exactly one SQLite snapshot source");
+  });
+
+  it.each([
+    [
+      "unknown",
+      "nope-agent",
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ],
+    ["empty", "", "--agent must not be blank"],
+    ["whitespace-only", "   ", "--agent must not be blank"],
+  ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
+    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-backup-sqlite-agent-rejection-");
+    await expect(
+      backupSqliteCreateCommand(createRuntimeCapture(), {
+        agent,
+        repository: "/tmp/snapshots",
+      }),
+    ).rejects.toThrow(message);
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {

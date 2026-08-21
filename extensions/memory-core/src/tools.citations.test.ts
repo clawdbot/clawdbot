@@ -74,6 +74,7 @@ beforeEach(() => {
       },
     ],
     readFileImpl: async (params: MemoryReadParams) => ({
+      status: "ok",
       text: "",
       path: params.relPath,
       from: params.from ?? 1,
@@ -206,9 +207,9 @@ describe("memory tools", () => {
     });
   });
 
-  it("returns empty text without error when file does not exist (ENOENT)", async () => {
+  it("returns an explicit not-found outcome when the file does not exist", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      return { text: "", path: "memory/2026-02-19.md", from: 1, lines: 0 };
+      return { text: "", path: "memory/2026-02-19.md", status: "not_found" };
     });
 
     const tool = createMemoryGetToolOrThrow();
@@ -217,8 +218,7 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       text: "",
       path: "memory/2026-02-19.md",
-      from: 1,
-      lines: 0,
+      status: "not_found",
     });
   });
 
@@ -228,6 +228,7 @@ describe("memory tools", () => {
     const result = await tool.execute("call_builtin_fast_path", { path: "memory/2026-02-19.md" });
 
     expect(result.details).toEqual({
+      status: "ok",
       text: "",
       path: "memory/2026-02-19.md",
       from: 1,
@@ -282,6 +283,7 @@ describe("memory tools", () => {
 
   it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      status: "ok",
       path: params.relPath,
       text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
       from: params.from ?? 1,
@@ -294,6 +296,7 @@ describe("memory tools", () => {
     const result = await tool.execute("call_partial", { path: "memory/partial.md" });
 
     expect(result.details).toEqual({
+      status: "ok",
       path: "memory/partial.md",
       text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
       from: 1,
@@ -393,6 +396,7 @@ describe("memory tools", () => {
           snippet: "Alpha wiki entry",
         },
       ],
+      corpora: [{ corpus: "wiki", outcome: "ok" }],
       citations: "auto",
       debug: undefined,
       fallback: undefined,
@@ -443,7 +447,6 @@ describe("memory tools", () => {
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:main",
         sandboxed: true,
-        corpus,
       });
     },
   );
@@ -636,10 +639,17 @@ describe("memory tools", () => {
       });
       await vi.advanceTimersByTimeAsync(15_000);
       const stalledAllResult = await stalledAllResultPromise;
-      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+      expect(stalledAllResult.details).toMatchObject({
+        results: [{ corpus: "memory", path: "MEMORY.md" }],
+        corpora: [
+          { corpus: "memory", outcome: "ok" },
+          {
+            corpus: "wiki",
+            outcome: "unavailable",
+            error: "memory_search timed out after 15s",
+          },
+        ],
+        warning: expect.stringContaining("Wiki corpus unavailable"),
       });
 
       const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
@@ -653,6 +663,23 @@ describe("memory tools", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("records an unregistered requested wiki corpus without hiding memory results", async () => {
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_without_wiki", {
+      query: "alpha",
+      corpus: "all",
+    });
+
+    expect(result.details).toMatchObject({
+      results: [{ corpus: "memory", path: "MEMORY.md" }],
+      corpora: [
+        { corpus: "memory", outcome: "ok" },
+        { corpus: "wiki", outcome: "not-registered" },
+      ],
+      warning: expect.stringContaining("Wiki corpus is not registered"),
+    });
   });
 
   it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {
@@ -713,10 +740,17 @@ describe("memory tools", () => {
       });
       await vi.advanceTimersByTimeAsync(15_000);
       const stalledAllResult = await stalledAllResultPromise;
-      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
+      expect(stalledAllResult.details).toMatchObject({
+        results: [{ corpus: "wiki", path: "entities/alpha.md" }],
+        corpora: [
+          {
+            corpus: "memory",
+            outcome: "unavailable",
+            error: "memory_search timed out after 15s",
+          },
+          { corpus: "wiki", outcome: "ok" },
+        ],
+        warning: expect.stringContaining("Memory corpus unavailable"),
       });
 
       const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {
@@ -725,200 +759,25 @@ describe("memory tools", () => {
       });
       const details = wikiOnlyResult.details as {
         results: Array<{ corpus: string; path: string }>;
+        corpora: Array<{ corpus: string; outcome: string; error?: string }>;
+        warning?: string;
       };
       expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
         ["wiki", "entities/alpha.md"],
       ]);
+      expect(details.corpora).toEqual([
+        {
+          corpus: "memory",
+          outcome: "unavailable",
+          error: "memory_search timed out after 15s",
+        },
+        { corpus: "wiki", outcome: "ok" },
+      ]);
+      expect(details.warning).toContain("Memory corpus unavailable");
+      expect(details.warning).toContain("memory_search timed out after 15s");
       expect(searchCalls).toBe(1);
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {
-    setMemoryReadFileImpl(async () => {
-      throw new Error("path required");
-    });
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => ({
-        corpus: "wiki",
-        path: "entities/alpha.md",
-        title: "Alpha",
-        kind: "entity",
-        content: "Alpha wiki entry",
-        fromLine: 3,
-        lineCount: 5,
-      }),
-    });
-
-    const tool = createMemoryGetToolOrThrow();
-    const result = await tool.execute("call_get_all_fallback", {
-      path: "entities/alpha.md",
-      from: 3,
-      lines: 5,
-      corpus: "all",
-    });
-
-    expect(result.details).toEqual({
-      corpus: "wiki",
-      path: "entities/alpha.md",
-      title: "Alpha",
-      kind: "entity",
-      text: "Alpha wiki entry",
-      fromLine: 3,
-      lineCount: 5,
-    });
-  });
-
-  it.each(["wiki", "all"] as const)(
-    "forwards effective agent context to memory_get corpus=%s supplements",
-    async (corpus) => {
-      if (corpus === "all") {
-        setMemoryReadFileImpl(async () => {
-          throw new Error("memory path missing");
-        });
-      }
-      const get = vi.fn(async () => ({
-        corpus: "wiki" as const,
-        path: "entities/alpha.md",
-        content: "Alpha wiki entry",
-        fromLine: 2,
-        lineCount: 4,
-      }));
-      registerMemoryCorpusSupplement("memory-wiki", {
-        search: async () => [],
-        get,
-      });
-      const config = asOpenClawConfig({
-        agents: { list: [{ id: "marketing-agent", default: true }] },
-      });
-      const tool = createMemoryGetTool({
-        config,
-        agentId: " Marketing Agent ",
-        agentSessionKey: "agent:marketing-agent:main",
-        sandboxed: true,
-      });
-      if (!tool) {
-        throw new Error("expected memory_get tool");
-      }
-
-      await tool.execute(`call_get_${corpus}`, {
-        path: "entities/alpha.md",
-        from: 2,
-        lines: 4,
-        corpus,
-      });
-
-      expect(get).toHaveBeenCalledWith({
-        lookup: "entities/alpha.md",
-        fromLine: 2,
-        lineCount: 4,
-        agentId: "marketing-agent",
-        agentSessionKey: "agent:marketing-agent:main",
-        sandboxed: true,
-        corpus,
-      });
-    },
-  );
-
-  it("falls back to a wiki corpus supplement when memory_get corpus=all misses memory without throwing", async () => {
-    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
-      text: "",
-      path: params.relPath,
-    }));
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => ({
-        corpus: "wiki",
-        path: "memory/entities/alpha.md",
-        title: "Alpha",
-        kind: "entity",
-        content: "Alpha wiki entry after empty miss",
-        fromLine: 3,
-        lineCount: 5,
-      }),
-    });
-
-    const tool = createMemoryGetToolOrThrow();
-    const result = await tool.execute("call_get_all_empty_miss_fallback", {
-      path: "memory/entities/alpha.md",
-      from: 3,
-      lines: 5,
-      corpus: "all",
-    });
-
-    expect(result.details).toEqual({
-      corpus: "wiki",
-      path: "memory/entities/alpha.md",
-      title: "Alpha",
-      kind: "entity",
-      text: "Alpha wiki entry after empty miss",
-      fromLine: 3,
-      lineCount: 5,
-    });
-  });
-
-  it("preserves an empty in-file range for memory_get corpus=all", async () => {
-    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
-      text: "",
-      path: params.relPath,
-      from: params.from ?? 1,
-      lines: 0,
-    }));
-    const getSupplement = vi.fn(async () => ({
-      corpus: "wiki" as const,
-      path: "memory/entities/alpha.md",
-      title: "Alpha",
-      kind: "entity",
-      content: "Alpha wiki entry",
-      fromLine: 10,
-      lineCount: 5,
-    }));
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: getSupplement,
-    });
-
-    const tool = createMemoryGetToolOrThrow();
-    const result = await tool.execute("call_get_all_empty_range", {
-      path: "memory/entities/alpha.md",
-      from: 10,
-      lines: 5,
-      corpus: "all",
-    });
-
-    expect(result.details).toEqual({
-      text: "",
-      path: "memory/entities/alpha.md",
-      from: 10,
-      lines: 0,
-    });
-    expect(getSupplement).not.toHaveBeenCalled();
-  });
-
-  it("returns the primary error when a corpus=all supplement fallback throws", async () => {
-    setMemoryReadFileImpl(async () => {
-      throw new Error("primary read failed");
-    });
-    registerMemoryCorpusSupplement("memory-wiki", {
-      search: async () => [],
-      get: async () => {
-        throw new Error("supplement lookup failed");
-      },
-    });
-
-    const tool = createMemoryGetToolOrThrow();
-    const result = await tool.execute("call_get_all_supplement_throws", {
-      path: "entities/alpha.md",
-      corpus: "all",
-    });
-
-    expect(result.details).toEqual({
-      path: "entities/alpha.md",
-      text: "",
-      disabled: true,
-      error: "primary read failed",
-    });
   });
 });

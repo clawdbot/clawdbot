@@ -13,6 +13,7 @@ import {
   reduceChatSessionProjection,
 } from "./history-merge.ts";
 import { persistedSteerTargetRunId, rolloverChatStream } from "./stream-causal-boundary.ts";
+import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -20,28 +21,30 @@ type SessionMessageApplySource =
 
 /**
  * The run this pane is finishing. A terminal chat event clears the local run
- * before its persisted reply row arrives, so the armed terminal tombstone is
- * the same pane's proof of ownership for that trailing row. The tombstone
- * outlives its run by design, so it may only claim the row that carries the
- * reply already projected for that run; a delayed older row keeps its own
- * missing ownership instead of displacing a newer run's answer.
+ * before its persisted reply row arrives, so match producer-owned rows to the
+ * active run or its exact terminal tombstone. Legacy rows without producer
+ * ownership may use that tombstone only when their projected reply matches.
  */
 function finishingChatRunId(
   state: ChatState,
   source: SessionMessageApplySource,
   message: unknown,
   scope: SessionProjectionScope,
+  producerRunId: string | null,
 ): string | null {
   if (source.kind !== "live") {
     return null;
   }
   if (source.activeRunId) {
-    return source.activeRunId;
+    return producerRunId && producerRunId !== source.activeRunId ? null : source.activeRunId;
   }
   const recent = state.lastLocalTerminalReconcile;
   const runId = recent?.sessionKey === state.sessionKey ? recent.runId : null;
   if (!runId) {
     return null;
+  }
+  if (producerRunId) {
+    return producerRunId === runId ? runId : null;
   }
   const projected = getChatSessionProjection(state, state.chatMessages, scope).runs[runId]?.message;
   const projectedText = extractText(projected)?.trim();
@@ -73,17 +76,15 @@ export function applySessionMessagePayload(
     source.activeRunId &&
     incoming.runId !== source.activeRunId,
   );
-  // The transcript never records which run wrote an assistant row, so the run
-  // this pane is finishing is the only proof of ownership for the reply that
-  // ends it. Admitting it here lets the reducer recognize the same run's
-  // terminal projection instead of rendering the reply twice.
+  // Only the producer's explicit run ID admits an assistant before its run
+  // ends; clientRunId describes the session event, not transcript ownership.
+  const producerRunId = incoming.runId === event.runId ? incoming.runId : null;
   const assistantOwnerRunId =
     incoming.role === "assistant" &&
     incoming.id &&
     !incoming.isImported &&
-    !incoming.runId &&
-    runActive !== true
-      ? finishingChatRunId(state, source, sourceMessage, scope)
+    (producerRunId || (!incoming.runId && runActive !== true))
+      ? finishingChatRunId(state, source, sourceMessage, scope, producerRunId)
       : null;
   if (
     source.kind === "live" &&
@@ -129,6 +130,9 @@ export function applySessionMessagePayload(
     },
     { scope, runActive },
   );
+  if (incoming.role === "assistant" && projection.messages.includes(message)) {
+    prunePersistedAssistantStreamSegments(state, message);
+  }
   const steerTargetRunId = persistedSteerTargetRunId(message);
   const currentRunId = state.chatRunId;
   if (

@@ -75,7 +75,8 @@ function presenceConnectivitySignature(entries: PresenceEntry[]): string {
     if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
       continue;
     }
-    states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+    const key = entry.roles?.includes("node") ? `${id}:node` : id;
+    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
   }
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }

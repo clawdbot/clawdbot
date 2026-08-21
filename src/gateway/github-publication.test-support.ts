@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   getConfigSnapshot: vi.fn(),
   attribution: vi.fn(),
   updateIndex: vi.fn(),
+  refreshIdentity: vi.fn(),
 }));
 
 export function githubPublicationTestMocks() {
@@ -36,6 +37,10 @@ vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
     prepareGitHubPublicationIdentity: mocks.prepareIdentity,
   };
 });
+
+vi.mock("./github-oauth-lifecycle.js", () => ({
+  requestCurrentGitHubOAuthRefresh: mocks.refreshIdentity,
+}));
 
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
   resolveGitCoauthorAttribution: mocks.attribution,
@@ -206,6 +211,7 @@ export function installGitHubPublicationTestHarness(): void {
       prompt: "",
     });
     mocks.getConfigSnapshot.mockReset().mockReturnValue(null);
+    mocks.refreshIdentity.mockReset().mockResolvedValue(undefined);
     mocks.matchesIdentity.mockReset().mockReturnValue(true);
     mocks.prepareIdentity.mockReset().mockResolvedValue({
       source: "system-configured",

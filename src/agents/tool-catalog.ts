@@ -231,6 +231,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "github_identity_status",
+    label: "github_identity_status",
+    description: "Inspect the effective GitHub identity and credential health",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "github_publish",
     label: "github_publish",
     description: "Publish the reconciled session worktree as a draft GitHub pull request",
@@ -581,6 +589,8 @@ export function listCoreToolSections(params?: {
       (tool) =>
         tool.sectionId === section.id &&
         (tool.id !== "agents_wait" || swarmEnabled) &&
+        (tool.id !== "github_identity_status" ||
+          params?.githubPublicationAvailable !== undefined) &&
         (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
     ).map((tool) => ({
       id: tool.id,

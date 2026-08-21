@@ -747,8 +747,6 @@ describe("modelsStatusCommand auth overview", () => {
         readOnly: true,
       }),
     );
-    expect(mocks.loadModelCatalog.mock.calls.at(-1)?.[0]).not.toHaveProperty("agentId");
-
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");

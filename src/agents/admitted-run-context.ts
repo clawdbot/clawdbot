@@ -65,6 +65,27 @@ export function getAdmittedRunDelegatedAuthority(
     : undefined;
 }
 
+/** Captures an exact admitted-run assertion for work that may cross an await boundary. */
+export function resolveAdmittedRunActiveAssertion(
+  context: AdmittedRunContext,
+  signal?: AbortSignal,
+): (() => void) | undefined {
+  const operationalRunInstance = context.operationalRunInstance;
+  const authority = getAdmittedRunDelegatedAuthority(context);
+  if (!authority) {
+    return undefined;
+  }
+  return () => {
+    if (
+      signal?.aborted ||
+      context.operationalRunInstance !== operationalRunInstance ||
+      getAdmittedRunDelegatedAuthority(context) !== authority
+    ) {
+      throw new Error("admitted run authority is no longer active");
+    }
+  };
+}
+
 /** Idempotently compare-releases the authority captured by this admission. */
 export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): boolean {
   const lease = delegatedAuthorityLeases.get(context);

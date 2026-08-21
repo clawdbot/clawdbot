@@ -508,7 +508,7 @@ describe("shared Codex app-server client", () => {
     expect(pluginLocal.process.stdin.destroyed).toBe(true);
   });
 
-  it("keeps a newer desktop app-server instead of falling back by version", async () => {
+  it("keeps a supported desktop prerelease instead of falling back by version", async () => {
     const desktop = createClientHarness();
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(desktop.client);
     const startOptions = configureManagedDesktopFallback();
@@ -525,13 +525,7 @@ describe("shared Codex app-server client", () => {
       managedFallbackCommandPaths: ["/cache/openclaw/codex"],
     });
     expect(desktop.process.stdin.destroyed).toBe(false);
-    expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledWith(
-      "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
-      {
-        detectedVersion: "0.148.0-alpha.23",
-        validatedVersion: CODEX_APP_SERVER_VERSION,
-      },
-    );
+    expect(mocks.embeddedAgentLog.warn).not.toHaveBeenCalled();
 
     await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
     expect(desktop.process.stdin.destroyed).toBe(true);

@@ -41,6 +41,7 @@ import {
   getGatewayContextResolver,
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
+  withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -793,6 +794,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             list: (params) => runWithPluginScope(() => nodes.list(params)),
             invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+            openDuplex: (params) =>
+              withPluginRuntimeRegistryScope(registry, () =>
+                runWithPluginScope(() => nodes.openDuplex(params)),
+              ),
           } satisfies PluginRuntime["nodes"];
         }
         if (prop === "agent") {

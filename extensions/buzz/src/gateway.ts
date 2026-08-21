@@ -174,10 +174,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       }
       cycleError = error instanceof Error ? error : new Error(String(error));
     } finally {
-      await bus?.close();
+      // Retire before fallible async shutdown so new work cannot reacquire this bus.
       if (activeBuses.get(account.accountId) === bus) {
         activeBuses.delete(account.accountId);
       }
+      await bus?.close();
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
