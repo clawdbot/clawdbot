@@ -895,7 +895,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
-  it("uses a co-mounted cgroup-v1 soft limit when the hard limit is unbounded", () => {
+  it("ignores a co-mounted cgroup-v1 soft limit when the hard limit is unbounded", () => {
     const slicePath = "/user.slice/user-999.slice";
     const cgroupFiles = new Map([
       [`/proc/self/cgroup`, `2:memory,cpu:${slicePath}/openclaw-main-update.service\n`],
@@ -912,6 +912,7 @@ describe("resolveTsdownBuildInvocation", () => {
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: {},
+      procMemTotalBytes: 16 * 1024 * 1024 * 1024,
       fs: {
         readFileSync(filePath: string) {
           const contents = cgroupFiles.get(filePath);
@@ -923,7 +924,7 @@ describe("resolveTsdownBuildInvocation", () => {
       },
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
   });
 
   it("ignores a cgroup-v1 parent limit when hierarchy accounting is disabled", () => {
