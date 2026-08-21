@@ -1322,38 +1322,43 @@ describe("Slack live QA runtime helpers", () => {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
-    const history = vi.fn(async () => ({
-      messages: [
-        {
-          blocks: [
-            {
-              type: "data_visualization",
-              title: "QA latency trend",
-              chart: {
-                type: "line",
-                series: [
+    const history = vi.fn(async (request: { limit: number }) => ({
+      // Shared-channel concurrency can push the earlier chart beyond the old
+      // 50-message observation window before the final marker arrives.
+      messages:
+        request.limit >= 200
+          ? [
+              {
+                blocks: [
                   {
-                    name: "Latency",
-                    data: [
-                      { label: "P50", value: 120 },
-                      { label: "P95", value: 240 },
-                    ],
+                    type: "data_visualization",
+                    title: "QA latency trend",
+                    chart: {
+                      type: "line",
+                      series: [
+                        {
+                          name: "Latency",
+                          data: [
+                            { label: "P50", value: 120 },
+                            { label: "P95", value: 240 },
+                          ],
+                        },
+                      ],
+                      axis_config: {
+                        categories: ["P50", "P95"],
+                        x_label: "Percentile",
+                        y_label: "Milliseconds",
+                      },
+                    },
                   },
                 ],
-                axis_config: {
-                  categories: ["P50", "P95"],
-                  x_label: "Percentile",
-                  y_label: "Milliseconds",
-                },
+                // Slack history flattens the top-level accessibility newlines on readback.
+                text: accessibleText.replace(/\s+/gu, " "),
+                ts: "2.000000",
+                user: "U999999999",
               },
-            },
-          ],
-          // Slack history flattens the top-level accessibility newlines on readback.
-          text: accessibleText.replace(/\s+/gu, " "),
-          ts: "2.000000",
-          user: "U999999999",
-        },
-      ],
+            ]
+          : [],
     }));
 
     await expect(
@@ -1370,7 +1375,7 @@ describe("Slack live QA runtime helpers", () => {
     expect(history).toHaveBeenCalledWith({
       channel: "C123456789",
       inclusive: true,
-      limit: 50,
+      limit: 200,
       oldest: "1.000000",
     });
   });

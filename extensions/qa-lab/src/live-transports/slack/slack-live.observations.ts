@@ -26,6 +26,10 @@ import {
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
+// Isolated Slack flows share one live QA channel. Presentation sends precede
+// their final markers, so retain enough history to survive concurrent traffic.
+const SLACK_QA_CHANNEL_HISTORY_LIMIT = 200;
+
 export async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
   const { createSlackWebClient } = loadSlackQaRuntime();
   const client = createSlackWebClient(token, { timeout: SLACK_QA_WEB_API_TIMEOUT_MS });
@@ -71,7 +75,7 @@ export async function listSlackMessages(params: {
     await params.client.conversations.history({
       channel: params.channelId,
       inclusive: true,
-      limit: 50,
+      limit: SLACK_QA_CHANNEL_HISTORY_LIMIT,
       oldest: params.oldestTs,
     }),
   );
