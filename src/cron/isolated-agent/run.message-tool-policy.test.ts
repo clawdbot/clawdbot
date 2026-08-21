@@ -796,6 +796,23 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     ).toBeUndefined();
   });
 
+  it("passes the resolved delivery account to CLI-backed announce runs", async () => {
+    mockCliAnnounceRun();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan({ accountId: "bot-a" }));
+    resolveDeliveryTargetMock.mockResolvedValue(makeResolvedAnnounceTarget({ accountId: "bot-a" }));
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({ delivery: { accountId: "bot-a" } }),
+    });
+
+    expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      { agentAccountId: "bot-a" },
+      "CLI run params",
+    );
+  });
+
   it("propagates restricted toolsAllow to CLI-backed announce runs without target metadata", async () => {
     mockCliAnnounceRun();
 
