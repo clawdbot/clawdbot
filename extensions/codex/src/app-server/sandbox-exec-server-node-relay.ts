@@ -319,9 +319,10 @@ function hasCredentialedCodexNodeRawJsonStrings(body: string): boolean {
   const tokens = body.matchAll(/("(?:\\.|[^"\\])*")(\s*:)?/gu);
   let fields = 0;
   for (const match of tokens) {
-    const value = JSON.parse(match[1]!) as string;
+    const value: unknown = JSON.parse(match[1]!);
     if (
       ++fields > CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_FIELDS ||
+      typeof value !== "string" ||
       hasSensitiveCodexNodeText(value) ||
       (match[2] !== undefined && isCodexNodeCredentialField(value))
     ) {
