@@ -255,24 +255,21 @@ export function resolveSubagentSessionCompletion(params: {
 }
 
 /**
- * What the child's own persisted session entry says about its liveness.
- *
- * `settled` — the entry is terminal, so the child's stop is observed and this
- * completion has been submitted through the ordinary lifecycle path.
- * `live` — the entry exists but is still running: authoritative evidence that
- * the child has NOT stopped. Callers must not run terminal effects on it.
- * `absent` — no usable session entry, so there is nothing left to preserve and
- * nothing to reconcile from.
- */
-export type SubagentSessionSettleResult = "settled" | "live" | "absent";
-
-/**
  * Settle a registry row from its persisted child session entry.
  *
  * This is the only liveness re-observation available without a live agent run
  * context: the session store is written by the child itself, so a terminal
  * status there is authoritative stop evidence and a `running` status is
- * authoritative evidence that the child is still alive.
+ * authoritative evidence that the child is still alive. Callers relying on that
+ * must not first overwrite the entry with their own derived status.
+ *
+ * Returns what the child's own record says:
+ * - `settled` — terminal there, so the stop is observed and this completion has
+ *   been submitted through the ordinary lifecycle path.
+ * - `live` — the entry exists and is still running. Terminal effects must not
+ *   run against it.
+ * - `absent` — no usable session entry, so there is nothing left to preserve
+ *   and nothing to reconcile from.
  */
 export async function settleSubagentRunFromSessionStore(
   completeSubagentRunWithRecovery: (
@@ -286,7 +283,7 @@ export async function settleSubagentRunFromSessionStore(
     storeCache?: SubagentSessionStoreCache;
     source: string;
   },
-): Promise<SubagentSessionSettleResult> {
+): Promise<"settled" | "live" | "absent"> {
   const sessionEntry = loadSubagentSessionEntry({
     childSessionKey: args.entry.childSessionKey,
     storeCache: args.storeCache,
