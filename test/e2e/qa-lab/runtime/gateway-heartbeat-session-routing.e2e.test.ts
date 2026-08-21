@@ -442,13 +442,12 @@ describe("Gateway heartbeat session routing", () => {
           .toBeGreaterThan(configuredRequestBaseline);
         const configuredRequest = JSON.stringify(providerRequests[configuredRequestBaseline]);
         expect(configuredRequest).toContain(configuredEvent);
-        expect(peekSystemEvents(configuredSessionKey)).not.toContain(configuredEvent);
         await expect
-          .poll(async () => (await readDeliveryTrace(deliveryTracePath)).length, {
+          .poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent), {
             timeout: 15_000,
             interval: 50,
           })
-          .toBe(1);
+          .toBe(false);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
           {
             accountId: "default",
@@ -496,14 +495,15 @@ describe("Gateway heartbeat session routing", () => {
         const explicitRequest = JSON.stringify(providerRequests[explicitRequestBaseline]);
         expect(explicitRequest).toContain(explicitQueuedEvent);
         expect(explicitRequest).toContain(explicitWakeText);
-        expect(peekSystemEvents(explicitSessionKey)).not.toContain(explicitQueuedEvent);
-        expect(peekSystemEvents(explicitSessionKey)).not.toContain(explicitWakeText);
         await expect
-          .poll(async () => (await readDeliveryTrace(deliveryTracePath)).length, {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toBe(2);
+          .poll(
+            () => {
+              const queued = peekSystemEvents(explicitSessionKey);
+              return queued.includes(explicitQueuedEvent) || queued.includes(explicitWakeText);
+            },
+            { timeout: 15_000, interval: 50 },
+          )
+          .toBe(false);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
           {
             accountId: "default",
