@@ -2773,6 +2773,18 @@ describe("buildGatewayCronService", () => {
       ).toBe("agent:primary:ops-heartbeat");
 
       requestHeartbeatMock.mockClear();
+      cronDeps?.requestHeartbeat?.({ source: "cron", agentId: "primary" });
+      const cronEventWake = requireRecord(
+        callArg(requestHeartbeatMock, 0, 0, "cron event heartbeat request"),
+        "cron event heartbeat request",
+      );
+      expect(cronEventWake).toMatchObject({
+        source: "cron",
+        agentId: "primary",
+        sessionKey: "agent:primary:main",
+      });
+
+      requestHeartbeatMock.mockClear();
       expect(
         state.cron.wake({
           mode: "now",

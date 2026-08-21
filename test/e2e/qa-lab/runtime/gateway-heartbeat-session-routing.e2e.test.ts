@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
+import { markCompleteReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -357,7 +357,7 @@ describe("Gateway heartbeat session routing", () => {
         if (!runtimeConfig) {
           throw new Error("gateway runtime config snapshot was not initialized");
         }
-        withFastReplyConfig(runtimeConfig);
+        markCompleteReplyConfig(runtimeConfig, { runtimeMode: "full" });
         const client = gateway.client;
 
         const seedSession = async (params: {
