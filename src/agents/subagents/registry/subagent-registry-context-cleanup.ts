@@ -6,6 +6,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import {
   emitSubagentEndedHookOnce,
   resolveLifecycleOutcomeFromRunOutcome,
@@ -132,6 +133,20 @@ export function createSubagentRegistryContextCleanup(config: {
     accountId?: string;
     isCurrent?: () => boolean;
   }) {
+    // Gate the plugin-visible completion hook here rather than at each caller:
+    // three paths reach it (terminal effects, the completion-message announce
+    // tail, and the suspended-delivery give-up), and `endedHookEmittedAt` below
+    // is a persisted exactly-once marker, so a single premature emit from ANY of
+    // them permanently consumes the run's one chance to report the real ending.
+    // `subagent_ended` is documented as "the child completed" and channel
+    // plugins act on it destructively — Discord unbinds the child's thread
+    // bindings, Feishu unbinds its session binding — so emitting it for a child
+    // whose stop was never observed tears down routing for a possibly-live
+    // child AND makes the truthful hook unsendable. Promotion re-enters these
+    // paths with an observed disposition, which is where the hook is emitted.
+    if (shouldDeferTerminalCleanupForUnconfirmedChild(params.entry)) {
+      return;
+    }
     if (params.entry.endedHookEmittedAt) {
       return;
     }
@@ -142,12 +157,17 @@ export function createSubagentRegistryContextCleanup(config: {
       allowGatewaySubagentBinding: true,
     });
     await withPluginRuntimeRegistryScope(registry, async () => {
-      if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+      if (
+        params.entry.endedHookEmittedAt ||
+        params.isCurrent?.() === false ||
+        shouldDeferTerminalCleanupForUnconfirmedChild(params.entry)
+      ) {
         return;
       }
       // Plugin loading yields after the terminal lock is released. Resolve the
       // event from the canonical row only after that boundary so an older callback
-      // cannot claim the exactly-once hook with a superseded timeout or error.
+      // cannot claim the exactly-once hook with a superseded timeout or error —
+      // including a row that became `child-unconfirmed` across the yield.
       const reason = params.entry.endedReason ?? params.reason ?? SUBAGENT_ENDED_REASON_COMPLETE;
       const outcome =
         reason === SUBAGENT_ENDED_REASON_KILLED

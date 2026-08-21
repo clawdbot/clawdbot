@@ -2530,6 +2530,98 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("emits no terminal plugin hooks for an unconfirmed child and exactly one of each after promotion", async () => {
+    // Regression (openclaw-odqn round 4): the deferral covered the durable
+    // signal-log record and the session writes, but the two plugin-visible
+    // terminal projections still ran for a `child-unconfirmed` row. Both are
+    // unrepeatable, so a premature emit is not merely early — it is final:
+    // `subagent_ended` persists `endedHookEmittedAt` (exactly-once), and
+    // `progress ended` latches `markProgressEnded` per entry. Channel plugins
+    // also act on `subagent_ended` destructively (Discord unbinds the child's
+    // thread bindings, Feishu its session binding), so the false emit tears
+    // down routing for a child that may still be live. These assertions run
+    // against the real hook-runner boundary the plugins subscribe to.
+    const startedAt = Date.now();
+    const runSubagentProgress = vi.fn<(event: { phase?: string; runId?: string }) => Promise<void>>(
+      async () => {},
+    );
+    mocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: (hookName: string) =>
+        hookName === "subagent_ended" || hookName === "subagent_progress",
+      runSubagentEnded: mocks.runSubagentEnded,
+      runSubagentProgress,
+    } as never);
+    const endedProgressPhases = () =>
+      runSubagentProgress.mock.calls.filter(
+        ([event]) => event.phase === "ended" && event.runId === "run-unconfirmed-terminal-hooks",
+      );
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt,
+        status: "running",
+        sessionId: "sess-terminal-hooks",
+        lifecycleRevision: "rev-terminal-hooks",
+      }),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-unconfirmed-terminal-hooks",
+      task: "unconfirmed child emits no terminal plugin hooks",
+      cleanup: "keep",
+      runTimeoutSeconds: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForFast(() => {
+      expect(
+        findRequesterRun("run-unconfirmed-terminal-hooks")?.execution.outcome?.timeoutDisposition,
+      ).toBe("child-unconfirmed");
+    });
+    // The parent is still woken — the announce is the notification that the
+    // wait ended, and it is deliberately NOT deferred.
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(endedProgressPhases()).toEqual([]);
+    expect(findRequesterRun("run-unconfirmed-terminal-hooks")?.endedHookEmittedAt).toBeUndefined();
+
+    // The child records its own stop. That is authoritative evidence, so
+    // promotion reopens cleanup and the withheld hooks finally fire — each
+    // exactly once, because neither unrepeatable marker was consumed early.
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt + 30_000,
+        endedAt: startedAt + 30_000,
+        status: "done",
+        sessionId: "sess-terminal-hooks",
+        lifecycleRevision: "rev-terminal-hooks",
+      }),
+    );
+    vi.setSystemTime(startedAt + 40_000);
+    await mod.testing.sweepOnceForTests();
+
+    // This half is also the anti-vacuity control: it proves both hooks are
+    // genuinely reachable in this harness, so the absences above are real.
+    await waitForFast(() => {
+      expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+      expect(endedProgressPhases()).toHaveLength(1);
+    });
+    const endedHookEvents = mocks.runSubagentEnded.mock.calls as unknown as ReadonlyArray<
+      readonly [{ targetSessionKey?: string; outcome?: string }]
+    >;
+    expect(endedHookEvents[0]?.[0]?.targetSessionKey).toBe("agent:main:subagent:child");
+    expect(typeof findRequesterRun("run-unconfirmed-terminal-hooks")?.endedHookEmittedAt).toBe(
+      "number",
+    );
+  });
+
   it("skips silent-cleanup session deletion for an unconfirmed child but keeps it for an observed stop", async () => {
     const sessionStore = () =>
       createSessionStore({

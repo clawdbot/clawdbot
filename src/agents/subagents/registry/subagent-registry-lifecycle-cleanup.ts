@@ -344,6 +344,14 @@ export async function completeTerminalEffects(
   }
   refreshSessionEffectsSuppression();
   const isProvisionalKill = entry.killReconciliation !== undefined;
+  // One derivation for every provisional terminal projection this callback owns:
+  // the durable signal-log record, the child's own session-timing write, the
+  // `progress ended` presentation event, and the resource teardown in
+  // `completeTerminalCleanup`. A `child-unconfirmed` row is terminal only in the
+  // sense that the parent's wait ended; nothing observed the child stop, so no
+  // claim about the child may be published and no child-owned resource may be
+  // torn down until an observed stop promotes the row.
+  const deferForUnconfirmedChild = shouldDeferTerminalCleanupForUnconfirmedChild(entry);
   // Record only the current, non-superseded callback with a committed outcome; the
   // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
   // would permanently mislabel the signal-log terminal kind. A `child-unconfirmed`
@@ -357,7 +365,7 @@ export async function completeTerminalEffects(
   if (
     !suppressSessionEffects &&
     !isProvisionalKill &&
-    !shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
+    !deferForUnconfirmedChild &&
     outcomeStatus &&
     outcomeStatus !== "unknown"
   ) {
@@ -375,7 +383,7 @@ export async function completeTerminalEffects(
   // child's session entry is the only independent record of whether it is
   // still running, and overwriting it would make our own guess look like the
   // child's own stop evidence. Leave it to the child until a stop is observed.
-  if (!suppressSessionEffects && !shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+  if (!suppressSessionEffects && !deferForUnconfirmedChild) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -421,7 +429,12 @@ export async function completeTerminalEffects(
       label: entry.label,
     });
     // The enclosing steer/session-effects guard admits only the real terminal generation.
-    if (!isProvisionalKill && !context.hasProgressEnded(entry)) {
+    // `progress ended` is a plugin-visible claim that this child finished, and
+    // `markProgressEnded` is a once-per-entry latch — emitting it now would both
+    // tell subscribers a possibly-live child ended and consume the latch, so the
+    // truthful event could never follow. Promotion re-enters here with the latch
+    // still unset and `mutated` true, so the event fires exactly once, then.
+    if (!isProvisionalKill && !deferForUnconfirmedChild && !context.hasProgressEnded(entry)) {
       context.markProgressEnded(entry);
       await params.emitSubagentProgressEndedForRun(entry);
       refreshSessionEffectsSuppression();
@@ -461,6 +474,7 @@ export async function completeTerminalEffects(
   refreshSessionEffectsSuppression();
   await completeTerminalCleanup(context, {
     completeParams,
+    deferForUnconfirmedChild,
     entry,
     isProvisionalKill,
     retireSupersededSession,
@@ -476,6 +490,7 @@ async function completeTerminalCleanup(
   context: SubagentLifecycleCompletionContext,
   args: {
     completeParams: SubagentCompletionRequest;
+    deferForUnconfirmedChild: boolean;
     entry: SubagentRunRecord;
     isProvisionalKill: boolean;
     retireSupersededSession: (entry: SubagentRunRecord) => Promise<void>;
@@ -488,6 +503,7 @@ async function completeTerminalCleanup(
   const params = context.options;
   const {
     completeParams,
+    deferForUnconfirmedChild,
     entry,
     isProvisionalKill,
     retireSupersededSession,
@@ -526,7 +542,6 @@ async function completeTerminalCleanup(
   // both tear down resources a still-live child is using. A bare deadline is
   // not evidence that it stopped, so they wait for the observed stop that
   // promotes this row out of `child-unconfirmed`.
-  const deferChildRuntimeTeardown = shouldDeferTerminalCleanupForUnconfirmedChild(entry);
   refreshSessionEffectsSuppression();
   if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
     return;
@@ -544,7 +559,7 @@ async function completeTerminalCleanup(
   // strand a duplicate caller's completion behind it.
   if (
     !suppressSessionEffects &&
-    !deferChildRuntimeTeardown &&
+    !deferForUnconfirmedChild &&
     entry.browserCleanupDispatchedAt === undefined
   ) {
     let dispatchedBrowserCleanup = false;
@@ -601,7 +616,7 @@ async function completeTerminalCleanup(
     }
   }
 
-  if (!suppressSessionEffects && !deferChildRuntimeTeardown) {
+  if (!suppressSessionEffects && !deferForUnconfirmedChild) {
     if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
       return;
     }
