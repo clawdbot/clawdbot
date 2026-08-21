@@ -79,4 +79,20 @@ describe("huggingface plugin", () => {
     expect(result).toBeNull();
     expect(buildHuggingfaceProviderMock).not.toHaveBeenCalled();
   });
+
+  it("serves the bundled catalog when discovery cannot run", async () => {
+    buildHuggingfaceProviderMock.mockClear();
+    const provider = registerProvider();
+
+    expect(provider.staticCatalog).toBeDefined();
+    expect(await provider.staticCatalog.run({} as never)).toEqual({
+      provider: {
+        baseUrl: "https://router.huggingface.co/v1",
+        api: "openai-completions",
+        models: [],
+      },
+    });
+    // The static catalog must not reach for a discovery secret.
+    expect(buildHuggingfaceProviderMock).toHaveBeenCalledWith();
+  });
 });

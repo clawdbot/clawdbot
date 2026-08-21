@@ -48,6 +48,10 @@ export default defineSingleProviderPluginEntry({
           },
         };
       },
+      // Discovery can be turned off or run before a key resolves. The bundled
+      // catalog is built offline, so keep serving it instead of dropping the
+      // provider from model selection entirely.
+      staticRun: async () => ({ provider: await buildHuggingfaceProvider() }),
     },
   },
 });
