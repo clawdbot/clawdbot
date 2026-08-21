@@ -526,6 +526,25 @@ describe("release Telegram QA workflow", () => {
     ]);
   });
 
+  it("accepts only same-line extended-stable successors in both provenance blocks", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const accepted = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.35",
+        targetContextRef: "extended-stable/2026.7.33",
+      });
+      expect(accepted.status, `${provenanceBlock.stepName}: ${accepted.stderr}`).toBe(0);
+
+      for (const candidateVersion of ["2026.7.32", "2026.8.35", "2026.7.35-beta.1"]) {
+        const rejected = runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          targetContextRef: "extended-stable/2026.7.33",
+        });
+        expect(rejected.status, `${provenanceBlock.stepName}: ${candidateVersion}`).toBe(1);
+        expect(rejected.stderr).toContain("PATCH >= 33");
+      }
+    }
+  });
+
   it("accepts only strict signed frozen beta branch heads in both provenance blocks", () => {
     for (const provenanceBlock of PROVENANCE_BLOCKS) {
       const frozen = runCandidateProvenance(provenanceBlock, {

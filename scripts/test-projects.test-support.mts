@@ -2113,10 +2113,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
   ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],
-  [
-    "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
-    ["docker-e2e-seeds", "mcp-code-mode-gateway-client"],
-  ],
+  ["scripts/e2e/lib/mcp-code-mode-probe-server.ts", ["mcp-code-mode-gateway-client"]],
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
@@ -2783,10 +2780,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mcp-code-mode-gateway-client", "session-log-mentions"],
   ],
   [
-    /^(?:scripts\/e2e\/(?:mcp-channels|mcp-code-mode-gateway|cron-mcp-cleanup)-seed\.ts)$/u,
-    ["docker-e2e-seeds"],
-  ],
-  [
     /^scripts\/e2e\/(?:mcp-channels|cron-cli|cron-mcp-cleanup)-docker\.sh$/u,
     ["docker-e2e-observability"],
   ],
@@ -2800,10 +2793,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/cron/active-jobs-manual-run.test.ts",
     ],
   ],
-  [
-    /^scripts\/e2e\/cron-mcp-cleanup-docker\.sh$/u,
-    ["cron-mcp-cleanup-docker-client", "docker-e2e-seeds"],
-  ],
+  [/^scripts\/e2e\/cron-mcp-cleanup-docker\.sh$/u, ["cron-mcp-cleanup-docker-client"]],
   [
     /^test\/e2e\/qa-lab\/runtime\/mcp-channels\.fixture\.ts$/u,
     ["test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts", "cron-mcp-cleanup-docker-client"],

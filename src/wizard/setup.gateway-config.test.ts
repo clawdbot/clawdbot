@@ -5,7 +5,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
+import {
+  withSecureTestNodeCommand,
+  withSecureTestNodeExecPath,
+} from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
@@ -352,31 +355,30 @@ describe("configureGatewayForSetup", () => {
       {},
       { gatewayAuth: "password", gatewayPassword: password },
     );
-    const nextConfig = {
-      secrets: {
-        providers: {
-          gatewaypasswords: {
-            source: "exec" as const,
-            command: process.execPath,
-            args: [
-              "-e",
-              "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='gateway-password-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
-            ],
-          },
-        },
-      },
-    };
     const prompter = createPrompter({
       selectQueue: ["provider", "gatewaypasswords"],
       textQueue: ["gateway/auth/password"],
     });
 
-    const result = await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: undefined }, async () =>
-      withSecureTestNodeExecPath(async () =>
+    const result = await withSecureTestNodeCommand(async (command) =>
+      withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: undefined }, async () =>
         configureGatewayForSetup({
           flow: "quickstart",
           baseConfig: {},
-          nextConfig,
+          nextConfig: {
+            secrets: {
+              providers: {
+                gatewaypasswords: {
+                  source: "exec",
+                  command,
+                  args: [
+                    "-e",
+                    "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='gateway-password-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
+                  ],
+                },
+              },
+            },
+          },
           localPort: 18789,
           quickstartGateway,
           secretInputMode: "ref",
