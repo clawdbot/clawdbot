@@ -103,7 +103,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
-  @property({ attribute: false }) splitMode = false;
+  @property({ attribute: false }) preferBottomSidebarDock = false;
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) chatMessagesBySession?: ChatMessageCache;
   @property({ attribute: false }) sessionSnapshotStore?: SessionSnapshotStore;

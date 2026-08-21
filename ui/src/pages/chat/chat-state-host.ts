@@ -26,7 +26,7 @@ import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./inpu
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { PendingChatAbort } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
+import type { SidebarDock, SidebarLayout } from "./sidebar-layout.ts";
 import type {
   CompactionStatus,
   FallbackStatus,
@@ -150,7 +150,7 @@ export type ChatPageHost = ChatHost &
     submitQueuedChatMessageEdit: () => void;
     cancelQueuedChatMessageEdit: () => void;
     handleCloseSidebar: () => void;
-    updateSidebarLayout: (layout: SidebarLayout) => void;
+    updateSidebarLayout: (layout: SidebarLayout, explicitDock?: SidebarDock) => void;
     beginImageOpen: () => number;
     handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
     handleCloseImage: () => void;

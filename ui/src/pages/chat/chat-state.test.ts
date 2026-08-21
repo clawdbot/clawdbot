@@ -26,6 +26,7 @@ import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route
 import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { openSlot, setSidebarDock } from "./sidebar-layout.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -1164,6 +1165,31 @@ describe("ChatStateController render lifecycle", () => {
       sessions: {},
     } as unknown as ApplicationContext;
   }
+
+  it("reconciles explicit sidebar docks between sibling panes", () => {
+    localStorage.clear();
+    const lifecycle = { invalidate: vi.fn(), afterCommit: () => () => {} };
+    const first = createPageState(createPageContext(), lifecycle, {
+      querySelector: () => null,
+      preferBottomSidebarDock: true,
+    });
+    const second = createPageState(createPageContext(), lifecycle, {
+      querySelector: () => null,
+      preferBottomSidebarDock: true,
+    });
+
+    first.updateSidebarLayout(openSlot(first.sidebarLayout, "browser"));
+    second.updateSidebarLayout(
+      setSidebarDock(openSlot(second.sidebarLayout, "browser"), "right"),
+      "right",
+    );
+    first.updateSidebarLayout(openSlot(first.sidebarLayout, "tasks"));
+
+    expect(Object.values(first.settings.sidebarSessionLayouts ?? {})[0]?.dock).toBe("right");
+    first.updateSidebarLayout(setSidebarDock(first.sidebarLayout, "bottom"), "bottom");
+
+    expect(Object.values(first.settings.sidebarSessionLayouts ?? {})[0]?.dock).toBe("bottom");
+  });
 
   it("keeps the active observer digest when another run streams in the same session", () => {
     const projectedDigest = {

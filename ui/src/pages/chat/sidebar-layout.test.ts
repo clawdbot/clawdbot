@@ -47,7 +47,7 @@ describe("sidebar layout", () => {
     expect(activatePanel(layout, chat.id).columns[0]?.activePanelId).toBe(chat.id);
   });
 
-  it("defaults a newly opened implicit panel to the bottom only in split view", () => {
+  it("defaults a newly opened implicit panel to the bottom only in eligible split panes", () => {
     const previous = { columns: [] } satisfies SidebarLayout;
     const next = openSlot(previous, "browser");
 
@@ -61,6 +61,13 @@ describe("sidebar layout", () => {
 
     expect(applySidebarDockDefault(right, openSlot(right, "tasks"), true).dock).toBe("right");
     expect(applySidebarDockDefault(bottom, openSlot(bottom, "tasks"), true).dock).toBe("bottom");
+  });
+
+  it("preserves an existing implicit-right layout when another panel opens", () => {
+    const persisted = openSlot({ columns: [] }, "browser");
+    const next = openSlot(persisted, "tasks");
+
+    expect(applySidebarDockDefault(persisted, next, true)).toEqual(next);
   });
 
   it("closes one tab and selects its nearest remaining neighbor", () => {

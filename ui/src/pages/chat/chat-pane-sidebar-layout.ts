@@ -130,7 +130,7 @@ export function sidebarRegionCallbacks(params: {
         reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
       ),
     resizePanel: params.resizePanel,
-    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock)),
+    setDock: (dock) => state.updateSidebarLayout(setSidebarDock(state.sidebarLayout, dock), dock),
     setExpanded: (expanded) =>
       state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
     setOpen: params.setPanelOpen,

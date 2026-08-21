@@ -108,7 +108,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
         : layout;
-    state.updateSidebarLayout(fitted);
+    // Board owns left/right chat placement; the unified sidebar represents
+    // both side edges with its canonical right dock.
+    state.updateSidebarLayout(fitted, "right");
     if (chatPanel) {
       state.updateSidebarActivePanel(chatPanel.id);
     }

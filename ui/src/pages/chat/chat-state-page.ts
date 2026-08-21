@@ -66,7 +66,7 @@ import { resetToolStream } from "./tool-stream.ts";
 type ChatPageElement = {
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
-  splitMode?: boolean;
+  preferBottomSidebarDock?: boolean;
 };
 
 function clearImageLightbox(state: ChatPageHost) {
@@ -376,18 +376,28 @@ export function createPageState(
     cancelQueuedMessageEdit(state);
     renderLifecycle.invalidate();
   };
-  state.updateSidebarLayout = (layout) => {
+  state.updateSidebarLayout = (layout, explicitDock) => {
     const normalized = normalizeSidebarLayout(layout);
+    const currentSidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    const persistedSettings = loadSettings();
+    const persistedDock = persistedSettings.sidebarSessionLayouts?.[currentSidebarSessionKey]?.dock;
+    // Duplicate-session panes keep local layout state. Carry a newer explicit
+    // dock forward unless this pane is the one changing it now.
+    const previousLayout = persistedDock
+      ? { ...state.sidebarLayout, dock: persistedDock }
+      : state.sidebarLayout;
+    const requestedDock = explicitDock ?? persistedDock;
+    const requestedLayout = requestedDock ? { ...normalized, dock: requestedDock } : normalized;
     const nextLayout = applySidebarDockDefault(
-      state.sidebarLayout,
-      normalized,
-      page.splitMode === true,
+      previousLayout,
+      requestedLayout,
+      page.preferBottomSidebarDock === true,
     );
     state.sidebarLayout = nextLayout;
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(
-        loadSettings().sidebarSessionLayouts,
-        canonicalUiSessionKeyForPersistence(state, state.sessionKey),
+        persistedSettings.sidebarSessionLayouts,
+        currentSidebarSessionKey,
         nextLayout,
       ),
     });

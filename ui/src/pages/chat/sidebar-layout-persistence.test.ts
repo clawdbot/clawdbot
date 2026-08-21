@@ -11,6 +11,7 @@ import {
   activatePanel,
   openSlot,
   resizeSidebarPanel,
+  setSidebarDock,
   setSidebarExpanded,
   setSidebarOpen,
 } from "./sidebar-layout.ts";
@@ -62,6 +63,13 @@ describe("sidebar session layout settings", () => {
     expect(persisted?.columns[0]?.activePanelId).toBe("workspace");
     expect(persisted?.columns[0]?.width).toBe(512);
     expect(persisted).toMatchObject({ open: false, expanded: true });
+  });
+
+  it("preserves explicit dock choices per session", () => {
+    for (const dock of ["right", "bottom"] as const) {
+      const layout = setSidebarDock(openSlot({ columns: [] }, "browser"), dock);
+      expect(updateSidebarSessionLayout({}, "main", layout).main?.dock).toBe(dock);
+    }
   });
 
   it("caps the newest session layouts", () => {

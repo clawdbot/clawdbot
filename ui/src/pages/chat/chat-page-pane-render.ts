@@ -17,6 +17,7 @@ import type { ChatSplitPane } from "./split-layout-types.ts";
 type ChatPagePaneRenderOptions = {
   active: boolean;
   chatMessagesBySession: ChatMessageCache;
+  columnPaneCount: number;
   sessionSnapshotStore: SessionSnapshotStore;
   consumedDraftData: SessionChatRouteData | null;
   context?: ApplicationContext;
@@ -46,6 +47,16 @@ type ChatPagePaneRenderOptions = {
   splitMode: boolean;
   weight: number;
 };
+
+export function bottomDockDefault(
+  splitMode: boolean,
+  narrow: boolean,
+  columnPaneCount: number,
+): boolean {
+  // Stacked and narrow panes cannot fit both bottom-dock and transcript
+  // minimums; keep their existing responsive layout.
+  return splitMode && !narrow && columnPaneCount === 1;
+}
 
 export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
   const nativeGateways = options.showGatewayPicker ? nativeGatewaysCapability() : null;
@@ -89,7 +100,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               aria-hidden=${presented ? "false" : "true"}
               ?inert=${!presented}
               .paneId=${options.pane.id}
-              .splitMode=${options.splitMode}
+              .preferBottomSidebarDock=${bottomDockDefault(
+                options.splitMode,
+                options.narrow,
+                options.columnPaneCount,
+              )}
               .presentationId=${JSON.stringify([options.pane.id, sessionKey])}
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}

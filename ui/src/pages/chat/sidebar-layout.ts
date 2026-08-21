@@ -118,22 +118,17 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
 export function applySidebarDockDefault(
   previous: SidebarLayout,
   next: SidebarLayout,
-  splitMode: boolean,
+  preferBottomDock: boolean,
 ): SidebarLayout {
-  // An omitted dock is the only state that may inherit the split default;
-  // explicit right/bottom choices must survive every later layout update.
-  if (!splitMode || previous.dock !== undefined || next.dock !== undefined) {
-    return next;
-  }
-  const previousPanelCount = previous.columns.reduce(
-    (count, column) => count + column.panels.length,
-    0,
-  );
-  const nextPanelCount = next.columns.reduce(
-    (count, column) => count + column.panels.length,
-    0,
-  );
-  return nextPanelCount > previousPanelCount ? { ...next, dock: "bottom" } : next;
+  // Only the first column creation may inherit the split default. Existing
+  // implicit-right layouts and explicit choices must survive later tab opens.
+  const shouldApply =
+    preferBottomDock &&
+    previous.dock === undefined &&
+    next.dock === undefined &&
+    previous.columns.length === 0 &&
+    next.columns.length > 0;
+  return shouldApply ? { ...next, dock: "bottom" } : next;
 }
 
 export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {

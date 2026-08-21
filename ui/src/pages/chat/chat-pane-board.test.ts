@@ -342,6 +342,7 @@ describe("chat pane board shell", () => {
   });
   it("activates an existing tabbed chat panel when reopening a side dock", () => {
     const pane = createTestPane();
+    const updateSidebarLayout = vi.spyOn(pane.state, "updateSidebarLayout");
     const withChat = openSlot(openSlot({ columns: [] }, "chat"), "discussion");
     const chatPanel = withChat.columns[0]!.panels[0]!;
     const discussionPanel = withChat.columns[0]!.panels[1]!;
@@ -351,6 +352,7 @@ describe("chat pane board shell", () => {
 
     expect(pane.state.sidebarLayout.columns[0]?.activePanelId).toBe(chatPanel.id);
     expect(pane.state.sidebarFocusPanelId).toBe(chatPanel.id);
+    expect(updateSidebarLayout).toHaveBeenCalledWith(expect.anything(), "right");
   });
 
   it("restores one board view across equivalent main session keys", () => {
