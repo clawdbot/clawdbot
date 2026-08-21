@@ -36,7 +36,8 @@ final class IOSRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
 
     func start(
         targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
+        onFailure _: @escaping @MainActor (String) -> Void) throws
     {
         self.stop()
         let input = self.audioEngine.inputNode

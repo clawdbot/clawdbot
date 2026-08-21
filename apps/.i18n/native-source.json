@@ -29962,6 +29962,17 @@
       ]
     },
     {
+      "id": "native.apple.024d68fa654acf2c",
+      "source": "Gateway connection was replaced before realtime startup finished",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.165da8a03dd68ee1",
       "source": "Gateway data changed while you edited. Save will validate the current revision.",
       "surface": "apple",
@@ -29984,6 +29995,17 @@
       ]
     },
     {
+      "id": "native.apple.da84239bbdff6838",
+      "source": "Gateway did not return a realtime relay session",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.8104be3229e9088b",
       "source": "Gateway is not connected",
       "surface": "apple",
@@ -29991,6 +30013,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Voice/TalkModeManager.swift"
         }
       ]
     },
@@ -39391,6 +39417,83 @@
       ]
     },
     {
+      "id": "native.apple.3459811c080ed880",
+      "source": "Realtime audio failed: %@",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.4f81777177325153",
+      "source": "Realtime audio input fell behind. Reconnecting…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.1d3037a7bc3ec7cb",
+      "source": "Realtime audio playback failed. Reconnecting…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.90f64f78a77015d7",
+      "source": "Realtime audio playback fell behind. Reconnecting…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.f40c2764425389ef",
+      "source": "Realtime closed before it became ready.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.59d22abf27122e23",
+      "source": "Realtime connection ended before it became ready.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.b236c658fc54cbe5",
+      "source": "Realtime did not become ready in time.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.afd0d1396586ab0b",
       "source": "Realtime disconnected",
       "surface": "apple",
@@ -39402,6 +39505,17 @@
       ]
     },
     {
+      "id": "native.apple.ca3a762269827f37",
+      "source": "Realtime failed",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.f350f10af66f4a87",
       "source": "Realtime failed before connecting",
       "surface": "apple",
@@ -39409,6 +39523,28 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Voice/TalkModeManager.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.96ece1b431ac3f96",
+      "source": "Realtime output cancellation failed: %@",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.83f84908b64f015c",
+      "source": "Realtime tool call did not return a run id",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/RealtimeTalkRelaySession.swift"
         }
       ]
     },
