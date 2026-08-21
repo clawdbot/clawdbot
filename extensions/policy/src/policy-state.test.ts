@@ -1,6 +1,8 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
+import { scanPolicyToolPosture } from "./policy-state-tool-posture.js";
+import { scanPolicyAgentWorkspace } from "./policy-state-workspace.js";
 import { collectPolicyEvidence } from "./policy-state.js";
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
@@ -12,6 +14,109 @@ async function scanPolicyTools(raw: string) {
 
 const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
+
+describe("keyed agents.entries scanning", () => {
+  // Regression: these scanners only walked the legacy `agents.list` array, so on any
+  // config that `doctor` had already migrated to the keyed `agents.entries` map they
+  // produced zero per-agent evidence. Scoped policy rules then fell back to the
+  // global/default posture, silently reporting a locked-down agent as unconstrained.
+  const keyedConfig = {
+    tools: { elevated: { enabled: true } },
+    agents: {
+      defaults: { sandbox: { mode: "off" } },
+      entries: {
+        guest: {
+          sandbox: { mode: "all", workspaceAccess: "none" },
+          tools: { deny: ["exec"], elevated: { enabled: false } },
+        },
+      },
+    },
+  };
+
+  it("reports sandbox posture for agents.entries", () => {
+    const evidence = scanPolicySandboxPosture(keyedConfig);
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          scope: "agent",
+          agentId: "guest",
+          value: "all",
+          source: "oc://openclaw.config/agents/entries/guest/sandbox/mode",
+        }),
+      ]),
+    );
+  });
+
+  it("reports tool posture for agents.entries", () => {
+    const evidence = scanPolicyToolPosture(keyedConfig);
+    expect(
+      evidence.filter((entry) => entry.scope === "agent" && entry.agentId === "guest"),
+    ).not.toHaveLength(0);
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "agent",
+          agentId: "guest",
+          source: "oc://openclaw.config/agents/entries/guest/tools/elevated/enabled",
+          value: false,
+        }),
+      ]),
+    );
+  });
+
+  it("reports workspace posture for agents.entries", () => {
+    const evidence = scanPolicyAgentWorkspace(keyedConfig);
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "agent",
+          agentId: "guest",
+          source: "oc://openclaw.config/agents/entries/guest/sandbox/workspaceAccess",
+          value: "none",
+        }),
+      ]),
+    );
+  });
+
+  it("still scans the legacy agents.list array", () => {
+    const evidence = scanPolicySandboxPosture({
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        list: [{ id: "legacy", sandbox: { mode: "all" } }],
+      },
+    });
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          scope: "agent",
+          agentId: "legacy",
+          value: "all",
+          source: "oc://openclaw.config/agents/list/#0/sandbox/mode",
+        }),
+      ]),
+    );
+  });
+
+  it("escapes entry keys that are not bare identifiers", () => {
+    const evidence = scanPolicySandboxPosture({
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        entries: { "team/qa": { sandbox: { mode: "all" } } },
+      },
+    });
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          agentId: "team/qa",
+          source: 'oc://openclaw.config/agents/entries/"team/qa"/sandbox/mode',
+        }),
+      ]),
+    );
+  });
+});
 
 describe("scanPolicySandboxPosture", () => {
   it("keeps explicit Podman identity while exposing shared container settings", () => {
