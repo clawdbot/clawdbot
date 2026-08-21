@@ -5919,11 +5919,13 @@ describe("package artifact reuse", () => {
     expect(telegramDispatch.env).toMatchObject({
       PARENT_WORKFLOW_REF: "${{ github.ref_name }}",
       PARENT_WORKFLOW_SHA: "${{ github.sha }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
     });
     expect(telegramDispatch.run).toContain('--ref "$PARENT_WORKFLOW_REF"');
     expect(telegramDispatch.run).toContain(
       '-f expected_trusted_workflow_sha="$PARENT_WORKFLOW_SHA"',
     );
+    expect(telegramDispatch.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
     expect(telegramDispatch.run).toContain('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
     expect(telegramDispatch.run).not.toContain("commits/main");
     expect(telegramDispatch.run).not.toContain("dispatch_attempt");
