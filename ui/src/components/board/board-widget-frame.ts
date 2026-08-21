@@ -409,6 +409,7 @@ export class BoardWidgetFrameLifecycle {
         this.host.context()?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
       ),
+      controlUiBaseUrl: `${window.location.origin}${this.host.context()?.basePath ?? ""}`,
       client: this.host.context()?.gateway.snapshot.client ?? undefined,
       resolveFrameUrl,
       confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),

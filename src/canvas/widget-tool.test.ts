@@ -546,6 +546,8 @@ describe("show_widget", () => {
       "e50212b277bc75dc07a1c6c46cc313ff8f5cbfe261211b12d1714ad9d6b8c912",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
+    expect(html).toContain("controlUiBaseUrl");
+    expect(html).toContain('define(host,"controlUiBaseUrl"');
     expect(html).toContain("else push.call(waiting,{send,reject})");
     expect(html).toContain("else push.call(promptWaiting,{send,inline,reject})");
     expect(html).toContain("openclaw:widget-prompt-host-ready");
