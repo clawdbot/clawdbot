@@ -360,6 +360,23 @@ describe("resolveTsdownBuildInvocation", () => {
     ).toBe(true);
   });
 
+  it.each([
+    [TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP],
+    [TSDOWN_UNIFIED_CONFIG_GROUP, TSDOWN_PACKAGE_CONFIG_GROUP],
+  ])("admits repeated filters in either order", (first, second) => {
+    const args = ["--filter", first, "--filter", second];
+    const result = resolveTsdownBuildPlan({
+      args,
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(resolveTsdownCleanOutputRoots(args)).toEqual(
+      expect.arrayContaining(["dist", "packages/agent-core/dist", "packages/ai/dist"]),
+    );
+  });
+
   it("applies admission to the unfiltered canonical config but not a package-only selector", () => {
     const full = resolveTsdownBuildPlan({
       args: ["--config", "tsdown.config.ts"],

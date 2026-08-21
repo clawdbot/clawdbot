@@ -313,19 +313,24 @@ export function listTsdownOutputRoots() {
   return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
 }
 
-function readForwardedOption(args: string[], names: string[]) {
+function readForwardedOptions(args: string[], names: string[]) {
+  const values: string[] = [];
   for (const [index, arg] of args.entries()) {
     for (const name of names) {
       if (arg === name) {
-        return args[index + 1];
-      }
-      if (arg.startsWith(`${name}=`)) {
-        return arg.slice(name.length + 1);
+        const value = args[index + 1];
+        if (value !== undefined) {
+          values.push(value);
+        }
+      } else if (arg.startsWith(`${name}=`)) {
+        values.push(arg.slice(name.length + 1));
       }
     }
   }
-  return undefined;
+  return values;
 }
+const readForwardedOption = (args: string[], names: string[]) =>
+  readForwardedOptions(args, names)[0];
 const isFilterFlag = (arg: string | undefined) => arg === "--filter" || arg === "-F";
 const isFilterArg = (arg: string) =>
   isFilterFlag(arg) || arg.startsWith("--filter=") || arg.startsWith("-F=");
@@ -341,30 +346,31 @@ const isUnifiedDtsGroup = (value: string | undefined) =>
 /** Limits cleanup to the output roots owned by an explicitly filtered build. */
 export function resolveTsdownCleanOutputRoots(args: string[] = []) {
   const config = readForwardedOption(args, ["--config", "-c"]);
-  const filter = readForwardedOption(args, ["--filter", "-F"]);
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
   const configPath = config ? path.resolve(config) : undefined;
   const aiConfigPath = path.resolve("tsdown.ai.config.ts");
   const mainConfigPath = path.resolve("tsdown.config.ts");
   const aiRoot = tsdownPackageOutputRoot("ai");
   const packageRoots = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter((root) => root !== aiRoot);
+  const selectedMainRoots = [
+    ...(filters.includes(TSDOWN_PACKAGE_CONFIG_GROUP) ? packageRoots : []),
+    ...(filters.some(
+      (filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP || isUnifiedDtsGroup(filter),
+    )
+      ? ROOT_TSDOWN_OUTPUT_ROOTS
+      : []),
+  ];
 
   if (configPath === aiConfigPath) {
     return [aiRoot];
   }
   if (configPath === mainConfigPath) {
-    if (filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
-      return packageRoots;
-    }
-    if (filter === TSDOWN_UNIFIED_CONFIG_GROUP || isUnifiedDtsGroup(filter)) {
-      return [...ROOT_TSDOWN_OUTPUT_ROOTS];
-    }
-    return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...packageRoots];
+    return filters.length === 0 || selectedMainRoots.length === 0
+      ? [...ROOT_TSDOWN_OUTPUT_ROOTS, ...packageRoots]
+      : selectedMainRoots;
   }
-  if (!config && filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
-    return [aiRoot, ...packageRoots];
-  }
-  if (!config && (filter === TSDOWN_UNIFIED_CONFIG_GROUP || isUnifiedDtsGroup(filter))) {
-    return [aiRoot, ...ROOT_TSDOWN_OUTPUT_ROOTS];
+  if (!config && filters.length > 0 && selectedMainRoots.length > 0) {
+    return [aiRoot, ...selectedMainRoots];
   }
   return listTsdownOutputRoots();
 }
@@ -1019,9 +1025,15 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
 
   if (hasForwardedConfig) {
     if (declarationsEnabled && selectsMainConfig(forwardedArgs)) {
-      const filter = readForwardedOption(forwardedArgs, ["--filter", "-F"]);
+      const filters = readForwardedOptions(forwardedArgs, ["--filter", "-F"]);
       const firstGroupIndex =
-        filter === undefined ? 0 : filter === TSDOWN_UNIFIED_CONFIG_GROUP ? 1 : -1;
+        filters.length === 0
+          ? 0
+          : filters.includes(TSDOWN_UNIFIED_CONFIG_GROUP)
+            ? filters.includes(TSDOWN_PACKAGE_CONFIG_GROUP)
+              ? 0
+              : 1
+            : -1;
       if (firstGroupIndex >= 0) {
         return SERIALIZED_MAIN_CONFIG_GROUPS.slice(firstGroupIndex).map((group) =>
           resolveTsdownBuildInvocation({
@@ -1064,8 +1076,9 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
 }
 
 function isFullTsdownBuildPlan(args: string[]) {
-  const filter = readForwardedOption(args, ["--filter", "-F"]);
-  const selectsUnifiedRuntime = filter === undefined || filter === TSDOWN_UNIFIED_CONFIG_GROUP;
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const selectsUnifiedRuntime =
+    filters.length === 0 || filters.includes(TSDOWN_UNIFIED_CONFIG_GROUP);
   return selectsUnifiedRuntime && (!args.some(isConfigArg) || selectsMainConfig(args));
 }
 
