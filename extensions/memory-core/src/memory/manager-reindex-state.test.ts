@@ -35,6 +35,7 @@ function createIdentityParams(
     provider?: { id: string; model: string } | null;
     providerKey?: string;
     providerAliases?: Array<{ model: string; providerKey: string }>;
+    providerModelKnown?: boolean;
     providerKeyKnown?: boolean;
     configuredSources?: MemorySource[];
     configuredScopeHash?: string;
@@ -144,6 +145,49 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("can defer a dynamic provider model until provider initialization", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "openai", model: "fts-only" },
+          providerKey: undefined,
+          providerModelKnown: false,
+          providerKeyKnown: false,
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("keeps provider identity strict while its dynamic model is unresolved", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "github-copilot", model: "fts-only" },
+          providerKey: undefined,
+          providerModelKnown: false,
+          providerKeyKnown: false,
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index was built for provider openai, expected github-copilot",
+    });
+  });
+
+  it("compares the discovered dynamic model after provider initialization", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "openai", model: "text-embedding-3-large" },
+          providerKey: "provider-key-large",
+        }),
+      ),
+    ).toEqual({
+      status: "mismatched",
+      reason: "index was built for model mock-embed-v1, expected text-embedding-3-large",
+    });
   });
 
   it("keeps model identity strict when paths share a basename", () => {

@@ -46,6 +46,7 @@ import {
 } from "./manager-reindex-state.js";
 import {
   markMemoryVectorRebuildRequired,
+  memoryTableExists,
   requiresMemoryVectorRebuild,
 } from "./manager-vector-rebuild-state.js";
 import type { MemoryWatchSettleQueue } from "./watch-settle.js";
@@ -99,11 +100,6 @@ const EMBEDDING_CACHE_SEED_BATCH_SIZE = 1_000;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
-function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
-  return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
-  );
-}
 export abstract class MemoryManagerSyncBase {
   protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
   protected abstract readonly cfg: OpenClawConfig;
@@ -370,36 +366,37 @@ export abstract class MemoryManagerSyncBase {
     hasIndexedChunks?: boolean;
   }): MemoryIndexIdentityState {
     const hasProviderOverride = params && "provider" in params;
+    const configuredProviderId = this.settings.provider;
     const configuredIndexIdentity =
-      !hasProviderOverride && !this.provider && this.settings.provider !== "none"
+      !hasProviderOverride && !this.provider && configuredProviderId !== "none"
         ? resolveEmbeddingProviderIndexIdentity({
             config: this.cfg,
             agentDir: resolveAgentDir(this.cfg, this.agentId),
             ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
           })
         : undefined;
-    // Plain status can compare identity before provider init. Mirror provider
-    // init's empty-model fallback so adapter defaults do not look mismatched.
+    const configuredModel =
+      configuredProviderId === "none"
+        ? ""
+        : this.settings.model.trim() ||
+          resolveEmbeddingProviderFallbackModel(configuredProviderId, "", this.cfg);
     const configuredProvider =
-      this.settings.provider === "none"
+      configuredProviderId === "none"
         ? null
         : (configuredIndexIdentity?.provider ?? {
             id:
-              resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
-              this.settings.provider,
-            model:
-              this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "fts-only", this.cfg),
+              resolveEmbeddingProviderAdapterId(configuredProviderId, this.cfg) ??
+              configuredProviderId,
+            model: configuredModel || "fts-only",
           });
     const provider = hasProviderOverride
       ? params.provider!
       : this.provider
         ? { id: this.provider.id, model: this.provider.model }
         : configuredProvider;
-    const vectorReady =
-      params && "vectorReady" in params
-        ? Boolean(params.vectorReady)
-        : this.vector.available === true;
+    const vectorReady = Boolean(
+      params && "vectorReady" in params ? params.vectorReady : this.vector.available,
+    );
     const initializedProviderIdentities =
       provider &&
       this.provider &&
@@ -419,6 +416,9 @@ export abstract class MemoryManagerSyncBase {
         ? initializedProviderIdentities
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
+    const configuredProviderModelKnown =
+      configuredProviderId === "none" ||
+      Boolean(this.provider || configuredIndexIdentity || configuredModel);
     return resolveMemoryIndexIdentityState({
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
@@ -428,6 +428,7 @@ export abstract class MemoryManagerSyncBase {
           ? undefined
           : (this.providerKey ?? undefined),
       providerAliases: providerIdentities.slice(1),
+      providerModelKnown: hasProviderOverride ? true : configuredProviderModelKnown,
       providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({

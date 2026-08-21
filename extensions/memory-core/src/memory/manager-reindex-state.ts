@@ -138,6 +138,7 @@ export function resolveMemoryIndexIdentityState(params: {
   provider: { id: string; model: string } | null;
   providerKey?: string;
   providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
+  providerModelKnown?: boolean;
   providerKeyKnown?: boolean;
   configuredSources: MemorySource[];
   configuredScopeHash: string;
@@ -168,7 +169,7 @@ export function resolveMemoryIndexIdentityState(params: {
     { model: expectedModel, providerKey: params.providerKey },
     ...(params.providerAliases ?? []),
   ].filter((identity) => identity.model === meta.model);
-  if (matchingModelIdentities.length === 0) {
+  if (params.providerModelKnown !== false && matchingModelIdentities.length === 0) {
     return {
       status: "mismatched",
       reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
@@ -182,6 +183,7 @@ export function resolveMemoryIndexIdentityState(params: {
     };
   }
   if (
+    params.providerModelKnown !== false &&
     params.providerKeyKnown !== false &&
     !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
   ) {

@@ -4,12 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
+  resolveConfiguredScopeHash,
+  resolveConfiguredSourcesForMeta,
+  type MemoryIndexMeta,
+} from "./manager-reindex-state.js";
 import { closeAllMemoryIndexManagers, type MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
@@ -70,7 +76,8 @@ vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
-  resolveEmbeddingProviderFallbackModel: () => "fts-only",
+  resolveEmbeddingProviderFallbackModel: (_providerId: string, fallbackModel: string) =>
+    fallbackModel,
 }));
 
 describe("memory manager FTS-only reindex", () => {
@@ -119,7 +126,11 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
+    params: {
+      provider?: string;
+      purpose?: "default" | "status";
+      vectorEnabled?: boolean;
+    } = {},
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
@@ -146,7 +157,11 @@ describe("memory manager FTS-only reindex", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: params.purpose,
+    });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -178,6 +193,57 @@ describe("memory manager FTS-only reindex", () => {
       sources: ["memory"],
     });
   }
+
+  it("defers a persisted dynamic model identity before provider initialization", async () => {
+    const persistedModel = "text-embedding-3-large";
+    const memoryManager = await createManager({
+      provider: "github-copilot",
+      purpose: "status",
+    });
+    const settings = Reflect.get(memoryManager, "settings") as {
+      chunking: { tokens: number; overlap: number };
+      extraPaths: string[];
+      multimodal: { enabled: boolean; modalities: string[]; maxFileBytes: number };
+      store: { fts: { tokenizer: string } };
+    };
+    const sources = Reflect.get(memoryManager, "sources") as Set<"memory" | "sessions">;
+    const metaWriter = memoryManager as unknown as {
+      writeMeta(meta: MemoryIndexMeta): void;
+    };
+    metaWriter.writeMeta({
+      model: persistedModel,
+      provider: "github-copilot",
+      providerKey: "persisted-copilot-key",
+      sources: resolveConfiguredSourcesForMeta(sources),
+      scopeHash: resolveConfiguredScopeHash({
+        workspaceDir,
+        extraPaths: settings.extraPaths,
+        multimodal: settings.multimodal,
+      }),
+      chunkTokens: settings.chunking.tokens,
+      chunkOverlap: settings.chunking.overlap,
+      chunkingVersion: MEMORY_CHUNKING_VERSION,
+      ftsTokenizer: settings.store.fts.tokenizer,
+      provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+    });
+    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    db.prepare(
+      `INSERT INTO memory_index_chunks
+       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+       VALUES (?, ?, 'memory', 1, 1, ?, ?, ?, ?, ?)`,
+    ).run(
+      "persisted-copilot-chunk",
+      "memory/copilot.md",
+      "persisted-copilot-hash",
+      persistedModel,
+      "Persisted Copilot semantic chunk.",
+      "[1,0]",
+      Date.now(),
+    );
+
+    expect(Reflect.get(memoryManager, "providerInitialized")).toBe(false);
+    expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  });
 
   it("preserves indexed chunks across forced reindex in FTS-only mode", async () => {
     const memoryManager = await createManager();
