@@ -1570,9 +1570,11 @@ extension GatewayConnection {
     }
 
     func cronRuns(jobId: String, limit: Int = 200) async throws -> [CronRunLogEntry] {
-        let data = try await requestRaw(
-            method: .cronRuns,
-            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)])
+        // Superseded history requests must not activate shared Gateway recovery.
+        let data = try await self.request(
+            method: Method.cronRuns.rawValue,
+            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)],
+            retryTransportFailures: false)
         return try Self.decodeCronRunsResponse(data)
     }
 

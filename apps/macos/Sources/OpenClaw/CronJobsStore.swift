@@ -27,19 +27,26 @@ final class CronJobsStore {
     private var runsTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
+    private var runsGeneration: UInt64 = 0
 
+    private let gateway: GatewayConnection
     private let interval: TimeInterval = 30
     private let isPreview: Bool
 
-    init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
+    init(gateway: GatewayConnection = .shared, isPreview: Bool = ProcessInfo.processInfo.isPreview) {
+        self.gateway = gateway
         self.isPreview = isPreview
     }
 
     func start() {
         guard !self.isPreview else { return }
         guard self.eventTask == nil else { return }
-        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
-            self?.handle(push: push)
+        self.eventTask = Task { [weak self, gateway] in
+            let stream = await gateway.subscribe()
+            for await push in stream {
+                guard !Task.isCancelled, let self else { return }
+                self.handle(push: push)
+            }
         }
         SimpleTaskSupport.startDetachedLoop(task: &self.pollTask, interval: self.interval) { [weak self] in
             await self?.refreshJobs()
@@ -49,8 +56,7 @@ final class CronJobsStore {
     func stop() {
         self.refreshTask?.cancel()
         self.refreshTask = nil
-        self.runsTask?.cancel()
-        self.runsTask = nil
+        self.invalidateRuns()
         self.eventTask?.cancel()
         self.eventTask = nil
         self.pollTask?.cancel()
@@ -65,12 +71,17 @@ final class CronJobsStore {
         defer { self.isLoadingJobs = false }
 
         do {
-            if let status = try? await GatewayConnection.shared.cronStatus() {
+            if let status = try? await self.gateway.cronStatus() {
                 self.schedulerEnabled = status.enabled
                 self.schedulerStorePath = status.sqlitePath ?? status.storePath
                 self.schedulerNextWakeAtMs = status.nextWakeAtMs
             }
-            self.jobs = try await GatewayConnection.shared.cronList(includeDisabled: true)
+            self.jobs = try await self.gateway.cronList(includeDisabled: true)
+            if let selectedJobId = self.selectedJobId,
+               !self.jobs.contains(where: { $0.id == selectedJobId })
+            {
+                self.clearSelectedJob()
+            }
             if self.jobs.isEmpty {
                 self.statusMessage = "No cron jobs yet."
             }
@@ -80,22 +91,51 @@ final class CronJobsStore {
         }
     }
 
-    func refreshRuns(jobId: String, limit: Int = 200) async {
-        guard !self.isLoadingRuns else { return }
-        self.isLoadingRuns = true
-        defer { self.isLoadingRuns = false }
+    func selectJob(_ id: String) {
+        if self.selectedJobId != id {
+            self.selectedJobId = id
+            self.runEntries = []
+            self.lastError = nil
+        }
+        self.refreshRuns(jobId: id)
+    }
 
-        do {
-            self.runEntries = try await GatewayConnection.shared.cronRuns(jobId: jobId, limit: limit)
-        } catch {
-            self.logger.error("cron.runs failed \(error.localizedDescription, privacy: .public)")
-            self.lastError = error.localizedDescription
+    func refreshRuns(jobId: String, limit: Int = 200, delay: TimeInterval = 0) {
+        guard self.selectedJobId == jobId else { return }
+        // Claim before scheduling so late completions cannot own a newer selection.
+        self.runsGeneration &+= 1
+        let generation = self.runsGeneration
+        self.isLoadingRuns = true
+        self.lastError = nil
+        SimpleTaskSupport.schedule(task: &self.runsTask, delay: delay) { [weak self] in
+            guard let self, self.runsGeneration == generation, self.selectedJobId == jobId else { return }
+            defer {
+                if self.runsGeneration == generation, self.selectedJobId == jobId {
+                    self.isLoadingRuns = false
+                    self.runsTask = nil
+                }
+            }
+            do {
+                let entries = try await self.gateway.cronRuns(jobId: jobId, limit: limit)
+                guard self.runsGeneration == generation,
+                      self.selectedJobId == jobId,
+                      !Task.isCancelled
+                else { return }
+                self.runEntries = entries
+            } catch {
+                guard self.runsGeneration == generation,
+                      self.selectedJobId == jobId,
+                      !Task.isCancelled
+                else { return }
+                self.logger.error("cron.runs failed \(error.localizedDescription, privacy: .public)")
+                self.lastError = error.localizedDescription
+            }
         }
     }
 
     func runJob(id: String, force: Bool = true) async {
         do {
-            try await GatewayConnection.shared.cronRun(jobId: id, force: force)
+            try await self.gateway.cronRun(jobId: id, force: force)
         } catch {
             self.lastError = error.localizedDescription
         }
@@ -103,12 +143,11 @@ final class CronJobsStore {
 
     func removeJob(id: String) async {
         do {
-            try await GatewayConnection.shared.cronRemove(jobId: id)
-            await self.refreshJobs()
+            try await self.gateway.cronRemove(jobId: id)
             if self.selectedJobId == id {
-                self.selectedJobId = nil
-                self.runEntries = []
+                self.clearSelectedJob()
             }
+            await self.refreshJobs()
         } catch {
             self.lastError = error.localizedDescription
         }
@@ -116,7 +155,7 @@ final class CronJobsStore {
 
     func setJobEnabled(id: String, enabled: Bool) async {
         do {
-            try await GatewayConnection.shared.cronUpdate(
+            try await self.gateway.cronUpdate(
                 jobId: id,
                 patch: ["enabled": AnyCodable(enabled)])
             await self.refreshJobs()
@@ -130,9 +169,9 @@ final class CronJobsStore {
         payload: [String: AnyCodable]) async throws
     {
         if let id {
-            try await GatewayConnection.shared.cronUpdate(jobId: id, patch: payload)
+            try await self.gateway.cronUpdate(jobId: id, patch: payload)
         } else {
-            try await GatewayConnection.shared.cronAdd(payload: payload)
+            try await self.gateway.cronAdd(payload: payload)
         }
         await self.refreshJobs()
     }
@@ -157,7 +196,7 @@ final class CronJobsStore {
         // Keep UI in sync with the gateway scheduler.
         self.scheduleRefresh(delayMs: 250)
         if evt.action == "finished", let selected = self.selectedJobId, selected == evt.jobId {
-            self.scheduleRunsRefresh(jobId: selected, delayMs: 200)
+            self.refreshRuns(jobId: selected, delay: 0.2)
         }
     }
 
@@ -167,11 +206,15 @@ final class CronJobsStore {
         }
     }
 
-    private func scheduleRunsRefresh(jobId: String, delayMs: Int = 200) {
-        SimpleTaskSupport.schedule(task: &self.runsTask, delay: TimeInterval(delayMs) / 1000) { [weak self] in
-            await self?.refreshRuns(jobId: jobId)
-        }
+    private func clearSelectedJob() {
+        self.invalidateRuns()
+        self.selectedJobId = nil
+        self.runEntries = []
     }
 
-    // MARK: - (no additional RPC helpers)
+    private func invalidateRuns() {
+        self.runsGeneration &+= 1
+        SimpleTaskSupport.stop(task: &self.runsTask)
+        self.isLoadingRuns = false
+    }
 }
