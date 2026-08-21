@@ -4042,6 +4042,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "rejects supplemental TTS audio instead of a final answer",
+      response: {
+        result: {
+          payloads: [
+            {
+              mediaUrl: "file:///tmp/answer.mp3",
+              ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+            },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
       name: "rejects an explicitly hidden assistant payload",
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
       requireVisibleReply: true,

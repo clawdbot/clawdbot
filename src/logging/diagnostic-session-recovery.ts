@@ -83,15 +83,6 @@ export type StuckSessionRecoveryOutcome =
       error: string;
     });
 
-export function recoveryOutcomeMutatesSessionState(
-  outcome: StuckSessionRecoveryOutcome | undefined,
-): boolean {
-  if (!outcome) {
-    return false;
-  }
-  return outcome.status === "aborted" || outcome.status === "released";
-}
-
 export function recoveryOutcomeClearsQueuedSessionState(
   outcome: StuckSessionRecoveryOutcome,
 ): boolean {
@@ -99,10 +90,6 @@ export function recoveryOutcomeClearsQueuedSessionState(
     outcome.status === "released" ||
     (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0)
   );
-}
-
-export function recoveryOutcomeReleasedCount(outcome: StuckSessionRecoveryOutcome): number {
-  return "released" in outcome ? outcome.released : 0;
 }
 
 export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): string {

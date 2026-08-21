@@ -446,6 +446,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasVisibleAgentPayload(directAnnounceResult, {
         ...completionPayloadVisibility,
         includeSilentReplyPayloads: false,
+        requireTerminalContent: true,
       }),
     );
     const hasIntentionalSilentCompletionReply = Boolean(
@@ -525,37 +526,13 @@ export async function sendSubagentAnnounceDirectly(params: {
         requireFinalReply: true,
       }) ||
         (shouldDeliverAgentFinal &&
-          !requiresMessageToolDelivery &&
-          hasVisibleAgentPayload(
-            {
-              payloads: Array.isArray(directAnnounceResult.payloads)
-                ? directAnnounceResult.payloads.filter((payload) => {
-                    const flags = payload as Record<string, unknown>;
-                    return (
-                      flags?.isCommentary !== true &&
-                      flags?.isCompactionNotice !== true &&
-                      flags?.isFallbackNotice !== true &&
-                      flags?.isStatusNotice !== true &&
-                      flags?.visible !== false
-                    );
-                  })
-                : [],
-            },
-            { ...completionPayloadVisibility, includeSilentReplyPayloads: false },
-          ) &&
+          hasVisibleNonSilentGatewayPayload &&
           directAnnounceResult.deliveryStatus?.status !== "suppressed")),
     );
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!params.requireVisibleReply &&
-        Boolean(
-          directAnnounceResult &&
-          (hasMessagingToolDelivery ||
-            hasVisibleAgentPayload(directAnnounceResult, {
-              ...completionPayloadVisibility,
-              includeSilentReplyPayloads: false,
-            })),
-        ));
+        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload));
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
