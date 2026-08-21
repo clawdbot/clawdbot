@@ -15,6 +15,7 @@ type WorkflowStep = {
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
+  "working-directory"?: string;
 };
 
 type WorkflowJob = {
@@ -504,6 +505,20 @@ describe("install smoke no-push root image transport", () => {
         OPENCLAW_INSTALL_SMOKE_GROUP: pair.group,
       });
     }
+
+    const bunConsumer = job(workflow, "bun_global_install_smoke");
+    expect(step(bunConsumer, "Setup trusted release harness for Bun smoke")).toMatchObject({
+      uses: "./.release-harness/.github/actions/setup-release-harness",
+      with: { "node-version": "24.x" },
+    });
+    expect(step(bunConsumer, "Install Bun for global smoke").run).toBe("npm install -g bun@1.3.14");
+    expect(step(bunConsumer, "Run Bun global install image-provider smoke")).toMatchObject({
+      "working-directory": ".release-harness",
+      run: "bash scripts/e2e/bun-global-install-smoke.sh",
+    });
+    expect(JSON.stringify(bunConsumer)).not.toContain(
+      "./.release-harness/.github/actions/setup-node-env",
+    );
   });
 
   it("packages candidate code only in an isolated image and verifies the sealed payload", () => {

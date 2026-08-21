@@ -2169,11 +2169,14 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
       "if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
     );
     expect(workflow).toContain("bun_global_install_smoke:");
-    expect(workflow).toContain("Setup Node environment for Bun smoke");
-    expect(workflow).toContain('install-bun: "true"');
+    expect(workflow).toContain("Setup trusted release harness for Bun smoke");
+    expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
+    expect(workflow).toContain("npm install -g bun@1.3.14");
     expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install image-provider smoke");
-    expect(workflow).toContain("bash .release-harness/scripts/e2e/bun-global-install-smoke.sh");
+    expect(workflow).toContain("working-directory: .release-harness");
+    expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(workflow).not.toContain("uses: ./.release-harness/.github/actions/setup-node-env");
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
     );
