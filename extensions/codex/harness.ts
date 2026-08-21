@@ -135,6 +135,19 @@ export function createCodexAppServerAgentHarness(options: {
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
+      // Codex owns discovery and auth for new first-party models. Only trust that
+      // native account when no authored transport or host credential is involved.
+      const nativeAccountOwnsUnobservedModel =
+        provider === "openai" &&
+        ctx.requestedRuntime === "codex" &&
+        Boolean(ctx.modelId?.trim()) &&
+        preparedAuth?.source === "harness" &&
+        preparedAuth.mode === undefined &&
+        preparedAuth.requirement === undefined &&
+        ctx.modelProvider?.api === undefined &&
+        ctx.modelProvider?.baseUrl === undefined &&
+        ctx.modelProvider?.azureApiVersion === undefined &&
+        ctx.modelProvider?.request === undefined;
       if (runtimePolicy) {
         const compatible = runtimePolicy.compatibleIds.some(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
@@ -145,7 +158,7 @@ export function createCodexAppServerAgentHarness(options: {
             reason: "Codex cannot reproduce the prepared provider route",
           };
         }
-      } else if (ctx.modelProvider && provider !== "codex") {
+      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
         return {
           supported: false,
           reason: "provider route compatibility with Codex is not declared",
