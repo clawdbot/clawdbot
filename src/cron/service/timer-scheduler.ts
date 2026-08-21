@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
+  runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -116,8 +117,11 @@ function armRunningRecheckTimer(state: CronServiceState) {
 
 function setCronTimer(state: CronServiceState, delayMs: number): void {
   state.timer = setTimeout(() => {
-    void onTimer(state).catch((err: unknown) => {
-      state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+    // The timer outlives the tick that armed it, so it must own a new Gateway root.
+    runOutsideGatewayRootWorkAdmission(() => {
+      void onTimer(state).catch((err: unknown) => {
+        state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      });
     });
   }, delayMs);
 }
@@ -212,7 +216,11 @@ async function onAdmittedTimer(state: CronServiceState) {
           state,
           admittedDue.length > 0
             ? () => capacityRechecks.request()
-            : () => void requestImmediateCronRecheck(state),
+            : () =>
+                // A zero-admission tick returns before this wake and cannot drain it.
+                runOutsideGatewayRootWorkAdmission(() => {
+                  void requestImmediateCronRecheck(state);
+                }),
         );
         allowEmptyCapacityRecheck = admittedDue.length > 0;
       }

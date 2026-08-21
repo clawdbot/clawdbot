@@ -7,6 +7,10 @@ import {
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { stop } from "./service/ops-lifecycle.js";
 import { createCronServiceState } from "./service/state.js";
@@ -28,6 +32,7 @@ const fixtures = setupCronRegressionFixtures({
 
 describe("cron service cross-tick bounded admission", () => {
   afterEach(() => {
+    resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
 
@@ -102,7 +107,7 @@ describe("cron service cross-tick bounded admission", () => {
     stop(state);
   });
 
-  it("does not create receipts or retain timer batches while all slots are full", async () => {
+  it("keeps saturated work unreserved and its capacity wake independently admitted", async () => {
     const store = fixtures.makeStorePath();
     const t0 = Date.parse("2026-02-06T10:06:00.000Z");
     const jobA = createDueIsolatedJob({
@@ -132,6 +137,7 @@ describe("cron service cross-tick bounded admission", () => {
     const releaseA = createDeferred<{ status: "ok"; summary: string }>();
     const releaseB = createDeferred<{ status: "ok"; summary: string }>();
     const cStarted = createDeferred();
+    const releaseC = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
       active += 1;
       peakActive = Math.max(peakActive, active);
@@ -146,7 +152,7 @@ describe("cron service cross-tick bounded admission", () => {
           return await releaseB.promise;
         }
         cStarted.resolve();
-        return { status: "ok" as const, summary: "c done" };
+        return await releaseC.promise;
       } finally {
         active -= 1;
       }
@@ -198,6 +204,7 @@ describe("cron service cross-tick bounded admission", () => {
 
     releaseA.resolve({ status: "ok", summary: "a done" });
     await cStarted.promise;
+    expect(getActiveGatewayRootWorkCount()).toBe(2);
     expect(
       inspectActiveCronRunReceipt({
         storePath: store.storePath,
@@ -209,7 +216,10 @@ describe("cron service cross-tick bounded admission", () => {
 
     releaseB.resolve({ status: "ok", summary: "b done" });
     await firstTick;
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    releaseC.resolve({ status: "ok", summary: "c done" });
     await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(state.queuedRunReservationsByJobId.size).toBe(0);
     expect(
       inspectActiveCronRunReceipt({
@@ -401,11 +411,10 @@ describe("cron service cross-tick bounded admission", () => {
     }
   });
 
-  it("keeps the next future wake armed while an earlier receipt-backed batch runs", async () => {
-    vi.useFakeTimers();
+  it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
+    vi.useRealTimers();
     const store = fixtures.makeStorePath();
-    const t0 = Date.parse("2026-02-06T10:08:00.000Z");
-    vi.setSystemTime(t0);
+    const t0 = Date.now();
     const jobA = createDueIsolatedJob({
       id: "timer-a",
       nowMs: t0,
@@ -415,7 +424,7 @@ describe("cron service cross-tick bounded admission", () => {
     const jobB = createDueIsolatedJob({
       id: "timer-b",
       nowMs: t0,
-      nextRunAtMs: t0 + 30_000,
+      nextRunAtMs: t0 + 500,
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [jobA, jobB] });
 
@@ -451,24 +460,31 @@ describe("cron service cross-tick bounded admission", () => {
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
 
     const tickA = onTimer(state);
-    await aStarted.promise;
-    await vi.advanceTimersByTimeAsync(30_000);
-    await bStarted.promise;
+    try {
+      await aStarted.promise;
+      await bStarted.promise;
 
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-    expect(peakActive).toBe(2);
-    expect(
-      inspectActiveCronRunReceipt({
-        storePath: store.storePath,
-        jobId: jobB.id,
-      }),
-    ).toBeDefined();
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+      expect(peakActive).toBe(2);
+      expect(
+        inspectActiveCronRunReceipt({
+          storePath: store.storePath,
+          jobId: jobB.id,
+        }),
+      ).toBeDefined();
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
 
-    releaseB.resolve({ status: "ok", summary: "b done" });
-    releaseA.resolve({ status: "ok", summary: "a done" });
-    await tickA;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(state.activeTimerTicks).toBe(0);
-    stop(state);
+      releaseA.resolve({ status: "ok", summary: "a done" });
+      await tickA;
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      releaseB.resolve({ status: "ok", summary: "b done" });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(state.activeTimerTicks).toBe(0);
+    } finally {
+      releaseA.resolve({ status: "ok", summary: "a cleanup" });
+      releaseB.resolve({ status: "ok", summary: "b cleanup" });
+      await tickA;
+      stop(state);
+    }
   });
 });
