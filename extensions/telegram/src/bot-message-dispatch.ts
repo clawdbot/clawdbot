@@ -384,6 +384,12 @@ export const dispatchTelegramMessage = async (
       }
     }
     loadFreshSessionEntry.clear();
+    // Media hydration and other pre-dispatch work can outlive the durable
+    // ingress watchdog. Never enter the reply pipeline after that owner has
+    // already fenced this attempt; the canonical spool row will retry it.
+    if (isDispatchSuperseded()) {
+      return { kind: "completed" };
+    }
     if (status.controller && !isRoomEvent) {
       void status.controller.setThinking();
     }
