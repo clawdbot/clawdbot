@@ -609,10 +609,6 @@ function main() {
   if (!["publish", "postpublish-confidence", "main-qualification"].includes(intent)) {
     throw new Error("--intent must be publish, postpublish-confidence, or main-qualification");
   }
-  const validationIntent =
-    intent === "main-qualification"
-      ? (requiredOption(args, "--validation-intent") as MainQualificationValidationIntent)
-      : undefined;
   const source = {
     candidateSha: requiredOption(args, "--candidate-sha"),
     candidateRef: requiredOption(args, "--candidate-ref"),
@@ -621,7 +617,14 @@ function main() {
   };
   const plan = produceReleasePlan(
     intent === "main-qualification"
-      ? { ...source, intent, validationIntent }
+      ? {
+          ...source,
+          intent,
+          validationIntent: requiredOption(
+            args,
+            "--validation-intent",
+          ) as MainQualificationValidationIntent,
+        }
       : { ...source, intent },
   );
   process.stdout.write(canonicalReleasePlanLockJson(createReleasePlanLock(plan)));
