@@ -14,7 +14,6 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -71,11 +70,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultModelSelection | null = null;
   @state() private selectedAgentId = "";
-  @state() private providerUsageStalled = false;
-
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
-  private connectionEpoch: object = {};
   // Null Task runs supersede stale work without counting as a real load.
   private loadClient: GatewayBrowserClient | null = null;
   private routeDataObserved = false;
@@ -111,7 +107,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () => this.loadClient !== null,
     reload: () => void this.refresh({ force: false }),
-    onIncompleteUsageExhausted: () => (this.providerUsageStalled = true),
+    onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -174,7 +170,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       } else {
         this.data = null;
         this.dataClient = null;
-        this.providerUsageStalled = false;
         this.refreshPolicy.resetPayload();
       }
       this.ensureInitialData();
@@ -208,14 +203,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
     this.data = data;
     this.dataClient = client;
-    const providerUsageIncomplete =
-      data.providerUsage?.ok === false ||
-      (data.providerUsage?.ok === true && isUsageIncomplete(data.providerUsage.value));
-    this.providerUsageStalled =
-      this.refreshPolicy.setLastLoadedAtMs(data.updatedAt, {
-        incomplete: providerUsageIncomplete,
-        connection: this.connectionEpoch,
-      }) === "exhausted";
+    this.refreshPolicy.markProviderUsage(data.providerUsage, data.updatedAt, this.gateway.epoch);
   }
 
   private invalidateRequests() {
@@ -229,8 +217,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.data = null;
       this.dataClient = null;
     }
-    this.connectionEpoch = {};
-    this.providerUsageStalled = false;
     this.refreshPolicy.resetPayload();
     this.busy = {};
     this.messages = {};
@@ -276,7 +262,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.invalidateRequests();
     this.data = null;
     this.dataClient = null;
-    this.providerUsageStalled = false;
     this.refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
     // switches, or an in-flight probe from the old agent can reuse an epoch
@@ -295,7 +280,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return Promise.resolve();
     }
     if (opts.force) {
-      this.providerUsageStalled = false;
       this.refreshPolicy.resetPayload();
     }
     this.loadClient = client;
@@ -623,11 +607,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const modelBehavior = readModelBehaviorConfig(agentsDefaults);
     // This keeps the pre-move General busy gate sourced from the same update state.
-    const configBusy = this.configBusy();
-    const providerUsage = data.providerUsage?.ok ? data.providerUsage.value : null;
     const cards = buildModelProviderCards({
       ...data,
-      providerUsage,
+      providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
@@ -639,8 +621,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         .map((provider) => provider.provider) ?? []),
     ]);
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
-    const blockedReason = this.mutationBlockedReason();
-    const configuredModels = buildSelectableDefaultModels(data.models, defaults);
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
@@ -651,19 +631,19 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
       cards,
-      configuredModels,
+      configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
       defaultModelsDirty: this.defaultsDraft !== null,
       ...modelBehavior,
-      configBusy,
+      configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         data.authStatus?.providerCapabilities,
         configuredProviderIds,
       ),
       canMutate: this.canMutate(),
-      mutationBlockedReason: blockedReason,
-      providerUsageStalled: this.providerUsageStalled,
+      mutationBlockedReason: this.mutationBlockedReason(),
+      providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
       busy: this.busy,
       messages: this.messages,

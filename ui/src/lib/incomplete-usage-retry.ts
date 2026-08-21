@@ -8,25 +8,11 @@ type IncompleteUsageRetryOptions = {
   limit?: number;
 };
 
-type UsageRetryHost = {
-  addController: (controller: { hostDisconnected: () => void }) => void;
-};
-
 /** Closed convergence state: an incomplete payload is never a rendered answer. */
 export type UsageRetryState = "complete" | "retrying" | "exhausted";
 
 export function isUsageIncomplete(usage: { refreshing?: boolean } | null | undefined): boolean {
   return usage?.refreshing === true;
-}
-
-export function createUsageRetry(
-  host: UsageRetryHost,
-  retry: () => void,
-  options?: Omit<IncompleteUsageRetryOptions, "retry">,
-): IncompleteUsageRetry {
-  const controller = new IncompleteUsageRetry({ retry, ...options });
-  host.addController({ hostDisconnected: () => controller.dispose() });
-  return controller;
 }
 
 /** Keeps incomplete usage cache-cold while bounding automatic convergence attempts. */
@@ -40,6 +26,10 @@ export class IncompleteUsageRetry {
   private connection: unknown;
 
   constructor(private readonly options: IncompleteUsageRetryOptions) {}
+
+  get exhausted(): boolean {
+    return this.exhaustionReported;
+  }
 
   observe(incomplete: boolean, connection?: unknown): UsageRetryState {
     this.useConnection(connection);

@@ -11,7 +11,6 @@ import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
-  providerUsage: { ok: boolean } | null;
   routeData: UsageRouteData;
   usageError: string | null;
   usageSelectedSessions: string[];
@@ -20,7 +19,8 @@ type TestUsagePage = HTMLElement & {
   usageSessionLogs: SessionLogEntry[] | null;
   usageSessionLogsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   providerUsageStalled: boolean;
-  routeData?: unknown;
+  providerUsageSummary: { updatedAt: number; providers: unknown[] } | null;
+  providerUsageUnavailable: boolean;
   loadUsage: () => Promise<void>;
   loadSessionTimeSeries: (sessionKey: string) => Promise<void>;
   loadSessionLogs: (sessionKey: string) => Promise<void>;
@@ -131,7 +131,7 @@ describe("UsagePage provider usage outcome", () => {
       await page.updateComplete;
       if (loadSource === "direct") {
         (page as unknown as { refreshPolicy: { reload: () => void } }).refreshPolicy.reload();
-        await vi.waitFor(() => expect(page.providerUsage).toMatchObject({ ok: false }));
+        await vi.waitFor(() => expect(page.providerUsageUnavailable).toBe(true));
       }
       const previousCalls = request.mock.calls.filter(
         ([method]) => method === "usage.status",
@@ -146,10 +146,7 @@ describe("UsagePage provider usage outcome", () => {
         );
       });
       await vi.waitFor(() =>
-        expect(page.providerUsage).toEqual({
-          ok: true,
-          value: { updatedAt: 2, providers: [] },
-        }),
+        expect(page.providerUsageSummary).toEqual({ updatedAt: 2, providers: [] }),
       );
     },
   );
@@ -197,7 +194,7 @@ describe("UsagePage provider usage outcome", () => {
     };
     refresh();
     await vi.waitFor(() => {
-      expect(page.providerUsage).toEqual({ ok: true, value: summary });
+      expect(page.providerUsageSummary).toEqual(summary);
     });
 
     phase = 2;
@@ -205,7 +202,7 @@ describe("UsagePage provider usage outcome", () => {
     await vi.waitFor(() => {
       expect(page.usageError).not.toBeNull();
     });
-    expect(page.providerUsage).toEqual({ ok: true, value: summary });
+    expect(page.providerUsageSummary).toEqual(summary);
   });
 
   it("clears a stale provider request failure when a later aggregate load fails", async () => {
@@ -254,7 +251,7 @@ describe("UsagePage provider usage outcome", () => {
     };
     refresh();
     await vi.waitFor(() => {
-      expect(page.providerUsage).toMatchObject({ ok: false });
+      expect(page.providerUsageUnavailable).toBe(true);
     });
 
     // Second load: usage.status succeeds but the aggregate fails on usage.cost.
@@ -264,13 +261,22 @@ describe("UsagePage provider usage outcome", () => {
     await vi.waitFor(() => {
       expect(page.usageError).not.toBeNull();
     });
-    expect(page.providerUsage).toBeNull();
+    expect(page.providerUsageUnavailable).toBe(false);
   });
 });
 
 describe("UsagePage detail requests", () => {
   it("marks provider usage stalled once the retry budget is spent", async () => {
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
+    vi.useFakeTimers();
+    const client = {
+      request: vi.fn(async (method: string) =>
+        method === "usage.status"
+          ? { updatedAt: 1, providers: [], refreshing: true }
+          : method === "usage.cost"
+            ? { daily: [] }
+            : { sessions: [], totals: null },
+      ),
+    } as unknown as GatewayBrowserClient;
     const page = await createPage(client);
     const gateway = page.context.gateway;
     const routeDataAt = (loadedAtMs: number) => ({
@@ -297,15 +303,11 @@ describe("UsagePage detail requests", () => {
       error: null,
     });
 
-    // Three bounded attempts, then the page owns the outcome. Without the wiring
-    // the empty provider list renders as a loaded answer.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      page.routeData = routeDataAt(attempt);
-      await page.updateComplete;
-      expect(page.providerUsageStalled).toBe(false);
-    }
-    page.routeData = routeDataAt(3);
+    page.routeData = routeDataAt(0);
     await page.updateComplete;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
     expect(page.providerUsageStalled).toBe(true);
 
     page.routeData = {
@@ -358,7 +360,7 @@ describe("UsagePage detail requests", () => {
     await page.updateComplete;
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await page.loadUsage();
+      await vi.advanceTimersByTimeAsync(5_000);
     }
 
     expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(3);

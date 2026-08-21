@@ -218,6 +218,12 @@ function requestCount(request: ReturnType<typeof vi.fn>, method: string): number
   return request.mock.calls.filter(([candidate]) => candidate === method).length;
 }
 
+async function advanceUsageRetries(): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await vi.advanceTimersByTimeAsync(5_000);
+  }
+}
+
 function appendPage(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-model-providers-page",
@@ -240,7 +246,7 @@ describe("ModelProvidersPage usage convergence", () => {
     harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
     const page = appendPage(harness.context);
     await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(15_000);
+    await advanceUsageRetries();
 
     const usageCallsBeforeReconnect = harness.request.mock.calls.filter(
       ([method]) => method === "usage.status",
@@ -269,7 +275,7 @@ describe("ModelProvidersPage usage convergence", () => {
     // not a failure and must not warn.
     expect(page.textContent ?? "").not.toContain("did not finish loading");
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await advanceUsageRetries();
     await page.updateComplete;
 
     // Budget spent and the payload is still incomplete. Rendering the ordinary
@@ -284,7 +290,7 @@ describe("ModelProvidersPage usage convergence", () => {
     ).length;
     page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
     await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(15_000);
+    await advanceUsageRetries();
     expect(
       harness.request.mock.calls.filter(([method]) => method === "usage.status").length,
     ).toBeGreaterThan(callsBeforeManual + 1);
@@ -296,7 +302,7 @@ describe("ModelProvidersPage usage convergence", () => {
     harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
     const page = appendPage(harness.context);
     await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(15_000);
+    await advanceUsageRetries();
     await page.updateComplete;
     expect(page.textContent ?? "").toContain("did not finish loading");
 
@@ -306,7 +312,7 @@ describe("ModelProvidersPage usage convergence", () => {
     harness.failUsageStatus();
     page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
     await page.updateComplete;
-    await vi.advanceTimersByTimeAsync(15_000);
+    await advanceUsageRetries();
     await page.updateComplete;
 
     expect(page.textContent ?? "").toContain("did not finish loading");
@@ -321,7 +327,13 @@ describe("ModelProvidersPage usage convergence", () => {
     // Disconnected route data carries providerUsage: null for the ordinary
     // "nothing loaded yet" reason. Treating that as unresolved would count down
     // the budget and warn about a stall that never happened.
-    page.routeData = { data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId: "main" };
+    page.routeData = {
+      gateway: harness.context.gateway,
+      gatewaySnapshot: harness.context.gateway.snapshot,
+      data: EMPTY_MODEL_PROVIDERS_DATA,
+      client: null,
+      agentId: "main",
+    };
     page.requestUpdate();
     await page.updateComplete;
     await vi.advanceTimersByTimeAsync(60_000);

@@ -1,4 +1,9 @@
-import { IncompleteUsageRetry, type UsageRetryState } from "../../lib/incomplete-usage-retry.ts";
+import {
+  IncompleteUsageRetry,
+  isUsageIncomplete,
+  type UsageRetryState,
+} from "../../lib/incomplete-usage-retry.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
@@ -51,6 +56,10 @@ export class UsageRefreshPolicy {
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
+  get incompleteUsageExhausted(): boolean {
+    return this.incompleteUsageRetry.exhausted;
+  }
+
   setLastLoadedAtMs(
     value: number | null,
     params?: { incomplete?: boolean; connection?: unknown },
@@ -60,6 +69,16 @@ export class UsageRefreshPolicy {
 
   markLoaded(params?: { incomplete?: boolean; connection?: unknown }): UsageRetryState {
     return this.applyLoadState(Date.now(), params?.incomplete === true, params?.connection);
+  }
+
+  markProviderUsage(
+    result: ProviderUsageRequestResult | null,
+    value: number | null,
+    connection: unknown,
+  ): UsageRetryState {
+    const incomplete =
+      result?.ok === false || (result?.ok === true && isUsageIncomplete(result.value));
+    return this.applyLoadState(value, incomplete, connection);
   }
 
   resetPayload(): void {

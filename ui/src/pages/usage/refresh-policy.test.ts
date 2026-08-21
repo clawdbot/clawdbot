@@ -6,7 +6,7 @@ const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 const NOW_MS = 1_000_000;
 
 function createPolicy(isLoading = () => false) {
-  const reload = vi.fn();
+  const reload = vi.fn(async () => undefined);
   return { policy: new UsageRefreshPolicy({ isLoading, reload }), reload };
 }
 
@@ -72,22 +72,22 @@ describe("UsageRefreshPolicy", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("restarts an exhausted retry budget for manual and focus cycles", () => {
+  it("restarts an exhausted retry budget for manual and focus cycles", async () => {
     const { policy, reload } = createPolicy();
     for (let attempt = 0; attempt < 4; attempt += 1) {
       policy.markLoaded({ incomplete: true });
-      vi.advanceTimersByTime(5_000);
+      await vi.advanceTimersByTimeAsync(5_000);
     }
     expect(reload).toHaveBeenCalledTimes(3);
 
     policy.request("manual");
     policy.markLoaded({ incomplete: true });
-    vi.advanceTimersByTime(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(5);
 
     policy.request("focus");
     policy.markLoaded({ incomplete: true });
-    vi.advanceTimersByTime(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(7);
   });
 });
