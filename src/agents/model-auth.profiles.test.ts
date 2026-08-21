@@ -5,6 +5,8 @@ import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
@@ -730,12 +732,20 @@ describe("getApiKeyForModelCore", () => {
           OPENAI_API_KEY: undefined,
         },
       },
-      async () => {
-        await expect(resolveApiKeyForProviderCore({ provider: "openai" })).rejects.toMatchObject({
+      async (state) => {
+        writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
+        const error = await resolveApiKeyForProviderCore({
+          provider: "openai",
+          agentDir: state.agentDir(),
+        }).catch((caught: unknown) => caught);
+        expect(error).toMatchObject({
           code: "missing-provider-auth",
-          message: expect.stringContaining('No API key found for provider "openai".'),
           provider: "openai",
         });
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain(
+          `Auth store: ${resolveOpenClawStateSqlitePath(state.env)} (agentDir: ${state.agentDir()}).`,
+        );
       },
     );
 
