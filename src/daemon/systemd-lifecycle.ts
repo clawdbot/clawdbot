@@ -216,12 +216,26 @@ function resolveSystemdUnitArchiveDir(env: GatewayServiceEnv): string {
  * same day (or any pre-existing file at that exact path) would otherwise let
  * `copyFile` silently replace an earlier operator backup — the exact data
  * loss this archive-instead-of-delete path exists to prevent (#116130).
+ *
+ * `linkTarget` archives a symlinked unit as the link itself: the installer
+ * treats such links as operator layout it refuses to rewrite, so flattening one
+ * here would make the restore command we print rebuild the wrong shape.
  */
-async function copyToUniqueArchiveTarget(sourcePath: string, baseTarget: string): Promise<string> {
+async function copyToUniqueArchiveTarget(
+  sourcePath: string,
+  linkTarget: string | undefined,
+  baseTarget: string,
+): Promise<string> {
   for (let attempt = 0; ; attempt++) {
     const target = attempt === 0 ? baseTarget : `${baseTarget}.${attempt}`;
     try {
-      await fs.copyFile(sourcePath, target, fsConstants.COPYFILE_EXCL);
+      // Both fail EEXIST rather than clobbering, which is what makes the
+      // numbered-sibling retry safe.
+      if (linkTarget === undefined) {
+        await fs.copyFile(sourcePath, target, fsConstants.COPYFILE_EXCL);
+      } else {
+        await fs.symlink(linkTarget, target);
+      }
       return target;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
@@ -256,18 +270,26 @@ export async function uninstallUserSystemdGatewayUnit({
   }
   const archiveTarget = path.join(resolveSystemdUnitArchiveDir(env), unitName);
   let archivedPath: string | undefined;
-  try {
-    // Archive dir first, so a missing destination cannot raise the ENOENT that
-    // means "no unit file here"; copy before unlink, so a cross-filesystem
-    // state dir or a failed write leaves the operator's unit in place.
-    await fs.mkdir(path.dirname(archiveTarget), { recursive: true, mode: 0o700 });
-    archivedPath = await copyToUniqueArchiveTarget(unitPath, archiveTarget);
-    await fs.unlink(unitPath);
-    stdout.write(`${formatLine("Archived user-scope systemd service", archivedPath)}\n`);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+  // This probe owns the "no unit file here" verdict; every later ENOENT is a
+  // real archive failure. Sharing one catch let an ENOENT from mkdir, the copy
+  // or the unlink report the unit absent with the operator's file still there.
+  // lstat, not stat: a dangling link is a unit systemd loads, not an absence.
+  const sourceStats = await fs.lstat(unitPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") {
       throw error;
     }
+    return undefined;
+  });
+  if (sourceStats) {
+    // Archive dir first, so a missing destination cannot fail the copy; copy
+    // before unlink, so a cross-filesystem state dir or a failed write leaves
+    // the operator's unit in place.
+    await fs.mkdir(path.dirname(archiveTarget), { recursive: true, mode: 0o700 });
+    const linkTarget = sourceStats.isSymbolicLink() ? await fs.readlink(unitPath) : undefined;
+    archivedPath = await copyToUniqueArchiveTarget(unitPath, linkTarget, archiveTarget);
+    await fs.unlink(unitPath);
+    stdout.write(`${formatLine("Archived user-scope systemd service", archivedPath)}\n`);
+  } else {
     stdout.write(`User-scope systemd unit not found at ${unitPath}\n`);
   }
   // The manager keeps a deleted unit's definition loaded until it reloads, so
