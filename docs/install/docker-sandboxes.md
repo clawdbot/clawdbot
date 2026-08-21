@@ -83,7 +83,7 @@ before anyone attaches. It generates its own token on first boot, because it
 binds to the container's external interface for port publishing and refuses a
 non-loopback bind without one. And it enables
 [Docker-backed sandboxing](/gateway/sandboxing#docker-backend) for tool
-execution, building that sandbox image on first boot, so the agent's shell never
+execution, pulling the image it needs on first boot, so the agent's shell never
 shares a filesystem with the Gateway's credential state:
 
 ```bash
