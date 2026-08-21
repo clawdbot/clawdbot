@@ -165,29 +165,34 @@ describe("@-prefixed tool paths", () => {
   it.each(WORKSPACE_ONLY_CASES)(
     "mutates the literal @-named file when it exists only inside a remote sandbox (workspaceOnly=%s)",
     async (workspaceOnly) => {
-      const root = "/workspace";
-      const { files, bridge } = createRemoteOnlySandboxBridge(root, {
-        "@notes.md": "literal\n",
-        "notes.md": "sibling\n",
-      });
-      const sandbox = createAgentToolsSandboxContext({ workspaceDir: root, fsBridge: bridge });
-      const config: OpenClawConfig = { tools: { fs: { workspaceOnly } } };
-      const tools = createOpenClawCodingTools({ sandbox, config });
-      const { writeTool, editTool } = expectReadWriteEditTools(tools);
+      // The root exists on the host but stays EMPTY: only the bridge's in-memory
+      // map holds "@notes.md". Host-side canonicalization (memory write
+      // provenance) needs a resolvable root, while the existence probe still has
+      // nothing on disk to find.
+      await withTempDir("openclaw-at-remote-", async (root) => {
+        const { files, bridge } = createRemoteOnlySandboxBridge(root, {
+          "@notes.md": "literal\n",
+          "notes.md": "sibling\n",
+        });
+        const sandbox = createAgentToolsSandboxContext({ workspaceDir: root, fsBridge: bridge });
+        const config: OpenClawConfig = { tools: { fs: { workspaceOnly } } };
+        const tools = createOpenClawCodingTools({ sandbox, config });
+        const { writeTool, editTool } = expectReadWriteEditTools(tools);
 
-      // A host-only existence probe cannot see "@notes.md" here — it only lives in
-      // the bridge's in-memory map, never on this process's real filesystem — so
-      // this proves the sandbox bridge's stat() call, not a host fs coincidence.
-      await writeTool.execute("sbx-at-write", { path: "@notes.md", content: "written\n" });
-      expect(files.get(`${root}/@notes.md`)).toBe("written\n");
-      expect(files.get(`${root}/notes.md`)).toBe("sibling\n");
+        // A host-only existence probe cannot see "@notes.md" here — it only lives in
+        // the bridge's in-memory map, never on this process's real filesystem — so
+        // this proves the sandbox bridge's stat() call, not a host fs coincidence.
+        await writeTool.execute("sbx-at-write", { path: "@notes.md", content: "written\n" });
+        expect(files.get(`${root}/@notes.md`)).toBe("written\n");
+        expect(files.get(`${root}/notes.md`)).toBe("sibling\n");
 
-      await editTool.execute("sbx-at-edit", {
-        path: "@notes.md",
-        edits: [{ oldText: "written", newText: "edited" }],
+        await editTool.execute("sbx-at-edit", {
+          path: "@notes.md",
+          edits: [{ oldText: "written", newText: "edited" }],
+        });
+        expect(files.get(`${root}/@notes.md`)).toBe("edited\n");
+        expect(files.get(`${root}/notes.md`)).toBe("sibling\n");
       });
-      expect(files.get(`${root}/@notes.md`)).toBe("edited\n");
-      expect(files.get(`${root}/notes.md`)).toBe("sibling\n");
     },
   );
 });
