@@ -6422,6 +6422,20 @@ export const en: TranslationMap = {
       noMatching: "No matching runs.",
       emptyTitle: "No runs yet",
       emptyHint: "Runs show up here once an automation fires.",
+      conditionActivity: "Condition activity",
+      conditionActivityHint: "Checks run on schedule before the payload starts.",
+      checks: "Checks",
+      lastChecked: "Last checked",
+      lastFired: "Last fired",
+      notChecked: "Not checked yet",
+      neverFired: "Never",
+      emptyConditionTitle: "No payload runs yet",
+      emptyConditionHint:
+        "The condition has been checked {count} times without matching. Run history starts when the payload executes.",
+      emptyConditionHintOne:
+        "The condition has been checked once without matching. Run history starts when the payload executes.",
+      emptyConditionUnchecked:
+        "The condition has not been checked yet. Run history starts when the payload executes.",
       loadMore: "Load more runs",
       runStatusOk: "OK",
       runStatusError: "Error",

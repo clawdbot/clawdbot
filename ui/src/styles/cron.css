@@ -859,6 +859,62 @@
   gap: var(--space-3);
 }
 
+.cron-condition-activity {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.4fr) minmax(390px, 2fr);
+  align-items: center;
+  gap: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.cron-condition-activity__intro {
+  min-width: 0;
+}
+
+.cron-condition-activity__intro .settings-row__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cron-condition-activity__icon {
+  display: inline-flex;
+  color: var(--accent-2);
+}
+
+.cron-condition-activity__icon svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-condition-activity__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 0;
+  margin: 0;
+}
+
+.cron-condition-activity__metric {
+  min-width: 0;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border);
+}
+
+.cron-condition-activity__metric dt {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-condition-activity__metric dd {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .cron-run-filters {
   display: flex;
   align-items: center;
@@ -868,6 +924,17 @@
 
 .cron-run-filter-search {
   flex: 1 1 220px;
+}
+
+@media (max-width: 768px) {
+  .cron-condition-activity {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-condition-activity__metric:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 /* Match the .btn--sm dropdown triggers beside it instead of the native look. */

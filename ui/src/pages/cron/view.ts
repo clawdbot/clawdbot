@@ -963,6 +963,13 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
   const selectedJob = mode === "job" ? (props.editingJob ?? undefined) : undefined;
   const hasDetailTabs = mode === "job" && Boolean(selectedJob);
   const showHistory = mode === "job" && props.detailTab === "history";
+  const conditionActivity = selectedJob?.trigger
+    ? {
+        checkCount: selectedJob.state?.triggerEvalCount ?? 0,
+        lastCheckedAtMs: selectedJob.state?.lastTriggerEvalAtMs,
+        lastFiredAtMs: selectedJob.state?.lastTriggerFireAtMs,
+      }
+    : undefined;
   const children = [
     html`
       <div class="cron-back-row">
@@ -991,7 +998,9 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
         ${showHistory
           ? renderSettingsSection(
               { title: t("cron.detail.historyTitle") },
-              html`<div class="cron-history">${renderRunsSection(props)}</div>`,
+              html`<div class="cron-history">
+                ${renderRunsSection({ ...props, conditionActivity })}
+              </div>`,
             )
           : renderEditor(props, mode)}
       </div>
