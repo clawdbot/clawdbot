@@ -21,7 +21,8 @@ import {
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
 import { createServiceChildRelayAdapter } from "../service-child-relay-host.js";
-import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
+import type { SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
+import { createManagedChildStdin } from "./child-stdin.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
@@ -193,77 +194,19 @@ export async function createChildAdapter(params: {
   child.stdout.on("error", ignoreOutputStreamError);
   child.stderr.on("error", ignoreOutputStreamError);
   const childStdin = spawned.child.stdin;
-  let stdinDestroyed = childStdin?.destroyed ?? false;
-  let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
-  if (childStdin) {
-    childStdin.once("finish", () => {
-      stdinEnded = true;
-    });
-    childStdin.once("close", () => {
-      stdinEnded = true;
-      stdinDestroyed = true;
-    });
-    childStdin.once("error", () => {
-      stdinDestroyed = true;
-    });
-    if (params.input !== undefined) {
-      childStdin.write(params.input);
-      stdinEnded = true;
-      childStdin.end();
-    } else if (stdinMode === "pipe-closed") {
-      stdinEnded = true;
-      childStdin.end();
-    }
+  const stdin = createManagedChildStdin(childStdin);
+  if (params.input !== undefined) {
+    childStdin?.write(params.input);
+    stdin?.end();
+  } else if (stdinMode === "pipe-closed") {
+    stdin?.end();
   }
 
-  const stdin: ManagedRunStdin | undefined = childStdin
-    ? {
-        get destroyed() {
-          return stdinDestroyed || childStdin.destroyed;
-        },
-        get writable() {
-          return !stdinDestroyed && !stdinEnded && childStdin.writable;
-        },
-        get writableEnded() {
-          return stdinEnded || childStdin.writableEnded;
-        },
-        get writableFinished() {
-          return childStdin.writableFinished;
-        },
-        write: (data: string, cb?: (err?: Error | null) => void) => {
-          if (stdinDestroyed || stdinEnded || !childStdin.writable) {
-            cb?.(new Error("stdin is not writable"));
-            return;
-          }
-          try {
-            childStdin.write(data, cb);
-          } catch (err) {
-            cb?.(err as Error);
-          }
-        },
-        end: () => {
-          try {
-            stdinEnded = true;
-            childStdin.end();
-          } catch {
-            // ignore close errors
-          }
-        },
-        destroy: () => {
-          try {
-            stdinDestroyed = true;
-            stdinEnded = true;
-            childStdin.destroy();
-          } catch {
-            // ignore destroy errors
-          }
-        },
-      }
-    : undefined;
+  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) =>
+    onDecodedOutput(child.stdout, listener, onRaw);
 
-  const onStdout = (listener: (chunk: string) => void) => onDecodedOutput(child.stdout, listener);
-
-  const onStderr = (listener: (chunk: string) => void) => onDecodedOutput(child.stderr, listener);
+  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) =>
+    onDecodedOutput(child.stderr, listener, onRaw);
 
   let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let waitError: unknown;

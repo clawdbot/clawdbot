@@ -3456,7 +3456,7 @@ src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/desktop-stream-command.ts	2
 src/node-host/invoke-agent-cli-claude-params.ts	4
-src/node-host/invoke-agent-cli-claude.ts	2
+src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-file-commands.ts	1
 src/node-host/invoke-payload.ts	5
 src/node-host/invoke.ts	7
@@ -3708,7 +3708,7 @@ src/process/exec-spawn.ts	4
 src/process/exec.ts	3
 src/process/spawn-secret-input.ts	1
 src/process/spawn-utils.ts	1
-src/process/supervisor/adapters/child.ts	3
+src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
