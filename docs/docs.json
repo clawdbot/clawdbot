@@ -1453,6 +1453,7 @@
                   "tools/agent-send",
                   "tools/goal",
                   "tools/steer",
+                  "tools/followup",
                   "tools/subagents",
                   "tools/swarm",
                   "tools/acp-agents",

@@ -203,6 +203,7 @@ plugins.
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
     | `/steer <message>` | Inject guidance into the active run. Alias: `/tell`. See [Steer](/tools/steer) |
+    | `/followup <message>` | Queue one later turn without changing the session queue mode. See [Followup](/tools/followup) |
 
     <AccordionGroup>
       <Accordion title="verbose / trace / fast / reasoning safety">

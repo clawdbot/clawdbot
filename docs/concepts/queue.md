@@ -41,7 +41,9 @@ Same-turn steering is the default. A prompt that arrives mid-run is injected int
 - `collect`: do not steer. Coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
 - `interrupt`: abort the active run for that session, then run the newest message.
 
-For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
+For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering).
+Use [`/steer <message>`](/tools/steer) for one explicit steer or
+[`/followup <message>`](/tools/followup) for one explicit later turn.
 
 Configure globally or per channel via `messages.queue`:
 
@@ -124,8 +126,10 @@ so lost local handles cannot leave a still-queued prompt running.
 embedded runtime. Local `steer` injects into an active embedded run when that
 runtime accepts steering and otherwise becomes a followup; `followup` and
 `collect` remain local pending work; `interrupt` aborts the active local run
-before starting the newest message. The explicit `/steer <message>` command is
-not a local-mode command.
+before starting the newest message. The explicit `/followup <message>` command
+queues only its payload without changing the stored mode, avoiding a temporary
+`/queue followup` switch followed by `/queue steer`. Explicit `/steer <message>`
+and `/followup <message>` are not local-mode commands.
 
 ## Scope and guarantees
 

@@ -477,6 +477,15 @@ export function buildBuiltinChatCommands(
         args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
       },
     ),
+    defineBuiltinCommand(
+      "followup",
+      "Queue one message after the active run without changing queue mode.",
+      "management",
+      "standard",
+      {
+        args: [defineCommandArgument("message", "Followup message", { captureRemaining: true })],
+      },
+    ),
     defineBuiltinCommand("config", "Show or set config values.", "management", "power", {
       args: [
         defineCommandArgument("action", "show | get | set | unset", {

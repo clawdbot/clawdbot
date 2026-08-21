@@ -27,6 +27,7 @@ export const commandHandlerOrder = [
   "diagnostics",
   "tasks",
   "steer",
+  "followup",
   "allowlist",
   "approve",
   "context",

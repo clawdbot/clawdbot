@@ -1015,11 +1015,12 @@ export async function getReplyFromConfig(
     contextTokens,
     inlineStatusRequested,
     directiveAck,
-    perMessageQueueMode,
+    perMessageQueueMode: parsedPerMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
   let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
     directiveResult.result;
+  let perMessageQueueMode = parsedPerMessageQueueMode;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -1110,6 +1111,9 @@ export async function getReplyFromConfig(
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  if (directives.hasQueueDirective && !directives.queueReset) {
+    perMessageQueueMode = directives.queueMode;
+  }
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;

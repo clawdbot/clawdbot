@@ -9,6 +9,7 @@ import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleDockCommand } from "./commands-dock.js";
+import { handleFollowupCommand } from "./commands-followup.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import { commandHandlerOrder, type CommandHandlerId } from "./commands-handlers.order.js";
 import {
@@ -66,6 +67,7 @@ const commandHandlersById = {
   fast: handleFastCommand,
   goal: handleGoalCommand,
   help: handleHelpCommand,
+  followup: handleFollowupCommand,
   learn: handleLearnCommand,
   loop: handleLoopCommand,
   login: handleLoginCommand,
