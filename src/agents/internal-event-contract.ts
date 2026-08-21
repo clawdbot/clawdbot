@@ -12,6 +12,8 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
 
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
 
+const AGENT_RUN_DISPOSITIONS = ["exited", "killed", "still-running"] as const;
+
 const GENERATED_MEDIA_COMPLETION_SOURCES = new Set<AgentInternalEventSource>([
   "image_generation",
   "video_generation",
@@ -20,6 +22,14 @@ const GENERATED_MEDIA_COMPLETION_SOURCES = new Set<AgentInternalEventSource>([
 
 export type AgentInternalEventSource = (typeof AGENT_INTERNAL_EVENT_SOURCES)[number];
 export type AgentInternalEventStatus = (typeof AGENT_INTERNAL_EVENT_STATUSES)[number];
+/**
+ * Who stopped, as opposed to `status` (how the wait ended). A `timeout` status
+ * alone cannot tell "the child stopped" from "I stopped waiting for the child",
+ * and reporting the second as the first invites a parent to spawn a successor
+ * onto working state its live child still owns. `still-running` means only the
+ * waiter ended: the run is live and its handle stays harvestable.
+ */
+export type AgentRunDisposition = (typeof AGENT_RUN_DISPOSITIONS)[number];
 
 /** Identifies completion events that can resume an exact cron run. */
 export function hasGeneratedMediaCompletionEvent(

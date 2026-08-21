@@ -2641,10 +2641,66 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps published explicit timeout stable when late lifecycle timeout arrives", async () => {
+  // A bare `agent.wait` timeout publishes the waiter giving up, not the run
+  // ending, so the child's own later lifecycle end must still win. Fencing it
+  // left the parent's last word "timed out" for a child that went on to finish
+  // — and a parent that believed it spawned a successor onto the child's tree.
+  it("lets a late lifecycle end supersede a wait-expiry publication", async () => {
     const startedAt = Date.now();
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": { status: "timeout" },
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt,
+        status: "running",
+      }),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-timeout-wait-expiry-superseded",
+      task: "wait expiry should yield to the child's real ending",
+      runTimeoutSeconds: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForFast(() => {
+      const completedRun = findRequesterRun("run-timeout-wait-expiry-superseded");
+      expectRecordFields(
+        completedRun?.execution.outcome,
+        { status: "timeout", disposition: "still-running" },
+        "provisional wait-expiry publication",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+
+    getLifecycleHandler()?.({
+      runId: "run-timeout-wait-expiry-superseded",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: startedAt + 10,
+        endedAt: startedAt + 2_000,
+        aborted: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await waitForFast(() => {
+      const run = findRequesterRun("run-timeout-wait-expiry-superseded");
+      // The run's own ending carries no still-running marker, so the second
+      // event tells the parent the child has actually stopped.
+      expect(run?.execution.outcome?.disposition).toBeUndefined();
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps published explicit timeout stable when late lifecycle timeout arrives", async () => {
+    const startedAt = Date.now();
+    // A terminal snapshot on the wait proves the run itself stopped, so this
+    // publication is final and a late duplicate must not disturb it.
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": { status: "timeout", endedAt: startedAt + 2_000 },
     });
     mocks.loadSessionStore.mockReturnValue(
       createSessionStore({

@@ -6,6 +6,7 @@ import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import {
+  isSubagentRunStillRunning,
   type SubagentRunOutcome,
   withSubagentOutcomeTiming,
 } from "../announce/subagent-announce-output.js";
@@ -52,7 +53,11 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
     !Number.isFinite(params.entry.runTimeoutSeconds) ||
     params.entry.runTimeoutSeconds <= 0 ||
     params.entry.execution.outcome?.status !== "timeout" ||
-    typeof params.entry.execution.endedAt !== "number"
+    typeof params.entry.execution.endedAt !== "number" ||
+    // A wait-expiry publication describes the waiter, not the run. Fencing the
+    // run behind it would discard the child's own terminal callback and leave
+    // the parent's last word "timed out" for a child that went on to finish.
+    isSubagentRunStillRunning(params.entry.execution.outcome)
   ) {
     return false;
   }
@@ -301,7 +306,12 @@ export async function completeSubagentRunAttempt(
         });
     if (expiredDeadlineMs !== undefined) {
       endedAt = expiredDeadlineMs;
-      completionOutcome = { status: "timeout" };
+      // Clamping the reported end to the deadline does not re-observe the run,
+      // so the caller's disposition is the only liveness evidence there is.
+      completionOutcome = {
+        status: "timeout",
+        ...(completionOutcome.disposition ? { disposition: completionOutcome.disposition } : {}),
+      };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
     }
     const killIntent = entry.killIntent;
@@ -313,7 +323,7 @@ export async function completeSubagentRunAttempt(
           killIntent.lifecycleGeneration !== undefined &&
           isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration);
         completionReason = SUBAGENT_ENDED_REASON_KILLED;
-        completionOutcome = { status: "error", error: killIntent.reason };
+        completionOutcome = { status: "error", error: killIntent.reason, disposition: "killed" };
         entry.killIntent = undefined;
         if (killOwnsCurrentLifecycle) {
           suppressSessionEffects = false;
@@ -382,6 +392,22 @@ export async function completeSubagentRunAttempt(
         killReconciliation.suppressTaskDelivery === true ? true : undefined;
       entry.suppressAnnounceReason = undefined;
       entry.killReconciliation = undefined;
+      entry.cleanupHandled = false;
+      entry.cleanupCompletedAt = undefined;
+      clearDeliveryState(entry);
+      mutated = true;
+    }
+
+    // A wait-expiry publication described the waiter, not the run, so the
+    // announce it already delivered is provisional. Release the delivery and
+    // cleanup bookkeeping once the run's own terminal callback lands, or the
+    // parent's last word stays "still running" for a child that has finished.
+    // Guarded on the incoming disposition so a second expiry cannot re-announce.
+    if (
+      !recoveryRequested &&
+      isSubagentRunStillRunning(entry.execution.outcome) &&
+      !isSubagentRunStillRunning(completionOutcome)
+    ) {
       entry.cleanupHandled = false;
       entry.cleanupCompletedAt = undefined;
       clearDeliveryState(entry);

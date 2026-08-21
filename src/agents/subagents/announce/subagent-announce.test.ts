@@ -242,7 +242,12 @@ function requireAgentCall() {
 describe("subagent wait outcome timing", () => {
   it.each([
     { wait: { status: "ok" }, expected: { status: "ok" } },
-    { wait: { status: "timeout" }, expected: { status: "timeout" } },
+    // A bare wait timeout carries no terminal snapshot, so it records the
+    // waiter giving up rather than the run ending.
+    {
+      wait: { status: "timeout" },
+      expected: { status: "timeout", disposition: "still-running" },
+    },
     {
       wait: { status: "error", error: "boom" },
       expected: { status: "error", error: "boom" },

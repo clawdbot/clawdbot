@@ -687,3 +687,124 @@ describe("subagent announce timeout config", () => {
     );
   });
 });
+
+// A wait that expires while the child keeps working produced an event reading
+// `status: timed out` / `(no output)` / `tokens 0`: three independent signals
+// all saying the child died. A parent acted on it and spawned a successor into
+// the live child's git worktree. Every one of those signals is pinned here.
+describe("subagent announce still-running disposition", () => {
+  beforeEach(() => {
+    gatewayCalls.length = 0;
+    chatHistoryMessages = [];
+    callGatewayImpl = async (request) => {
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    };
+    // Token counters exist but are mid-turn zeros, exactly as observed: the
+    // child had not flushed usage because it had not finished.
+    sessionStore = {
+      "agent:main:subagent:worker": { sessionId: "child-session", inputTokens: 0, outputTokens: 0 },
+    };
+    configOverride = { session: defaultSessionConfig };
+    requesterDepthResolver = () => 0;
+    subagentSessionRunActive = true;
+    shouldIgnorePostCompletion = false;
+    pendingDescendantRuns = 0;
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
+    fallbackRequesterResolution = null;
+  });
+
+  const runWaitExpiryAnnounce = async (runId: string, disposition?: "still-running") =>
+    await runAnnounceFlowForTest(runId, {
+      outcome: {
+        status: "timeout",
+        ...(disposition ? { disposition } : {}),
+      },
+      roundOneReply: undefined,
+      startedAt: 1_000,
+      endedAt: 5_401_000,
+    });
+
+  const readAnnouncedEvent = () => {
+    const directAgentCall = findFinalDirectAgentCall();
+    const [event] =
+      (directAgentCall?.params?.internalEvents as Array<{
+        statusLabel?: string;
+        disposition?: string;
+        result?: string;
+        statsLine?: string;
+      }>) ?? [];
+    const message = directAgentCall?.params?.message;
+    return { event, message: typeof message === "string" ? message : "" };
+  };
+
+  it("reports a live child as still running instead of timed out", async () => {
+    await runWaitExpiryAnnounce("run-wait-expiry-live", "still-running");
+
+    const { event, message } = readAnnouncedEvent();
+    expect(event?.disposition).toBe("still-running");
+    expect(event?.statusLabel).toBe("still running; the wait for it expired, it did not");
+    expect(event?.result).toBe("(no result yet; child still running)");
+    expect(event?.statsLine).toBe("Stats: waited 1h30m • child tokens not yet reported");
+    // The rendered prompt is what a parent actually reads, so assert there too:
+    // no "timed out", no "(no output)", no zeroed token total.
+    expect(message).toContain("status: still running; the wait for it expired, it did not");
+    expect(message).toContain("disposition: still-running");
+    expect(message).not.toContain("timed out");
+    expect(message).not.toContain("(no output)");
+    expect(message).not.toContain("tokens 0");
+  });
+
+  it("tells the parent not to replace a child that has not stopped", async () => {
+    await runWaitExpiryAnnounce("run-wait-expiry-instruction", "still-running");
+
+    const { message } = readAnnouncedEvent();
+    expect(message).toContain("has NOT finished");
+    expect(message).toContain("do not start a replacement");
+  });
+
+  it("still reports a genuinely stopped child as timed out", async () => {
+    await runWaitExpiryAnnounce("run-wait-expiry-exited");
+
+    const { event, message } = readAnnouncedEvent();
+    expect(event?.disposition).toBe("exited");
+    expect(event?.statusLabel).toBe("timed out");
+    expect(event?.result).toBe("(no output)");
+    expect(event?.statsLine).toBe("Stats: runtime 1h30m • tokens 0 (in 0 / out 0)");
+    expect(message).toContain("status: timed out");
+    expect(message).toContain("disposition: exited");
+  });
+
+  it("never submits delete cleanup for a session the live child still owns", async () => {
+    // onBeforeDeleteChildSession is the delete-submission fence; reaching it at
+    // all means the flow was about to remove a running child's session.
+    const onBeforeDeleteChildSession = vi.fn(() => true);
+
+    await runAnnounceFlowForTest("run-wait-expiry-no-delete", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      roundOneReply: undefined,
+      cleanup: "delete",
+      onBeforeDeleteChildSession,
+    });
+
+    expect(onBeforeDeleteChildSession).not.toHaveBeenCalled();
+  });
+
+  it("marks a timeout announced over a run this process still sees executing", async () => {
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(true);
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(false);
+
+    await runAnnounceFlowForTest("run-wait-expiry-embedded-active", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+      waitForCompletion: false,
+      cleanup: "keep",
+    });
+
+    const { event } = readAnnouncedEvent();
+    expect(event?.disposition).toBe("still-running");
+  });
+});

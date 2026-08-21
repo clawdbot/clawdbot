@@ -14,6 +14,7 @@ import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
+import type { AgentRunDisposition } from "../../internal-event-contract.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import {
@@ -93,11 +94,30 @@ type AgentWaitResult = {
 
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
+  /**
+   * Written only by producers that observed something other than the run
+   * publishing its own terminal state: a waiter whose budget expired while the
+   * run stayed live, or a kill. Absence therefore means `exited`; read it
+   * through `resolveSubagentRunDisposition` rather than defaulting inline.
+   */
+  disposition?: AgentRunDisposition;
   error?: string;
   startedAt?: number;
   endedAt?: number;
   elapsedMs?: number;
 };
+
+/** Total read of a run's disposition; see `SubagentRunOutcome.disposition`. */
+export function resolveSubagentRunDisposition(
+  outcome: SubagentRunOutcome | undefined,
+): AgentRunDisposition {
+  return outcome?.disposition ?? "exited";
+}
+
+/** True when the completion event describes a child that has not stopped. */
+export function isSubagentRunStillRunning(outcome: SubagentRunOutcome | undefined): boolean {
+  return resolveSubagentRunDisposition(outcome) === "still-running";
+}
 
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
@@ -358,10 +378,16 @@ export function applySubagentWaitOutcome(params: {
   if (terminalOutcome) {
     switch (classifyAgentRunTerminalOutcome(terminalOutcome)) {
       case "timeout":
-        outcome = { status: "timeout" };
+        // `hard_timeout` is the run's own budget firing; a plain `timed_out` is
+        // wait-layer uncertainty (see agent-run-terminal-outcome.ts) — the
+        // waiter gave up with no terminal snapshot, so the child is still live.
+        outcome = {
+          status: "timeout",
+          disposition: terminalOutcome.reason === "hard_timeout" ? "exited" : "still-running",
+        };
         break;
       case "cancellation":
-        outcome = { status: "error", error: "subagent run terminated" };
+        outcome = { status: "error", error: "subagent run terminated", disposition: "killed" };
         break;
       case "failure":
         outcome = { status: "error", error: terminalOutcome.error ?? waitError };
@@ -664,7 +690,9 @@ export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
   endedAt?: number;
+  disposition?: AgentRunDisposition;
 }) {
+  const stillRunning = params.disposition === "still-running";
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = subagentAnnounceOutputDeps.resolveSessionStorePathCore(cfg.session?.store, {
@@ -697,10 +725,20 @@ export async function buildCompactAnnounceStatsLine(params: {
       ? Math.max(0, params.endedAt - params.startedAt)
       : undefined;
 
-  const parts = [
-    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
-  ];
+  // A live child has not flushed its usage counters, so a zeroed token total
+  // reads as "the run did nothing" when it means "nothing is final yet". Label
+  // both numbers by what they actually measure instead of publishing 0.
+  const parts = stillRunning
+    ? [
+        `waited ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
+        ioTotal > 0
+          ? `tokens so far ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+          : "child tokens not yet reported",
+      ]
+    : [
+        `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
+        `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
+      ];
   if (typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }

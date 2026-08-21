@@ -59,9 +59,11 @@ import {
   buildCompactAnnounceStatsLine,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
+  isSubagentRunStillRunning,
   readLatestSubagentOutputWithRetry,
   readSubagentOutput,
   readSubagentTimeoutProgress,
+  resolveSubagentRunDisposition,
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
@@ -110,7 +112,13 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  stillRunning?: boolean;
 }): string {
+  if (params.stillRunning) {
+    // The parent's next act decides whether this event is harmless or
+    // destructive, so name the forbidden act rather than only the state.
+    return `This ${params.announceType} has NOT finished — the wait above expired, the child did not. It is still running and still owns its session, working directory, and any branch or file it was given. Do not treat this as a result, do not report it as done or failed, and do not start a replacement or duplicate for the same work. Anything above is partial. Continue with other work; a further completion event will arrive when the child actually ends. Keep this internal context private (don't mention system/log/stats/session details or announce type). If there is nothing for the user right now, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
@@ -233,6 +241,9 @@ export async function runSubagentAnnounceFlow(params: {
         if (outcome?.status !== "timeout" || params.cleanup === "delete") {
           return "retryable";
         }
+        // Announcing a timeout over a run this process can still see executing
+        // is the strongest liveness evidence available; carry it to the event.
+        outcome = { ...outcome, disposition: "still-running" };
       }
     }
 
@@ -453,9 +464,18 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = params.outcome ?? { status: "unknown" };
     }
 
+    const disposition = resolveSubagentRunDisposition(outcome);
+    const stillRunning = isSubagentRunStillRunning(outcome);
+    if (stillRunning) {
+      // The child owns this session until it actually ends; deleting it under a
+      // live run is the collision this event exists to prevent.
+      shouldDeleteChildSession = false;
+    }
+
     // Build status label
-    const statusLabel =
-      outcome.status === "ok"
+    const statusLabel = stillRunning
+      ? "still running; the wait for it expired, it did not"
+      : outcome.status === "ok"
         ? "completed; ready for parent review"
         : outcome.status === "timeout"
           ? "timed out"
@@ -467,7 +487,10 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionEffectsAllowed()
       ? childSessionId || "unknown"
       : "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    const findings =
+      childCompletionFindings ||
+      reply ||
+      (stillRunning ? "(no result yet; child still running)" : "(no output)");
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
@@ -501,6 +524,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      stillRunning,
     });
     const candidateStatsLine = !childSessionEffectsAllowed()
       ? undefined
@@ -508,6 +532,7 @@ export async function runSubagentAnnounceFlow(params: {
           sessionKey: params.childSessionKey,
           startedAt: params.startedAt,
           endedAt: params.endedAt,
+          disposition,
         });
     const statsLine = childSessionEffectsAllowed() ? candidateStatsLine : undefined;
     const internalEvents: AgentInternalEvent[] = [
@@ -520,6 +545,7 @@ export async function runSubagentAnnounceFlow(params: {
         taskLabel,
         status: outcome.status,
         statusLabel,
+        disposition,
         result: findings,
         statsLine,
         replyInstruction,

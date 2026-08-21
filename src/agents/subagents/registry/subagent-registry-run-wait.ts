@@ -10,6 +10,7 @@ import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
+import type { AgentRunDisposition } from "../../internal-event-contract.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
 import {
   type SubagentRunOutcome,
@@ -320,10 +321,14 @@ export class SubagentWaitManager {
               childSessionKey: entry.childSessionKey,
               notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
-      const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
+      const completeAsRunTimeout = async (
+        endedAt?: number,
+        startedAt?: number,
+        disposition: AgentRunDisposition = "exited",
+      ) => {
         const timeoutCompletion: Parameters<typeof this.options.completeSubagentRun>[0] = {
           runId,
-          outcome: { status: "timeout" },
+          outcome: { status: "timeout", disposition },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
@@ -392,7 +397,14 @@ export class SubagentWaitManager {
           if (timeoutAfterDeadline !== undefined) {
             timeoutEndedAt = timeoutAfterDeadline;
           }
-          await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
+          // Only `isTerminalWaitTimeout` carries evidence that the run stopped.
+          // Reaching the stored deadline is clock arithmetic on our own budget:
+          // it earns the parent a wake, never the claim that the child ended.
+          await completeAsRunTimeout(
+            timeoutEndedAt,
+            observedStartedAt,
+            isTerminalWaitTimeout ? "exited" : "still-running",
+          );
           return;
         }
         if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
