@@ -7,11 +7,9 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -99,7 +97,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
-  resolveKnownAgentId,
+  resolveModelsTargetAgent,
 } from "./shared.js";
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
@@ -367,11 +365,14 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
-  const agentDir = agentId
-    ? resolveAgentDir(cfg, agentId)
-    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
+  const explicitAgentId = opts.agent?.trim();
+  const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
+    agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
+    kind: "read",
+  });
+  // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
+  // system-agent target still reports unscoped defaults, matching this command's shipped output.
+  const agentId = explicitAgentId ? workspaceAgentId : undefined;
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
@@ -650,7 +651,7 @@ export async function modelsStatusCommand(
     ].toSorted((left, right) => left.localeCompare(right));
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
-      ...(agentId ? { agentId } : {}),
+      agentId: workspaceAgentId,
       providerDiscoveryProviderIds,
       readOnly: true,
     });
@@ -1261,6 +1262,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        classification?: string;
         recoveryHint: string;
         until: number;
         remainingMs: number;
@@ -1276,12 +1278,14 @@ export async function modelsStatusCommand(
             ? "disabled"
             : "cooldown";
         const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const classification = kind === "cooldown" ? stats?.cooldownClassification : undefined;
         const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
           provider,
           kind,
           reason,
+          ...(classification ? { classification } : {}),
           recoveryHint: buildAuthProfileUnusableHint({
             kind,
             reason,
@@ -1637,7 +1641,8 @@ export async function modelsStatusCommand(
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
       for (const profile of unusableProfiles) {
-        const reason = profile.reason ? `:${profile.reason}` : "";
+        const diagnostic = profile.classification ?? profile.reason;
+        const reason = diagnostic ? `:${diagnostic}` : "";
         const provider = profile.provider ? ` (${profile.provider})` : "";
         runtime.log(
           `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,

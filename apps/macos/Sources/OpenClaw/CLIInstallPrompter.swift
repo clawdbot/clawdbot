@@ -161,7 +161,7 @@ final class CLIInstallPrompter {
             } else {
                 activation = nil
             }
-            activated = activation != .failed
+            if case .failed = activation { activated = false } else { activated = true }
             if shouldRestartManagedGateway {
                 // Only proven gateway health closes the recovery loop; the
                 // on-disk CLI already reads ready, so a lost marker here means
@@ -217,7 +217,7 @@ final class CLIInstallPrompter {
             return false
         }
         await GatewayConnection.shared.shutdown()
-        guard await CLIInstaller.activateLocalGateway() != .failed else { return false }
+        if case .failed = await CLIInstaller.activateLocalGateway() { return false }
         Self.clearPendingManagedRestart()
         self.logger.info("pending managed Gateway restart completed")
         return true

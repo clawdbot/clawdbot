@@ -102,6 +102,7 @@ In interactive onboarding, choosing SecretRef storage runs preflight validation 
 - Env refs: validates the env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
 - Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
+- Generated gateway token: setup mints `gateway.auth.token` itself, so reference mode has nothing to prompt for. With `OPENCLAW_GATEWAY_TOKEN` exported it writes an `env` ref to that variable, keeping a later rotation authoritative; otherwise it writes the token to the secret store under `OPENCLAW_GATEWAY_TOKEN` and stores a `store` ref. An existing store entry is reused rather than rotated, so re-running setup never invalidates already-paired clients.
 
 Validation failure shows the error and lets you retry.
 
@@ -275,12 +276,12 @@ but are not displayed because resolver output can contain credential material.
 
 The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. The CLI commands operate on the local state database and do not accept Gateway URL or token options.
 
-Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
+Entries have two explicit access modes. Both retain the existing `secret` and `env` storage kinds, and either kind can back a SecretRef:
 
-- `secret` values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC.
-- `env` values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to the environment of commands run by OpenClaw's own exec tool, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning. This covers direct tool calls, Code Mode (whose guest reaches shell through the same `openclaw:core:exec` tool), sandboxed exec, and `node` -hosted exec.
+- **Protected secret** (`kind: "secret"`) values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC. A protected value is inert until a supported config field references it with a SecretRef or an enabled, destination-bound [secret egress proxy](#secret-egress-proxy) uses it.
+- **Agent-readable environment** (`kind: "env"`) values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. OpenClaw adds them as plaintext to Gateway-hosted commands run through its exec tool, after inherited process values and before explicit per-call env. The agent can print, transmit, or persist these values. Protected host keys are ignored with a visible warning.
 
-It does not cover commands executed inside a provider-native harness — the Codex app-server and its sandbox exec-server, or ACP children such as Claude Code. Those harnesses assemble their own child environment and never pass through OpenClaw's exec preparation, so store entries are absent there. The store snapshot is also read once per agent run, so entries added mid-run apply from the next run onward.
+Agent-readable environment values do not reach Codex native shell, the Codex sandbox exec-server, ACP children such as Claude Code, OpenClaw sandbox exec, or remote `node` exec. Those paths assemble a different child environment. In eligible Codex app-server turns, use `gateway_exec` to deliberately re-enter the OpenClaw Gateway execution path; `gateway_process` provides the existing per-session background follow-up. Native Codex shell remains preferred for ordinary local work. The store snapshot is read once per agent run, so entries added or changed mid-run apply from the next run onward.
 
 By default, `secret` entries are never injected into subprocess environments. When the default-off [secret egress proxy](#secret-egress-proxy) is enabled, Gateway-hosted exec commands receive process-local sentinels instead of plaintext values.
 
@@ -356,6 +357,7 @@ Equivalent config:
 When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
 - `HTTPS_PROXY` and `HTTP_PROXY`, with per-run credentials embedded in the loopback proxy URL
+- `NODE_USE_ENV_PROXY=1`, which makes supported Node.js global `fetch` clients honor `HTTP_PROXY` and `HTTPS_PROXY` without using `NODE_OPTIONS`
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `REQUESTS_CA_BUNDLE`, pointing at the ephemeral CA certificate
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
 
@@ -891,7 +893,7 @@ For static credentials, runtime no longer depends on plaintext legacy auth stora
 
 ## Control UI
 
-Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. Credential-like names default to `secret`; clear **Auto-detect secrets** to import all entries as visible environment values.
+Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Choose **Protected secret** for write-only values used by SecretRefs or destination-bound Gateway egress. Choose **Agent-readable environment** only when Gateway-hosted agent commands must receive plaintext and the agent may print, transmit, or persist it. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. **Protect credential-like names automatically** defaults credential-shaped names to protected mode.
 
 This store page manages values only. Configure the corresponding `store` SecretRef on a supported field through its settings form or the raw editor. Identity-scoped entries are reserved for a later release and are not exposed by this page.
 

@@ -5,6 +5,7 @@ import {
   qaTransportSupportsModuleFlows,
 } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { invalidateQaSuiteArtifactGeneration } from "./suite-artifacts.js";
 import { resolveRequestedQaSuiteModels } from "./suite-model-selection.js";
 import {
   collectQaSuiteGatewayConfigPatches,
@@ -69,6 +70,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   if (params?.roundTripProbe && params.runtimePair) {
     throw new Error("QA round-trip probes are not supported with runtime-pair runs.");
   }
+  await invalidateQaSuiteArtifactGeneration(outputDir);
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),

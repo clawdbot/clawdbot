@@ -30,10 +30,8 @@ import {
   formatOAuthRefreshFailureLoginCommandMarkdown,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  resolveAuthStorePathForDisplay,
-  resolveSharedAuthStoreOwnership,
-} from "../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
 import { inspectPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -384,7 +382,8 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
     const remaining = formatRemainingShort(until - now);
     const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
     const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
-    const kind = `${disabledActive ? "disabled" : "cooldown"}${reason ? `:${reason}` : ""}`;
+    const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
+    const kind = `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`;
     const hint = buildAuthProfileUnusableHint({
       kind: disabledActive ? "disabled" : "cooldown",
       reason,
@@ -490,7 +489,8 @@ async function noteAuthProfileHealthForTarget(params: {
       const remaining = formatRemainingShort(until - now);
       const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
       const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
-      const kind = `${disabledActive ? "disabled" : "cooldown"}${reason ? `:${reason}` : ""}`;
+      const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
+      const kind = `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`;
       const hint = buildAuthProfileUnusableHint({
         kind: disabledActive ? "disabled" : "cooldown",
         reason,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   bumpSkillsSnapshotVersion,
@@ -38,6 +39,10 @@ const watchMock = vi.fn(() => {
   createdWatchers.push(watcher);
   return watcher;
 });
+const pluginSkillsMocks = vi.hoisted(() => ({
+  resolvePluginSkillDirs: vi.fn((): string[] => []),
+  resolvePluginSkillDirsFromMetadata: vi.fn((): string[] => []),
+}));
 
 let refreshModule: typeof import("./refresh.js");
 let refreshTestSupport: typeof import("./refresh.test-support.js");
@@ -47,7 +52,8 @@ vi.mock("chokidar", () => ({
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: vi.fn(() => []),
+  resolvePluginSkillDirs: pluginSkillsMocks.resolvePluginSkillDirs,
+  resolvePluginSkillDirsFromMetadata: pluginSkillsMocks.resolvePluginSkillDirsFromMetadata,
 }));
 
 describe("ensureSkillsWatcher", () => {
@@ -59,6 +65,8 @@ describe("ensureSkillsWatcher", () => {
   beforeEach(() => {
     watchMock.mockClear();
     createdWatchers.length = 0;
+    pluginSkillsMocks.resolvePluginSkillDirs.mockClear();
+    pluginSkillsMocks.resolvePluginSkillDirsFromMetadata.mockClear();
   });
 
   afterEach(async () => {
@@ -534,6 +542,30 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
+  it("reuses prepared plugin metadata when reconciling watch targets", () => {
+    const config = { skills: { load: {} } };
+    const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config,
+      pluginMetadataSnapshot,
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config,
+      pluginMetadataSnapshot,
+    });
+
+    expect(pluginSkillsMocks.resolvePluginSkillDirs).not.toHaveBeenCalled();
+    expect(pluginSkillsMocks.resolvePluginSkillDirsFromMetadata).toHaveBeenCalledTimes(2);
+    expect(pluginSkillsMocks.resolvePluginSkillDirsFromMetadata).toHaveBeenLastCalledWith({
+      workspaceDir: "/tmp/workspace",
+      config,
+      metadataSnapshot: pluginMetadataSnapshot,
+    });
+  });
+
   it("watches extra-dir roots and companion skills folders without resolving them", async () => {
     const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-pair-"));
     try {
@@ -761,6 +793,38 @@ describe("ensureSkillsWatcher", () => {
           changedPath: "/tmp/workspace/skills/demo/SKILL.md",
         },
       ]);
+    },
+  );
+
+  it.each(["add", "change", "unlink"] as const)(
+    "refreshes the owning snapshot when an execution-directory skill emits %s",
+    async (event) => {
+      vi.useFakeTimers();
+      const workspaceDir = "/tmp/agent-workspace";
+      const executionSkillsDir = "/tmp/execution-workspace/skills";
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir });
+      const versionBefore = getSkillsSnapshotVersion(workspaceDir);
+      const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map(([target]) =>
+        target.replaceAll("\\", "/"),
+      );
+      const executionWatcherIndex = callPaths.indexOf(executionSkillsDir);
+      const changedPath = `${executionSkillsDir}/demo/SKILL.md`;
+
+      expect(executionWatcherIndex).toBeGreaterThanOrEqual(0);
+      createdWatchers[executionWatcherIndex]?.emit("all", event, changedPath);
+      await vi.advanceTimersByTimeAsync(250);
+
+      const versionAfter = getSkillsSnapshotVersion(workspaceDir);
+      expect(shouldRefreshSnapshotForVersion(versionBefore, versionAfter)).toBe(true);
+      expect(seen).toContainEqual({
+        workspaceDir,
+        reason: "watch",
+        changedPath,
+      });
     },
   );
 

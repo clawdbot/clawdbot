@@ -28,14 +28,12 @@ describe("Control UI build chunking", () => {
         "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
       ),
     ).toBe("config-runtime");
-    expect(controlUiStableChunkName("/repo/ui/src/components/config-form.shared.ts")).toBe(
-      "control-ui-shared",
-    );
-    expect(controlUiStableChunkName("/repo/ui/src/lib/clipboard.ts")).toBe("control-ui-shared");
-    expect(controlUiStableChunkName("/repo/ui/src/build-info.ts")).toBe("control-ui-shared");
-    expect(controlUiStableChunkName("/repo/ui/src/build-info-normalizers.ts")).toBe(
-      "control-ui-shared",
-    );
+    expect(
+      controlUiStableChunkName("/repo/ui/src/components/config-form.shared.ts"),
+    ).toBeUndefined();
+    expect(controlUiStableChunkName("/repo/ui/src/lib/clipboard.ts")).toBeUndefined();
+    expect(controlUiStableChunkName("/repo/ui/src/build-info.ts")).toBeUndefined();
+    expect(controlUiStableChunkName("/repo/ui/src/build-info-normalizers.ts")).toBeUndefined();
     expect(
       controlUiStableChunkName("/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js"),
     ).toBe("gateway-runtime");

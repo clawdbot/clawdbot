@@ -360,6 +360,7 @@ describe("agent defaults schema", () => {
     "adaptive",
     "max",
     "ultra",
+    "inherit",
   ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
     const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
     expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);

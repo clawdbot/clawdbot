@@ -12,8 +12,8 @@ import type {
 export type { WorkerTunnelStatus };
 
 export class WorkerTunnelOwnerDisconnectedError extends Error {
-  constructor() {
-    super("Worker tunnel owner is no longer connected");
+  constructor(message = "Worker tunnel owner is no longer connected") {
+    super(message);
     this.name = "WorkerTunnelOwnerDisconnectedError";
   }
 }
@@ -57,6 +57,7 @@ export type WorkerWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
+  gitAuthor?: { name?: string; email?: string };
 };
 
 export type WorkerWorkspaceSyncResult = {
@@ -99,7 +100,7 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
-type WorkerTurnLaunchRequest = {
+export type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
@@ -107,10 +108,10 @@ type WorkerTurnLaunchRequest = {
   onDispatchReady?: () => void;
 };
 
-export type WorkerTunnelHandle = {
+export type WorkerWorkspaceTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
-  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+  launchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
@@ -119,3 +120,9 @@ export type WorkerTunnelHandle = {
   ): Promise<WorkerWorkspaceReconcileResult>;
   stop(): Promise<void>;
 };
+
+export type WorkerTurnTunnelHandle = Omit<WorkerWorkspaceTunnelHandle, "launchTurn"> & {
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+};
+
+export type WorkerTunnelHandle = WorkerWorkspaceTunnelHandle | WorkerTurnTunnelHandle;

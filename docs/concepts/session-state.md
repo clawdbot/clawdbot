@@ -39,9 +39,10 @@ Log-only kinds exist for reconciliation history, not notification: ordinary chil
 
 ## Watchers
 
-A watcher is a session that holds a cursor (`session_watch_cursors`) on a target. Cursors come from two places:
+A watcher is a session that holds a cursor (`session_watch_cursors`) on a target. Cursors come from three places:
 
 - **Implicit (spawn edges).** When a session spawns a sub-agent or ACP child, the parent's cursor is seeded automatically at the child's spawn version. Parents never subscribe manually.
+- **Ambient groups.** Under `session.groupScope: "per-group"`, the agent's main session watches its isolated group, room, and channel sessions after their first human turn. This is independent of `session.dmScope`; routing a room into main needs no watch because it already shares the main conversation.
 - **Explicit (`sessions_send watch: true`).** Any coordinator can watch a non-spawned target: pass `watch: true` on `sessions_send`, and after the send dispatches successfully the sender is registered as a watcher of the session that actually received the message. Registration starts at the target's current state version — prior history never produces notices. The tool result reports `watched: true|false` when the parameter was set.
 
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.

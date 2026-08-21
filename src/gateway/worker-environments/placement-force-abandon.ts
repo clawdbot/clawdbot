@@ -9,7 +9,7 @@ import {
 } from "./workspace-result-staging.js";
 
 export const FORCED_WORKER_ABANDONMENT_ERROR =
-  "Cloud worker result abandoned by forced operator teardown";
+  "Worker result abandoned by forced operator teardown";
 
 async function tryResolveWorkspacePath(
   resolveWorkspacePath: (placement: {
@@ -156,6 +156,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
         expectedGeneration: current.generation,
+        forceLocalClaim: true,
       });
     }
     if (current && current.state !== "failed") {

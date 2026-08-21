@@ -32,6 +32,7 @@ import {
   type CodexAppServerLiveThreadOwnership,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { readCodexThreadContextSnapshot } from "./event-projector-usage.js";
 import {
   readCodexNotificationThreadId,
@@ -70,7 +71,7 @@ type CodexAppServerCompactOptions = {
 };
 
 type CodexNativeCompactionCompletion =
-  | { completed: true; tokensAfter?: number }
+  | { completed: true; turnId?: string; itemId?: string; tokensAfter?: number }
   | { completed: false; reason: string };
 
 function watchCodexNativeCompactionCompletion(params: {
@@ -111,7 +112,12 @@ function watchCodexNativeCompactionCompletion(params: {
     resolveCompletion(result);
   };
   const complete = () =>
-    finish({ completed: true, ...(tokensAfter !== undefined ? { tokensAfter } : {}) });
+    finish({
+      completed: true,
+      ...(compactionTurnId ? { turnId: compactionTurnId } : {}),
+      ...(compactionItemId ? { itemId: compactionItemId } : {}),
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+    });
   const fail = (reason: string) => finish({ completed: false, reason });
   const retireUnconfirmed = (reason: string) => {
     if (settled || retirementStarted) {
@@ -742,6 +748,18 @@ async function compactCodexNativeThread(
             throw new Error(completion.reason);
           }
           tokensAfter = completion.tokensAfter;
+          if (completion.turnId && completion.itemId) {
+            await persistCodexContextCompactionActivity({
+              sessionTarget: params.sessionTarget,
+              config: params.config,
+              cwd: params.workspaceDir,
+              runId: params.runId,
+              threadId: binding.threadId,
+              turnId: completion.turnId,
+              itemId: completion.itemId,
+              timestamp: Date.now(),
+            });
+          }
           embeddedAgentLog.info("completed codex app-server compaction", {
             sessionId: params.sessionId,
             threadId: binding.threadId,

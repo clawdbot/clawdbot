@@ -226,29 +226,43 @@ describe("resolveGatewayScopedTools", () => {
   });
 
   it("passes loopback yield context into sessions_yield", async () => {
+    const registry = await import("../agents/subagents/registry/subagent-registry.js");
+    const markRequesterTurnYielded = vi
+      .spyOn(registry, "markRequesterTurnYielded")
+      .mockReturnValue(1);
     const onYield = vi.fn();
-    const result = resolveGatewayScopedTools({
-      cfg: { tools: { profile: "minimal", alsoAllow: ["sessions_yield"] } } as OpenClawConfig,
-      sessionKey: "agent:main:telegram:group:-100123",
-      sessionId: "session-123",
-      onYield,
-      surface: "loopback",
-    });
-    const yieldTool = result.tools.find((tool) => tool.name === "sessions_yield");
-    if (!yieldTool) {
-      throw new Error("expected sessions_yield tool");
+    try {
+      const result = resolveGatewayScopedTools({
+        cfg: { tools: { profile: "minimal", alsoAllow: ["sessions_yield"] } } as OpenClawConfig,
+        sessionKey: "agent:main:telegram:group:-100123",
+        sessionId: "session-123",
+        runId: "run-123",
+        onYield,
+        surface: "loopback",
+      });
+      const yieldTool = result.tools.find((tool) => tool.name === "sessions_yield");
+      if (!yieldTool) {
+        throw new Error("expected sessions_yield tool");
+      }
+
+      const toolResult = await yieldTool.execute("tool-call-1", {
+        message: "waiting on subagents",
+        acknowledgment: "I’m waiting on the subagents.",
+      });
+
+      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:telegram:group:-100123",
+        requesterTurnRunId: "run-123",
+      });
+      expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
+      expect(toolResult.details).toEqual({
+        status: "yielded",
+        message: "waiting on subagents",
+        acknowledgment: "I’m waiting on the subagents.",
+      });
+    } finally {
+      markRequesterTurnYielded.mockRestore();
     }
-
-    const toolResult = await yieldTool.execute("tool-call-1", {
-      message: "waiting on subagents",
-      acknowledgment: "I’m waiting on the subagents.",
-    });
-
-    expect(onYield).toHaveBeenCalledWith("waiting on subagents", "I’m waiting on the subagents.");
-    expect(toolResult.details).toEqual({
-      status: "yielded",
-      message: "waiting on subagents",
-      acknowledgment: "I’m waiting on the subagents.",
-    });
   });
 });

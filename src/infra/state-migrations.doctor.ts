@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listAgentIds, tryResolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
@@ -12,10 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import {
-  resolveSessionStoreCompatibilityAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../config/legacy.default-agent-owner.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -282,8 +279,7 @@ function createPluginDoctorStateMigrationContext(
 }
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
-  const agentId =
-    tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+  const agentId = tryResolveAmbientOwnerAgentId(cfg);
   return agentId && listAgentIds(cfg).includes(agentId) ? agentId : undefined;
 }
 
@@ -363,6 +359,7 @@ export async function detectLegacyStateMigrations(params: {
   pluginSessionStoreAgentIds?: readonly string[];
   sessionStoreOwnership?: SessionStoreOwnership;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
@@ -547,6 +544,7 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
   });
   const execApprovals = detectDoctorOwnedState(detectLegacyExecApprovals);
   const mcpOauth = detectDoctorOwnedState(detectLegacyMcpOAuthStores);
@@ -568,6 +566,19 @@ export async function detectLegacyStateMigrations(params: {
   const subagentRegistry = detectDoctorOwnedState(detectLegacySubagentRegistry);
   const rescuePending = detectDoctorOwnedState(detectLegacyRescuePending);
   const configuredChannels = Object.entries(params.cfg.channels ?? {});
+  // Doctor already resolved this migration owner; plugin defaults must not infer it again.
+  let migrationOwnerConfig = params.cfg;
+  if (migrationAgentId && listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
+    const agents = structuredClone(params.cfg.agents);
+    delete agents.ownership;
+    for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {
+      entry.default = normalizeAgentId(agentId) === targetAgentId;
+    }
+    for (const entry of agents.list ?? []) {
+      entry.default = normalizeAgentId(entry.id) === targetAgentId;
+    }
+    migrationOwnerConfig = { ...params.cfg, agents };
+  }
   const configuredAccountIds = Object.fromEntries(
     configuredChannels.map(([channelId, value]) => {
       const channelConfig =
@@ -623,7 +634,8 @@ export async function detectLegacyStateMigrations(params: {
         }
         const plugin = getChannelPlugin(channelId as ChannelId);
         if (plugin) {
-          return [[channelId, resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })]];
+          const accountId = resolveChannelDefaultAccountId({ plugin, cfg: migrationOwnerConfig });
+          return [[channelId, accountId]];
         }
         return [[channelId, configuredAccountIds[channelId]?.toSorted()[0] ?? DEFAULT_ACCOUNT_ID]];
       }),
@@ -1354,6 +1366,7 @@ export async function autoMigrateLegacyState(params: {
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
   legacySessionSurfaces?: PreparedLegacySessionSurfaces;
 }): Promise<{
   migrated: boolean;
@@ -1510,6 +1523,7 @@ export async function autoMigrateLegacyState(params: {
     env,
     homedir: params.homedir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
     legacySessionSurfaces,
   });
   const deviceAuth = await migrateLegacyDeviceAuth({
@@ -1522,6 +1536,7 @@ export async function autoMigrateLegacyState(params: {
     env,
     stateDir: detected.stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
   });
   const meetingTranscripts = await migrateLegacyMeetingTranscripts({
     detected: detected.meetingTranscripts,

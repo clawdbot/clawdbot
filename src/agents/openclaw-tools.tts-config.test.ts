@@ -124,10 +124,6 @@ vi.mock("./tools/transcripts-tool.js", () => ({
   },
 }));
 
-vi.mock("./tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => mocks.stubTool("update_plan"),
-}));
-
 vi.mock("./tools/video-generate-tool.js", () => ({
   createVideoGenerateTool: (options: unknown) => {
     mocks.createVideoGenerateToolOptions(options);

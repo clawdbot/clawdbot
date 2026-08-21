@@ -1,5 +1,5 @@
 // Leaf contract for chat.send acknowledgment shapes and timing records.
-// Kept import-free of chat-page modules so lifecycle/steer/history layers
+// Kept import-free of chat-page modules so lifecycle and history layers
 // can consume ack types without forming import cycles.
 import { asNonNegativeFiniteNumber as normalizeAckTimingValue } from "@openclaw/normalization-core/number-coercion";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";

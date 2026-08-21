@@ -81,6 +81,19 @@ const readOnlyRetainedTask = {
 };
 
 const readOnlyRetainedResult = "Synthetic retained result copied by a read-only operator.";
+const olderRetainedResult = "Older retained result from the first copy activation.";
+const newestRetainedResult = "Newest retained result from the second copy activation.";
+
+type ClipboardFaultState = {
+  asyncWrites: string[];
+  execSucceeds: boolean;
+  legacyWrites: string[];
+  mode: "defer" | "missing" | "reject";
+  pending: Array<{
+    reject: (reason?: unknown) => void;
+    resolve: () => void;
+  }>;
+};
 
 const retryBlockedTask = {
   ...readOnlyRetainedTask,
@@ -130,6 +143,57 @@ const activePageOneTasks = [
 ];
 
 suite.define(() => {
+  it("keeps completed tasks visible when active work fills the unfiltered page", async () => {
+    await mkdir(artifactDir, { recursive: true });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    try {
+      const activeTasks = activePageOneTasks.slice(0, 200);
+      const terminalStatuses = ["completed", "failed", "timed_out", "cancelled"];
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "tasks.list": {
+            cases: [
+              {
+                match: { agentId: "main", limit: 500, status: ["queued", "running"] },
+                response: { tasks: activeTasks },
+              },
+              {
+                match: { agentId: "main", limit: 200, status: terminalStatuses },
+                response: { tasks: [completedTask, failedTask] },
+              },
+              {
+                match: { agentId: "main", limit: 200 },
+                response: { tasks: activeTasks },
+              },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}tasks`);
+      const active = page.locator('[data-task-section="active"]');
+      const recent = page.locator('[data-task-section="recent"]');
+      await active.locator('[data-task-id="task-running"]').waitFor({ state: "visible" });
+      await recent.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(artifactDir, "10-recent-terminal-starvation.png") });
+
+      expect(await recent.textContent()).toContain("Generate media index");
+      expect(await recent.textContent()).toContain("Worker exited");
+      expect(await gateway.getRequests("tasks.list")).toContainEqual({
+        id: expect.any(String),
+        method: "tasks.list",
+        params: { agentId: "main", limit: 200, status: terminalStatuses },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps retry and dismiss outcomes authoritative across a stale refresh and reconnect", async () => {
     const actionArtifactDir = path.resolve(
       process.cwd(),
@@ -325,7 +389,11 @@ suite.define(() => {
                 },
               },
               {
-                match: { agentId: "main", limit: 200 },
+                match: {
+                  agentId: "main",
+                  limit: 200,
+                  status: ["completed", "failed", "timed_out", "cancelled"],
+                },
                 response: { tasks: [completedTask, failedTask] },
               },
             ],
@@ -357,12 +425,12 @@ suite.define(() => {
         listRequests.filter(
           (request) => (request.params as { status?: unknown }).status !== undefined,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
       expect(
         listRequests.filter(
           (request) => (request.params as { status?: unknown }).status === undefined,
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(listRequests).toContainEqual({
         id: expect.any(String),
         method: "tasks.list",
@@ -371,6 +439,15 @@ suite.define(() => {
           cursor: "active-page-2",
           limit: 500,
           status: ["queued", "running"],
+        },
+      });
+      expect(listRequests).toContainEqual({
+        id: expect.any(String),
+        method: "tasks.list",
+        params: {
+          agentId: "main",
+          limit: 200,
+          status: ["completed", "failed", "timed_out", "cancelled"],
         },
       });
       await page.screenshot({
@@ -420,15 +497,50 @@ suite.define(() => {
     }
   });
 
-  it("lets an operator.read-only user copy a retained result without mutations", async () => {
+  it("copies retained results through fallback and announces total failure", async () => {
     await mkdir(artifactDir, { recursive: true });
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { width: 1440, height: 900 },
     });
-    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-      origin: new URL(suite.server.baseUrl).origin,
+    await context.addInitScript(() => {
+      const state: ClipboardFaultState = {
+        asyncWrites: [],
+        execSucceeds: true,
+        legacyWrites: [],
+        mode: "reject",
+        pending: [],
+      };
+      Object.defineProperty(window, "tasksClipboardFault", { value: state });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        get: () =>
+          state.mode === "missing"
+            ? undefined
+            : {
+                writeText(text: string) {
+                  state.asyncWrites.push(text);
+                  if (state.mode === "defer") {
+                    return new Promise<void>((resolve, reject) => {
+                      state.pending.push({ reject, resolve });
+                    });
+                  }
+                  return Promise.reject(
+                    new DOMException("Clipboard access denied", "NotAllowedError"),
+                  );
+                },
+              },
+      });
+      document.execCommand = (command: string) => {
+        if (command !== "copy") {
+          return false;
+        }
+        state.legacyWrites.push(
+          document.querySelector<HTMLTextAreaElement>("textarea")?.value ?? "",
+        );
+        return state.execSucceeds;
+      };
     });
     const page = await context.newPage();
     try {
@@ -448,7 +560,13 @@ suite.define(() => {
             ],
           },
           "tasks.get": {
-            task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult },
+            sequence: [
+              { task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: olderRetainedResult } },
+              { task: { ...readOnlyRetainedTask, result: newestRetainedResult } },
+            ],
           },
         },
       });
@@ -469,11 +587,166 @@ suite.define(() => {
       const copyButton = task.getByRole("button", { name: "Copy result" });
       await copyButton.waitFor({ state: "visible" });
       await copyButton.click();
-      const getRequest = await gateway.waitForRequest("tasks.get");
-      expect(getRequest.params).toEqual({ taskId: readOnlyRetainedTask.taskId });
       await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toBe(readOnlyRetainedResult);
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault,
+          ),
+        )
+        .toMatchObject({
+          asyncWrites: [readOnlyRetainedResult],
+          legacyWrites: [readOnlyRetainedResult],
+        });
+
+      await page.evaluate(() => {
+        (
+          window as typeof window & { tasksClipboardFault: ClipboardFaultState }
+        ).tasksClipboardFault.mode = "missing";
+      });
+      await copyButton.click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault,
+          ),
+        )
+        .toMatchObject({
+          asyncWrites: [readOnlyRetainedResult],
+          legacyWrites: [readOnlyRetainedResult, readOnlyRetainedResult],
+        });
+
+      await page.evaluate(() => {
+        const state = (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+          .tasksClipboardFault;
+        state.mode = "reject";
+        state.execSucceeds = false;
+      });
+      await copyButton.click();
+      await expect.poll(() => page.getByRole("alert").textContent()).toBe("Copy failed");
+      await page.screenshot({ path: path.join(artifactDir, "05-copy-failed.png") });
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+              .tasksClipboardFault,
+        ),
+      ).toMatchObject({
+        asyncWrites: [readOnlyRetainedResult, readOnlyRetainedResult],
+        legacyWrites: [readOnlyRetainedResult, readOnlyRetainedResult, readOnlyRetainedResult],
+      });
+
+      await page.evaluate(() => {
+        const state = (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+          .tasksClipboardFault;
+        state.mode = "defer";
+        state.execSucceeds = false;
+      });
+      await copyButton.click();
+      await copyButton.click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault.pending.length,
+          ),
+        )
+        .toBe(2);
+      await page.evaluate(() => {
+        (
+          window as typeof window & { tasksClipboardFault: ClipboardFaultState }
+        ).tasksClipboardFault.pending[1]?.reject(
+          new DOMException("Clipboard access denied", "NotAllowedError"),
+        );
+      });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+                .tasksClipboardFault.legacyWrites.length,
+          ),
+        )
+        .toBe(4);
+      await page.evaluate(() => {
+        (
+          window as typeof window & { tasksClipboardFault: ClipboardFaultState }
+        ).tasksClipboardFault.pending[0]?.reject(
+          new DOMException("Clipboard access denied", "NotAllowedError"),
+        );
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      const currentAlert = page.getByRole("alert");
+      expect(await currentAlert.count()).toBe(1);
+      expect(await currentAlert.textContent()).toBe("Copy failed");
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+              .tasksClipboardFault.legacyWrites,
+        ),
+      ).toEqual([
+        readOnlyRetainedResult,
+        readOnlyRetainedResult,
+        readOnlyRetainedResult,
+        newestRetainedResult,
+      ]);
+
+      await gateway.deferNext("tasks.get", { taskId: readOnlyRetainedTask.taskId });
+      await copyButton.click();
+      await expect.poll(() => gateway.getRequests("tasks.get")).toHaveLength(6);
+      expect(await page.getByRole("alert").textContent()).toBe("Copy failed");
+      const socketCount = await gateway.getSocketCount();
+      await gateway.closeLatest(1012, "retire retained-result copy");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await gateway.resolveDeferred("tasks.get", {
+        task: { ...readOnlyRetainedTask, result: readOnlyRetainedResult },
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.getByRole("alert").count()).toBe(0);
+      expect(
+        await page.evaluate(
+          () =>
+            (window as typeof window & { tasksClipboardFault: ClipboardFaultState })
+              .tasksClipboardFault,
+        ),
+      ).toMatchObject({
+        asyncWrites: [
+          readOnlyRetainedResult,
+          readOnlyRetainedResult,
+          olderRetainedResult,
+          newestRetainedResult,
+        ],
+        legacyWrites: [
+          readOnlyRetainedResult,
+          readOnlyRetainedResult,
+          readOnlyRetainedResult,
+          newestRetainedResult,
+        ],
+      });
+
+      expect((await gateway.getRequests("tasks.get")).map((request) => request.params)).toEqual([
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+        { taskId: readOnlyRetainedTask.taskId },
+      ]);
       expect(await gateway.getRequests("tasks.retry")).toHaveLength(0);
       expect(await gateway.getRequests("tasks.dismiss")).toHaveLength(0);
       expect(await gateway.getRequests("tasks.cancel")).toHaveLength(0);

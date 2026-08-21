@@ -393,19 +393,42 @@ describe("resolveFailureDestination", () => {
     });
   });
 
-  it("returns null for webhook mode without destination URL", () => {
-    const plan = resolveFailureDestination(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "111",
-          failureDestination: { mode: "webhook" },
-        },
-      }),
-      undefined,
-    );
-    expect(plan).toBeNull();
+  it.each([
+    {
+      name: "explicit announce mode",
+      failureDestination: { mode: "announce" as const },
+      globalConfig: undefined,
+      expected: { mode: "announce", channel: "last", to: undefined, accountId: undefined },
+    },
+    {
+      name: "webhook mode without a URL",
+      failureDestination: { mode: "webhook" as const },
+      globalConfig: undefined,
+      expected: null,
+    },
+    {
+      name: "clear-only override",
+      failureDestination: {
+        channel: undefined as never,
+        to: undefined as never,
+        accountId: undefined as never,
+        mode: undefined as never,
+      },
+      globalConfig: {
+        channel: "signal",
+        to: "group-abc",
+        accountId: "global-account",
+        mode: "announce" as const,
+      },
+      expected: null,
+    },
+  ])("resolves $name", ({ failureDestination, globalConfig, expected }) => {
+    expect(
+      resolveFailureDestination(
+        makeCronJob({ delivery: { mode: "none", failureDestination } }),
+        globalConfig,
+      ),
+    ).toEqual(expected);
   });
 
   it("returns null when failure destination matches primary delivery target", () => {
@@ -512,36 +535,6 @@ describe("resolveFailureDestination", () => {
       },
     );
     expect(plan).toBeNull();
-  });
-
-  it("allows job-level failure destination fields to clear inherited global values", () => {
-    const plan = resolveFailureDestination(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "111",
-          failureDestination: {
-            mode: "announce",
-            channel: undefined as never,
-            to: undefined as never,
-            accountId: undefined as never,
-          },
-        },
-      }),
-      {
-        channel: "signal",
-        to: "group-abc",
-        accountId: "global-account",
-        mode: "announce",
-      },
-    );
-    expect(plan).toEqual({
-      mode: "announce",
-      channel: "last",
-      to: undefined,
-      accountId: undefined,
-    });
   });
 
   it("keeps inherited announce targets when a job clears only failure destination mode", () => {

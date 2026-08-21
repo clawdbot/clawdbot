@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { installDesktopClientFake, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "desktop source panel",
@@ -69,32 +69,6 @@ async function openDirectDesktop(page: import("playwright").Page, environmentId:
       }),
     );
   }, environmentId);
-}
-
-async function installDesktopClientFake(panel: import("playwright").Locator) {
-  await panel.evaluate((element) => {
-    (
-      element as HTMLElement & {
-        desktopClientFactory: () => {
-          connect(options: { credentials?: { username?: string; password?: string } }): Promise<{
-            disconnect(): void;
-          }>;
-        };
-      }
-    ).desktopClientFactory = () => ({
-      async connect(options) {
-        element.dataset.connectCount = String(Number(element.dataset.connectCount ?? "0") + 1);
-        element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
-        return {
-          disconnect() {
-            element.dataset.disconnectCount = String(
-              Number(element.dataset.disconnectCount ?? "0") + 1,
-            );
-          },
-        };
-      },
-    });
-  });
 }
 
 suite.define(() => {
@@ -312,6 +286,25 @@ suite.define(() => {
         await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
       ).toBe(0);
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+    });
+  });
+
+  it("opens the selected desktop source in a focused window", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["environments.list", "desktop.observe"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": { environments: [] },
+        },
+      });
+      await openDesktopPanel(page);
+      const popupPromise = page.waitForEvent("popup");
+      await page.getByRole("link", { name: "Open desktop in new window", exact: true }).click();
+      const popup = await popupPromise;
+      await popup.waitForLoadState("domcontentloaded");
+      expect(new URL(popup.url()).pathname).toBe("/focus/desktop");
+      await popup.close();
     });
   });
 
@@ -652,9 +645,11 @@ suite.define(() => {
       await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
       await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
 
+      // Pin past the first launch so a slow runner can't return it stale.
+      const launchesBeforeRetry = (await gateway.getRequests("desktop.launch")).length;
       await gateway.deferNext("desktop.launch");
       await browserButton.click();
-      await gateway.waitForRequest("desktop.launch");
+      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeRetry });
       await gateway.rejectDeferred("desktop.launch", {
         message: "worker desktop app launch unavailable; try again",
       });

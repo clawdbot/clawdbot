@@ -198,9 +198,13 @@ class SecretsPage extends OpenClawLightDomElement {
       }
       this.dialogMode = null;
       this.formError = null;
+      const saved = t(
+        draft.kind === "secret" ? "secretsStore.savedProtected" : "secretsStore.savedReadable",
+        { name: draft.name },
+      );
       this.notice = result.warningCount
-        ? `${t("secretsStore.saved", { name: draft.name })} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
-        : t("secretsStore.saved", { name: draft.name });
+        ? `${saved} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
+        : saved;
     });
   }
 
@@ -257,9 +261,14 @@ class SecretsPage extends OpenClawLightDomElement {
       }
       this.bulkOpen = false;
       this.formError = null;
+      const saved = t("secretsStore.savedMany", {
+        count: String(result.saved),
+        protected: String(parsed.entries.filter((entry) => entry.kind === "secret").length),
+        readable: String(parsed.entries.filter((entry) => entry.kind === "env").length),
+      });
       this.notice = result.warningCount
-        ? `${t("secretsStore.savedMany", { count: String(result.saved) })} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
-        : t("secretsStore.savedMany", { count: String(result.saved) });
+        ? `${saved} ${t("secretsStore.warnings", { count: String(result.warningCount) })}`
+        : saved;
     });
   }
 
@@ -311,9 +320,9 @@ class SecretsPage extends OpenClawLightDomElement {
       onDraftNameChange: (name) => this.changeDraftName(name),
       onDraftValueChange: (value) => this.patchDraft({ value }),
       onDraftAllowedHostsChange: (allowedHosts) => this.patchDraft({ allowedHosts }),
-      onDraftSecretChange: (secret) => {
+      onDraftKindChange: (kind) => {
         this.secretKindOverridden = true;
-        this.patchDraft({ kind: secret ? "secret" : "env" });
+        this.patchDraft({ kind });
       },
       onSubmitDraft: () => this.submitDraft(),
       onOpenBulk: () => this.openBulk(),

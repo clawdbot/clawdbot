@@ -229,7 +229,7 @@ export type PluginManifestSetup = {
   configMigrations?: string[];
   /**
    * Whether setup still needs plugin runtime execution after descriptor lookup.
-   * Defaults to false when omitted.
+   * Explicit false disables setup runtime; omission preserves the legacy fallback.
    */
   requiresRuntime?: boolean;
 };

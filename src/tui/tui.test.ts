@@ -516,6 +516,15 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.remediation).not.toContain("devices rotate");
   });
 
+  it("shows edge-auth guidance for an identity-proxy rejection", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
+      reason: "gateway rejected websocket upgrade (HTTP 302)",
+    });
+    expect(state.activityStatus).toBe("identity-aware proxy rejected connection");
+    expect(state.remediation).toContain("gateway.remote.edgeAuth");
+  });
+
   it("falls back to idle for generic disconnect reasons", () => {
     const state = resolveGatewayDisconnectState({ reason: "network timeout" });
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");

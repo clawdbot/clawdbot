@@ -24,9 +24,11 @@ import {
   buildCompactionDividerItem,
   buildResetDividerItem,
   clearWorkingProgress,
+  projectContextCompactionActivity,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import {
   coalesceToolActivityMessages,
   groupMessages,
@@ -56,7 +58,6 @@ import {
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
@@ -64,7 +65,6 @@ import {
   buildToolStreamIdentity,
   removeLiveToolBlocksFromHistory,
 } from "./tool-stream-identity.ts";
-import type { PlanStatus } from "./tool-stream.ts";
 
 export type BuildChatItemsProps = {
   paneId: string;
@@ -85,7 +85,6 @@ export type BuildChatItemsProps = {
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
-  planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
@@ -216,7 +215,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
   for (let i = 0; i < history.length; i++) {
-    const msg = history[i];
+    const msg = projectContextCompactionActivity(history[i]);
     const itemKey = historyKeys[i] ?? messageKey(msg, i);
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
@@ -733,10 +732,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (showWorkingIndicator) {
     items.push({ kind: "reading-indicator", ...resolveProgress() });
   }
-  if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
-    items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
-  }
-
   // Future queued turns are a causal ceiling for every current-run projection.
   // Append them after tools, streams, progress, and prompts so none can cross the
   // next user turn when a live item becomes stable transcript history.

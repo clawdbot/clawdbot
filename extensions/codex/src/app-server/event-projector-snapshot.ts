@@ -5,6 +5,7 @@ import type {
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { promptSnapshot } from "./user-prompt-message.js";
 
@@ -13,9 +14,7 @@ const CODEX_META_KEY = "__openclaw";
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
   const metadata = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
-    ? (metadata as TurnTaintMetadata)
-    : undefined;
+  return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
 }
 
 function applyStickyTurnTaint(messages: readonly AgentMessage[]): AgentMessage[] {

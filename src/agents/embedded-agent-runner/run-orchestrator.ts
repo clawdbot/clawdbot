@@ -15,12 +15,12 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -222,7 +222,9 @@ async function runEmbeddedAgentInternal(
         provider: params.provider,
         model: params.model,
       });
-      const requestedHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const requestedHarnessRuntime =
+        explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
       const runtimePluginFallbacksOverride =
         params.modelFallbacksOverride ??
         resolveRunModelFallbacksOverride({
@@ -230,21 +232,25 @@ async function runEmbeddedAgentInternal(
           agentId: requestedWorkspaceResolution.agentId,
           sessionKey: params.sessionKey,
         });
-      const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-        config,
-        workspaceDir: requestedWorkspaceResolution.workspaceDir,
-        env: process.env,
-        allowWorkspaceScopedSnapshot: true,
-      });
+      const pluginMetadataSnapshot =
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: requestedWorkspaceResolution.workspaceDir,
+          env: process.env,
+        });
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
-        manifestPlugins: currentPluginMetadataSnapshot?.plugins ?? [],
+        agentId: requestedWorkspaceResolution.agentId,
+        manifestPlugins: pluginMetadataSnapshot.plugins,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
         fallbacksOverride: runtimePluginFallbacksOverride,
-      }).map((candidate) =>
-        requestedHarnessRuntime
+      }).map((candidate, index) =>
+        requestedHarnessRuntime &&
+        // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+        (index === 0 || explicitHarnessRuntime)
           ? {
               provider: candidate.provider,
               modelId: candidate.model,
@@ -287,11 +293,19 @@ async function runEmbeddedAgentInternal(
                 // Turns need only configured admission facts. Full live model inventory remains
                 // available through the snapshot's lazy control-plane loader.
                 catalogMode: "static",
+                ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
               }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
+        if (
+          params.pluginGeneration &&
+          preparedModelRuntimeOwnerSnapshot.metadataSnapshot !==
+            params.pluginGeneration.pluginMetadataSnapshot
+        ) {
+          throw new Error("prepared model runtime replaced the admitted plugin generation");
+        }
         // A reload may complete while admission waits. The committed generation owns config,
         // directories, model selection, hooks, fallbacks, and every later run projection.
         const rebound = bindRunToPreparedModelRuntime({
@@ -421,6 +435,7 @@ async function runEmbeddedAgentInternal(
             agentDir,
             workspaceResolution,
             workspaceDir: resolvedWorkspace,
+            bootstrapWorkspaceDir: canonicalWorkspace,
             isCanonicalWorkspace,
             globalLane,
             hookRunner,

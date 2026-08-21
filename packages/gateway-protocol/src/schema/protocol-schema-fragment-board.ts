@@ -19,6 +19,7 @@ export const BoardProtocolSchemas = {
   BoardWidgetMcpAppContent: board.BoardWidgetMcpAppContentSchema,
   BoardWidgetMcpAppPutContent: board.BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContent: board.BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContent: board.BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSource: board.BoardCanvasDocumentSourceSchema,
   BoardWidgetContent: board.BoardWidgetContentSchema,
   BoardWidgetPutContent: board.BoardWidgetPutContentSchema,

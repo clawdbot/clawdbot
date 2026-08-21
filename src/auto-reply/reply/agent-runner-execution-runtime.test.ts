@@ -243,6 +243,53 @@ describe("executeAgentTurn: runtime selection", () => {
     });
   });
 
+  it("forwards model-scoped Codex policy as a worker preparation hint", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.5"),
+      provider: "openai",
+      model: "gpt-5.5",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "worker" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "worker";
+    followupRun.run.sessionKey = "agent:worker:main";
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    followupRun.run.config = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey: "agent:worker:main",
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      agentId: "worker",
+      githubPublicationAvailable: false,
+      agentHarnessId: undefined,
+      agentHarnessRuntimeOverride: undefined,
+      agentHarnessRuntimePreparationHint: "codex",
+    });
+  });
+
   it("keeps catalog-adopted Codex sessions on Codex during heartbeat model overrides", async () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

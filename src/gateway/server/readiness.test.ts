@@ -261,6 +261,20 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("keeps a long-running Reef account ready during fresh reconnect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        reef: managedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          lastDisconnect: { at: Date.now() - 5_000, error: "socket closed" },
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+    });
+  });
+
   it("uses fresh recorded lifecycle within connect grace", () => {
     withReadinessClock(() => {
       const { readiness } = createLongRunningReadinessHarness({

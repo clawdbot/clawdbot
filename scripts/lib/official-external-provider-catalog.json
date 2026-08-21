@@ -123,9 +123,6 @@
                 "groupLabel": "Arcee AI",
                 "groupHint": "Direct API or OpenRouter",
                 "optionKey": "openrouterApiKey",
-                "cliFlag": "--openrouter-api-key",
-                "cliOption": "--openrouter-api-key <key>",
-                "cliDescription": "OpenRouter API key for Arcee AI models",
                 "onboardingScopes": [
                   "text-inference"
                 ]
@@ -1288,6 +1285,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
           "npmSpec": "@openclaw/pixverse-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.26"

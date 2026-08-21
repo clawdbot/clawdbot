@@ -17,6 +17,7 @@ import {
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
@@ -36,6 +37,7 @@ import type {
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -67,7 +69,7 @@ type SidebarMenusRenderer = {
   renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
 };
 
-export interface SidebarMenusControllerHost
+interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
@@ -91,14 +93,19 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      "approvalBadgeSnapshot" | "presenceInstanceId" | "presencePayload" | "sessionsLoading"
+      | "approvalBadgeSnapshot"
+      | "presenceInstanceId"
+      | "presencePayload"
+      | "sessionResultsByAgent"
+      | "sessionsLoading"
+      | "sessionsResult"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly sessionCreatorFilterActive: boolean;
-  sessionCreatorFilterId: string | null;
+  readonly sessionOwnerFilterActive: boolean;
+  sessionOwnerFilterId: string | null;
   sessionInvolvingMeFilterActive: boolean;
-  readonly sessionCreatorOptions: readonly SessionOwnerOption[];
+  readonly sessionOwnerOptions: readonly SessionOwnerOption[];
   readonly sessionOwnershipVisible: boolean;
   readSessionMutationAccess(request: {
     method: string;
@@ -111,6 +118,7 @@ export interface SidebarMenusControllerHost
   hideSessionCatalog(catalogId: string): void;
   sessionSortMode: SidebarSessionSortMode;
   effectiveSessionSortMode(): SidebarSessionSortMode;
+  effectiveSessionsGrouping(): SidebarSessionsGrouping;
   sessionPeopleSortAvailable(): boolean;
   setSessionSortMode(mode: SidebarSessionSortMode): void;
   readonly terminalAvailable: boolean;
@@ -319,6 +327,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     y: number,
     trigger: HTMLElement | null = null,
   ) {
+    trigger?.dispatchEvent(
+      new CustomEvent(SESSION_MENU_OPEN_EVENT, { bubbles: true, composed: true }),
+    );
     if (!this.host.selectedSessionKeys.has(session.key)) {
       this.host.clearSessionSelection();
     }

@@ -326,6 +326,15 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
   });
 
+  it("hydrates the subagent registry before plugin bootstrap", async () => {
+    await prepareBootstrapWithRuntimeConfig({});
+
+    expect(initSubagentRegistry).toHaveBeenCalledOnce();
+    expect(initSubagentRegistry.mock.invocationCallOrder[0]).toBeLessThan(
+      loadPluginLookUpTable.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {

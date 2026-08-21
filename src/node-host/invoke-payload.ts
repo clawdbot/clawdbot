@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
@@ -21,6 +22,7 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
         : null;
   const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
   const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
+  const sessionKey = normalizeOptionalString(obj.sessionKey);
   return {
     id,
     nodeId,
@@ -28,6 +30,7 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
     paramsJSON,
     timeoutMs,
     idempotencyKey,
+    ...(sessionKey ? { sessionKey } : {}),
   };
 }
 

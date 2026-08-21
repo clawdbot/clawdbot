@@ -1,14 +1,26 @@
 // Covers agent harness selection, fallback behavior, and compaction routing.
+import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -17,6 +29,11 @@ import {
 } from "../admitted-run-context.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import {
+  createModelGenerationFixture,
+  publishCurrentModelGeneration,
+  resetModelGenerationFixtureState,
+} from "../embedded-agent-runner/model.generation-scope.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -24,7 +41,7 @@ import type {
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
-import { maybeCompactAgentHarnessSession } from "./compaction.js";
+import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "./compaction.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -151,11 +168,13 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+const trajectoryTempDirs = createTempDirTracker();
 let selectionAdmission: PreparedAgentRunAdmission;
 let selectionAdmittedRunContext: AdmittedRunContext;
 
 beforeEach(async () => {
   resetAgentRunRegistryForTest();
+  resetModelGenerationFixtureState();
   selectionAdmission = prepareAgentRunAdmission({
     cfg: {},
     facts: {
@@ -211,9 +230,14 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  trajectoryTempDirs.cleanup();
   selectionAdmission.close();
   resetAgentRunRegistryForTest();
   clearAgentHarnesses();
+  resetModelGenerationFixtureState();
   cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
   compactAuthMocks.prepareAgentRuntimeAuth.mockClear();
@@ -435,7 +459,21 @@ function agentModelRuntimeConfig(
   } as OpenClawConfig;
 }
 
-type CompactSessionParams = Parameters<typeof maybeCompactAgentHarnessSession>[0];
+function maybeCompactAgentHarnessSession(
+  params: Parameters<typeof maybeCompactAgentHarnessSessionImpl>[0],
+  options: Partial<Parameters<typeof maybeCompactAgentHarnessSessionImpl>[1]> = {},
+) {
+  const preparedModelRuntime =
+    options.preparedModelRuntime ??
+    createModelGenerationFixture({
+      config: params.config ?? {},
+      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+      label: "harness-test",
+    }).preparedModelRuntime;
+  return maybeCompactAgentHarnessSessionImpl(params, { ...options, preparedModelRuntime });
+}
+
+type CompactSessionParams = Parameters<typeof maybeCompactAgentHarnessSessionImpl>[0];
 
 const OPENAI_PLATFORM_ROUTE = {
   provider: "openai",
@@ -669,6 +707,47 @@ describe("runAgentHarnessAttempt", () => {
 
     expect((params as unknown as Record<string, unknown>)[internalKey]).toBeDefined();
     expect(handedOffRuntime).toBeUndefined();
+  });
+
+  it("persists plugin trajectory events through the selected harness host capability", async () => {
+    const tempDir = trajectoryTempDirs.make("openclaw-harness-trajectory-");
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+    });
+    if (!trajectoryRecorder) {
+      throw new Error("Expected SQLite trajectory recorder");
+    }
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          const trajectory = attempt.hostCapabilities?.trajectory;
+          if (!trajectory) {
+            throw new Error("Expected host trajectory capability");
+          }
+          trajectory.recordEvent("plugin.selected");
+          await trajectory.flush();
+          return createAttemptResult("codex");
+        },
+      },
+      { ownerPluginId: "codex" },
+    );
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    params.sessionKey = sessionKey;
+    params.trajectoryRecorder = trajectoryRecorder;
+
+    await runAgentHarnessAttempt(params);
+
+    expect(await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath })).toEqual([
+      expect.objectContaining({ source: "runtime", type: "plugin.selected" }),
+    ]);
   });
 
   it.each(["heartbeat"] as const)(
@@ -1220,6 +1299,7 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
+    expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });
@@ -1957,6 +2037,45 @@ describe("selectAgentHarness", () => {
         requestedRuntime: "codex",
       }).modelProvider,
     ).toMatchObject({
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+    });
+  });
+
+  it("ignores catalog-seeded compatibility when selecting an official OpenAI route", () => {
+    const createConfig = (compat?: { supportsStore: boolean }) =>
+      ({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT-5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                  ...(compat ? { compat } : {}),
+                },
+              ],
+            },
+          },
+        },
+      }) satisfies OpenClawConfig;
+    const sourceConfig = createConfig();
+    const runtimeConfig = createConfig({ supportsStore: false });
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        requestedRuntime: "codex",
+        config: runtimeConfig,
+      }).modelProvider,
+    ).toMatchObject({
+      requestTransportOverrides: "none",
       runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
     });
   });
@@ -3349,6 +3468,111 @@ describe("selectAgentHarness", () => {
         runtimeModel: expect.objectContaining({
           baseUrl: "https://proxy.example/v1",
           id: "proxy-model",
+        }),
+      }),
+    );
+  });
+
+  it("keeps auth-route rematerialization on the caller-owned prepared generation", async () => {
+    const cfg = {} as OpenClawConfig;
+    const createStores = () => ({ authStorage: {} as never, modelRegistry: {} as never });
+    const generationA = createModelGenerationFixture({
+      config: cfg,
+      createStores,
+      label: "compact-a",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "proxy-model",
+      runtimeApi: "openai-responses",
+    });
+    const generationB = createModelGenerationFixture({
+      config: cfg,
+      createStores,
+      label: "compact-b",
+      provider: "local-proxy",
+      requestProvider: "local-proxy",
+      modelId: "proxy-model",
+      runtimeApi: "openai-responses",
+    });
+    publishCurrentModelGeneration(generationA);
+    compactAuthMocks.resolveModelAsync.mockImplementation(
+      async (_provider, _modelId, _agentDir, _config, options) => {
+        const registry = options?.preparedModelRuntime?.pluginRegistry ?? getActivePluginRegistry();
+        const label = registry === generationA.pluginRegistry ? "A" : "B";
+        return {
+          model: {
+            provider: "local-proxy",
+            id: "proxy-model",
+            name: `Runtime ${label}`,
+            api: "openai-responses",
+            baseUrl: `https://generation-${label.toLowerCase()}.example.test/v1`,
+          },
+        };
+      },
+    );
+    compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "local-proxy:stale": {
+          type: "api_key",
+          provider: "local-proxy",
+          key: "stale-key",
+        },
+      },
+    });
+    const profilePlan = {
+      providerForAuth: "local-proxy",
+      authProfileProviderForAuth: "local-proxy",
+      forwardedAuthProfileId: "local-proxy:stale",
+      forwardedAuthProfileSource: "auto" as const,
+      selectedAuthMode: "api_key" as const,
+    };
+    const directPlan = {
+      providerForAuth: "local-proxy",
+      authProfileProviderForAuth: "local-proxy",
+      selectedAuthMode: "api_key" as const,
+    };
+    compactAuthMocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: profilePlan,
+      attempts: [
+        {
+          kind: "profile" as const,
+          profileId: "local-proxy:stale",
+          plan: profilePlan,
+          allowAuthProfileFallback: false,
+        },
+        { kind: "direct" as const, plan: directPlan, requiresPriorProfileAttempt: true },
+      ],
+    });
+    compactAuthMocks.getApiKeyForModelCore.mockImplementation(async (params) => {
+      if (params.profileId === "local-proxy:stale") {
+        publishCurrentModelGeneration(generationB);
+        throw new Error("stale profile");
+      }
+      return { apiKey: "direct-key", source: "direct", mode: "api-key" };
+    });
+    const compact = registerTestCompactor({ id: "copilot", provider: "local-proxy" });
+    const options = { preparedModelRuntime: generationA.preparedModelRuntime };
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        createCompactionParams({
+          config: cfg,
+          provider: "local-proxy",
+          model: "proxy-model",
+          agentHarnessId: "copilot",
+        }),
+        options,
+      ),
+    ).resolves.toEqual({ ok: true, compacted: false });
+
+    expect(compactAuthMocks.resolveModelAsync).toHaveBeenCalledTimes(2);
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeModel: expect.objectContaining({
+          name: "Runtime A",
+          api: "openai-responses",
+          baseUrl: "https://generation-a.example.test/v1",
         }),
       }),
     );

@@ -6,7 +6,6 @@ import {
   readMemoryFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { scanMemoryManagerSources } from "./cli-runtime-common.js";
 import { resolveMemoryPathClassification } from "./memory/memory-path-provenance.js";
 
 describe.skipIf(process.platform !== "win32")("Windows explicit memory extra-file casing", () => {
@@ -38,7 +37,7 @@ describe.skipIf(process.platform !== "win32")("Windows explicit memory extra-fil
   });
 
   it.each(["physical", "alias"] as const)(
-    "lists, reads, and scans the configured %s spelling",
+    "lists and reads the configured %s spelling",
     async (spelling) => {
       const configuredPath = spelling === "physical" ? physicalPath : configuredAlias;
       await expect(listMemoryFiles(workspaceDir, [configuredPath])).resolves.toEqual([
@@ -51,18 +50,6 @@ describe.skipIf(process.platform !== "win32")("Windows explicit memory extra-fil
           relPath: configuredPath,
         }),
       ).resolves.toMatchObject({ text: "shared Windows memory" });
-      await expect(
-        scanMemoryManagerSources(
-          {
-            backend: "builtin",
-            provider: "none",
-            workspaceDir,
-            sources: ["memory"],
-            extraPaths: [configuredPath],
-          },
-          "main",
-        ),
-      ).resolves.toMatchObject({ totalFiles: 1, issues: [] });
     },
   );
 

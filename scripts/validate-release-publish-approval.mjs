@@ -11,6 +11,8 @@ const allowCompletedSuccessfulParent = process.env.ALLOW_COMPLETED_SUCCESSFUL_PA
 const approvalPath = process.env.APPROVAL_PATH ?? "";
 const approvalKind = process.env.RELEASE_APPROVAL_KIND ?? "android";
 const expectedRunAttempt = process.env.EXPECTED_RUN_ATTEMPT ?? "";
+const expectedWorkflowFullRef = process.env.EXPECTED_WORKFLOW_FULL_REF ?? "";
+const expectedWorkflowSha = process.env.EXPECTED_WORKFLOW_SHA ?? "";
 const childWorkflowSha = process.env.CHILD_WORKFLOW_SHA ?? "";
 
 function fail(message) {
@@ -92,12 +94,30 @@ const checks = [
   ["headBranch", expectedBranch],
   ["event", "workflow_dispatch"],
 ];
+if (process.env.GITHUB_REPOSITORY) {
+  checks.push(["repository", process.env.GITHUB_REPOSITORY]);
+}
 
 for (const [key, expected] of checks) {
   if (run[key] !== expected) {
     fail(
       `Referenced release publish run ${releasePublishRunId} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`,
     );
+  }
+}
+
+if (expectedWorkflowSha && run.headSha !== expectedWorkflowSha) {
+  fail(
+    `Referenced release publish run ${releasePublishRunId} must use tooling SHA ${expectedWorkflowSha}, got ${run.headSha ?? "<missing>"}.`,
+  );
+}
+if (expectedWorkflowFullRef) {
+  const [workflowPath, workflowFullRef] = String(run.path ?? "").split("@", 2);
+  if (workflowPath !== ".github/workflows/openclaw-release-publish.yml") {
+    fail(`Referenced release publish run ${releasePublishRunId} has untrusted workflow path.`);
+  }
+  if (workflowFullRef && workflowFullRef !== expectedWorkflowFullRef) {
+    fail(`Referenced release publish run ${releasePublishRunId} has untrusted workflow full ref.`);
   }
 }
 

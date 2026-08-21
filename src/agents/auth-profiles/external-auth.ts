@@ -9,6 +9,11 @@ import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-r
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
+import {
+  isUsablePersistedExternalCliProfileCredential,
+  listConfiguredExternalCliProfileMetadataIds,
+  listExternalCliProfileMetadataIds,
+} from "./external-cli-profile-metadata.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -110,12 +115,46 @@ function resolveExternalAuthProfiles(params: {
       store: params.store,
     },
   });
-  const resolved = resolveExternalCliAuthProfileMap(params);
+  const configuredProfileIds = listConfiguredExternalCliProfileMetadataIds(
+    params.externalCli?.config?.auth?.profiles,
+  );
+  const externalCli = configuredProfileIds.length
+    ? {
+        ...params.externalCli,
+        externalCliProfileIds: [
+          ...(params.externalCli?.externalCliProfileIds ?? []),
+          ...configuredProfileIds,
+        ],
+      }
+    : params.externalCli;
+  const resolved = resolveExternalCliAuthProfileMap({ ...params, externalCli });
   const runtimeExternalCliProfileIds = new Set(
     [...resolved.values()]
       .filter((profile) => profile.persistence !== "persisted")
       .map((profile) => profile.profileId),
   );
+  // A persisted Claude CLI profile may be usable and identity-complete, in which
+  // case its resolver intentionally avoids rereading the CLI and emits no overlay.
+  // Its canonical profile slot still establishes refresh ownership
+  // after a process restart, when runtime-only provenance is no longer available.
+  for (const profileId of listExternalCliProfileMetadataIds()) {
+    const credential = params.store.profiles[profileId];
+    const hasUsablePersistedCliCredential = isUsablePersistedExternalCliProfileCredential(
+      profileId,
+      credential,
+    );
+    if (
+      (resolved.has(profileId) || hasUsablePersistedCliCredential) &&
+      externalCliSync.isExternalCliAuthProfileInScope({
+        store: params.store,
+        profileId,
+        providerIds: externalCli?.externalCliProviderIds,
+        profileIds: externalCli?.externalCliProfileIds,
+      })
+    ) {
+      runtimeExternalCliProfileIds.add(profileId);
+    }
+  }
   const pluginProfileIds = new Set<string>();
   const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
   for (const rawProfile of profiles) {
@@ -207,9 +246,16 @@ function hasPersistableExternalCliSyncCandidate(
   if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
     return true;
   }
+  // Keep the existing Claude and MiniMax steady-state sync trigger independent
+  // from the narrower legacy Claude metadata migration/recovery registry.
   for (const profileId of [CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID]) {
     const credential = store.profiles[profileId];
-    if (credential?.type === "oauth") {
+    if (
+      credential?.type === "oauth" ||
+      listConfiguredExternalCliProfileMetadataIds(params?.config?.auth?.profiles).includes(
+        profileId,
+      )
+    ) {
       return true;
     }
   }
@@ -275,10 +321,21 @@ export function syncPersistedExternalCliAuthProfiles(
   if (!hasPersistableExternalCliSyncCandidate(store, params)) {
     return store;
   }
+  const configuredProfileIds = listConfiguredExternalCliProfileMetadataIds(
+    params?.config?.auth?.profiles,
+  );
   const persistedProfiles = resolveAllowedExternalCliAuthProfiles({
     store,
     env: params?.env,
-    externalCli: params,
+    externalCli: configuredProfileIds.length
+      ? {
+          ...params,
+          externalCliProfileIds: [
+            ...(params?.externalCliProfileIds ?? []),
+            ...configuredProfileIds,
+          ],
+        }
+      : params,
   }).filter((profile) => profile.persistence === "persisted");
   if (persistedProfiles.length === 0) {
     return store;

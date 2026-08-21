@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -130,9 +131,18 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
       }
   );
 
+export class SessionEntryLifecycleUpsertConflictError extends Error {
+  constructor(readonly sessionKey: string) {
+    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+    this.name = "SessionEntryLifecycleUpsertConflictError";
+  }
+}
+
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
   resetBoundaryReason?: SessionResetBoundaryReason;
+  /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
+  routeContext?: ConversationRouteContext | null;
 } & (
   | {
       entry: SessionEntry;
@@ -157,6 +167,7 @@ export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;
   removedEntries: number;
   removedSessionKeys: string[];
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;

@@ -1,3 +1,4 @@
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive.js";
 import type { SessionEntryLifecycleRemoval } from "./session-accessor.sqlite-contract.js";
@@ -11,6 +12,7 @@ export type SessionEntryRemovalPlan = {
   sessionKey: string;
 };
 type SessionEntryMaintenanceCounts = {
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;
@@ -36,6 +38,7 @@ export type ProjectedLifecycleMutation = {
   upsertedEntries: Array<{
     entry: SessionEntry;
     expectedEntry: SessionEntry | undefined;
+    routeContext?: ConversationRouteContext | null;
     resetBoundaryPlan?: SessionResetBoundaryPlan;
     sessionKey: string;
   }>;

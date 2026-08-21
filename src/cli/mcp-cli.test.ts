@@ -297,6 +297,22 @@ describe("mcp cli", () => {
     });
   });
 
+  it("tells the operator how to add a server when probing with none configured", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "probe"]);
+
+      const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("No MCP servers configured in");
+      expect(output).toContain("openclaw mcp add <name> --command <command>");
+      // A bare "MCP probe (<path>):" header was the whole output before this guard.
+      expect(output).not.toMatch(/^MCP probe \(.*\):$/m);
+    });
+  });
+
   it("updates per-server MCP tool filters", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
@@ -859,6 +875,18 @@ describe("mcp cli", () => {
         claudeChannelMode: "on",
         verbose: true,
       });
+    });
+  });
+
+  it("points serve startup failures at the deep Gateway health diagnostic", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+      await expect(runMcpCommand(["mcp", "serve"])).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe(
+        "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
+      );
     });
   });
 });

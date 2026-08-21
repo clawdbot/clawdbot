@@ -346,7 +346,6 @@ export const dispatchTelegramMessage = async (
   const progressState = createProgressState(
     turnConfig,
     draftState,
-    () => turn,
     async () => await prepareAnswerLaneForToolProgress(turn),
   );
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
@@ -385,6 +384,12 @@ export const dispatchTelegramMessage = async (
       }
     }
     loadFreshSessionEntry.clear();
+    // Media hydration and other pre-dispatch work can outlive the durable
+    // ingress watchdog. Never enter the reply pipeline after that owner has
+    // already fenced this attempt; the canonical spool row will retry it.
+    if (isDispatchSuperseded()) {
+      return { kind: "completed" };
+    }
     if (status.controller && !isRoomEvent) {
       void status.controller.setThinking();
     }
@@ -394,8 +399,7 @@ export const dispatchTelegramMessage = async (
       turn.dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      // Terminal order: stop producers, drain queued drafts, materialize accepted text,
-      // clean previews, then collapse the progress window.
+      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
       turn.progressCompositor.cancel();
       await waitForDraftEvents(turn);
       try {
@@ -507,7 +511,8 @@ export const dispatchTelegramMessage = async (
       {
         outcome:
           turn.agentRunFailed ||
-          (!turn.finalAnswerDelivered && (turn.dispatchError != null || sentFallback))
+          turn.dispatchError != null ||
+          (!turn.finalAnswerDelivered && sentFallback)
             ? "error"
             : "done",
       },

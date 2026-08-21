@@ -446,9 +446,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
       ${renderSessionOwnerChip(
-        props.showOwnerChip
-          ? (props.session?.owner?.actor ?? props.session?.createdActor)
-          : undefined,
+        props.showOwnerChip ? props.session?.owner?.actor : undefined,
         "header",
         props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
         props.ownerViewing,
@@ -538,12 +536,13 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.panelActions} ${compactSessionActions ? nothing : props.discussionAction}
+        ${compactSessionActions ? nothing : props.panelActions}
+        ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
             ${props.sessionRailAction}`}
-        ${props.onOpenSplitView
+        ${props.onOpenSplitView && !compactSessionActions
           ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
               <button
                 class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
@@ -591,7 +590,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
-        ${props.mergedChrome
+        ${props.mergedChrome && !compactSessionActions
           ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
               <button
                 class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"

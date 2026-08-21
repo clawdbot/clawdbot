@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import process from "node:process";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -94,76 +94,49 @@ const OPENCODE_PARAMETER_MESSAGES = {
   invalidThreadId: "threadId is invalid",
 };
 
-function resolveSpawnInvocation(args: string[]): {
-  command: string;
-  argv: string[];
-  shell?: boolean;
-  windowsHide?: boolean;
-} {
-  const program = resolveWindowsSpawnProgram({
-    command: "opencode",
-    platform: process.platform,
-    env: process.env,
-    execPath: process.execPath,
-    packageName: "opencode-ai",
-  });
-  return materializeWindowsSpawnProgram(program, args);
-}
-
 async function runOpenCode(args: string[]): Promise<string> {
-  const invocation = resolveSpawnInvocation(args);
+  const invocation = materializeWindowsSpawnProgram(
+    resolveWindowsSpawnProgram({
+      command: "opencode",
+      platform: process.platform,
+      env: process.env,
+      execPath: process.execPath,
+      packageName: "opencode-ai",
+    }),
+    args,
+  );
   const env: NodeJS.ProcessEnv = { OPENCODE_PURE: "1", NO_COLOR: "1" };
   for (const key of SAFE_ENV_KEYS) {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];
     }
   }
-  const child = spawn(invocation.command, invocation.argv, {
+  const result = await runCommandBuffered([invocation.command, ...invocation.argv], {
+    baseEnv: {},
     env,
-    shell: invocation.shell,
-    windowsHide: invocation.windowsHide,
-    stdio: ["ignore", "pipe", "pipe"],
+    input: "",
+    maxCombinedOutputBytes: MAX_CLI_OUTPUT_BYTES,
+    maxOutputBytes: MAX_CLI_OUTPUT_BYTES,
+    terminateOnOutputError: true,
+    timeoutMs: CLI_TIMEOUT_MS,
   });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  let bytes = 0;
-  let overflow = false;
-  const timeout = setTimeout(() => child.kill("SIGKILL"), CLI_TIMEOUT_MS);
-  timeout.unref?.();
-  let outputError: Error | undefined;
-  const failFromOutputError = (source: "stdout" | "stderr", error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    outputError ??= new Error(`OpenCode ${source} stream failed: ${message}`, { cause: error });
-    child.kill("SIGKILL");
-  };
-  const collect = (target: Buffer[], chunk: Buffer) => {
-    bytes += chunk.length;
-    if (bytes > MAX_CLI_OUTPUT_BYTES) {
-      overflow = true;
-      child.kill("SIGKILL");
-      return;
-    }
-    target.push(chunk);
-  };
-  child.stdout.once("error", (error) => failFromOutputError("stdout", error));
-  child.stderr.once("error", (error) => failFromOutputError("stderr", error));
-  child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
-  child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  }).finally(() => clearTimeout(timeout));
-  if (overflow) {
+  if (result.termination === "output-limit") {
     throw new Error("OpenCode session output exceeded the safety limit");
   }
-  if (outputError) {
-    throw outputError;
+  if (result.errorStream) {
+    const message = result.error?.message ?? "unknown error";
+    throw new Error(`OpenCode ${result.errorStream} stream failed: ${message}`, {
+      cause: result.error,
+    });
   }
-  if (exitCode !== 0) {
-    const detail = Buffer.concat(stderr).toString("utf8").trim();
-    throw new Error(detail || `OpenCode exited with code ${String(exitCode)}`);
+  if (result.termination === "error" && result.error) {
+    throw result.error;
   }
-  return Buffer.concat(stdout).toString("utf8");
+  if (result.code !== 0) {
+    const detail = result.stderr.toString("utf8").trim();
+    throw new Error(detail || `OpenCode exited with code ${String(result.code)}`);
+  }
+  return result.stdout.toString("utf8");
 }
 
 export async function queryOpenCodeDatabase(query: string): Promise<unknown> {

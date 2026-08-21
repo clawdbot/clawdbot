@@ -237,6 +237,7 @@ export async function readConfigFileSnapshotInternal(
           hash: snapshotHash,
           issues: validated.issues,
           warnings: [...validated.warnings, ...envVarWarnings],
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -320,6 +321,7 @@ export async function readConfigFileSnapshotInternal(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
+            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -441,7 +443,14 @@ export async function readBestEffortConfigSnapshotFromContext(
 ): Promise<BestEffortConfigSnapshot> {
   const result = await readConfigFileSnapshotInternal(context);
   if (!result.snapshot.valid) {
-    return { config: result.snapshot.config, sourceConfig: result.snapshot.sourceConfig };
+    return {
+      config: result.snapshot.config,
+      sourceConfig: result.snapshot.sourceConfig,
+      configDiagnostics: {
+        path: result.snapshot.path,
+        issues: result.snapshot.issues,
+      },
+    };
   }
   return {
     config: context.finalizeLoadedRuntimeConfig(
@@ -450,6 +459,7 @@ export async function readBestEffortConfigSnapshotFromContext(
       }),
     ),
     sourceConfig: result.snapshot.sourceConfig,
+    configDiagnostics: null,
   };
 }
 

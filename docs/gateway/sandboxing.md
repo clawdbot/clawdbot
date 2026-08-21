@@ -462,7 +462,7 @@ commands shown below instead.
 
 By default, local container sandboxes run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
 
-The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives the proxy and CA environment variables when the feature is enabled, but container loopback does not reach the Gateway host, and the default `network: "none"` blocks egress entirely. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
+The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives neither its proxy/CA environment nor protected sentinels. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 
 <Note>
 Package installation and certificate-store changes are image provisioning, not

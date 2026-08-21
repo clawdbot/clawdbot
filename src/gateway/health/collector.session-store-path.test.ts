@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -16,6 +16,7 @@ describe("health session store paths", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
+    vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
   });
@@ -38,6 +39,41 @@ describe("health session store paths", () => {
     expect(summary.count).toBe(1);
     expect(summary.path).toBe(databasePath);
     expect(fs.existsSync(summary.path)).toBe(true);
+  });
+
+  it("counts and orders lightweight session projections without cloning full entries", async () => {
+    const stateDir = tempDirs.make("openclaw-health-session-projection-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "main";
+    const storePath = resolveSessionStorePathCore(undefined, { agentId, env });
+    const now = vi.spyOn(Date, "now");
+    for (const updatedAt of [30, 70, 10, 60, 40, 20, 50]) {
+      now.mockReturnValue(updatedAt);
+      await upsertSessionEntryCore(
+        { agentId, env, sessionKey: `agent:${agentId}:session-${updatedAt}`, storePath },
+        {
+          sessionId: `session-${updatedAt}`,
+          updatedAt,
+          skillsSnapshot: { prompt: "large runtime prompt", skills: [{ name: "demo" }] },
+        },
+      );
+    }
+    now.mockReturnValue(100);
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    const summary = await buildHealthSessionSummary(storePath, agentId);
+
+    expect(clone).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      count: 7,
+      recent: [
+        { key: "agent:main:session-70", updatedAt: 70, age: 30 },
+        { key: "agent:main:session-60", updatedAt: 60, age: 40 },
+        { key: "agent:main:session-50", updatedAt: 50, age: 50 },
+        { key: "agent:main:session-40", updatedAt: 40, age: 60 },
+        { key: "agent:main:session-30", updatedAt: 30, age: 70 },
+      ],
+    });
   });
 
   it("preserves configured store templates and reports empty agent targets", async () => {

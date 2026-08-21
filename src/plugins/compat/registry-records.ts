@@ -12,6 +12,22 @@ export const PLUGIN_COMPAT_RECORDS = [
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
+    code: "memory-read-result-statusless-success",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-04-28",
+    deprecated: "2026-08-19",
+    warningStarts: "2026-08-19",
+    removalGate: "next-plugin-sdk-major",
+    replacement: '`MemoryReadResult` with explicit `status: "ok" | "not_found"`',
+    docsPath: "/plugins/sdk-migration#memory-read-missing-results",
+    surfaces: ["statusless external memory manager read results"],
+    diagnostics: ["host memory-manager acquisition adapter"],
+    tests: ["src/plugins/memory-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "External memory managers must return explicit not-found status for absence; statusless results retain legacy successful-read semantics through the next Plugin SDK major.",
+  },
+  {
     code: "context-engine-legacy-host-param-default",
     status: "removed",
     owner: "sdk",

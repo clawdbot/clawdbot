@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -31,6 +32,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bumpSessionAutomationVersion } from "../session-automation-index.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const loader = vi.hoisted(() => ({
@@ -266,6 +268,116 @@ describe("sessions.list single-flight", () => {
       emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
       await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("rebuilds cached runner availability after burst inventory transitions", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      let runnerAvailable = true;
+      let runnerAvailabilityVersion = 0;
+      const placement = {
+        sessionId: "main-active",
+        sessionKey: "agent:main:active",
+        agentId: "main",
+        executionMode: "worker-turn",
+        state: "active",
+        generation: 4,
+        environmentId: "environment-device",
+        activeOwnerEpoch: 2,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "manifest-device",
+        remoteWorkspaceDir: "/workspace",
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        turnClaim: null,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        stateChangedAtMs: 2,
+      } satisfies WorkerSessionPlacementRecord;
+      const context = {
+        ...requestContext(config),
+        workerSessionPlacementService: {
+          getMany: () =>
+            new Map<string, WorkerSessionPlacementRecord>([[placement.sessionId, placement]]),
+        },
+        workerPlacementRunnerAvailabilityReader: {
+          read: () => ({
+            kind: "device" as const,
+            status: runnerAvailable ? ("available" as const) : ("offline" as const),
+          }),
+          version: () => runnerAvailabilityVersion,
+        },
+      } as GatewayRequestContext;
+      const client = identifiedClient("owner@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+
+      const available = await listSessions({ client, context, request });
+      expect(
+        available.sessions.find((session) => session.key === placement.sessionKey)?.placement,
+      ).toMatchObject({ runner: { kind: "device", status: "available" } });
+      expect(await listSessions({ client, context, request })).toBe(available);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      runnerAvailable = false;
+      runnerAvailabilityVersion += 3;
+      const offline = await listSessions({ client, context, request });
+      expect(
+        offline.sessions.find((session) => session.key === placement.sessionKey)?.placement,
+      ).toMatchObject({ runner: { kind: "device", status: "offline" } });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("reprojects a cached list when a completed model catalog replaces startup metadata", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      config.agents = {
+        ...config.agents,
+        defaults: { model: { primary: "dynamic-router/reasoner" } },
+      };
+      const startupCatalog: ModelCatalogEntry[] = [
+        {
+          provider: "dynamic-router",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: false,
+        },
+      ];
+      const fullCatalog: ModelCatalogEntry[] = [
+        {
+          provider: "dynamic-router",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "high", "max"] },
+        },
+      ];
+      let catalog = startupCatalog;
+      const context = {
+        ...requestContext(config),
+        readPreparedGatewayModelCatalog: vi.fn(async () => catalog),
+      };
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+
+      const first = await listSessions({ client, context, request });
+      expect(first.sessions.find((session) => session.agentId === "main")?.thinkingOptions).toEqual(
+        ["off"],
+      );
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      catalog = fullCatalog;
+      const refreshed = await listSessions({ client, context, request });
+      expect(refreshed).not.toBe(first);
+      expect(
+        refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
+      ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
+      expect(loader.calls).toHaveBeenCalledTimes(2);
     });
   });
 

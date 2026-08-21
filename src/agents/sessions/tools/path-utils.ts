@@ -34,9 +34,8 @@ export function expandOsHomePrefix(filePath: string): string {
   return home ? expandHomePrefix(filePath, { home }) : filePath;
 }
 
-function expandPath(filePath: string, normalizeSpaces = true): string {
-  const withoutAtPrefix = normalizeAtPrefix(filePath);
-  const normalized = normalizeSpaces ? normalizeUnicodeSpaces(withoutAtPrefix) : withoutAtPrefix;
+function expandPath(filePath: string): string {
+  const normalized = normalizeAtPrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -53,14 +52,6 @@ function expandPath(filePath: string, normalizeSpaces = true): string {
  */
 export function resolveToCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
-  if (isAbsolute(expanded)) {
-    return expanded;
-  }
-  return resolvePath(cwd, expanded);
-}
-
-export function resolveReadPath(filePath: string, cwd: string): string {
-  const expanded = expandPath(filePath, false);
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 

@@ -34,7 +34,10 @@ export type ModelCatalogRouteProjection =
     };
 
 type ModelCatalogLogicalOverrides = Partial<
-  Pick<ModelCatalogEntry, "name" | "contextWindow" | "contextTokens" | "reasoning" | "input">
+  Pick<
+    ModelCatalogEntry,
+    "name" | "contextWindow" | "contextTokens" | "reasoning" | "configuredReasoning" | "input"
+  >
 >;
 
 function normalizeExactModelId(value: string): string {
@@ -65,6 +68,7 @@ export function resolveConfiguredModelCatalogOverrides(params: {
     ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
     ...(model?.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     ...(model?.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+    ...(model?.reasoning !== undefined ? { configuredReasoning: model.reasoning } : {}),
     ...(model?.input !== undefined ? { input: model.input } : {}),
   };
   return Object.keys(overrides).length > 0 ? overrides : undefined;
@@ -142,7 +146,7 @@ export function projectModelCatalogEntryForRoute(params: {
   overrides?: ModelCatalogLogicalOverrides;
 }): ModelCatalogEntry {
   if (params.projection.kind === "unmanaged") {
-    return params.entry;
+    return applyLogicalOverrides(params.entry, params.overrides);
   }
   const identity = params.projection.policy.resolveIdentity(params.entry) ?? {
     id: splitTrailingAuthProfile(params.entry.id).model,

@@ -51,14 +51,11 @@ type TelegramProgressDraftState = {
 export function createProgressState(
   config: TurnConfig,
   draftState: TelegramProgressDraftState,
-  getTurn: () => Turn,
   prepareAnswerLaneForToolProgress: () => Promise<void>,
 ): TelegramProgressStateSlice {
   const progressState = {
-    draftEverRendered: false,
     finalAnswerDeliveryStarted: false,
     finalAnswerDelivered: false,
-    sawProgressFinal: false,
     verboseProgressActive: () => false,
   };
   const progressCompositor = createChannelProgressDraftCompositor({
@@ -80,7 +77,6 @@ export function createProgressState(
     // headline/checklist mode, so they must not also arrive inside the text.
     rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
-      getTurn().draftEverRendered = true;
       await prepareAnswerLaneForToolProgress();
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
@@ -159,7 +155,6 @@ export function markFinalStarted(turn: Turn): void {
 
 export function markFinalDelivered(turn: Turn): void {
   turn.finalAnswerDelivered = true;
-  turn.sawProgressFinal = true;
   turn.progressCompositor.markFinalReplyDelivered();
 }
 

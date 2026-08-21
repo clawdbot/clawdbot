@@ -1,6 +1,6 @@
 // Message tool policy tests cover message tool availability during cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { applyJobPatch } from "../service/jobs.js";
@@ -16,6 +16,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
   queueCronMessageToolDeliveryAwarenessMock,
@@ -795,6 +796,89 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     ).toBeUndefined();
   });
 
+  it("binds the resolved delivery account to account-implicit CLI message sends", async () => {
+    mockCliAnnounceRun();
+    resolveCronDeliveryPlanMock.mockReturnValue(
+      makeAnnounceDeliveryPlan({ channel: "telegram", accountId: "bot-a" }),
+    );
+    resolveDeliveryTargetMock.mockResolvedValue(
+      makeResolvedAnnounceTarget({ channel: "telegram", accountId: "bot-a" }),
+    );
+    let messageActionInput: Record<string, unknown> | undefined;
+    runCliAgentMock.mockImplementation(async (runParams: unknown) => {
+      const [{ buildCliMcpGrantContext }, { createMessageTool }] = await Promise.all([
+        import("../../agents/cli-runner/mcp-grant-context.js"),
+        import("../../agents/tools/message-tool-execution.js"),
+      ]);
+      const grant = buildCliMcpGrantContext({
+        run: runParams as never,
+        config: {},
+        requireExplicitMessageTarget: true,
+        agentId: "default",
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      });
+      const tool = createMessageTool({
+        agentAccountId: grant.accountId,
+        currentChannelProvider: grant.messageProvider,
+        requireExplicitTarget: grant.requireExplicitMessageTarget,
+        preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+        getRuntimeConfig: () => ({}),
+        runMessageAction: async (input) => {
+          messageActionInput = input as unknown as Record<string, unknown>;
+          return {
+            kind: "send",
+            action: "send",
+            channel: "telegram",
+            to: "123",
+            handledBy: "plugin",
+            payload: {},
+            dryRun: false,
+          };
+        },
+      });
+      const messageArgs = {
+        action: "send",
+        channel: "telegram",
+        target: "123",
+        message: "done",
+      };
+      await tool.execute("call-1", messageArgs);
+      return makeMessageToolRunResult([
+        { tool: "message", provider: messageArgs.channel, to: messageArgs.target },
+      ]);
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        delivery: { channel: "telegram", accountId: "bot-a" },
+      }),
+    });
+
+    expectRecordFields(messageActionInput, { defaultAccountId: "bot-a" }, "message action input");
+    const actionParams = expectRecordFields(
+      messageActionInput?.params,
+      { channel: "telegram", target: "123" },
+      "message action params",
+    );
+    expect(actionParams.accountId).toBeUndefined();
+    expect(result.status).toBe("ok");
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "telegram", to: "123", accountId: "bot-a", source: "explicit" },
+      resolved: {
+        ok: true,
+        channel: "telegram",
+        to: "123",
+        accountId: "bot-a",
+        source: "explicit",
+      },
+      messageToolSentTo: [{ channel: "telegram", to: "123" }],
+      fallbackUsed: false,
+      delivered: true,
+    });
+  });
+
   it("propagates restricted toolsAllow to CLI-backed announce runs without target metadata", async () => {
     mockCliAnnounceRun();
 
@@ -1270,6 +1354,45 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         verifiedMessageToolDelivery: true,
         satisfiesSourceDelivery: true,
       },
+    });
+  });
+
+  it("passes deferred same-source awareness to current-session dispatch", async () => {
+    const sourceSessionKey = "agent:default:messagechat:direct:123";
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        store: { [sourceSessionKey]: makeCronSessionEntry({ sessionId: "source-session" }) },
+      }),
+    );
+    runEmbeddedAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([
+        {
+          tool: "message",
+          provider: "messagechat",
+          to: "123",
+          text: "Current-session completion.",
+        },
+      ]),
+    );
+    queueCronMessageToolDeliveryAwarenessMock.mockResolvedValueOnce(queueSourceAwareness);
+    const job = makeAnnounceMessageToolJob() as unknown as Record<string, unknown>;
+    job.sessionTarget = "current";
+    job.sessionKey = sourceSessionKey;
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: job as never,
+    });
+
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ deferredTargetSessionKey: sourceSessionKey }),
+    );
+    expectDispatchFields({
+      sourceSessionKey,
+      queueSourceSessionMessageToolAwareness: queueSourceAwareness,
     });
   });
 

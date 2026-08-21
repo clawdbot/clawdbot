@@ -223,6 +223,9 @@ func buildOpenClawChatSwarmGroups(
 
 enum SelfContainedSwarmHelpers {
     static func status(_ row: OpenClawChatSessionEntry) -> OpenClawChatSwarmDotStatus? {
+        if row.status == "queued" {
+            return .queued
+        }
         if row.status == "running" || row.hasActiveRun == true {
             return .running
         }

@@ -2,29 +2,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import {
-  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-  NATIVE_UPDATE_DECLINED_EVENT,
-} from "../app/native-link-routing.ts";
-import {
-  answerConfirmDialog,
-  cancelOpenModalDialogs,
-  installDialogPolyfill,
-  waitForConfirmDialogActions,
-} from "../test-helpers/modal-dialog.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
+import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import "./sidebar-update-card.ts";
-
-const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
-
-/** Resolve the update confirmation the card opens, then let its dispatch settle. */
-async function resolveUpdateConfirmation(
-  label: "Cancel" | "Update and restart" | "Update Mac app and restart",
-) {
-  const actions = await waitForConfirmDialogActions();
-  expect(actions.textContent).toContain(label);
-  answerConfirmDialog(actions, label === "Cancel" ? "cancel" : "confirm");
-}
 
 type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
@@ -37,12 +17,12 @@ type SidebarUpdateCardElement = HTMLElement & {
   refreshRequired: boolean;
   onRefresh: () => void;
   onHoldUpdate: () => Promise<boolean>;
+  statusBanner: ApplicationStatusBanner | null;
+  onReviewUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
 let originalWebkit: PropertyDescriptor | undefined;
-let originalLocalStorage: PropertyDescriptor | undefined;
-let restoreDialogPolyfill: () => void;
 
 async function mount(
   update: UpdateAvailable | null,
@@ -63,31 +43,17 @@ async function mount(
 }
 
 beforeEach(() => {
-  restoreDialogPolyfill = installDialogPolyfill();
   originalWebkit = Object.getOwnPropertyDescriptor(window, "webkit");
-  originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: createStorageMock(),
-  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  cancelOpenModalDialogs();
   document.body.replaceChildren();
-  restoreDialogPolyfill();
-  if (originalLocalStorage) {
-    Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-  } else {
-    Reflect.deleteProperty(globalThis, "localStorage");
-  }
   if (originalWebkit) {
     Object.defineProperty(window, "webkit", originalWebkit);
   } else {
     Reflect.deleteProperty(window, "webkit");
   }
-  vi.resetModules();
 });
 
 describe("SidebarUpdateCard", () => {
@@ -134,161 +100,19 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
-  it("does not render a dismiss button for the refresh state", async () => {
+  it("routes a recorded failure to update settings when availability is gone", async () => {
     const element = await mount(null);
-    element.refreshRequired = true;
+    const onReviewUpdate = vi.fn();
+    element.statusBanner = { tone: "danger", text: "Update failed" };
+    element.onReviewUpdate = onReviewUpdate;
     await element.updateComplete;
 
-    expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
+    expect(element.textContent).toContain("Update failed");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__review")?.click();
+    expect(onReviewUpdate).toHaveBeenCalledOnce();
   });
 
-  it("labels a direct Gateway update and confirms before invoking its action", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
-    expect(element.querySelector(".sidebar-update-card")?.getAttribute("role")).toBe("status");
-    expect(element.querySelector(".sidebar-update-card__text")?.textContent).toBe(
-      "Update Gateway · v2.0.0",
-    );
-    expect(element.querySelector(".sidebar-update-card__copy")).toBeNull();
-    expect(element.querySelector(".sidebar-update-card__subtitle")).toBeNull();
-    expect(element.querySelector(".sidebar-update-card__arrow")).toBeNull();
-    action?.click();
-    await waitForConfirmDialogActions();
-
-    expect(onUpdate).not.toHaveBeenCalled();
-    await resolveUpdateConfirmation("Update and restart");
-    expect(onUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("leaves the Gateway untouched when the operator cancels the confirmation", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    await resolveUpdateConfirmation("Cancel");
-
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  it.each(["2026.7.2", "2026.7.2-beta.5"])(
-    "identifies a beta update when its available version is %s",
-    async (latestVersion) => {
-      const element = await mount({
-        currentVersion: "2026.7.1-2",
-        latestVersion,
-        channel: "beta",
-      });
-
-      expect(element.querySelector(".sidebar-update-card__text")?.textContent).toBe(
-        `Update Gateway · v${latestVersion} (beta)`,
-      );
-    },
-  );
-
-  it.each([null, { currentVersion: "2.0.0", latestVersion: "2.0.0", channel: "stable" }] as const)(
-    "renders nothing when no newer update is available",
-    async (update) => {
-      const element = await mount(update);
-      expect(element.querySelector(".sidebar-update-card")).toBeNull();
-    },
-  );
-
-  it("renders nothing for a dismissed version and channel", async () => {
-    localStorage.setItem(
-      DISMISS_KEY,
-      JSON.stringify({ latestVersion: "2.0.0", channel: "beta", dismissedAtMs: 1 }),
-    );
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "beta",
-    });
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
-  });
-
-  it("labels and routes a coordinated Mac app and managed Gateway update", async () => {
-    const postMessage = vi.fn();
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawUpdate: { postMessage } } },
-    });
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
-    expect(action?.textContent).toContain("Update Mac app + Gateway");
-    expect(action?.textContent).toContain("v2.0.0");
-    action?.click();
-    await waitForConfirmDialogActions();
-
-    expect(postMessage).not.toHaveBeenCalled();
-    await resolveUpdateConfirmation("Update Mac app and restart");
-    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "start-update" });
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  it("updates the visible target when native ownership changes", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    expect(element.textContent).toContain("Update Gateway");
-
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawUpdate: { postMessage: vi.fn() } } },
-    });
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
-    await element.updateComplete;
-    expect(element.textContent).toContain("Update Mac app + Gateway");
-
-    Reflect.deleteProperty(window, "webkit");
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
-    await element.updateComplete;
-    expect(element.textContent).toContain("Update Gateway");
-  });
-
-  it("uses a newly installed native bridge before its availability event arrives", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    const postMessage = vi.fn();
-    element.onUpdate = onUpdate;
-    expect(element.textContent).toContain("Update Gateway");
-
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawUpdate: { postMessage } } },
-    });
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    await resolveUpdateConfirmation("Update Mac app and restart");
-
-    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "start-update" });
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  it("returns a declined native click to the gateway while connected", async () => {
+  it("returns a declined native alert update to the gateway", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
@@ -314,66 +138,7 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 
-  it("keeps later clicks on the displayed Gateway route after a native decline", async () => {
-    const postMessage = vi.fn();
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawUpdate: { postMessage } } },
-    });
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    await element.updateComplete;
-    expect(element.textContent).toContain("Update Gateway");
-
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    await resolveUpdateConfirmation("Update and restart");
-    expect(onUpdate).toHaveBeenCalledTimes(2);
-    expect(postMessage).not.toHaveBeenCalled();
-
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
-    await element.updateComplete;
-    expect(element.textContent).toContain("Update Mac app + Gateway");
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    await resolveUpdateConfirmation("Update Mac app and restart");
-    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "start-update" });
-    expect(onUpdate).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps a declined Gateway route consistent across reconnection", async () => {
-    const postMessage = vi.fn();
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawUpdate: { postMessage } } },
-    });
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    await element.updateComplete;
-    element.remove();
-    document.body.append(element);
-    await element.updateComplete;
-
-    expect(element.textContent).toContain("Update Gateway");
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    await resolveUpdateConfirmation("Update and restart");
-    expect(onUpdate).toHaveBeenCalledTimes(2);
-    expect(postMessage).not.toHaveBeenCalled();
-  });
-
-  it("narrates the whole update, including after the Gateway drops its metadata", async () => {
+  it("narrates the whole update after the Gateway drops its metadata", async () => {
     const element = await mount(
       { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
       {
@@ -387,35 +152,26 @@ describe("SidebarUpdateCard", () => {
         },
       },
     );
-    expect(element.textContent).toContain("246 commits behind");
+    expect(element.querySelector(".sidebar-update-card")).toBeNull();
 
     element.updateBusy = true;
     await element.updateComplete;
     const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
     expect(action?.disabled).toBe(true);
     expect(action?.textContent).toContain("Updating Gateway…");
-    // The stale call to action must not survive into the install.
-    expect(element.textContent).not.toContain("246 commits behind");
-    expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
 
-    // The restarting Gateway takes its update metadata with it; the card is the
-    // operator's only remaining sign that an install is still running.
     element.updateAvailable = null;
     element.updateSchedule = null;
     await element.updateComplete;
     expect(element.textContent).toContain("Updating Gateway…");
   });
 
-  it("renders a quiet live countdown, hides dismissal, and stops ticking on disconnect", async () => {
+  it("renders a quiet live countdown and stops ticking on disconnect", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const clearInterval = vi.spyOn(globalThis, "clearInterval");
     const element = await mount(
-      {
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-        channel: "stable",
-      },
+      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
       {
         channel: "stable",
         autoEnabled: true,
@@ -436,7 +192,6 @@ describe("SidebarUpdateCard", () => {
     expect(card?.hasAttribute("role")).toBe(false);
     expect(timer?.getAttribute("aria-live")).toBe("off");
     expect(timer?.textContent).toContain("Updating in 0:54 · v2.0.0");
-    expect(element.querySelector(".sidebar-update-card__dismiss")).toBeNull();
     expect(element.querySelector(".sidebar-update-card__hold")?.textContent?.trim()).toBe(
       "Hold 1 h",
     );
@@ -460,11 +215,7 @@ describe("SidebarUpdateCard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const element = await mount(
-      {
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-        channel: "stable",
-      },
+      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
       {
         channel: "stable",
         autoEnabled: true,
@@ -489,20 +240,14 @@ describe("SidebarUpdateCard", () => {
     element.heldUpdateCampaignId = "campaign-1";
     element.updateSchedule = {
       ...element.updateSchedule!,
-      campaign: {
-        ...element.updateSchedule!.campaign!,
-        holdUntilMs: 61_000,
-      },
+      campaign: { ...element.updateSchedule!.campaign!, holdUntilMs: 61_000 },
     };
     await element.updateComplete;
     expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
 
     element.updateSchedule = {
       ...element.updateSchedule!,
-      campaign: {
-        ...element.updateSchedule!.campaign!,
-        holdUntilMs: 500,
-      },
+      campaign: { ...element.updateSchedule!.campaign!, holdUntilMs: 500 },
     };
     await element.updateComplete;
     expect(element.querySelector(".sidebar-update-card__hold")).toBeNull();
@@ -542,78 +287,5 @@ describe("SidebarUpdateCard", () => {
 
     const unsupported = await mount(null, unheldSchedule, true, false);
     expect(unsupported.querySelector(".sidebar-update-card__hold")).toBeNull();
-  });
-
-  it("disables the update action when the operator cannot administer updates", async () => {
-    const element = await mount(
-      {
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-        channel: "stable",
-      },
-      null,
-      false,
-    );
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
-    expect(action?.disabled).toBe(true);
-    expect(action?.title).toContain("Administrator access is required");
-    action?.click();
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  it("persists dismissal and hides the card", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__dismiss")?.click();
-    await element.updateComplete;
-
-    expect(JSON.parse(localStorage.getItem(DISMISS_KEY) ?? "null")).toMatchObject({
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
-  });
-
-  it("hides the card when dismissal persistence fails", async () => {
-    const storage = createStorageMock();
-    storage.setItem = () => {
-      throw new Error("quota exceeded");
-    };
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
-    const update = { currentVersion: "1.0.0", latestVersion: "3.0.0", channel: "stable" };
-    const element = await mount(update);
-
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__dismiss")?.click();
-    await element.updateComplete;
-
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
-    element.remove();
-    const replacement = await mount(update);
-    expect(replacement.querySelector(".sidebar-update-card")).not.toBeNull();
-  });
-
-  it("shows a newer update after dismissing an older version", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    element.querySelector<HTMLButtonElement>(".sidebar-update-card__dismiss")?.click();
-    await element.updateComplete;
-
-    element.updateAvailable = {
-      currentVersion: "1.0.0",
-      latestVersion: "3.0.0",
-      channel: "stable",
-    };
-    await element.updateComplete;
-
-    expect(element.querySelector(".sidebar-update-card")?.textContent).toContain("v3.0.0");
   });
 });
