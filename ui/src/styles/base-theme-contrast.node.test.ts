@@ -73,7 +73,7 @@ const SENDER_TINT_BUBBLE_RULE = ".chat-group.user.chat-group--sender-tint .chat-
 // Light mode resets both bubble skins back to flat surfaces, and those rules win
 // on source order (see the order contract in chat/grouped.css). Asserting the
 // dark fills against light palettes would guard a surface nothing paints.
-const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-bubble';
+const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
   ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
 
@@ -316,6 +316,7 @@ function readChatLinkTokens(chatTextCss: string): { link: string; hover: string 
 function readBubbleBackgrounds(groupedCss: string): {
   user: string;
   lightUser: string;
+  lightUserText: string;
   senderTint: string;
   lightSenderTint: string;
 } {
@@ -329,6 +330,9 @@ function readBubbleBackgrounds(groupedCss: string): {
   return {
     user: readBackground(USER_BUBBLE_RULE),
     lightUser: readBackground(LIGHT_USER_BUBBLE_RULE),
+    lightUserText:
+      readRuleBody(groupedCss, LIGHT_USER_BUBBLE_RULE).match(/color:\s*var\((--[\w-]+)\)/u)?.[1] ??
+      "",
     senderTint: readBackground(SENDER_TINT_BUBBLE_RULE),
     lightSenderTint: readBackground(LIGHT_SENDER_TINT_BUBBLE_RULE),
   };
@@ -437,6 +441,17 @@ describe("Control UI theme contrast", () => {
       const userFill = isLight ? bubbleBackgrounds.lightUser : bubbleBackgrounds.user;
       const senderTint = isLight ? bubbleBackgrounds.lightSenderTint : bubbleBackgrounds.senderTint;
       const userBubble = composite(resolveColor(userFill, tokens), page);
+
+      if (isLight) {
+        expect(bubbleBackgrounds.lightUserText).not.toBe("");
+        const foreground = resolveOpaqueColor(`var(${bubbleBackgrounds.lightUserText})`, tokens);
+        const ratio = contrastRatio(foreground, userBubble);
+        if (ratio < AA_NORMAL_TEXT_MIN) {
+          failures.push(
+            `${themeName}: text ${bubbleBackgrounds.lightUserText} on user bubble ${userFill} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+          );
+        }
+      }
 
       for (const [state, token] of [
         ["link", linkTokens.link],
