@@ -202,10 +202,13 @@ in.
 ### Telegram Desktop recorder
 
 The Telegram Desktop recorder is a standalone operator utility, invoked
-directly through `pnpm qa:telegram-desktop-recorder`. It records native
-Telegram Desktop and nothing else: it never drives OpenClaw or sends Telegram
-messages. Whoever runs it owns the turn — start the SUT, send through a real
-Telegram user, then tell the recorder which message to show — and supplies
+directly through `pnpm qa:telegram-desktop-recorder`. It never drives OpenClaw.
+Its normal recording commands do not send Telegram messages. The optional
+`actions` command drives only the measured Telegram window through bounded
+`click`, `key`, `type`, and `sleep` actions; those actions can send as the
+signed-in Telegram user. Whoever runs it owns the turn and those side effects —
+start the SUT, send through a real Telegram user, then tell the recorder which
+message to show — and supplies
 `--user-driver`, the command the recorder shells out to for the TDLib calls it
 cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
 those two verbs works, including this repo's
