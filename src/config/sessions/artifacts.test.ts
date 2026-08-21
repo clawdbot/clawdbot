@@ -101,6 +101,16 @@ describe("session artifact helpers", () => {
         `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
       ),
     ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.trajectory.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z.zst",
+      ),
+    ).toBe(false);
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -134,6 +144,16 @@ describe("session artifact helpers", () => {
       ),
     ).toBeNull();
     expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        "abc.trajectory.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBeNull();
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z.zst",
+      ),
+    ).toBeNull();
   });
 
   it("formats and parses archive timestamps", () => {
