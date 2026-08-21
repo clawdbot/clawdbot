@@ -268,8 +268,11 @@ export function resolveSubagentSessionCompletion(params: {
  *   been submitted through the ordinary lifecycle path.
  * - `live` — the entry exists and is still running. Terminal effects must not
  *   run against it.
- * - `absent` — no usable session entry, so there is nothing left to preserve
- *   and nothing to reconcile from.
+ * - `absent` — no usable session entry, so there is nothing to reconcile from.
+ *   This is the absence of evidence, not evidence of a stop: the entry is
+ *   best-effort and also reads absent when the store is unreadable or has not
+ *   been written yet. Callers deciding whether a child may still be alive must
+ *   fail closed on it rather than treat it as `settled`.
  */
 export async function settleSubagentRunFromSessionStore(
   completeSubagentRunWithRecovery: (

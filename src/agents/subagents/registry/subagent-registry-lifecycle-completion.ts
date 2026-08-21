@@ -598,6 +598,13 @@ export async function completeSubagentRunAttempt(
           // runtime's own finalizer decide whether provider completion won.
           return;
         }
+        if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+          // Not a failed projection: the shared boundary deliberately withheld
+          // it because nothing observed this child stop. A completion that
+          // observed nothing cannot arbitrate the kill tombstone either, so
+          // leave the kill tail live for an owner that has real evidence.
+          return;
+        }
         const latestTaskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
         const latestTask = latestTaskResolution.task;
         const stableTaskCancellation =

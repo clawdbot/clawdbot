@@ -21,11 +21,22 @@ import {
   type SubagentLifecycleEndedOutcome,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-/** Returns the complete task projection only after completion capture has settled. */
+/**
+ * Returns the complete task projection only after completion capture has
+ * settled **and** the child's stop has actually been observed.
+ *
+ * This is the single boundary between a provisional registry row and a durable
+ * task projection: every writer of subagent task state resolves through here
+ * (`safeFinalizeSubagentTaskRun` for both completion call sites, the
+ * steer-restart abandon path, and the kill target-state read). Returning
+ * `undefined` therefore keeps the detached task nonterminal everywhere at once,
+ * instead of each projection re-deriving the provisional predicate.
+ */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
 ): DetachedTaskTerminalState | undefined {
@@ -67,6 +78,16 @@ export function resolveFinalizedSubagentTaskState(
       terminalSummary: terminal.terminalSummary ?? null,
       terminalOutcome: terminal.terminalOutcome,
     };
+  }
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    // A deadline-only expiry observed nothing about the child, and this
+    // projection is the one provisional effect that cannot be taken back:
+    // `shouldApplyRunScopedStatusUpdate` refuses `timed_out` -> `succeeded`, so
+    // writing `timed_out` here would make the later observed success
+    // unrepresentable and leave a still-running child permanently timed out.
+    // Stay nonterminal; promotion resolves through this same function with an
+    // observed outcome and publishes the real terminal state exactly once.
+    return undefined;
   }
   return {
     status: outcome.status === "timeout" ? "timed_out" : "failed",

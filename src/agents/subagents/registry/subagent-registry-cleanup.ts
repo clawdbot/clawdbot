@@ -42,10 +42,15 @@ export function resolveCleanupCompletionReason(
  * be running, so **no terminal effect may run against it**: not the
  * `sessions.delete` that removes its session and transcript, not its attachments
  * directory, not its browser sessions, not its MCP runtimes, not the internal
- * session-effects teardown, and not the context-engine "this child ended" report.
+ * session-effects teardown, not the context-engine "this child ended" report,
+ * not the exactly-once terminal plugin hooks, and not the detached task's
+ * terminal state — `shouldApplyRunScopedStatusUpdate` rejects
+ * `timed_out` -> `succeeded`, so a published `timed_out` is the one projection a
+ * later observed success could never repair.
  *
  * Only authoritative stop evidence promotes the row out of this state, never a
- * clock. Two owners produce that evidence:
+ * clock, and never the mere absence of a record. Two owners produce that
+ * evidence:
  *
  * - **push** — a later lifecycle callback settles the run; the published
  *   provisional timeout is explicitly not preserved against it
@@ -53,9 +58,9 @@ export function resolveCleanupCompletionReason(
  *   cleanup so the withheld effects finally run.
  * - **pull** — the sweeper re-reads the child's own persisted session entry
  *   (`settleSubagentRunFromSessionStore`). A terminal status there promotes the
- *   row; a `running` status defers it again, so retention never deletes a child
- *   that is still alive and `archiveAfterMinutes: 0` keeps its documented
- *   no-auto-archive meaning.
+ *   row; a `running` status defers it again, and an *absent* entry defers it too,
+ *   so retention never deletes a child that is still alive and
+ *   `archiveAfterMinutes: 0` keeps its documented no-auto-archive meaning.
  */
 export function shouldDeferTerminalCleanupForUnconfirmedChild(entry: SubagentRunRecord): boolean {
   const outcome = entry.execution.outcome;

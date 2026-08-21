@@ -2622,6 +2622,182 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("keeps the detached task nonterminal for an unconfirmed child and promotes it to succeeded", async () => {
+    // Regression (openclaw-odqn round 5, finding 1): the deferral covered
+    // cleanup, session writes and plugin hooks, but the detached task was still
+    // finalized to `timed_out` on a deadline-only expiry. That is the one
+    // projection a later truth cannot repair — `shouldApplyRunScopedStatusUpdate`
+    // rejects `timed_out` -> `succeeded` (pinned directly in
+    // task-executor.test.ts) — so a still-running child's task was permanently
+    // wrong. Asserted through the task READ path (`tasks.list`/`agent.wait` both
+    // read here) against the real task registry, not through a spy on the write.
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      const startedAt = Date.now();
+      const runId = "run-unconfirmed-task-state";
+      const childSessionKey = "agent:main:subagent:child";
+      const readTask = () =>
+        findDetachedTaskRun({
+          runId,
+          runtime: "subagent",
+          sessionKey: childSessionKey,
+          createdAtOrAfter: startedAt,
+        });
+      mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+        if (request.method === "agent.wait") {
+          return { status: "timeout" };
+        }
+        return {};
+      });
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore({
+          updatedAt: startedAt,
+          status: "running",
+          sessionId: "sess-task-state",
+          lifecycleRevision: "rev-task-state",
+        }),
+      );
+
+      mod.registerSubagentRun({
+        runId,
+        task: "unconfirmed child keeps a nonterminal task",
+        cleanup: "keep",
+        runTimeoutSeconds: 1,
+      });
+      // The launch owns the task row, so the promotion below has a real
+      // subject and the nonterminal assertion cannot pass by absence.
+      expect(findTaskByRunIdForStatus(runId)?.status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await waitForFast(() => {
+        expect(findRequesterRun(runId)?.execution.outcome?.timeoutDisposition).toBe(
+          "child-unconfirmed",
+        );
+      });
+      // The parent is still woken; the announce is deliberately not deferred.
+      await waitForFast(() => {
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      });
+
+      // The task a parent reads must not claim the child died. `running` is the
+      // truthful answer: the wait ended, the child did not.
+      expect(findTaskByRunIdForStatus(runId)?.status).toBe("running");
+      expect(readTask()).toMatchObject({
+        lookup: "available",
+        task: { status: "running" },
+      });
+
+      // The child's own record turns out to say it finished *successfully*,
+      // 100ms before the deadline the wait expired on. That is the whole point
+      // of the disposition: the deadline was a clock comparison, so the wait
+      // simply never saw the stop. Publishing `timed_out` above would have made
+      // this success unrepresentable forever. (A stop observed *after* the
+      // deadline still promotes to `timed_out` — truthfully; that path is
+      // covered by the late-lifecycle-timeout case.)
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore({
+          updatedAt: startedAt + 900,
+          endedAt: startedAt + 900,
+          status: "done",
+          sessionId: "sess-task-state",
+          lifecycleRevision: "rev-task-state",
+        }),
+      );
+      vi.setSystemTime(startedAt + 40_000);
+      await mod.testing.sweepOnceForTests();
+
+      // Anti-vacuity control: the promotion must actually land as `succeeded`.
+      // It can only do so because nothing published `timed_out` first.
+      await waitForFast(() => {
+        expect(findTaskByRunIdForStatus(runId)?.status).toBe("succeeded");
+      });
+      expect(readTask()).toMatchObject({
+        lookup: "available",
+        task: { status: "succeeded" },
+      });
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+
+  it("retains an unconfirmed child whose session snapshot is absent and retires it on an observed stop", async () => {
+    // Regression (openclaw-odqn round 5, finding 2): the sweeper deferred only
+    // while the child's session entry said `running`. An `absent` entry fell
+    // through to TTL deletion plus attachment removal — but the entry is
+    // best-effort and reads absent when the store is unreadable, not yet
+    // written, or simply missing, so absence is not evidence of a stop. Fail
+    // closed: retain and retry until something observed the child stop.
+    const startedAt = Date.now();
+    const runId = "run-unconfirmed-absent-session";
+    const deleteCalls = () =>
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete");
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt,
+        status: "running",
+        sessionId: "sess-absent",
+        lifecycleRevision: "rev-absent",
+      }),
+    );
+
+    mod.registerSubagentRun({
+      runId,
+      task: "unconfirmed child with a vanishing session entry",
+      // delete-mode is what makes the row reach retention teardown at all; a
+      // keep-mode row would be retained for unrelated reasons.
+      cleanup: "delete",
+      runTimeoutSeconds: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForFast(() => {
+      expect(findRequesterRun(runId)?.execution.outcome?.timeoutDisposition).toBe(
+        "child-unconfirmed",
+      );
+    });
+
+    // The child's session entry is now unreadable. Nothing has been observed to
+    // stop it, so no clock past SESSION_RUN_TTL_MS may retire it.
+    mocks.loadSessionStore.mockReturnValue({});
+    vi.setSystemTime(startedAt + 61 * 60_000);
+    await mod.testing.sweepOnceForTests();
+    expect(findRequesterRun(runId)).toBeDefined();
+    expect(deleteCalls()).toHaveLength(0);
+
+    // Still absent much later: retain and retry, never a bounded give-up. A
+    // clock-based escape here would reintroduce exactly the bug this PR fixes.
+    vi.setSystemTime(startedAt + 180 * 60_000);
+    await mod.testing.sweepOnceForTests();
+    expect(findRequesterRun(runId)).toBeDefined();
+    expect(deleteCalls()).toHaveLength(0);
+
+    // Anti-vacuity control: the entry reappears with the child's own terminal
+    // record. That is stop evidence, so the row promotes and finally retires —
+    // proving retention is gated on evidence, not disabled.
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt + 181 * 60_000,
+        endedAt: startedAt + 181 * 60_000,
+        status: "done",
+        sessionId: "sess-absent",
+        lifecycleRevision: "rev-absent",
+      }),
+    );
+    vi.setSystemTime(startedAt + 182 * 60_000);
+    await mod.testing.sweepOnceForTests();
+    await waitForFast(() => {
+      expect(findRequesterRun(runId)).toBeUndefined();
+    });
+  });
+
   it("skips silent-cleanup session deletion for an unconfirmed child but keeps it for an observed stop", async () => {
     const sessionStore = () =>
       createSessionStore({

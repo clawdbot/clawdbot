@@ -497,13 +497,22 @@ export function createSubagentRegistrySweeper(params: {
           // terminal session record promotes this row out of the unconfirmed
           // state; while that record still says running, nothing here may
           // retire the row, its attachments, or its session.
-          const promotion = await settleSubagentRunFromSessionStore(
-            params.completeSubagentRunWithRecovery,
-            { runId, entry, now, storeCache, source: "sweeper-unconfirmed-child" },
-          );
-          if (promotion !== "absent") {
-            continue;
-          }
+          await settleSubagentRunFromSessionStore(params.completeSubagentRunWithRecovery, {
+            runId,
+            entry,
+            now,
+            storeCache,
+            source: "sweeper-unconfirmed-child",
+          });
+          // Fail closed on every result. `settled` already promoted the row
+          // through the ordinary lifecycle path, so the next sweep retires it
+          // with the observed outcome. `live` is positive evidence the child is
+          // still running. `absent` is not evidence of a stop at all — the entry
+          // is best-effort and also reads absent when the store is unreadable or
+          // simply not written yet, so treating it as death would delete a live
+          // child's session and attachments. Retain and retry instead; only
+          // observed stop evidence may retire this row.
+          continue;
         }
         if (!entry.archiveAtMs && entry.cleanup === "keep" && entry.spawnMode !== "session") {
           continue;
