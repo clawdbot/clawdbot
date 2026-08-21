@@ -306,7 +306,7 @@ final class ControlChannel {
         let endpoint = if let url = directURL, let host = url.host,
                           let port = GatewayRemoteConfig.defaultPort(for: url)
         {
-            "\(host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host):\(port)"
+            "\(host.contains(":") && !host.hasPrefix("[") ? "[" + host + "]" : host):\(port)"
         } else {
             "localhost:\(localPort)"
         }
