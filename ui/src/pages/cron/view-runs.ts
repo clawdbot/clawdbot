@@ -223,8 +223,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     .map((option) => option.label);
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
-  // The sort select's .value binding commits before its options exist;
-  // selected attributes preserve non-first values.
+  const sortLabel =
+    props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
     <div class="cron-runs">
       ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
@@ -273,23 +273,40 @@ export function renderRunsSection(props: CronRunsSectionProps) {
             void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           },
         })}
-        <select
-          class="cron-run-sort"
-          aria-label=${t("cron.jobs.sort")}
-          title=${t("cron.jobs.sort")}
-          .value=${props.runsSortDir}
-          @change=${(e: Event) =>
-            props.onRunsFiltersChange({
-              cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
-            })}
-        >
-          <option value="desc" ?selected=${props.runsSortDir === "desc"}>
-            ${t("cron.runs.newestFirst")}
-          </option>
-          <option value="asc" ?selected=${props.runsSortDir === "asc"}>
-            ${t("cron.runs.oldestFirst")}
-          </option>
-        </select>
+        <div class="cron-filter-dropdown">
+          <wa-dropdown
+            class="cron-filter-dropdown__details"
+            placement="bottom-start"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const value = event.detail.item.value;
+              if (value === "asc" || value === "desc") {
+                void props.onRunsFiltersChange({ cronRunsSortDir: value });
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              type="button"
+              class="btn btn--sm cron-filter-dropdown__trigger cron-run-sort"
+              aria-label=${`${t("cron.jobs.sort")} ${sortLabel}`}
+            >
+              <span>${sortLabel}</span>
+              ${icon("chevronDown")}
+            </button>
+            <wa-dropdown-item value="desc" aria-current=${String(props.runsSortDir === "desc")}>
+              ${t("cron.runs.newestFirst")}
+              <span slot="details" aria-hidden="true">
+                ${props.runsSortDir === "desc" ? icon("check") : nothing}
+              </span>
+            </wa-dropdown-item>
+            <wa-dropdown-item value="asc" aria-current=${String(props.runsSortDir === "asc")}>
+              ${t("cron.runs.oldestFirst")}
+              <span slot="details" aria-hidden="true">
+                ${props.runsSortDir === "asc" ? icon("check") : nothing}
+              </span>
+            </wa-dropdown-item>
+          </wa-dropdown>
+        </div>
       </div>
       ${runs.length === 0
         ? hasRunFilters

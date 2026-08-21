@@ -355,9 +355,11 @@ describe("cron view selects", () => {
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {
     const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
-    const sort = getElement(activity, "select.cron-run-sort", HTMLSelectElement);
-    expect(sort.value).toBe("asc");
-    expect(sort.querySelector('option[value="asc"]')?.hasAttribute("selected")).toBe(true);
+    const sort = getElement(activity, ".cron-run-sort", HTMLButtonElement);
+    expect(sort.textContent).toContain("Oldest first");
+    expect(
+      activity.querySelector('wa-dropdown-item[value="asc"]')?.getAttribute("aria-current"),
+    ).toBe("true");
     const tasks = renderView({ jobsLastStatusFilter: "error" });
     const lastStatus = getElement(
       tasks,
