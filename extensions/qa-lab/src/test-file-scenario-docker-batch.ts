@@ -4,7 +4,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { shellQuote } from "./shell-quote.js";
-import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
+import {
+  runQaScenarioCommandLifecycle,
+  type QaScenarioCommandExecution,
+} from "./test-file-scenario-command-lifecycle.js";
 
 const QA_DOCKER_E2E_LANE_SCRIPT = "test/e2e/qa-lab/runtime/docker-e2e-lane.ts";
 const DOCKER_CANDIDATE_ENV_KEY =
