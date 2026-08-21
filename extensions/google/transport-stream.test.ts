@@ -1539,6 +1539,52 @@ describe("google transport stream", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("retries when a pending response callback reaches the Gemini first-response deadline", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    const controller = new AbortController();
+    const cancel = vi.fn();
+    guardedFetchMock
+      .mockResolvedValueOnce(
+        buildOpenRawSseResponse({
+          sse: 'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+          onCancel: cancel,
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+    let responseCount = 0;
+    const onResponse = vi.fn(() => {
+      responseCount += 1;
+      return responseCount === 1 ? new Promise<void>(() => {}) : undefined;
+    });
+    const safetyTimeout = setTimeout(() => {
+      controller.abort(new Error("test safety deadline reached"));
+    }, 5000);
+
+    try {
+      const result = await runGeminiStreamResult({
+        model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+        options: {
+          reasoning: "high",
+          signal: controller.signal,
+          onResponse,
+        },
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+      expect(onResponse).toHaveBeenCalledTimes(2);
+      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      clearTimeout(safetyTimeout);
+    }
+  });
+
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
     guardedFetchMock
