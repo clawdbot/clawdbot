@@ -191,7 +191,7 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageCostSummary = value.costSummary;
       this.providerUsage = value.providerUsage;
       this.usageError = null;
-      this.refreshPolicy.markLoaded();
+      this.refreshPolicy.setLastLoadedAtMs(value.providerUsage.ok ? Date.now() : null);
       this.refreshPolicy.flushPending();
     },
     onError: (error) => {
@@ -315,7 +315,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
     this.providerUsage = data.providerUsage;
-    this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
+    this.refreshPolicy.setLastLoadedAtMs(data.providerUsage?.ok ? data.loadedAtMs : null);
     this.usageError = data.error;
   }
 
