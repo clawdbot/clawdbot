@@ -1650,29 +1650,36 @@ describe("grouped chat rendering", () => {
     streamingMarkdownRenderMock.mockClear();
 
     render(
-      renderStreamGroup([
-        {
-          kind: "stream",
-          key: "stream:1",
-          text: "**live**\nreply",
-          startedAt: 1,
-          isStreaming: true,
-        },
-      ]),
+      renderStreamGroup(
+        [
+          {
+            kind: "stream",
+            key: "stream:1",
+            text: "**live**\nreply",
+            startedAt: 1,
+            isStreaming: true,
+          },
+        ],
+        { streamRevision: 4 },
+      ),
       container,
     );
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
-    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
-      assistantTranscriptRoleHeaders: true,
-      codeBlockChrome: "copy",
-      codeBlockInteraction: "interactive",
-      fileLinks: true,
-      interactiveImages: false,
-      linkFavicons: false,
-      sessionLinks: true,
-      tableInteractions: "enabled",
-    });
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith(
+      "**live**\nreply",
+      {
+        assistantTranscriptRoleHeaders: true,
+        codeBlockChrome: "copy",
+        codeBlockInteraction: "interactive",
+        fileLinks: true,
+        interactiveImages: false,
+        linkFavicons: false,
+        sessionLinks: true,
+        tableInteractions: "enabled",
+      },
+      ["", "stream:1", "4"].join("\0"),
+    );
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });

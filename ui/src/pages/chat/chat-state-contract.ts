@@ -40,6 +40,8 @@ export type ChatState = {
   chatRunId: string | null;
   chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
+  /** Changes whenever the active stream is replaced rather than appended. */
+  chatStreamRevision?: number;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;
@@ -64,3 +66,14 @@ export type ChatState = {
   chatBranchesConnectionEpoch?: number | null;
   requestUpdate?: () => void;
 };
+
+export function replaceChatStream(
+  state: Pick<ChatState, "chatStream" | "chatStreamRevision">,
+  next: string | null,
+): void {
+  if (state.chatStream === next) {
+    return;
+  }
+  state.chatStream = next;
+  state.chatStreamRevision = (state.chatStreamRevision ?? 0) + 1;
+}

@@ -249,9 +249,16 @@ export function renderUserMessageMarkdown(
   },
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   if (!opts.onToggleUserMessageExpanded) {
-    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
+    return renderMarkdownText(
+      markdown,
+      opts.isStreaming,
+      markdownRenderOptions,
+      duplicateSuffix,
+      streamKey,
+    );
   }
 
   const disclosureId = `user-message:${messageKey}`;
@@ -266,7 +273,13 @@ export function renderUserMessageMarkdown(
           : ""}"
     >
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
-        ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
+        ${renderMarkdownText(
+          markdown,
+          opts.isStreaming,
+          markdownRenderOptions,
+          duplicateSuffix,
+          streamKey,
+        )}
       </div>
       <button
         class="chat-message-disclosure__toggle"
@@ -295,6 +308,7 @@ export function renderAssistantMessageMarkdown(
   disclosure: AssistantMessageDisclosure | undefined,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const markdown = disclosure?.expanded
     ? (disclosure.markdown ?? previewMarkdown)
@@ -302,7 +316,7 @@ export function renderAssistantMessageMarkdown(
   const renderOptions = disclosure?.expanded
     ? { ...markdownRenderOptions, mode: "document" as const }
     : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix);
+  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix, streamKey);
   if (!disclosure?.onRetryFullMessage) {
     return text;
   }
@@ -328,9 +342,10 @@ export function renderMarkdownText(
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const rendered = isStreaming
-    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions)
+    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions, streamKey)
     : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
   const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
   return html`

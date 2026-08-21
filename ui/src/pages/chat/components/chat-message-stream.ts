@@ -27,6 +27,7 @@ export type StreamGroupPart = Extract<
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
   | "sessionKey"
+  | "streamRevision"
   | "boardProvider"
   | "agentId"
   | "runActive"
@@ -89,6 +90,7 @@ export function renderStreamGroupParts(
               isStreaming: part.isStreaming,
               showReasoning: false,
               sessionKey: opts.sessionKey,
+              streamRevision: opts.streamRevision,
               boardProvider: opts.boardProvider,
               agentId: opts.agentId,
               runActive: opts.runActive,

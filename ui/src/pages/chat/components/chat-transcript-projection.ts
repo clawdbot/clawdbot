@@ -340,6 +340,7 @@ export function projectChatTranscript(
   const sharedMessageRenderOptions = {
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
+    streamRevision: props.streamRevision,
     boardProvider: props.boardProvider,
     agentId: props.fullMessageAgentId,
     runActive: props.runActive,

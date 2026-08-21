@@ -119,6 +119,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     stream: string | null;
+    streamRevision?: number;
     streamStartedAt: number | null;
     /** Browser-local active run identity, retained across transient disconnects. */
     runId?: string | null;
@@ -320,6 +321,7 @@ export function renderChat(props: ChatProps) {
       guardianNotices: props.guardianNotices,
       streamSegments: props.streamSegments,
       stream: props.stream,
+      streamRevision: props.streamRevision,
       streamStartedAt: props.streamStartedAt,
       runId: props.runId,
       runOutputTokens: props.runOutputTokens,

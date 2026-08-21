@@ -215,6 +215,7 @@ export function renderGroupedMessage(
   opts: {
     isStreaming: boolean;
     sessionKey?: string;
+    streamRevision?: number;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -305,6 +306,9 @@ export function renderGroupedMessage(
     tableInteractions: "enabled",
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
   };
+  const streamingMarkdownKey = opts.isStreaming
+    ? `${opts.sessionKey ?? ""}\u0000${messageKey}\u0000${opts.streamRevision ?? 0}`
+    : undefined;
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -562,6 +566,7 @@ export function renderGroupedMessage(
                               opts.isStreaming,
                               markdownRenderOptions,
                               duplicateSuffix,
+                              streamingMarkdownKey,
                             )
                           : nothing}
                       ${hasToolCards
@@ -634,6 +639,7 @@ export function renderGroupedMessage(
                       opts,
                       markdownRenderOptions,
                       duplicateSuffix,
+                      streamingMarkdownKey,
                     )
                   : normalizedRole === "assistant"
                     ? renderAssistantMessageMarkdown(
@@ -642,12 +648,14 @@ export function renderGroupedMessage(
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
                         duplicateSuffix,
+                        streamingMarkdownKey,
                       )
                     : renderMarkdownText(
                         bodyMarkdown,
                         opts.isStreaming,
                         markdownRenderOptions,
                         duplicateSuffix,
+                        streamingMarkdownKey,
                       )
                 : nothing}
             ${hasToolCards

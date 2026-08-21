@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
+import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
@@ -856,6 +857,102 @@ PY
 });
 
 describe("toStreamingMarkdownHtml", () => {
+  it("keeps appended-prefix splitting below repeated full-rescan cost", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const prefixes: string[] = [];
+    let prefix = "";
+    for (let index = 0; index < 256; index += 1) {
+      prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(50)}\n`;
+      prefixes.push(prefix);
+    }
+    const measure = (streamKey?: string) => {
+      const startedAt = performance.now();
+      for (const value of prefixes) {
+        if (streamKey) {
+          splitIncrementally(value, streamKey);
+        } else {
+          splitStableStreamingMarkdown(value);
+        }
+      }
+      return performance.now() - startedAt;
+    };
+    measure("line-scan-warmup");
+    const fullRescanMs = measure();
+    const incrementalMs = measure("line-scan-regression");
+
+    expect(incrementalMs).toBeLessThan(fullRescanMs / 5);
+  }, 5_000);
+
+  it("keeps chunked-prefix splits identical to full splits", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const cases = [
+      [
+        "## Result",
+        "",
+        "A paragraph with `inline code`.",
+        "",
+        "<details>",
+        "<summary>Logs</summary>",
+        "",
+        "```ts",
+        "const value = 1;",
+        "```",
+        "",
+        "More **text**",
+        "",
+        "</details>",
+      ].join("\n"),
+      "- one\n\n  - nested\n\n[Docs][ref\\]]\n\n[ref\\]]: /docs",
+      "`` multiline\n<details> remains code\n``\n\n<details>\n<summary>Real</summary>",
+    ];
+    for (const [caseIndex, markdown] of cases.entries()) {
+      for (const chunkSize of [1, 7, 64]) {
+        for (let end = chunkSize; end <= markdown.length + chunkSize; end += chunkSize) {
+          const prefix = markdown.slice(0, Math.min(end, markdown.length));
+          const key = `${caseIndex}-${chunkSize}`;
+          expect(splitIncrementally(prefix, `split-parity-${key}`)).toEqual(
+            splitStableStreamingMarkdown(prefix),
+          );
+          expect(toStreamingMarkdownHtml(prefix, {}, `html-parity-${key}`)).toBe(
+            toStreamingMarkdownHtml(prefix),
+          );
+          if (end >= markdown.length) {
+            break;
+          }
+        }
+      }
+    }
+  });
+
+  it("resets replaced streams and keeps interleaved streams independent", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const streams = new Map([
+      ["a", "First stream\n\n```ts\nconst a = 1;"],
+      ["b", "Second stream\n\n<details>\n<summary>B</summary>"],
+    ]);
+    for (const end of [8, 16, 32, 64]) {
+      for (const [key, markdown] of streams) {
+        const prefix = markdown.slice(0, end);
+        expect(splitIncrementally(prefix, `interleaved-${key}`)).toEqual(
+          splitStableStreamingMarkdown(prefix),
+        );
+      }
+    }
+    const replacement = "Replacement\n\n- starts a different list";
+    expect(splitIncrementally(replacement, "interleaved-a:replacement")).toEqual(
+      splitStableStreamingMarkdown(replacement),
+    );
+  });
+
   it("marks a completed transcript-role header in the streaming tail", () => {
     const html = toStreamingMarkdownHtml("user[Thu 2026-07-02] question", {
       assistantTranscriptRoleHeaders: true,

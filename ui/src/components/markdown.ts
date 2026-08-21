@@ -582,6 +582,7 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
+  streamKey?: string,
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
@@ -597,7 +598,7 @@ export function toStreamingMarkdownHtml(
   }
   const input = formatTruncatedMarkdownInput(trimmedInput);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input, streamKey);
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
