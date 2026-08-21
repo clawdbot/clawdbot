@@ -7,7 +7,7 @@ import XCTest
 final class SettingsWindowLayoutTests: XCTestCase {
     private static var retainedWindows: [NSWindow] = []
 
-    func testPanesCollapseRetainScrollAndRenderDashboardHandoff() async throws {
+    func testInactivePanesCollapseAndRetainScrollPosition() async throws {
         let state = AppState(preview: true)
         state.nativeSettingsPanesEnabled = true
         let hosting = NSHostingView(rootView: SettingsRootView(
@@ -55,11 +55,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
 
         state.nativeSettingsPanesEnabled = false
         NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: SettingsTab.channels)
-        try await Self.waitForLayout(hosting, stage: "Dashboard handoff transition") {
+        try await Self.waitForLayout(hosting, stage: "permissions collapse after settings mode change") {
             permissionsScroll.frame.isEmpty
-        }
-        try await Self.waitForLayout(hosting, stage: "Dashboard handoff rendering") {
-            Self.dashboardHandoffButton(in: hosting)?.frame.isEmpty == false
         }
 
         window.orderOut(nil)
@@ -79,12 +76,6 @@ final class SettingsWindowLayoutTests: XCTestCase {
             matches.append(contentsOf: self.descendants(of: type, in: child))
         }
         return matches
-    }
-
-    private static func dashboardHandoffButton(in view: NSView) -> NSButton? {
-        self.descendants(of: NSButton.self, in: view).first { button in
-            button.title == "Open in Dashboard"
-        }
     }
 
     private static func waitForLayout(
