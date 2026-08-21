@@ -2,6 +2,7 @@
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
@@ -45,12 +46,14 @@ import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
+import { assertInternalDeliveryConstraints } from "./command/internal-delivery-constraints.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandRuntimeContext,
 } from "./command/prepare.js";
+import { acquireSessionReplyLane } from "./command/reply-run-lane.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
@@ -104,19 +107,7 @@ async function agentCommandInternal(
           forceRestartSafeTools: prepared.sessionEntry?.restartRecoveryForceSafeTools,
         }
       : prepared.opts;
-  if (
-    (preparedOpts.internalDeliverySuppressText === true &&
-      preparedOpts.internalDeliveryMediaUrls === undefined) ||
-    ((preparedOpts.internalDeliveryMediaUrls !== undefined ||
-      preparedOpts.internalDeliverySuppressText === true) &&
-      (preparedOpts.forceRestartSafeTools !== true ||
-        preparedOpts.disableMessageTool !== true ||
-        preparedOpts.sourceReplyDeliveryMode !== "automatic"))
-  ) {
-    throw new Error(
-      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
-    );
-  }
+  assertInternalDeliveryConstraints(preparedOpts);
   let opts: AgentCommandOpts = {
     ...preparedOpts,
     abortSignal: preparedOpts.abortSignal
@@ -188,6 +179,7 @@ async function agentCommandInternal(
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   let preparedRunAdmission: ReturnType<typeof executionIdentity.prepare> | undefined;
+  let sessionReplyLane: ReplyOperation | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     const sessionStoreRuntime =
@@ -238,6 +230,15 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
+      // Serialize against the reply-run registry so this turn neither races a
+      // live channel-delivered run nor hides from later channel arrivals.
+      // Internal model runs never touch the visible transcript, so they skip it.
+      if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
+        sessionReplyLane = await acquireSessionReplyLane(sessionKey, sessionId, {
+          abortSignal: opts.abortSignal,
+        });
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      }
       preparedRunAdmission = prepareAgentCommandExecutionIdentity({
         opts,
         prepared,
@@ -513,6 +514,7 @@ async function agentCommandInternal(
         embeddedSessionState,
         trackInternalModelRunTarget,
         preparedRunAdmission,
+        replyOperation: sessionReplyLane,
       });
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();
@@ -546,6 +548,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    sessionReplyLane?.complete();
     preparedRunAdmission?.close();
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {

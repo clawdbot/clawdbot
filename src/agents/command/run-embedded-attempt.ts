@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -76,6 +77,7 @@ export async function runEmbeddedAgentAttempt(params: {
   modelSelection: EmbeddedModelSelection;
   embeddedSessionState: EmbeddedSessionState;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
+  replyOperation?: ReplyOperation;
 }) {
   const {
     cfg,
@@ -507,7 +509,12 @@ export async function runEmbeddedAgentAttempt(params: {
               lifecycleGeneration = nextLifecycleGeneration;
               params.onLifecycleGenerationChanged(nextLifecycleGeneration);
             },
-            onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
+            onAgentEvent: (evt) => {
+              // Real agent events keep the reply lane fresh so long turns are
+              // not reclaimed as stale by concurrent-arrival recovery.
+              params.replyOperation?.recordActivity();
+              attemptLifecycleCallbacks.onAgentEvent(evt);
+            },
             deferTerminalLifecycle: true,
           });
         },
