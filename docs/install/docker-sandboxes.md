@@ -2,15 +2,21 @@
 summary: "Run OpenClaw in a Docker Sandbox with proxy-managed credentials and sandboxed tool calls"
 read_when:
   - You want to run OpenClaw somewhere isolated without managing a VPS
-  - You want provider credentials to stay off the machine that runs the agent
+  - You want the provider credential stored outside the sandbox the agent runs in
 title: "Docker Sandboxes"
 ---
 
 Run OpenClaw in a [Docker Sandbox](https://docs.docker.com/ai/sandboxes/): an
-isolated environment on your own machine. Provider credentials stay outside it:
-the sandbox gets a placeholder, and the proxy swaps in the real value on the way
-out. Egress is limited to a declared allowlist, and the agent's own tool calls
-run in a second sandbox inside the first.
+isolated environment on your own machine. The credential you store never has to
+be written inside it: the sandbox receives a placeholder value, and the sandbox
+proxy substitutes the real one on requests leaving for the provider host. Egress
+is limited to a declared allowlist, and the agent's own tool calls run in a
+second sandbox inside the first.
+
+How far that substitution isolates the credential from code running in the
+sandbox is a property of Docker Sandboxes and the kit, not of OpenClaw. Treat it
+as the placeholder-substitution mechanism described above rather than a
+guarantee this page can make.
 
 The environment ships as a kit, so this is two commands: store a credential,
 then start.
@@ -18,7 +24,9 @@ then start.
 <Note>
 The `openclaw` kit is community maintained in
 [docker/sbx-kits-contrib](https://github.com/docker/sbx-kits-contrib/tree/main/openclaw).
-Report kit issues and contribute there.
+Report kit issues and contribute there. This page describes the kit at
+[`cc502cd`](https://github.com/docker/sbx-kits-contrib/commit/cc502cd); the
+`:latest` artifact moves, so behavior can change ahead of this page.
 </Note>
 
 ## What you need
@@ -145,7 +153,7 @@ with a newer kit rather than through an in-place update.
 | `authentication_error: API key is invalid` | The credential reached Anthropic in the wrong shape, usually a subscription token bound as a service secret, or a stale service secret still setting `x-api-key`. |
 | `authentication_error: OAuth access token is invalid` | The bearer placeholder went out unswapped, so no matching credential is bound for that host. |
 | `auth flow failed (exit 1)` after `/auth` | Interactive login needs a TTY the TUI's subprocess does not get. Credentials belong on the host. |
-| `Sandbox image not found: openclaw-sandbox:bookworm-slim` | The kit's first-boot image build did not finish. Check `~/.openclaw/sandbox-image-build.log`. |
+| `Sandbox image not found: docker/sandbox-templates:shell-docker. Build or pull it first.` | The kit's first-boot image pull has not finished. Check `~/.openclaw/sandbox-image-pull.log` in the sandbox. |
 | A new secret changes nothing | Credentials are wired at create time. Start a fresh sandbox. |
 
 ## Related
