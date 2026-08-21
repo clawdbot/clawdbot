@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
-import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
+import { boardWidgetSandboxPermissions, BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
   sandboxOrigin: string;
@@ -41,6 +41,20 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("board widget sandbox permissions", () => {
+  it("allows new tabs only after the widget grant is active", () => {
+    expect(boardWidgetSandboxPermissions({ grantState: "pending" })).toBe(
+      "allow-scripts allow-same-origin allow-forms",
+    );
+    expect(boardWidgetSandboxPermissions({ grantState: "rejected" })).toBe(
+      "allow-scripts allow-same-origin allow-forms",
+    );
+    expect(boardWidgetSandboxPermissions({ grantState: "granted" })).toBe(
+      "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
+    );
+  });
 });
 
 // Drives the private terminal-failure path directly: attempts are exhausted so
