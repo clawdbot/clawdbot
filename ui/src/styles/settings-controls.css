@@ -91,9 +91,14 @@ wa-radio-group.settings-segmented::part(radios) {
 }
 
 @media (forced-colors: active) {
-  .settings-segmented__btn.settings-segmented__btn--active {
+  .settings-segmented__btn--active {
+    text-decoration: underline 2px;
+    text-underline-offset: 3px;
+  }
+
+  .settings-segmented__btn:focus-visible {
     outline: 2px solid Highlight;
-    outline-offset: -2px;
+    outline-offset: 2px;
   }
 }
 

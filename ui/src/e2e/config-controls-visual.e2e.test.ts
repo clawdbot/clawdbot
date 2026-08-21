@@ -181,12 +181,36 @@ suite.define(() => {
           expect(
             await selected.evaluate((element) => {
               const style = getComputedStyle(element);
-              return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+              return {
+                textDecorationLine: style.textDecorationLine,
+                textDecorationThickness: style.textDecorationThickness,
+              };
             }),
-          ).toEqual({ outlineStyle: "solid", outlineWidth: "2px" });
+          ).toEqual({ textDecorationLine: "underline", textDecorationThickness: "2px" });
           expect(
-            await unselected.evaluate((element) => getComputedStyle(element).outlineStyle),
+            await unselected.evaluate((element) => getComputedStyle(element).textDecorationLine),
           ).toBe("none");
+
+          await selected.focus();
+          expect(await selected.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(
+            await selected.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                outlineOffset: style.outlineOffset,
+                outlineStyle: style.outlineStyle,
+                outlineWidth: style.outlineWidth,
+                textDecorationLine: style.textDecorationLine,
+              };
+            }),
+          ).toEqual({
+            outlineOffset: "2px",
+            outlineStyle: "solid",
+            outlineWidth: "2px",
+            textDecorationLine: "underline",
+          });
         },
       );
     }
