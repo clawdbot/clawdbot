@@ -68,7 +68,7 @@ import type {
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
-import { resolveOptionFromCommand } from "./cli-utils.js";
+import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
@@ -219,13 +219,10 @@ async function runSkillsAction(
   render: (report: SkillStatusReport) => string,
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<void> {
-  try {
+  await runCommandWithRuntime(defaultRuntime, async () => {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
-  } catch (err) {
-    defaultRuntime.error(formatErrorMessage(err));
-    defaultRuntime.exit(1);
-  }
+  });
 }
 
 function resolveSkillsWorkspaceForCommand(
@@ -602,7 +599,7 @@ export function registerSkillsCli(program: Command) {
     .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const results = await searchSkillsFromClawHub({
           query: normalizeOptionalString(queryParts.join(" ")),
           limit: opts.limit,
@@ -627,10 +624,7 @@ export function registerSkillsCli(program: Command) {
           const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
           defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
         }
-      } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   skills
