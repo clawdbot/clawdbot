@@ -120,7 +120,7 @@ describe("temporal decay", () => {
     const nestedOld = byPath.get("memory/dreaming/light/2025-01-01.md");
     const rootOld = byPath.get("memory/2025-01-01.md");
     // A date-only basename at any depth below memory/ decays exactly like a
-    // root daily note with the same date (#121046).
+    // root daily note with the same date.
     expect(nestedOld?.score).toBeCloseTo(rootOld?.score ?? 0);
     expect(nestedOld?.score ?? 1).toBeLessThan(0.5);
     expect(byPath.get("memory/dreaming/light/report.md")?.score).toBeCloseTo(0.7);
