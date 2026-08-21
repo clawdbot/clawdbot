@@ -244,14 +244,16 @@ loads the owning plugin runtime.
 
 Tool factories receive trusted runtime context, including `deliveryContext`,
 `nativeChannelId` for the active platform conversation when available, and
-`requesterSenderId`. Use `delivery.send(...)` to send text or media to the
-current conversation. OpenClaw binds the route, account, thread, and media
-access policy; the capability expires when the turn ends.
+`requesterSenderId`. A factory can use
+`toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
+current conversation. The property is unavailable outside an active channel
+turn. OpenClaw binds the route, account, thread, and media access policy; the
+capability expires when the turn ends.
 
 ```typescript
 register(api) {
   api.registerTool(
-    {
+    (toolContext) => ({
       name: "workflow_tool",
       description: "Run a workflow",
       parameters: Type.Object({ pipeline: Type.String() }),
@@ -260,13 +262,16 @@ register(api) {
         { additionalProperties: false },
       ),
       async execute(_id, params) {
+        await toolContext.delivery?.send({
+          text: `Workflow started: ${params.pipeline}`,
+        });
         return {
           content: [{ type: "text", text: params.pipeline }],
           details: { pipeline: params.pipeline },
         };
       },
-    },
-    { optional: true },
+    }),
+    { name: "workflow_tool", optional: true },
   );
 }
 ```
