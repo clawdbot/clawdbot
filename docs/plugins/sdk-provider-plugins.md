@@ -1077,7 +1077,14 @@ catalog, API-key auth, and dynamic model resolution.
           },
           createTool: () => ({
             description: "Search the web through Acme Search.",
-            parameters: {},
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                result_depth: { type: "string", enum: ["brief", "deep"] },
+              },
+            },
+            providerParameters: ["result_depth"],
             execute: async (args) => ({ content: [] }),
           }),
         });
@@ -1086,7 +1093,9 @@ catalog, API-key auth, and dynamic model resolution.
         Both provider types share the same credential-wiring shape:
         `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
         `getCredentialValue`, `setCredentialValue`, and `createTool` are all
-        required.
+        required. When search providers add top-level parameters beyond the
+        shared `web_search` surface, list them in `providerParameters`; core
+        projects their provider-owned schemas only for the selected provider.
       </Tab>
     </Tabs>
 

@@ -34,6 +34,13 @@ import {
 
 const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
+const PERPLEXITY_SEARCH_CONTEXT_SIZES = ["low", "medium", "high"] as const;
+
+type PerplexitySearchContextSize = (typeof PERPLEXITY_SEARCH_CONTEXT_SIZES)[number];
+
+function isPerplexitySearchContextSize(value: string): value is PerplexitySearchContextSize {
+  return value === "low" || value === "medium" || value === "high";
+}
 
 type PerplexityConfig = {
   apiKey?: string;
@@ -65,6 +72,13 @@ type PerplexitySearchApiResponse = {
     date?: string;
   }>;
 };
+
+function normalizePerplexitySearchContextSize(
+  value: string | undefined,
+): PerplexitySearchContextSize | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && isPerplexitySearchContextSize(normalized) ? normalized : undefined;
+}
 
 function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityConfig {
   const perplexity = searchConfig?.perplexity;
@@ -202,6 +216,7 @@ async function runPerplexitySearchApi(params: {
   searchLanguageFilter?: string[];
   searchAfterDate?: string;
   searchBeforeDate?: string;
+  searchContextSize?: PerplexitySearchContextSize;
   maxTokens?: number;
   maxTokensPerPage?: number;
 }): Promise<Array<Record<string, unknown>>> {
@@ -226,6 +241,9 @@ async function runPerplexitySearchApi(params: {
   }
   if (params.searchBeforeDate) {
     body.search_before_date_filter = params.searchBeforeDate;
+  }
+  if (params.searchContextSize) {
+    body.search_context_size = params.searchContextSize;
   }
   if (params.maxTokens !== undefined) {
     body.max_tokens = params.maxTokens;
@@ -272,6 +290,7 @@ async function runPerplexitySearch(params: {
   timeoutSeconds: number;
   signal?: AbortSignal;
   freshness?: string;
+  searchContextSize?: PerplexitySearchContextSize;
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -280,6 +299,11 @@ async function runPerplexitySearch(params: {
   };
   if (params.freshness) {
     body.search_recency_filter = params.freshness;
+  }
+  if (params.searchContextSize) {
+    body.web_search_options = {
+      search_context_size: params.searchContextSize,
+    };
   }
 
   return withTrustedWebSearchEndpoint(
@@ -352,6 +376,15 @@ export async function executePerplexitySearch(
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
   const domainFilter = readStringArrayParam(args, "domain_filter");
+  const rawSearchContextSize = readStringParam(args, "search_context_size");
+  const searchContextSize = normalizePerplexitySearchContextSize(rawSearchContextSize);
+  if (rawSearchContextSize && !searchContextSize) {
+    return {
+      error: "invalid_search_context_size",
+      message: "search_context_size must be low, medium, or high.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   const maxTokens = readPositiveIntegerParam(args, "max_tokens", {
     max: 1_000_000,
     message: "max_tokens must be a positive integer.",
@@ -403,6 +436,18 @@ export async function executePerplexitySearch(
     }
   }
 
+  if (
+    structured &&
+    searchContextSize &&
+    (maxTokens !== undefined || maxTokensPerPage !== undefined)
+  ) {
+    return {
+      error: "conflicting_content_budget",
+      message:
+        "search_context_size cannot be used with max_tokens or max_tokens_per_page. Use either search_context_size or explicit token budgets, not both.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   if (language && !/^[a-z]{2}$/iu.test(language)) {
     return {
       error: "invalid_language",
@@ -474,6 +519,7 @@ export async function executePerplexitySearch(
     dateAfter,
     dateBefore,
     domainFilter?.join(","),
+    searchContextSize,
     maxTokens,
     maxTokensPerPage,
   ]);
@@ -506,6 +552,7 @@ export async function executePerplexitySearch(
               timeoutSeconds,
               signal,
               freshness,
+              searchContextSize,
             });
             return {
               content: wrapWebContent(result.content, "web_search"),
@@ -536,6 +583,7 @@ export async function executePerplexitySearch(
             searchLanguageFilter: language ? [language] : undefined,
             searchAfterDate: dateAfter ? isoToPerplexityDate(dateAfter) : undefined,
             searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
+            searchContextSize,
             maxTokens: maxTokens ?? undefined,
             maxTokensPerPage: maxTokensPerPage ?? undefined,
           }),
@@ -560,4 +608,5 @@ export const testing = {
   resolvePerplexityTransport,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
+  normalizePerplexitySearchContextSize,
 } as const;

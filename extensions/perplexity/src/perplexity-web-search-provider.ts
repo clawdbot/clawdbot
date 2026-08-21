@@ -29,6 +29,11 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       type: "string",
       description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
     },
+    search_context_size: {
+      type: "string",
+      enum: ["low", "medium", "high"],
+      description: "Perplexity content extraction budget.",
+    },
   };
 
   if (transport !== "chat_completions") {
@@ -57,13 +62,15 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     };
     properties.max_tokens = {
       type: "integer",
-      description: "Native Perplexity Search API only. Total content budget across all results.",
+      description:
+        "Native Perplexity Search API only. Total content budget across all results. Do not combine with search_context_size.",
       minimum: 1,
       maximum: 1000000,
     };
     properties.max_tokens_per_page = {
       type: "integer",
-      description: "Native Perplexity Search API only. Max tokens extracted per page.",
+      description:
+        "Native Perplexity Search API only. Max tokens extracted per page. Do not combine with search_context_size.",
       minimum: 1,
     };
   }
@@ -97,6 +104,7 @@ function createPerplexityToolDefinition(
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
+    providerParameters: ["search_context_size"],
     execute: async (args, context) => {
       context?.signal?.throwIfAborted();
       const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();

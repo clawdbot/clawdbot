@@ -15,6 +15,8 @@ type WebFetchProviderId = string;
 export type WebSearchProviderToolDefinition = {
   description: string;
   parameters: TSchema;
+  /** Top-level tool parameters owned by this provider and projected into the shared web_search schema. */
+  providerParameters?: readonly string[];
   execute: (
     args: Record<string, unknown>,
     context?: WebSearchProviderToolExecutionContext,
