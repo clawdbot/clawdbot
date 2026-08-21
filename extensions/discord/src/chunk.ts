@@ -21,6 +21,7 @@ type OpenFence = {
   markerChar: string;
   markerLen: number;
   openLine: string;
+  trailing: string;
 };
 
 const DEFAULT_MAX_CHARS = 2000;
@@ -51,11 +52,13 @@ function parseFenceLine(line: string): OpenFence | null {
   }
   const indent = match[1] ?? "";
   const marker = match[2] ?? "";
+  const trailing = match[3] ?? "";
   return {
     indent,
     markerChar: marker[0] ?? "`",
     markerLen: marker.length,
     openLine: line,
+    trailing,
   };
 }
 
@@ -159,7 +162,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
         nextOpenFence = fenceInfo;
       } else if (
         openFence.markerChar === fenceInfo.markerChar &&
-        fenceInfo.markerLen >= openFence.markerLen
+        fenceInfo.markerLen >= openFence.markerLen &&
+        /^[ \t]*_?[ \t]*$/u.test(fenceInfo.trailing)
       ) {
         nextOpenFence = null;
       }

@@ -15,7 +15,11 @@ export function hasBalancedFences(chunk: string): boolean {
       open = { markerChar: marker.charAt(0), markerLen: marker.length };
       continue;
     }
-    if (open.markerChar === marker[0] && marker.length >= open.markerLen) {
+    if (
+      open.markerChar === marker[0] &&
+      marker.length >= open.markerLen &&
+      /^[ \t]*_?[ \t]*$/u.test(match[3] ?? "")
+    ) {
       open = null;
     }
   }
