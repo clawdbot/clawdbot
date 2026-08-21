@@ -1433,7 +1433,10 @@ export async function createGatewaySession(params: {
         await loadSessionLifecycleRuntime();
       // Child key shape does not establish lifecycle ownership. The caller owns
       // that fact; omission keeps the shipped rollover for out-of-tree clients.
-      if (params.succeedsParent !== false) {
+      // `reason` is replacement-only: a parallel child keeps the parent active
+      // and must not look like a predecessor boundary to session_start plugins.
+      const replacesParent = params.succeedsParent !== false;
+      if (replacesParent) {
         emitGatewaySessionEndPluginHook({
           cfg: params.cfg,
           sessionKey: canonicalParentSessionKey,
@@ -1451,7 +1454,7 @@ export async function createGatewaySession(params: {
         sessionKey: target.canonicalKey,
         sessionId: created.entry.sessionId,
         resumedFrom: parentEntry?.sessionId,
-        reason: "new",
+        ...(replacesParent ? { reason: "new" as const } : {}),
         storePath: target.storePath,
         sessionFile: target.canonicalKey,
         agentId: target.agentId,

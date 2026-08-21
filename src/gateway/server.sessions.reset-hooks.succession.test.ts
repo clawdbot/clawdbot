@@ -27,6 +27,7 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 type HookEvent = {
   sessionKey?: string;
   nextSessionKey?: string;
+  reason?: string;
 };
 
 function firstHookEvent(mock: { mock: { calls: unknown[][] } }): HookEvent {
@@ -91,9 +92,9 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
-    result.payload?.key,
-  );
+  const startEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionStart);
+  expect(startEvent.sessionKey).toBe(result.payload?.key);
+  expect(startEvent.reason).toBeUndefined();
 });
 
 test("sessions.create accepts an explicit successor with a minted dashboard key", async () => {
@@ -110,9 +111,10 @@ test("sessions.create accepts an explicit successor with a minted dashboard key"
   const endEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionEnd);
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.nextSessionKey).toBe(result.payload?.key);
-  expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
-    result.payload?.key,
-  );
+  expect(endEvent.reason).toBe("new");
+  const startEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionStart);
+  expect(startEvent.sessionKey).toBe(result.payload?.key);
+  expect(startEvent.reason).toBe("new");
 });
 
 test("sessions.create rejects an explicit successor fork", async () => {
