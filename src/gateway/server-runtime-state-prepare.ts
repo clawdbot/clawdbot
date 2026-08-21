@@ -444,8 +444,7 @@ export async function prepareGatewayKernelState(params: {
   const sidecarStartup = restoredStartup ? "start" : (opts.sidecarStartup ?? "start");
   const isGatewayStartupPending = () =>
     !lifecycle.closePreludeStarted &&
-    (!startupState.restoredAdmissionReady ||
-      (!startupState.sidecarsReady && sidecarStartup === "start"));
+    (!startupState.restoredAdmissionReady || !startupState.sidecarsReady);
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
