@@ -36,6 +36,16 @@ describe("release plan contract", () => {
       `{"digest":"${String(lockFixture.digest)}","digest":`,
     );
     expect(() => parseReleasePlanLockJson(duplicate)).toThrow("duplicate key");
+    const nestedDuplicate = lockText.replace(
+      '"tooling":{"ref":',
+      '"tooling":{"ref":"ignored","\\u0072ef":',
+    );
+    expect(() => parseReleasePlanLockJson(nestedDuplicate)).toThrow("duplicate key");
+    const arrayEntryDuplicate = lockText.replace(
+      '{"name":"@openclaw/example","targets":',
+      '{"name":"ignored","name":"@openclaw/example","targets":',
+    );
+    expect(() => parseReleasePlanLockJson(arrayEntryDuplicate)).toThrow("duplicate key");
     expect(() =>
       parseReleasePlanLockJson(
         `${JSON.stringify({

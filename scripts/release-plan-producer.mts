@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, posix, resolve } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parse as parseYaml } from "yaml";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
@@ -56,6 +57,7 @@ export type ReleasePlanSource =
     });
 
 type PackageManifest = PluginPackageJson;
+type ParseYaml = (source: string) => unknown;
 
 type CorePackagePolicy = {
   path: string;
@@ -68,6 +70,18 @@ const PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-release-publish.ym
 const NPM_PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
 const PRODUCER_PATH = "scripts/release-plan-producer.mts";
 const EXECUTION_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const TOOLING_PACKAGE_JSON_PATH = "package.json";
+const TOOLING_LOCKFILE_PATH = "pnpm-lock.yaml";
+// These values bind runtime parsing to the reviewed yaml tarball. Loading before
+// the root files and installed manifest pass this gate would reopen caller drift.
+const YAML_PACKAGE_VERSION = "2.9.0";
+const YAML_PACKAGE_INTEGRITY =
+  "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
+const YAML_PACKAGE_JSON_SHA256 = "20b8b197cbd10dad245d45e463dfe58e4c8c25a47e24bc4256ad9ab58bf35683";
+const BUILTIN_IMPORTS = new Set([
+  ...builtinModules,
+  ...builtinModules.map((specifier) => `node:${specifier}`),
+]);
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -133,13 +147,12 @@ function gitPathExists(repoRoot: string, commit: string, path: string): boolean 
   }
 }
 
-function collectLocalImports(source: string): string[] {
+function collectLiteralImports(source: string): string[] {
   const imports = new Set<string>();
   for (const pattern of [
-    /\bfrom\s+["'](\.[^"']+)["']/gu,
-    /\bimport\s*["'](\.[^"']+)["']/gu,
-    /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/gu,
-    /\bexport\s+(?:\*|\{[^}]*\})\s+from\s+["'](\.[^"']+)["']/gu,
+    /\bfrom\s+["']([^"']+)["']/gu,
+    /\bimport\s*["']([^"']+)["']/gu,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu,
   ]) {
     for (const match of source.matchAll(pattern)) {
       if (match[1]) {
@@ -197,10 +210,159 @@ function verifyToolingImportClosure(repoRoot: string, toolingSha: string) {
     }
     verified.add(sourcePath);
     const source = toolingBytes.toString("utf8");
-    for (const specifier of collectLocalImports(source)) {
+    for (const specifier of collectLiteralImports(source)) {
+      if (BUILTIN_IMPORTS.has(specifier)) {
+        continue;
+      }
+      if (!specifier.startsWith(".")) {
+        throw new Error(
+          `tooling import closure contains an unowned bare import: ${sourcePath} -> ${specifier}`,
+        );
+      }
       pending.push(resolveToolingImportPath(repoRoot, toolingSha, sourcePath, specifier));
     }
   }
+}
+
+function readVerifiedToolingRootBytes(repoRoot: string, toolingSha: string, path: string): Buffer {
+  const toolingBytes = readGitBytes(repoRoot, toolingSha, path);
+  const executionBytes = readFileSync(resolve(EXECUTION_ROOT, path));
+  if (!executionBytes.equals(toolingBytes)) {
+    throw new Error(`tooling root file differs from tooling SHA: ${path}`);
+  }
+  return toolingBytes;
+}
+
+type LineRange = { start: number; end: number };
+
+function findLockfileMapping(
+  lines: string[],
+  key: string,
+  indent: number,
+  scope: LineRange = { start: 0, end: lines.length },
+): LineRange {
+  const declaration = `${" ".repeat(indent)}${key}:`;
+  const matches: number[] = [];
+  for (let index = scope.start; index < scope.end; index += 1) {
+    if (lines[index] === declaration) {
+      matches.push(index);
+    }
+  }
+  if (matches.length !== 1) {
+    throw new Error(`pnpm lockfile must declare exactly one ${key} mapping`);
+  }
+  const start = matches[0]!;
+  let end = scope.end;
+  for (let index = start + 1; index < scope.end; index += 1) {
+    const line = lines[index] ?? "";
+    if (!line) {
+      continue;
+    }
+    const nextIndent = line.length - line.trimStart().length;
+    if (nextIndent <= indent) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function verifyYamlLockfile(lockfileText: string) {
+  const lines = lockfileText.split("\n");
+  if (lines.filter((line) => line === "lockfileVersion: '9.0'").length !== 1) {
+    throw new Error("pnpm lockfile must use lockfileVersion 9.0");
+  }
+  const importers = findLockfileMapping(lines, "importers", 0);
+  const rootImporter = findLockfileMapping(lines, ".", 2, importers);
+  const dependencies = findLockfileMapping(lines, "dependencies", 4, rootImporter);
+  const yamlImporter = findLockfileMapping(lines, "yaml", 6, dependencies);
+  const importerEntries = lines.slice(yamlImporter.start + 1, yamlImporter.end).filter(Boolean);
+  if (
+    importerEntries.length !== 2 ||
+    importerEntries[0] !== `        specifier: ${YAML_PACKAGE_VERSION}` ||
+    importerEntries[1] !== `        version: ${YAML_PACKAGE_VERSION}`
+  ) {
+    throw new Error(`pnpm root importer must pin yaml exactly to ${YAML_PACKAGE_VERSION}`);
+  }
+
+  const packages = findLockfileMapping(lines, "packages", 0);
+  const yamlPackage = findLockfileMapping(lines, `yaml@${YAML_PACKAGE_VERSION}`, 2, packages);
+  const resolution = `    resolution: {integrity: ${YAML_PACKAGE_INTEGRITY}}`;
+  if (
+    lines
+      .slice(yamlPackage.start + 1, yamlPackage.end)
+      .filter((line) => line.trimStart().startsWith("resolution:"))
+      .join("\n") !== resolution
+  ) {
+    throw new Error(`pnpm lockfile must bind yaml@${YAML_PACKAGE_VERSION} to its exact integrity`);
+  }
+
+  const snapshots = findLockfileMapping(lines, "snapshots", 0);
+  if (
+    lines
+      .slice(snapshots.start + 1, snapshots.end)
+      .filter((line) => line === `  yaml@${YAML_PACKAGE_VERSION}: {}`).length !== 1
+  ) {
+    throw new Error(
+      `pnpm lockfile yaml@${YAML_PACKAGE_VERSION} snapshot must have no dependencies`,
+    );
+  }
+}
+
+function loadVerifiedYamlParser(repoRoot: string, toolingSha: string): ParseYaml {
+  const packageJsonBytes = readVerifiedToolingRootBytes(
+    repoRoot,
+    toolingSha,
+    TOOLING_PACKAGE_JSON_PATH,
+  );
+  const lockfileBytes = readVerifiedToolingRootBytes(repoRoot, toolingSha, TOOLING_LOCKFILE_PATH);
+  let packageJson: { dependencies?: Record<string, unknown> };
+  try {
+    packageJson = JSON.parse(packageJsonBytes.toString("utf8")) as {
+      dependencies?: Record<string, unknown>;
+    };
+  } catch (error) {
+    throw new Error("tooling package.json is invalid JSON", { cause: error });
+  }
+  if (packageJson.dependencies?.yaml !== YAML_PACKAGE_VERSION) {
+    throw new Error(`tooling package.json must pin yaml exactly to ${YAML_PACKAGE_VERSION}`);
+  }
+  verifyYamlLockfile(lockfileBytes.toString("utf8"));
+
+  const toolingRequire = createRequire(resolve(EXECUTION_ROOT, TOOLING_PACKAGE_JSON_PATH));
+  const packageJsonPath = realpathSync(toolingRequire.resolve("yaml/package.json"));
+  const packageRoot = dirname(packageJsonPath);
+  const modulePath = realpathSync(toolingRequire.resolve("yaml"));
+  const moduleRelativePath = relative(packageRoot, modulePath);
+  if (
+    moduleRelativePath === ".." ||
+    moduleRelativePath.startsWith(`..${sep}`) ||
+    isAbsolute(moduleRelativePath)
+  ) {
+    throw new Error("resolved yaml module must be owned by its installed package");
+  }
+  const installedPackageJsonBytes = readFileSync(packageJsonPath);
+  const installedPackageJsonSha = createHash("sha256")
+    .update(installedPackageJsonBytes)
+    .digest("hex");
+  if (installedPackageJsonSha !== YAML_PACKAGE_JSON_SHA256) {
+    throw new Error(`installed yaml package.json must match yaml@${YAML_PACKAGE_VERSION}`);
+  }
+  const installedPackageJson = JSON.parse(installedPackageJsonBytes.toString("utf8")) as {
+    name?: unknown;
+    version?: unknown;
+  };
+  if (
+    installedPackageJson.name !== "yaml" ||
+    installedPackageJson.version !== YAML_PACKAGE_VERSION
+  ) {
+    throw new Error(`installed yaml package must be exactly yaml@${YAML_PACKAGE_VERSION}`);
+  }
+  const yamlModule = toolingRequire(modulePath) as { parse?: unknown };
+  if (typeof yamlModule.parse !== "function") {
+    throw new Error(`installed yaml@${YAML_PACKAGE_VERSION} must export parse`);
+  }
+  return yamlModule.parse as ParseYaml;
 }
 
 function withCandidateSnapshot<T>(
@@ -293,7 +455,7 @@ export function deriveReleasePlanPolicy(
   };
 }
 
-function collectAllowedGroups(workflowText: string): string[] {
+function collectAllowedGroups(workflowText: string, parseYaml: ParseYaml): string[] {
   const workflow = parseYaml(workflowText) as {
     on?: { workflow_dispatch?: { inputs?: { rerun_group?: { options?: unknown } } } };
   };
@@ -316,7 +478,7 @@ function readPackageManifest(path: string): PackageManifest {
   return JSON.parse(readFileSync(path, "utf8")) as PackageManifest;
 }
 
-function collectCorePackagePolicy(workflowText: string): CorePackagePolicy[] {
+function collectCorePackagePolicy(workflowText: string, parseYaml: ParseYaml): CorePackagePolicy[] {
   const workflow = parseYaml(workflowText) as {
     jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
   };
@@ -440,7 +602,7 @@ function collectPackageInventory(
     .toSorted((left, right) => compareAscii(left.name, right.name));
 }
 
-function collectPlatformSources(workflowText: string) {
+function collectPlatformSources(workflowText: string, parseYaml: ParseYaml) {
   const platforms = new Map<string, string>();
   const addPlatform = (id: string, source: string) => {
     const existing = platforms.get(id);
@@ -484,8 +646,13 @@ function collectPlatformSources(workflowText: string) {
   return [...platforms.entries()].toSorted(([left], [right]) => compareAscii(left, right));
 }
 
-function collectPlatformInventory(repoRoot: string, toolingSha: string, workflowText: string) {
-  return collectPlatformSources(workflowText).map(([id, source]) => {
+function collectPlatformInventory(
+  repoRoot: string,
+  toolingSha: string,
+  workflowText: string,
+  parseYaml: ParseYaml,
+) {
+  return collectPlatformSources(workflowText, parseYaml).map(([id, source]) => {
     if (!gitPathExists(repoRoot, toolingSha, source)) {
       throw new Error(`release platform workflow does not exist at tooling SHA: ${source}`);
     }
@@ -535,13 +702,14 @@ function resolveSource(params: ReleasePlanSource) {
 export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
   const { candidateSha, repoRoot, toolingFullRef, toolingSha } = resolveSource(params);
   verifyToolingImportClosure(repoRoot, toolingSha);
+  const parseYaml = loadVerifiedYamlParser(repoRoot, toolingSha);
   const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
   const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
   const npmPublicationWorkflow = readGitText(repoRoot, toolingSha, NPM_PUBLICATION_WORKFLOW_PATH);
   const candidate = readCandidateInventory(
     repoRoot,
     candidateSha,
-    collectCorePackagePolicy(npmPublicationWorkflow),
+    collectCorePackagePolicy(npmPublicationWorkflow, parseYaml),
   );
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
   const expectedCandidateRef =
@@ -573,11 +741,11 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
       intent: policy.intent,
       profile: policy.profile,
       soak: policy.soak,
-      allowed_groups: collectAllowedGroups(validationWorkflow),
+      allowed_groups: collectAllowedGroups(validationWorkflow, parseYaml),
     },
     inventory: {
       packages: candidate.packages,
-      platforms: collectPlatformInventory(repoRoot, toolingSha, publicationWorkflow),
+      platforms: collectPlatformInventory(repoRoot, toolingSha, publicationWorkflow, parseYaml),
     },
   });
 }

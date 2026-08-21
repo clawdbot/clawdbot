@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { parseDocument } from "yaml";
 import { isRecord } from "./lib/record-shared.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
@@ -146,6 +145,43 @@ function canonicalAsciiJson(value) {
     fail("canonical JSON must be printable ASCII with exactly one trailing newline");
   }
   return json;
+}
+
+function assertNoDuplicateJsonKeys(text) {
+  const tokenPattern =
+    /"(?:\\(?:["\\/bfnrt]|u[a-fA-F0-9]{4})|[^"\\\u0000-\u001f])*"|[{}\[\],:]|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|\s+/guy;
+  const stack = [];
+  for (let index = 0; index < text.length;) {
+    tokenPattern.lastIndex = index;
+    const match = tokenPattern.exec(text);
+    if (!match) {
+      fail("release plan lock JSON is invalid JSON");
+    }
+    index = tokenPattern.lastIndex;
+    const token = match[0];
+    if (/^\s+$/u.test(token)) {
+      continue;
+    }
+    const current = stack.at(-1);
+    if (token === "{") {
+      stack.push({ keys: new Set(), expectingKey: true });
+    } else if (token === "[") {
+      stack.push(null);
+    } else if (token === "}" || token === "]") {
+      stack.pop();
+    } else if (token === "," && current !== null && current !== undefined) {
+      current.expectingKey = true;
+    } else if (token === ":" && current !== null && current !== undefined) {
+      current.expectingKey = false;
+    } else if (token.startsWith('"') && current?.expectingKey) {
+      const key = JSON.parse(token);
+      if (current.keys.has(key)) {
+        fail("release plan JSON contains a duplicate key");
+      }
+      current.keys.add(key);
+      current.expectingKey = false;
+    }
+  }
 }
 
 function validatePackages(value) {
@@ -389,17 +425,7 @@ export function parseReleasePlanLockJson(text) {
   if (!/^[\x20-\x7e]+\n$/u.test(text)) {
     fail("release plan lock JSON must be compact printable ASCII with exactly one trailing LF");
   }
-  const document = parseDocument(text, { strict: true, uniqueKeys: true });
-  if (document.errors.length > 0) {
-    const duplicate = document.errors.find((error) =>
-      error.message.includes("keys must be unique"),
-    );
-    fail(
-      duplicate
-        ? "release plan JSON contains a duplicate key"
-        : `release plan lock JSON is invalid: ${document.errors[0].message}`,
-    );
-  }
+  assertNoDuplicateJsonKeys(text);
   let value;
   try {
     value = JSON.parse(text);

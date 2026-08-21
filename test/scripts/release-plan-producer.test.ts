@@ -1,6 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../../scripts/lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
@@ -34,6 +36,7 @@ const TOOLING_CLOSURE = [
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
 ];
+const TOOLING_ROOT_FILES = ["package.json", "pnpm-lock.yaml"];
 
 function writeFixture(root: string, path: string, content: string) {
   const target = join(root, path);
@@ -62,7 +65,7 @@ function commit(root: string, message: string, options: { allowEmpty?: boolean }
 }
 
 function copyToolingClosure(root: string) {
-  for (const path of TOOLING_CLOSURE) {
+  for (const path of [...TOOLING_CLOSURE, ...TOOLING_ROOT_FILES]) {
     writeFixture(root, path, readFileSync(resolve(path), "utf8"));
   }
 }
@@ -219,7 +222,6 @@ function createFixtureRepo(
     writeFixture(root, `.github/workflows/${name}`, `name: ${name}\n`);
   }
   copyToolingClosure(root);
-  writeFixture(root, "package.json", JSON.stringify({ name: "openclaw", version: "2099.1.1" }));
   const toolingSha = commit(root, "tooling");
   const toolingFullRef = `refs/tags/release-publish/${toolingSha.slice(0, 12)}-1`;
   return { candidateRef, candidateSha, root, toolingFullRef, toolingSha };
@@ -478,6 +480,78 @@ describe("release plan producer", () => {
         runGh: trustedToolingGh(toolingFullRef, toolingSha),
       }),
     ).toThrow("tooling import closure differs from tooling SHA");
+  });
+
+  it("rejects foreign yaml resolved from a distinct execution root", () => {
+    const fixture = createFixtureRepo();
+    writeFixture(
+      fixture.root,
+      "node_modules/yaml/package.json",
+      JSON.stringify({
+        name: "yaml",
+        version: "9.9.9",
+        type: "commonjs",
+        main: "./index.cjs",
+        exports: {
+          ".": "./index.cjs",
+          "./package.json": "./package.json",
+        },
+      }),
+    );
+    writeFixture(
+      fixture.root,
+      "node_modules/yaml/index.cjs",
+      `
+exports.parse = source => {
+  if (source.includes("rerun_group")) {
+    return { on: { workflow_dispatch: { inputs: { rerun_group: { options: ["package", "all", "ci"] } } } } };
+  }
+  if (source.includes("CORE_PACKAGE_DIRS")) {
+    return { jobs: { preflight: { steps: [{ env: { CORE_PACKAGE_DIRS: "packages/ai packages/gateway-protocol packages/gateway-client" } }] } } };
+  }
+  return {
+    jobs: {
+      publish_docker: { uses: "./.github/workflows/docker-release.yml" },
+      publish_vcr: { uses: "./.github/workflows/vercel-container-registry-publish.yml" }
+    }
+  };
+};
+`,
+    );
+    writeFixture(
+      fixture.root,
+      "foreign-yaml-harness.mts",
+      `
+import { produceReleasePlan } from "./scripts/release-plan-producer.mts";
+
+const toolingFullRef = ${JSON.stringify(fixture.toolingFullRef)};
+const toolingSha = ${JSON.stringify(fixture.toolingSha)};
+produceReleasePlan({
+  repoRoot: ${JSON.stringify(fixture.root)},
+  intent: "publish",
+  candidateSha: ${JSON.stringify(fixture.candidateSha)},
+  candidateRef: ${JSON.stringify(fixture.candidateRef)},
+  toolingSha,
+  toolingFullRef,
+  runGh: () => JSON.stringify({
+    ref: toolingFullRef,
+    object: { type: "commit", sha: toolingSha },
+  }),
+});
+`,
+    );
+    const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", tsxImport, join(fixture.root, "foreign-yaml-harness.mts")],
+      {
+        cwd: fixture.root,
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installed yaml package.json must match yaml@2.9.0");
   });
 
   it("rejects malformed publishable plugins while producing the plan", () => {
