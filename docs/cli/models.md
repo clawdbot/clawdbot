@@ -33,7 +33,7 @@ openclaw models scan
 > **Upgrade note.** `scan` and `aliases` previously accepted a parent `--agent <id>`
 > and ignored it, including an id that does not exist. They now exit nonzero with
 > `does not support --agent`. Scripts passing `--agent` to these subcommands should
-> drop the flag: the behaviour they were getting was always the global default, so
+> drop the flag: the behavior they were getting was always the global default, so
 > removing it does not change what the command does.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
