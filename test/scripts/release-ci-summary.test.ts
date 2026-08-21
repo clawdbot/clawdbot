@@ -1677,6 +1677,9 @@ describe("release CI summary child correlation", () => {
   });
 
   it("requires the child mapped by rerunGroup and scans only selected in-progress workflows", () => {
+    expect(() => requiredChildKeysForRerunGroup("release-checks")).toThrow(
+      "release validation manifest rerun group is invalid: release-checks",
+    );
     const focused = validateParentManifest(
       {
         ...rawManifest({ rerunGroup: "npm-telegram" }),

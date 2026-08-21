@@ -82,7 +82,6 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
   ["all", ["normalCi", "releaseChecks", "pluginPrerelease", "productPerformance"]],
   ["ci", ["normalCi"]],
   ["plugin-prerelease", ["pluginPrerelease"]],
-  ["release-checks", ["releaseChecks"]],
   ["install-smoke", ["releaseChecks"]],
   ["cross-os", ["releaseChecks"]],
   ["live-e2e", ["releaseChecks"]],

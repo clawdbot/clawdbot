@@ -532,7 +532,7 @@ jobs:
   prepare_release_candidate:
     name: Prepare shared release candidate
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && contains(fromJSON('["all","plugin-prerelease","cross-os","live-e2e","package"]'), inputs.rerun_group) }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && (contains(fromJSON('["all","plugin-prerelease","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && inputs.live_suite_filter == '')) }}
     permissions:
       actions: read
       contents: read
@@ -1235,6 +1235,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
@@ -1514,8 +1515,11 @@ jobs:
           echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ -z "${RELEASE_PACKAGE_SPEC// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             case "$RERUN_GROUP" in
-              all|plugin-prerelease|cross-os|live-e2e|package)
+              all|plugin-prerelease|cross-os|package)
                 candidate_required=1
+                ;;
+              live-e2e)
+                [[ -n "${LIVE_SUITE_FILTER// }" ]] || candidate_required=1
                 ;;
             esac
           fi

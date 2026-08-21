@@ -517,8 +517,14 @@ jobs:
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
+          if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER_INPUT// }" &&
+                "$RELEASE_RERUN_GROUP_INPUT" != "cross-os" ]]; then
+            echo "cross_os_suite_filter requires rerun_group=cross-os; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
+            exit 1
+          fi
 
           qa_filter_seen=false
+          repo_filter_seen=false
           filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
           repo_live_suite_filter="$filter"
           if [[ -n "${filter// }" ]]; then
@@ -588,10 +594,22 @@ jobs:
                   [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
                 *)
+                  repo_filter_seen=true
                   repo_filter_tokens+=("$token")
                   ;;
               esac
             done
+
+            if [[ "$qa_filter_seen" == "true" &&
+                  "$RELEASE_RERUN_GROUP_INPUT" != "qa" &&
+                  "$RELEASE_RERUN_GROUP_INPUT" != "qa-live" ]]; then
+              echo "QA live_suite_filter selectors require rerun_group=qa or qa-live; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
+              exit 1
+            fi
+            if [[ "$repo_filter_seen" == "true" && "$RELEASE_RERUN_GROUP_INPUT" != "live-e2e" ]]; then
+              echo "Repo live_suite_filter selectors require rerun_group=live-e2e; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
+              exit 1
+            fi
 
             if [[ "$qa_filter_seen" == "true" ]]; then
               repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]-}")"
