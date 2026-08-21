@@ -148,7 +148,12 @@ describe("outbound prepared queue migration", () => {
     const id = "stable-legacy-delivery";
     upsertDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      entry: { ...legacyEntry(id, "secret"), completionRetention: "permanent" },
+      entry: {
+        ...legacyEntry(id, "secret"),
+        completionRetention: "permanent",
+        replyToId: "root-message",
+        replyToMode: "batched",
+      },
       stateDir: tmpDir(),
     });
 
@@ -174,6 +179,13 @@ describe("outbound prepared queue migration", () => {
     expect(
       acceptedPreparedOutboundEntries(queued.preparedBatch).map((entry) => entry.payload),
     ).toEqual([{ text: "secret-prepared" }]);
+    expect(queued.reply).toEqual({
+      source: "implicit",
+      replyToId: "root-message",
+      mode: "first",
+    });
+    expect(queued).not.toHaveProperty("replyToId");
+    expect(queued).not.toHaveProperty("replyToMode");
     expect(queued).not.toHaveProperty("legacyPreparationOwnerId");
     expect(queued).not.toHaveProperty("legacyPreparationLeaseExpiresAt");
 
