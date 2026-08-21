@@ -16,6 +16,9 @@ vi.mock("../../utils/tools-manager.js", () => ({
 }));
 
 afterEach(() => {
+  // Restore fake timers even when a timeout test fails mid-way; leaked fake
+  // timers would otherwise poison later cases and hide the real failure.
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -296,7 +299,6 @@ describe("grep tool streaming", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await rejection;
     expect(child.killed).toBe(true);
-    vi.useRealTimers();
   });
 
   it("clears the stall timer when ripgrep exits normally", async () => {
@@ -315,7 +317,6 @@ describe("grep tool streaming", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
     expect(child.killed).toBe(false);
-    vi.useRealTimers();
   });
 
   it("does not time out while formatting context after ripgrep exits", async () => {
@@ -354,7 +355,6 @@ describe("grep tool streaming", () => {
     resolveReadFile?.("foo\n");
     const result = await resultPromise;
     expect(textContent(result)).toContain("match.txt:1: foo");
-    vi.useRealTimers();
   });
 
   it("keeps stdout guarded after a stderr failure closes readline", async () => {

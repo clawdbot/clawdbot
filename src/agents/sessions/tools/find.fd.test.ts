@@ -26,6 +26,9 @@ type MockChild = ChildProcessWithoutNullStreams & {
 };
 
 afterEach(() => {
+  // Restore fake timers even when a timeout test fails mid-way; leaked fake
+  // timers would otherwise poison later cases and hide the real failure.
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -99,7 +102,6 @@ it("rejects and kills fd when the search stalls without output past the deadline
   await vi.advanceTimersByTimeAsync(60_000);
   await rejection;
   expect(child.killMock).toHaveBeenCalledOnce();
-  vi.useRealTimers();
 });
 
 it("clears the stall timer when fd exits normally", async () => {
@@ -117,7 +119,6 @@ it("clears the stall timer when fd exits normally", async () => {
 
   expect(vi.getTimerCount()).toBe(0);
   expect(child.killMock).not.toHaveBeenCalled();
-  vi.useRealTimers();
 });
 
 it.each(["stdout", "stderr"] as const)(
