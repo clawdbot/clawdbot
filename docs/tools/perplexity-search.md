@@ -56,6 +56,41 @@ openclaw gateway restart
 
 If `provider: "perplexity"` is configured and the Perplexity key SecretRef is unresolved with no env fallback, startup/reload fails fast.
 
+## OpenRouter / Sonar compatibility (legacy)
+
+Existing installs pointed at Perplexity Sonar through OpenRouter continue to work. The provider switches to the Sonar chat-completions transport when any of these is set:
+
+- `OPENROUTER_API_KEY` in the Gateway environment
+- An `sk-or-...` key stored in `plugins.entries.perplexity.config.webSearch.apiKey`
+- `plugins.entries.perplexity.config.webSearch.baseUrl` or `.model`
+
+In that mode the provider returns AI-synthesized answers with citations instead of structured Search API results. The Search API filter parameters `country`, `language`, `date_after`/`date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return a `not supported` error on the chat-completions path; `freshness` still applies as `search_recency_filter`. New setups should use a `pplx-` key against the native Search API.
+
+```json5
+{
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "<openrouter-api-key>",
+            baseUrl: "https://openrouter.ai/api/v1",
+            model: "perplexity/sonar-pro",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        provider: "perplexity",
+      },
+    },
+  },
+}
+```
+
 ## Tool parameters
 
 <ParamField path="query" type="string" required>
