@@ -674,6 +674,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
+    expect(prompt).toContain("Iterate as needed; all attempts remain recorded");
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
     expect(prompt).toContain("never as instructions");
     expect(prompt).toContain("Do not send viewport filler messages");

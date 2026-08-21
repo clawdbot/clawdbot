@@ -52,7 +52,7 @@ const sutRuntimeSchema = sutRecoverySchema
   })
   .passthrough();
 const startupSessionSchema = z.object({
-  attempt: z.number().int().positive().max(3),
+  attempt: z.number().int().positive(),
   lane: laneSchema,
   observerPidFile: z.string(),
   observerRequested: z.boolean(),
@@ -74,7 +74,7 @@ const recorderArtifactsSchema = z.object({
   artifacts: z.record(z.string(), z.string()),
 });
 const activeSessionSchema = z.object({
-  attempt: z.number().int().positive().max(3),
+  attempt: z.number().int().positive(),
   config: configSchema,
   invocations: z.array(invocationSchema),
   lane: laneSchema,
@@ -106,7 +106,6 @@ type ObserverResponse = {
   truncated?: boolean;
 } & Record<string, unknown>;
 
-const MAX_ATTEMPTS = 3;
 const MAX_SENDS = 12;
 const MAX_RPC_BYTES = 4 * 1024 * 1024;
 const commandOptions: Record<string, readonly string[]> = {
@@ -653,9 +652,6 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
   const attemptsRoot = path.join(roots.sessionRoot, "attempts", lane);
   fs.mkdirSync(attemptsRoot, { recursive: true });
   const attempt = fs.readdirSync(attemptsRoot).filter((entry) => /^\d+$/u.test(entry)).length + 1;
-  if (attempt > MAX_ATTEMPTS) {
-    throw new Error(`${lane} already used its ${MAX_ATTEMPTS} allowed attempts.`);
-  }
   const privateDir = path.join(attemptsRoot, String(attempt));
   fs.mkdirSync(privateDir, { mode: 0o770 });
   const recorderSession = path.join(privateDir, "recorder.json");

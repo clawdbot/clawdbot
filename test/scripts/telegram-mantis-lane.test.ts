@@ -494,6 +494,20 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
+  it("keeps later proof attempts usable", async () => {
+    const harness = await setupHarness();
+    const active = path.join(harness.sessionRoot, "candidate.active.json");
+    const state = JSON.parse(fs.readFileSync(active, "utf8"));
+    state.attempt = 4;
+    writeJson(active, state);
+    try {
+      const result = await runLane(harness.env, ["requests", "--lane", "candidate"]);
+      expect(JSON.parse(result.stdout)).toEqual({ count: 0, requests: [] });
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("finishes an expected-silence proof on the triggering user message", async () => {
     const harness = await setupHarness({ userOnlyEvents: true });
     try {

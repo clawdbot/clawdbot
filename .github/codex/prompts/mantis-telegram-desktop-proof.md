@@ -108,7 +108,7 @@ behavior, call `block`; do not call `finish` and describe the block only in pros
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
 PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
 near the bottom and the recording covers the behavior—not only its final state.
-Iterate within the three-attempt budget; all attempts remain recorded.
+Iterate as needed; all attempts remain recorded.
 
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each
