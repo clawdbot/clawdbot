@@ -11,6 +11,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -131,6 +132,7 @@ type StartCodexAttemptThreadResult = {
 export async function startCodexAttemptThread(params: {
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
+  runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: ResolvedCodexComputerUseConfig;
@@ -171,6 +173,7 @@ export async function startCodexAttemptThread(params: {
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
+  onExecutionDisconnect?: (error: Error) => void;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
@@ -362,7 +365,10 @@ export async function startCodexAttemptThread(params: {
             const releaseStartupSandboxEnvironment = async () => {
               if (startupSandboxEnvironmentAcquired) {
                 startupSandboxEnvironmentAcquired = false;
-                await releaseCodexSandboxExecServerEnvironment(params.sandbox);
+                await releaseCodexSandboxExecServerEnvironment(
+                  params.sandbox,
+                  startupSandboxEnvironment,
+                );
               }
             };
             releaseStartupResourcesOnTimeout = releaseStartupSandboxEnvironment;
@@ -376,9 +382,11 @@ export async function startCodexAttemptThread(params: {
                 ? await ensureCodexSandboxExecServerEnvironment({
                     client: activeStartupClient,
                     sandbox: params.sandbox ?? null,
+                    runtime: params.runtime,
                     appServerStartOptions: params.appServer.start,
                     timeoutMs: params.appServer.requestTimeoutMs,
-                    signal: startupAbandonController.signal,
+                    signal: AbortSignal.any([params.signal, startupAbandonController.signal]),
+                    onExecutionDisconnect: params.onExecutionDisconnect,
                   })
                 : undefined;
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);

@@ -118,7 +118,7 @@ describe("Where chip", () => {
       cloudProfiles: [],
       cloudProfileId: "",
       deviceId: "",
-      deviceDisabledReason: "Needs the embedded runtime",
+      deviceDisabledReason: "This runtime does not support paired devices",
     });
     const container = document.createElement("div");
     render(
@@ -146,7 +146,7 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("Needs the embedded runtime");
-    expect(device?.title).toBe("Needs the embedded runtime");
+    expect(device?.textContent).toContain("This runtime does not support paired devices");
+    expect(device?.title).toBe("This runtime does not support paired devices");
   });
 });

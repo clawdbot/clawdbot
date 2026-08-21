@@ -55,6 +55,7 @@ const loadWorkerPlacementSessionRuntimeModule = createLazyRuntimeModule(async ()
     managedWorktrees,
     resolveWorkerPlacementSessionRuntime:
       placementSessionRuntime.resolveWorkerPlacementSessionRuntime,
+    supportsWorkerPlacementOnDevice: placementSessionRuntime.supportsWorkerPlacementOnDevice,
     resolveCanonicalSessionEntryFromStoreKeys:
       sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
     resolveGatewaySessionStoreTargetWithStore:
@@ -391,9 +392,12 @@ export function createGatewayWorkerPlacementRuntime(
         if (!executionMode) {
           throw new Error(`Runtime ${runtime} lacks cloud placement support`);
         }
-        if (moveTarget.kind === "device" && executionMode !== "worker-turn") {
+        if (
+          moveTarget.kind === "device" &&
+          !sessionRuntime.supportsWorkerPlacementOnDevice(runtime)
+        ) {
           throw new Error(
-            `runtime ${runtime} cannot move to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or move to an SSH-backed cloud worker provider`,
+            `runtime ${runtime} does not support paired-device placement; select a compatible runtime or cloud worker provider`,
           );
         }
         return { executionMode, ...destination.value };

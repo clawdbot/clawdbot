@@ -21,7 +21,10 @@ import {
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
-import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
+import {
+  releaseCodexSandboxExecServerEnvironment,
+  type CodexSandboxExecEnvironment,
+} from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
@@ -55,6 +58,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     trajectory: params.hostCapabilities.trajectory,
     tools: toolBridge.availableSpecs,
   });
+  const executionState: {
+    sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
+    executionDisconnectError: Error | undefined;
+  } = {
+    sandboxExecEnvironment: undefined,
+    executionDisconnectError: undefined,
+  };
   const state = {
     client: undefined as unknown as CodexAppServerClient,
     thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
@@ -76,7 +86,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLease: undefined as (() => void) | undefined,
     startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
-    sandboxExecEnvironmentAcquired: false,
+    ...executionState,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
     codexExecutionCwd: effectiveCwd,
     codexSandboxPolicy: undefined as CodexSandboxPolicy | undefined,
@@ -153,9 +163,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     await retireSharedCodexClientForOneShotCleanup();
   };
   const releaseSandboxExecEnvironment = async () => {
-    if (state.sandboxExecEnvironmentAcquired) {
-      state.sandboxExecEnvironmentAcquired = false;
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
+    if (state.sandboxExecEnvironment) {
+      const environment = state.sandboxExecEnvironment;
+      state.sandboxExecEnvironment = undefined;
+      await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
     }
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>

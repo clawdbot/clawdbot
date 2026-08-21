@@ -39,11 +39,11 @@ function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state:
 describe("sessions.dispatch", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry(), "sessions-dispatch-test", "default");
-    const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
+    const codexHarness: AgentHarness = {
       id: "codex",
       label: "Codex",
       autoSelection: { providerIds: ["codex", "openai"] },
-      cloudPlacement: { mode: "remote-exec" },
+      cloudPlacement: { mode: "remote-exec", devicePlacement: true },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
         throw new Error("not used");
@@ -436,15 +436,34 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("explains how to make a codex session eligible for paired-device dispatch", async () => {
+  it.each([
+    { name: "dispatches an opted-in runtime", runtimeId: "codex", supported: true },
+    { name: "rejects a runtime without opt-in", runtimeId: "cloud-only", supported: false },
+  ])("$name to a paired device", async ({ runtimeId, supported }) => {
+    if (!supported) {
+      registerAgentHarness({
+        id: runtimeId,
+        label: "Cloud only",
+        cloudPlacement: { mode: "remote-exec" },
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("not used");
+        },
+      });
+    }
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
-        agentRuntimeOverride: "codex",
+        agentRuntimeOverride: runtimeId,
         worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
       }),
     );
-    const dispatch = vi.fn();
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("paired-device dispatch reached"));
     const respond = await invoke(
       makeContext({
         workerPlacementDispatchService: { dispatch },
@@ -453,14 +472,27 @@ describe("sessions.dispatch", () => {
       { deviceId: "device-1" },
     );
 
-    expect(dispatch).not.toHaveBeenCalled();
+    if (supported) {
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionMode: "remote-exec",
+          profileId: "device:device-1",
+          deviceId: "device-1",
+        }),
+        expect.any(Function),
+        undefined,
+      );
+    } else {
+      expect(dispatch).not.toHaveBeenCalled();
+    }
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          'runtime codex cannot dispatch to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or choose an SSH-backed cloud worker provider',
+        code: supported ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+        message: supported
+          ? "paired-device dispatch reached"
+          : "runtime cloud-only does not support paired-device placement; select a compatible runtime or cloud worker provider",
       }),
     );
   });

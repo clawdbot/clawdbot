@@ -817,7 +817,7 @@ export const en: TranslationMap = {
     cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
     cloudProfileRuntimeUnsupported:
       "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
-    deviceRuntimeUnsupported: "Needs the embedded runtime",
+    deviceRuntimeUnsupported: "This runtime does not support paired devices",
     cloudRecoveryUnavailable:
       "Cloud workers are unavailable because this connection does not support task recovery. Reconnect or update the Gateway.",
     placementStartFailed: "The session was created, but runner startup failed: {error}",

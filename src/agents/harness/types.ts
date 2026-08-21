@@ -354,6 +354,8 @@ type AgentHarnessRunCapability<
    * dynamic probing; an empty list marks an explicit-only harness.
    */
   autoSelection?: { providerIds: readonly string[] };
+  /** Declares host-owned remote execution and optional paired-device transport support. */
+  cloudPlacement?: { mode: "remote-exec"; devicePlacement?: boolean };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.

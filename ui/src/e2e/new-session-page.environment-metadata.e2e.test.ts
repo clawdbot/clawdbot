@@ -16,7 +16,7 @@ const updateIssue = {
 };
 
 suite.define(() => {
-  it("offers paired devices only to models that use the embedded runtime", async () => {
+  it("offers paired devices to every model whose runtime explicitly supports them", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -45,6 +45,18 @@ suite.define(() => {
           provider: "openai",
           agentRuntime: {
             id: "codex",
+            cloudPlacementSupported: true,
+            devicePlacementSupported: true,
+            source: "model",
+          },
+        },
+        {
+          available: true,
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          provider: "anthropic",
+          agentRuntime: {
+            id: "cloud-only",
             cloudPlacementSupported: true,
             devicePlacementSupported: false,
             source: "model",
@@ -75,30 +87,49 @@ suite.define(() => {
       const whereTrigger = page.locator("#new-session-where-trigger");
       const where = page.locator("wa-popover.new-session-page__where-popover");
       const device = where.locator('[data-value="device:build-mac"]');
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
 
       await whereTrigger.click();
       await device.waitFor();
       expect(await device.isEnabled()).toBe(true);
-      expect(await device.textContent()).not.toContain("Needs the embedded runtime");
+      expect(await device.textContent()).not.toContain(
+        "This runtime does not support paired devices",
+      );
       await captureDeviceRuntimeUiProof(page, "01-embedded-device-enabled.png");
       await page.keyboard.press("Escape");
 
-      await page.locator('[data-chat-model-select="true"]').click();
+      await modelSelect.click();
       await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
+      await whereTrigger.click();
+      await expect.poll(() => device.isEnabled()).toBe(true);
+      expect(await device.textContent()).not.toContain(
+        "This runtime does not support paired devices",
+      );
+      await captureDeviceRuntimeUiProof(page, "02-codex-device-enabled.png");
+      await page.keyboard.press("Escape");
+
+      await modelSelect.click();
+      await page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]').click();
+      await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
       await expect
         .poll(() => device.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual(["Needs the embedded runtime"]);
-      expect(await device.getAttribute("title")).toBe("Needs the embedded runtime");
-      await captureDeviceRuntimeUiProof(page, "02-codex-device-disabled.png");
+        .toEqual(["This runtime does not support paired devices"]);
+      expect(await device.getAttribute("title")).toBe(
+        "This runtime does not support paired devices",
+      );
+      await captureDeviceRuntimeUiProof(page, "03-cloud-only-device-disabled.png");
       await page.keyboard.press("Escape");
 
-      await page.locator('[data-chat-model-select="true"]').click();
+      await modelSelect.click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
-      expect(await device.textContent()).not.toContain("Needs the embedded runtime");
+      expect(await device.textContent()).not.toContain(
+        "This runtime does not support paired devices",
+      );
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

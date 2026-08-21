@@ -49,10 +49,6 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
-type CodexAppServerAgentHarness = AgentHarnessV2 & {
-  cloudPlacement?: { mode: "remote-exec" };
-};
-
 type CodexAppServerAgentHarnessOptions = {
   id?: string;
   label?: string;
@@ -124,11 +120,11 @@ export function createCodexAppServerAgentHarness(
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
     options.pluginConfig;
-  const harness: CodexAppServerAgentHarness = {
+  const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
     autoSelection: { providerIds: [...providerIds] },
-    cloudPlacement: { mode: "remote-exec" },
+    cloudPlacement: { mode: "remote-exec", devicePlacement: true },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
@@ -251,6 +247,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
         pluginConfig: resolveAttemptPluginConfig(params.config),
+        runtime: sessionRuntime,
         runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
         nativeHookRelay: { enabled: true },
       });
@@ -290,6 +287,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        runtime: sessionRuntime,
         runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });

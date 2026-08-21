@@ -34,14 +34,26 @@ export function resolveWorkerPlacementSessionRuntime(params: {
 export function resolveWorkerPlacementExecutionMode(
   runtime: string,
 ): WorkerPlacementExecutionMode | undefined {
+  return resolveWorkerPlacementCapabilities(runtime).executionMode;
+}
+
+function resolveWorkerPlacementCapabilities(runtime: string): {
+  executionMode?: WorkerPlacementExecutionMode;
+  devicePlacementSupported: boolean;
+} {
   const runtimeId = runtime.trim();
   if (runtimeId === OPENCLAW_AGENT_RUNTIME_ID) {
-    return "worker-turn";
+    return { executionMode: "worker-turn", devicePlacementSupported: true };
   }
-  const harness = getRegisteredAgentHarness(runtimeId)?.harness as
-    | { cloudPlacement?: { mode: "remote-exec" } }
-    | undefined;
-  return harness?.cloudPlacement?.mode;
+  const placement = getRegisteredAgentHarness(runtimeId)?.harness.cloudPlacement;
+  return {
+    ...(placement ? { executionMode: placement.mode } : {}),
+    devicePlacementSupported: placement?.devicePlacement === true,
+  };
+}
+
+export function supportsWorkerPlacementOnDevice(runtime: string): boolean {
+  return resolveWorkerPlacementCapabilities(runtime).devicePlacementSupported;
 }
 
 export function projectWorkerPlacementAgentRuntime(
@@ -52,12 +64,14 @@ export function projectWorkerPlacementAgentRuntime(
   devicePlacementSupported: boolean;
 } {
   const { source, ...identity } = runtime;
-  const executionMode = resolveWorkerPlacementExecutionMode(runtime.id);
+  const { executionMode, devicePlacementSupported } = resolveWorkerPlacementCapabilities(
+    runtime.id,
+  );
   return {
     ...identity,
     cloudPlacementSupported: executionMode !== undefined,
     ...(executionMode ? { cloudPlacementExecutionMode: executionMode } : {}),
-    devicePlacementSupported: executionMode === "worker-turn",
+    devicePlacementSupported,
     source,
   };
 }

@@ -482,6 +482,20 @@ This preview path is local-only. A remote WebSocket app-server cannot reach
 the loopback exec-server unless it is running on the same host, so OpenClaw
 rejects that combination.
 
+Paired-device `remote-exec` placement is a separate, placement-owned execution
+path and does not require `appServer.experimental.sandboxExecServer`. The
+Gateway keeps Codex app-server and provider auth local, while the authorized
+paired device runs the managed Codex exec-server over its existing duplex node
+connection. It requires explicit `gateway.nodes.commands.allow` authorization
+for `codex.exec-server.stdio.v1`, the approved pairing surface, and normal node
+invocation approval. The node receives a fresh private home and sanitized
+environments, never Gateway provider, cloud, or GitHub credentials. A lost
+node connection terminates the attempt and process instead of resuming it.
+The managed placement workspace is not an OS sandbox: approved processes and
+files have the node account's full access. Use a separate least-privilege node
+account when isolation is required.
+See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
+
 ## Auth and environment isolation
 
 In the default per-agent home, managed stdio launches use Codex's ephemeral

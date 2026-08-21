@@ -64,6 +64,24 @@ describe("new-session model runtime", () => {
     expect(control.cloudRuntimeUnsupportedReason(profile)).toBe(expected);
   });
 
+  it.each([
+    { name: "allows opted-in remote execution", runtimeId: "codex", supported: true },
+    { name: "allows embedded execution", runtimeId: "openclaw", supported: true },
+    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only", supported: false },
+  ])("$name on paired devices", ({ runtimeId, supported }) => {
+    const control = new NewSessionModelControl(() => undefined);
+    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
+      id: runtimeId,
+      cloudPlacementSupported: true,
+      devicePlacementSupported: supported,
+      source: "model",
+    });
+
+    expect(control.devicePlacementUnsupportedReason()).toBe(
+      supported ? undefined : "This runtime does not support paired devices",
+    );
+  });
+
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },

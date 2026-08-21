@@ -820,15 +820,39 @@ async function dispatchInvoke(
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const acquireManagedWorkspace = context?.acquireManagedWorkspace;
+    let pluginInvocationActive = true;
     const invokeContext =
-      context && (frame.sessionKey || runtime.signal)
+      context && (frame.sessionKey || runtime.signal || acquireManagedWorkspace)
         ? {
             ...context,
             ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
             ...(runtime.signal ? { signal: runtime.signal } : {}),
+            ...(acquireManagedWorkspace
+              ? {
+                  acquireManagedWorkspace: (
+                    request: Parameters<typeof acquireManagedWorkspace>[0],
+                  ) => {
+                    if (
+                      !pluginInvocationActive ||
+                      runtime.signal?.aborted ||
+                      !frame.sessionKey ||
+                      request.sessionKey !== frame.sessionKey
+                    ) {
+                      throw new Error("node placement workspace invocation authority is closed");
+                    }
+                    return acquireManagedWorkspace(request);
+                  },
+                }
+              : {}),
           }
         : context;
-    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    let pluginResult: string | null;
+    try {
+      pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    } finally {
+      pluginInvocationActive = false;
+    }
     if (pluginResult !== null) {
       await runtime.flushPluginCommandIo?.();
       await sendRawPayloadResult(client, frame, pluginResult);

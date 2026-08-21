@@ -137,9 +137,9 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
-  const provider: WorkerProvider = {
+  const provider: WorkerProvider<"internal"> = {
     id: DEVICE_WORKER_PROVIDER_ID,
-    supportedExecutionModes: ["worker-turn"],
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);

@@ -220,6 +220,15 @@ process. Failed environment registration never falls back to host execution.
 See [Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution)
 for configuration and local-only transport restrictions.
 
+Paired-device `remote-exec` is separate from the experimental local sandbox
+flag: Codex app-server and model auth stay on the Gateway, while an explicitly
+authorized managed exec-server on the node owns process, filesystem, capability,
+and HTTP operations. The existing duplex node channel carries the Codex
+JSON-RPC stream without starting an OpenClaw worker child. Disconnect ends the
+active attempt and its remote processes; reconnect allows only a fresh attempt.
+The placement workspace does not confine execution: process and filesystem
+access remain bounded only by the node's operating system account.
+
 ## V1 support contract
 
 Supported in Codex runtime v1:

@@ -83,6 +83,54 @@ describe("device worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({ state: "active" });
   });
 
+  it("syncs paired-device remote-exec without launching an OpenClaw worker child", async () => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({ available: true }));
+    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
+      ...harness.ready,
+      providerId: "device",
+      profileId: "device:device-1",
+      profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+      nodeDeviceId: "device-1",
+      leaseId: "device-lease-1",
+      sshEndpoint: null,
+      sharedHost: true,
+    });
+    const request = {
+      ...REQUEST,
+      executionMode: "remote-exec" as const,
+      profileId: "device:device-1",
+      deviceId: "device-1",
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
+      },
+    };
+
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      executionMode: "remote-exec",
+      remoteWorkspaceDir: "/worker/workspace",
+    });
+
+    expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
+      { profileId: request.profileId, ...request.inheritedProfile },
+      expect.stringMatching(/^session-dispatch:/u),
+      undefined,
+      "remote-exec",
+    );
+    const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
+      ?.value;
+    expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: request.sessionId,
+        localPath: expect.any(String),
+        generation: expect.any(Number),
+      }),
+    );
+    expect(workspaceTunnel?.launchTurn).not.toHaveBeenCalled();
+  });
+
   it("records an unavailable device dispatch as a durable failed placement", async () => {
     const harness = createHarness(placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({

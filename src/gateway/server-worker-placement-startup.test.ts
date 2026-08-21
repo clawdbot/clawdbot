@@ -24,6 +24,7 @@ const moveDestinationMocks = vi.hoisted(() => ({
     worktree: { id: "worktree-recovery" },
   })),
   resolveExecutionMode: vi.fn(() => "remote-exec"),
+  supportsDevicePlacement: vi.fn(() => false),
   resolveGatewaySessionTarget: vi.fn(() => ({
     agentId: "main",
     canonicalKey: "agent:main:move-source",
@@ -61,6 +62,7 @@ vi.mock("./worker-environments/placement-session-runtime.js", async (importOrigi
     ...actual,
     resolveWorkerPlacementExecutionMode: moveDestinationMocks.resolveExecutionMode,
     resolveWorkerPlacementSessionRuntime: moveDestinationMocks.resolveSessionRuntime,
+    supportsWorkerPlacementOnDevice: moveDestinationMocks.supportsDevicePlacement,
   };
 });
 
@@ -852,70 +854,78 @@ describe("worker placement move destination", () => {
     },
   );
 
-  it("rejects a remote-exec paired-device move before reclaiming the active source", async () => {
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    runtimeFactoryMocks.createDispatch.mockReturnValue({
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      move: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
-    });
-    createGatewayWorkerPlacementRuntime({
-      placements: { workspaceResultInstanceId: () => "gateway-test" } as never,
-      environments: {} as never,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
-      warn: vi.fn(),
-    });
-    const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
-      | {
-          resolveMoveDestination: Parameters<
-            typeof createWorkerPlacementMoveService
-          >[0]["resolveDestination"];
-        }
-      | undefined;
-    if (!dispatchOptions) {
-      throw new Error("worker placement dispatch options were not captured");
-    }
-    const runMoveBarrier = vi.fn(async () => {
-      throw new Error("source placement barrier started");
-    });
-    const reclaimSource = vi.fn();
-    const dispatch = vi.fn();
-    const moves = createWorkerPlacementMoveService({
-      placements: { getPlacementMove: () => undefined } as never,
-      environments: { get: () => undefined },
-      runMoveBarrier,
-      dispatch,
-      reclaimSource,
-      validateAbandonSource: vi.fn(),
-      abandonSource: vi.fn(async () => {
-        throw new Error("unexpected source abandonment");
-      }),
-      resolveDestination: dispatchOptions.resolveMoveDestination,
-    });
+  it.each([
+    { name: "allows explicitly supported", devicePlacementSupported: true },
+    { name: "rejects unsupported", devicePlacementSupported: false },
+  ])(
+    "$name remote-exec paired-device moves before source reclaim",
+    async ({ devicePlacementSupported }) => {
+      moveDestinationMocks.supportsDevicePlacement.mockReturnValueOnce(devicePlacementSupported);
+      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+        read: vi.fn(),
+        version: vi.fn(() => 0),
+        sweep: vi.fn().mockResolvedValue(undefined),
+      });
+      runtimeFactoryMocks.createDispatch.mockReturnValue({
+        dispatch: vi.fn(),
+        forceDestroyEnvironment: vi.fn(),
+        move: vi.fn(),
+        reclaim: vi.fn(),
+        reconcile: vi.fn(),
+        reconcileActive: vi.fn(),
+      });
+      createGatewayWorkerPlacementRuntime({
+        placements: { workspaceResultInstanceId: () => "gateway-test" } as never,
+        environments: {} as never,
+        gatewayNamespace: "gateway-test",
+        revokeSessionAuthority: vi.fn(),
+        warn: vi.fn(),
+      });
+      const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
+        | {
+            resolveMoveDestination: Parameters<
+              typeof createWorkerPlacementMoveService
+            >[0]["resolveDestination"];
+          }
+        | undefined;
+      if (!dispatchOptions) {
+        throw new Error("worker placement dispatch options were not captured");
+      }
+      const runMoveBarrier = vi.fn(async () => {
+        throw new Error("source placement barrier started");
+      });
+      const reclaimSource = vi.fn();
+      const dispatch = vi.fn();
+      const moves = createWorkerPlacementMoveService({
+        placements: { getPlacementMove: () => undefined } as never,
+        environments: { get: () => undefined },
+        runMoveBarrier,
+        dispatch,
+        reclaimSource,
+        validateAbandonSource: vi.fn(),
+        abandonSource: vi.fn(async () => {
+          throw new Error("unexpected source abandonment");
+        }),
+        resolveDestination: dispatchOptions.resolveMoveDestination,
+      });
 
-    await expect(
-      moves.move({
+      const move = moves.move({
         sessionId: "session-move-source",
         sessionKey: "agent:main:move-source",
         agentId: "main",
         source: { generation: 4, environmentId: "environment-source", ownerEpoch: 2 },
         target: { kind: "device", deviceId: "paired-build-mac" },
-      }),
-    ).rejects.toThrow(
-      'runtime codex cannot move to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or move to an SSH-backed cloud worker provider',
-    );
-    expect(runMoveBarrier).not.toHaveBeenCalled();
-    expect(reclaimSource).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
-  });
+      });
+      await expect(move).rejects.toThrow(
+        devicePlacementSupported
+          ? "source placement barrier started"
+          : "runtime codex does not support paired-device placement; select a compatible runtime or cloud worker provider",
+      );
+      expect(runMoveBarrier).toHaveBeenCalledTimes(devicePlacementSupported ? 1 : 0);
+      expect(reclaimSource).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("worker placement startup recovery authority", () => {

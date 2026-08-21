@@ -20,6 +20,7 @@ import type { WorkerSessionPlacementRecord } from "../worker-environments/placem
 import {
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
+  supportsWorkerPlacementOnDevice,
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -143,21 +144,28 @@ function validateDispatchExecutionMode(params: {
   target: { profileId: string; deviceId?: string };
   respond: RespondFn;
 }): boolean {
+  if (params.target.deviceId !== undefined) {
+    if (supportsWorkerPlacementOnDevice(params.sessionRuntime)) {
+      return true;
+    }
+    respondInvalidWorkerSession(
+      params.respond,
+      `runtime ${params.sessionRuntime} does not support paired-device placement; select a compatible runtime or cloud worker provider`,
+    );
+    return false;
+  }
   if (
     params.executionMode !== "remote-exec" ||
-    (params.target.deviceId === undefined &&
-      params.context.workerEnvironmentService?.supportsExecutionMode?.(
-        params.target.profileId,
-        params.executionMode,
-      ) === true)
+    params.context.workerEnvironmentService?.supportsExecutionMode?.(
+      params.target.profileId,
+      params.executionMode,
+    ) === true
   ) {
     return true;
   }
   respondInvalidWorkerSession(
     params.respond,
-    params.target.deviceId !== undefined
-      ? `runtime ${params.sessionRuntime} cannot dispatch to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or choose an SSH-backed cloud worker provider`
-      : `runtime ${params.sessionRuntime} requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"`,
+    `runtime ${params.sessionRuntime} requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"`,
   );
   return false;
 }

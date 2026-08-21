@@ -95,7 +95,7 @@ describe("device worker provider", () => {
       listCurrentNodes: async () => [connectedNode()],
     }).provider;
 
-    expect(provider.supportedExecutionModes).toEqual(["worker-turn"]);
+    expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
     const first = await provider.provision({ device: DEVICE_ID }, "operation-1");
     const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1");
     const next = await provider.provision({ device: DEVICE_ID }, "operation-2");
