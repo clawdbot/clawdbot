@@ -583,17 +583,17 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
-    const effectiveTyping = updateTypingConnections({
+    const { typing: effectiveTyping, preview } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
+      ...(params.typing && params.preview ? { preview: params.preview } : {}),
       now,
     });
     if (!params.typing && effectiveTyping) {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const preview = effectiveTyping ? params.preview || undefined : undefined;
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,

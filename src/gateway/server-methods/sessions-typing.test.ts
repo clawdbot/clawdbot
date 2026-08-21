@@ -142,6 +142,55 @@ describe("session typing handler", () => {
     });
   });
 
+  it("keeps a live draft preview when another connection sends boolean-only typing", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(40_000);
+      const sessionKey = "agent:main:shared-preview";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-shared-preview",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = [
+        { user: { id: "alice" }, watchedSessions: [sessionKey] },
+        { user: { id: "owner" }, watchedSessions: [sessionKey] },
+      ];
+      const broadcast = vi.fn();
+      const params = {
+        sessionKey,
+        sessionId: "session-shared-preview",
+        context: context(broadcast),
+      };
+
+      expect(
+        await callTyping({
+          ...params,
+          typing: true,
+          preview: "still drafting",
+          client: client("alice", "alice-preview-tab"),
+        }),
+      ).toEqual({ ok: true, broadcast: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(
+        await callTyping({
+          ...params,
+          typing: true,
+          client: client("alice", "alice-presence-tab"),
+        }),
+      ).toEqual({ ok: true, broadcast: true });
+
+      expect(broadcast.mock.calls[1]?.[1]).toMatchObject({
+        typing: true,
+        preview: "still drafting",
+      });
+    });
+  });
+
   it.each([
     { agentId: "main", expected: ["agent:main:global"] },
     { agentId: "work", expected: ["agent:work:global"] },

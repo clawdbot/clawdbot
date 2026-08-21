@@ -19,10 +19,11 @@ type TypingBroadcastState = {
   pending?: PendingTypingBroadcast;
   timer?: ReturnType<typeof setTimeout>;
 };
+type TypingConnectionState = { updatedAt: number; preview?: string };
 
 type SessionTypingState = {
   broadcasts: Map<string, TypingBroadcastState>;
-  connections: Map<string, Map<string, number>>;
+  connections: Map<string, Map<string, TypingConnectionState>>;
 };
 
 function clearSessionTypingStateValue(state: SessionTypingState): void {
@@ -157,11 +158,12 @@ export function updateTypingConnections(params: {
   key: string;
   connectionId: string;
   typing: boolean;
+  preview?: string;
   now: number;
-}): boolean {
+}): { typing: boolean; preview?: string } {
   for (const [typingKey, activeConnections] of typingConnections) {
-    for (const [connectionId, updatedAt] of activeConnections) {
-      if (params.now - updatedAt >= TYPING_ACTIVE_TTL_MS) {
+    for (const [connectionId, connection] of activeConnections) {
+      if (params.now - connection.updatedAt >= TYPING_ACTIVE_TTL_MS) {
         activeConnections.delete(connectionId);
       }
     }
@@ -169,18 +171,27 @@ export function updateTypingConnections(params: {
       typingConnections.delete(typingKey);
     }
   }
-  const connections = typingConnections.get(params.key) ?? new Map<string, number>();
+  const connections = typingConnections.get(params.key) ?? new Map<string, TypingConnectionState>();
   if (params.typing) {
-    connections.set(params.connectionId, params.now);
+    connections.set(params.connectionId, {
+      updatedAt: params.now,
+      ...(params.preview ? { preview: params.preview } : {}),
+    });
   } else {
     connections.delete(params.connectionId);
   }
   if (connections.size === 0) {
     typingConnections.delete(params.key);
-    return false;
+    return { typing: false };
   }
   typingConnections.delete(params.key);
   typingConnections.set(params.key, connections);
   pruneMapToMaxSize(typingConnections, MAX_TYPING_THROTTLE_KEYS);
-  return true;
+  let latestPreview: TypingConnectionState | undefined;
+  for (const connection of connections.values()) {
+    if (connection.preview && (!latestPreview || connection.updatedAt >= latestPreview.updatedAt)) {
+      latestPreview = connection;
+    }
+  }
+  return { typing: true, ...(latestPreview?.preview ? { preview: latestPreview.preview } : {}) };
 }

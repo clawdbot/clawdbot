@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { broadcastTypingThrottled, clearSessionTypingState } from "./session-typing-state.js";
+import {
+  broadcastTypingThrottled,
+  clearSessionTypingState,
+  updateTypingConnections,
+} from "./session-typing-state.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -10,6 +14,109 @@ beforeEach(() => {
 afterEach(() => {
   clearSessionTypingState();
   vi.useRealTimers();
+});
+
+describe("session typing connection state", () => {
+  it("retains the newest live preview across an actor's connections", () => {
+    const key = "shared-preview";
+
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "preview-tab",
+        typing: true,
+        preview: "first draft",
+        now: 10_000,
+      }),
+    ).toEqual({ typing: true, preview: "first draft" });
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "presence-tab",
+        typing: true,
+        now: 10_100,
+      }),
+    ).toEqual({ typing: true, preview: "first draft" });
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "presence-tab",
+        typing: true,
+        preview: "newer draft",
+        now: 10_200,
+      }),
+    ).toEqual({ typing: true, preview: "newer draft" });
+  });
+
+  it("removes a stopped connection's preview while preserving another connection's liveness", () => {
+    const key = "stopped-preview";
+
+    updateTypingConnections({
+      key,
+      connectionId: "preview-tab",
+      typing: true,
+      preview: "draft",
+      now: 10_000,
+    });
+    updateTypingConnections({
+      key,
+      connectionId: "presence-tab",
+      typing: true,
+      now: 10_100,
+    });
+
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "preview-tab",
+        typing: false,
+        now: 10_200,
+      }),
+    ).toEqual({ typing: true });
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "presence-tab",
+        typing: false,
+        now: 10_300,
+      }),
+    ).toEqual({ typing: false });
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "missing-tab",
+        typing: false,
+        now: 10_400,
+      }),
+    ).toEqual({ typing: false });
+  });
+
+  it("expires stale previews while a refreshed boolean-only connection remains live", () => {
+    const key = "expired-preview";
+
+    updateTypingConnections({
+      key,
+      connectionId: "preview-tab",
+      typing: true,
+      preview: "expired draft",
+      now: 10_000,
+    });
+    updateTypingConnections({
+      key,
+      connectionId: "presence-tab",
+      typing: true,
+      now: 11_000,
+    });
+
+    expect(
+      updateTypingConnections({
+        key,
+        connectionId: "presence-tab",
+        typing: true,
+        now: 12_500,
+      }),
+    ).toEqual({ typing: true });
+  });
 });
 
 describe("session typing broadcast throttle", () => {
