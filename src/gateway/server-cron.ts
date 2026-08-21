@@ -1439,10 +1439,16 @@ export function buildGatewayCronService(params: {
   };
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
-    const generation = streamWatcherGeneration;
+    const exitGeneration = exitWatcherGeneration;
+    const streamGeneration = streamWatcherGeneration;
+    const lifecycleChanged = () =>
+      exitGeneration !== exitWatcherGeneration || streamGeneration !== streamWatcherGeneration;
     await exitWatchersStopPromise;
+    if (lifecycleChanged()) {
+      return;
+    }
     await startCron();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     exitWatchersStopped = false;
@@ -1451,15 +1457,15 @@ export function buildGatewayCronService(params: {
     exitWatchersStopPromise = undefined;
     streamWatchersStopPromise = undefined;
     streamWatchersRef.current?.resume();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     await reconcileStreamWatchers();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     await reconcileHeartbeatJobs();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     // Register only once started, under the build-time epoch, so a stale lazy
