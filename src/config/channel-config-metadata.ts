@@ -388,7 +388,11 @@ export function collectChannelSchemaMetadataWithOwnership(
     const rootLabel = record.channelCatalogMeta?.label;
     const rootDescription = record.channelCatalogMeta?.blurb;
 
-    for (const channelId of record.channels) {
+    for (const declaredChannelId of record.channels) {
+      // Key by the canonical id. Ownership below already decides on `normalizeClaimedChannelId`,
+      // and the runtime config is canonical too, so keying the entry by the declared spelling put
+      // a differently-spelled claimant in its own bucket that no `channels.<id>.*` path can reach.
+      const channelId = normalizeClaimedChannelId(declaredChannelId);
       const current = byChannelId.get(channelId);
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
@@ -431,7 +435,10 @@ export function collectChannelSchemaMetadataWithOwnership(
       }
     }
 
-    for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+    for (const [declaredChannelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+      // Same canonicalization as the declaration loop: a sensitive hint collected under a
+      // non-canonical spelling never lines up with the config path redaction actually reads.
+      const channelId = normalizeClaimedChannelId(declaredChannelId);
       // Collect before any ownership decision: a claimant that loses the schema still contributes
       // sensitivity, and the decision below `continue`s past this point for losers.
       for (const [relPath, hint] of Object.entries(channelConfig.uiHints ?? {})) {

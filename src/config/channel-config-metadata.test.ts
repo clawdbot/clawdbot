@@ -376,3 +376,31 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(ownerOf([second, first])).toBe("clickclack-core");
   });
 });
+
+// Codex review P1 on #123209: ownership decides on `normalizeClaimedChannelId`, but the metadata
+// and redaction maps were keyed by the spelling the manifest declared. A claimant spelling the
+// channel differently landed in its own bucket, so a field only it marked sensitive carried no
+// hint on the canonical path that redaction reads.
+describe("channel id canonicalization", () => {
+  it("collects a differently-spelled channel claim onto the canonical entry", () => {
+    const plugins = [
+      {
+        id: "fallback",
+        origin: "global",
+        channels: ["clickclack"],
+        channelConfigs: {
+          Clickclack: {
+            schema: { type: "object", additionalProperties: true },
+            uiHints: { token: { sensitive: true } },
+          },
+        },
+      },
+    ];
+    const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
+
+    const entries = collectChannelSchemaMetadataWithOwnership(registry);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["clickclack"]);
+    expect(entries[0]?.configUiHints?.token?.sensitive).toBe(true);
+  });
+});
