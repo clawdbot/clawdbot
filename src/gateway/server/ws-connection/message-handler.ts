@@ -424,12 +424,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const isStartupNodePreauth = (data: RawData): boolean => {
     const parsed = parsePreauthConnectFrame(data);
     return parsed ? isStartupNodeConnect(parsed.params) : false;
+  };
+
   const isHeldRestoredAdmissionProbeConnect = (data: RawData): boolean => {
     const parsed = parsePreauthConnectFrame(data);
     if (!parsed || !isLocalClient || hasBrowserOriginHeader) {
       return false;
     }
-    const connectParams = parsed.params as ConnectParams;
+    const connectParams = parsed.params;
     if (
       (connectParams.role !== undefined && connectParams.role !== "operator") ||
       connectParams.client.id !== GATEWAY_CLIENT_IDS.GATEWAY_CLIENT ||

@@ -1,11 +1,11 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import {
   createGatewayKernel,
   gatewayKernelLogs,
   resetPreparedModelCatalogForTestCore,
 } from "./server-kernel.js";
-import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";

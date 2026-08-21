@@ -340,7 +340,7 @@ async function authenticateGatewayConnectCore(
     close(1008, "device identity required");
     return false;
   };
-  if (startupPending && !device) {
+  if (startupPending && !device && !context.allowStartupPendingConnect) {
     await settleRejectedSharedAuthFailure();
     await rejectGatewayStartupConnect(context);
     return undefined;
