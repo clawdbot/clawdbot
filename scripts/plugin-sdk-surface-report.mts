@@ -408,7 +408,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-      // +6: shipped channel config schemas and setup helpers retained during package migration.
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
       // +1: shared ingress error factory projected through channel-message.
@@ -422,7 +421,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      1140,
+      1134,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
