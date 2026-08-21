@@ -333,18 +333,14 @@ describe("Codex paired-device exec-server relay", () => {
     ],
     ["OAuth URL access token", { url: "https://example.test/path?access_token=synthetic-canary" }],
     ["session identity", { url: "https://example.test/path?sessionId=synthetic-canary" }],
+    ["matrix session", { url: "https://x/p;jsessionid=synthetic-canary" }],
+    ["matrix case", { url: "https://x/p;JSESSIONID=synthetic-canary" }],
+    ["encoded matrix", { url: "https://x/p%3Bjsessionid%3Dsynthetic-canary" }],
+    ["nested matrix", { url: "https://x/a;region=west/b;session_id=synthetic-canary" }],
     ["SAML assertion", { url: "https://example.test/path?SAMLResponse=synthetic-canary" }],
     ["OAuth device code", { url: "https://example.test/path?device_code=synthetic-canary" }],
-    [
-      "OAuth consumer key",
-      { url: "https://example.test/path?oauth_consumer_key=synthetic-canary" },
-    ],
-    [
-      "encoded canonical token",
-      {
-        url: `https://example.test/?safe=${["sk", "live", "x".repeat(30)].join("%255F")}`,
-      },
-    ],
+    ["OAuth consumer key", { url: "https://x/?oauth_consumer_key=synthetic-canary" }],
+    ["encoded token", { url: `https://x/?v=${["sk", "live", "x".repeat(30)].join("%255F")}` }],
     [
       "encoded nested form credential",
       { url: "https://example.test/path?user%255Bpassword%255D=synthetic-canary" },
@@ -476,7 +472,7 @@ describe("Codex paired-device exec-server relay", () => {
       method: "http/request",
       params: {
         method: "POST",
-        url: "https://example.test/stream",
+        url: "https://example.test/stream;region=west/next;color=blue",
         headers: [
           { name: "X-Trace", value: "first" },
           { name: "x-trace", value: "second" },

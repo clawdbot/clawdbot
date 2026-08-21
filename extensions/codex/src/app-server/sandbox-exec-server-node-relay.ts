@@ -233,18 +233,39 @@ function hasCredentialedCodexNodeHttpUrl(value: string): boolean {
     return true;
   }
   let fields = 0;
+  const hasCredentialedParameter = (name: string, parameterValue: string): boolean =>
+    ++fields > CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_FIELDS ||
+    isCodexNodeCredentialField(name) ||
+    hasSensitiveCodexNodeText(parameterValue);
   for (const parameters of [url.searchParams, new URLSearchParams(url.hash.slice(1))]) {
-    for (const [name, value] of parameters) {
-      if (
-        ++fields > CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_FIELDS ||
-        isCodexNodeCredentialField(name) ||
-        hasSensitiveCodexNodeText(value)
-      ) {
+    for (const [name, parameterValue] of parameters) {
+      if (hasCredentialedParameter(name, parameterValue)) {
         return true;
       }
     }
   }
-  return false;
+  let pathname = url.pathname;
+  for (let depth = 0; depth <= CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_DEPTH; depth += 1) {
+    for (const segment of pathname.split("/")) {
+      for (const parameter of segment.split(";").slice(1)) {
+        const separator = parameter.indexOf("=");
+        const name = separator < 0 ? parameter : parameter.slice(0, separator);
+        const parameterValue = separator < 0 ? "" : parameter.slice(separator + 1);
+        if (hasCredentialedParameter(name, parameterValue)) {
+          return true;
+        }
+      }
+    }
+    if (!/%[\da-f]{2}/iu.test(pathname)) {
+      return false;
+    }
+    try {
+      pathname = decodeURIComponent(pathname);
+    } catch {
+      return true;
+    }
+  }
+  return true;
 }
 
 function hasCredentialedCodexNodeHttpBody(
@@ -303,11 +324,11 @@ function hasCredentialedCodexNodeHttpBody(
     return !declaredText;
   }
   let fields = 0;
-  for (const [name, value] of new URLSearchParams(body)) {
+  for (const [name, parameterValue] of new URLSearchParams(body)) {
     if (
       ++fields > CODEX_NODE_HTTP_CREDENTIAL_SCAN_MAX_FIELDS ||
       isCodexNodeCredentialField(name) ||
-      hasSensitiveCodexNodeText(value)
+      hasSensitiveCodexNodeText(parameterValue)
     ) {
       return true;
     }
