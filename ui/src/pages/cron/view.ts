@@ -17,6 +17,7 @@ import type {
   CronStatus,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
+  CronJobsScheduleKindFilter,
   CronJobsTriggerFilter,
   CronRunsStatusValue,
   CronJobsSortBy,
@@ -51,7 +52,6 @@ import type {
   CronFieldKey,
   CronFormState,
   CronJobsLastStatusFilter,
-  CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
