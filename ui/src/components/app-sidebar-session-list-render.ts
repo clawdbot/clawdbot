@@ -59,17 +59,28 @@ function renderSessionSection(params: {
   const { host, section } = params;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
+  const personOwner = section.personOwner;
   // Pinned rows render in the nav zone; renderHeader records whether this list
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
-  const label = section.groups
-    ? t("chat.sidebar.groups")
-    : section.work
-      ? t("chat.sidebar.coding")
-      : group
-        ? group
-        : t("chat.sidebar.otherSessions");
-  const zone = section.groups ? "groups" : section.work ? "coding" : group ? "category" : "threads";
+  const label = personOwner
+    ? personOwner.label || personOwner.id
+    : section.groups
+      ? t("chat.sidebar.groups")
+      : section.work
+        ? t("chat.sidebar.coding")
+        : group
+          ? group
+          : t("chat.sidebar.otherSessions");
+  const zone = personOwner
+    ? "person"
+    : section.groups
+      ? "groups"
+      : section.work
+        ? "coding"
+        : group
+          ? "category"
+          : "threads";
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -83,6 +94,7 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
+  const sectionDropEnabled = groupWriteAccess.allowed && !personOwner;
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -103,19 +115,21 @@ function renderSessionSection(params: {
     <div
       class=${sectionClass}
       data-session-section=${section.id}
-      @dragover=${groupWriteAccess.allowed
+      data-zone=${zone}
+      @dragover=${sectionDropEnabled
         ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
         : nothing}
-      @dragleave=${groupWriteAccess.allowed
+      @dragleave=${sectionDropEnabled
         ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
         : nothing}
-      @drop=${groupWriteAccess.allowed
+      @drop=${sectionDropEnabled
         ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
         : nothing}
     >
       ${section.renderHeader
         ? renderSidebarSessionSectionHeader({
             sectionId: section.id,
+            draggable: !personOwner,
             disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
             onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
             onFinishDrag: () => host.finishSidebarSectionDrag(),
@@ -138,6 +152,19 @@ function renderSessionSection(params: {
                     >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                   >
                 </span>
+                ${personOwner
+                  ? html`<openclaw-viewer-avatar
+                      .user=${{
+                        id: personOwner.id,
+                        name: personOwner.label,
+                        avatarUrl: personOwner.avatarUrl,
+                        watchedSessions: [],
+                      }}
+                      .markAsViewer=${false}
+                      variant="session"
+                      aria-hidden="true"
+                    ></openclaw-viewer-avatar>`
+                  : nothing}
                 <span class="sidebar-recent-sessions__label-text">${label}</span>
                 ${collapsed && totalRowCount > 0
                   ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`

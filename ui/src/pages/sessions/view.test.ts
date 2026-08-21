@@ -482,6 +482,39 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
   });
 
+  it("offers person grouping and labels owner sections from their durable profile", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:ada",
+              kind: "direct",
+              updatedAt: 2,
+              owner: { actor: { type: "human", id: "profile-ada", label: "Ada Lovelace" } },
+            },
+            { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+        groupBy: "person",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      container
+        .querySelector<HTMLOptionElement>('.session-groupby__select option[value="person"]')
+        ?.textContent?.trim(),
+    ).toBe("Person");
+    expect(
+      [...container.querySelectorAll(".session-group-row__label")].map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Ada Lovelace", "Ungrouped"]);
+  });
+
   it("selects and names the current page size on first render", async () => {
     const container = document.createElement("div");
     render(

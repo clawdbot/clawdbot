@@ -1164,6 +1164,7 @@ export const en: TranslationMap = {
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
+    groupByPerson: "Person",
     showSessionPreview: "Show message preview",
     showCronSessions: "Show automation sessions",
     showSystemSessions: "Show system sessions",
