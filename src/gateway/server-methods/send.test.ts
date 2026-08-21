@@ -1446,6 +1446,46 @@ describe("gateway send mirroring", () => {
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
   });
 
+  it("does not send or queue after delegated authority closes during delivery preflight", async () => {
+    const enteredDelivery = createDeferred<null>();
+    const resumeDelivery = createDeferred<null>();
+    const platformSend = vi.fn();
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async (params: { onPlatformSendDispatch?: () => Promise<void> }) => {
+        enteredDelivery.resolve(null);
+        await resumeDelivery.promise;
+        await params.onPlatformSendDispatch?.();
+        platformSend();
+        return [{ channel: "slack", messageId: "must-not-send" }];
+      },
+    );
+    let authorityActive = true;
+    const context = {
+      ...makeContext(),
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    } as GatewayRequestContext;
+    const request = runSendWithClient(
+      {
+        channel: "slack",
+        to: "channel:C1",
+        message: "must not escape",
+        sessionKey: "agent:main:slack:channel:C1",
+        idempotencyKey: "idem-send-delivery-authority-race",
+      },
+      agentRuntimeClient("agent:main:slack:channel:C1"),
+      context,
+    );
+    await enteredDelivery.promise;
+    authorityActive = false;
+    resumeDelivery.resolve(null);
+
+    const { respond } = await request;
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expect(deliveryCall()?.skipQueue).toBe(true);
+    expect(platformSend).not.toHaveBeenCalled();
+  });
+
   it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {
     const receipt = createDeferred<"started">();
     mocks.beginRestartRecoveryTerminalDelivery.mockReturnValueOnce(receipt.promise);

@@ -562,6 +562,41 @@ describe("gateway url override hardening", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("carries live authority across a gateway send RPC", async () => {
+    setThreadChatGatewayRegistry();
+    let authorityActive = true;
+    const queueDelivery = vi.fn();
+    const platformSend = vi.fn();
+    callGatewayMock.mockImplementationOnce(async (call: { agentRuntimeIdentityToken?: string }) => {
+      if (call.agentRuntimeIdentityToken && !authorityActive) {
+        throw new Error("agent runtime authority is no longer active");
+      }
+      queueDelivery();
+      platformSend();
+      return { messageId: "must-not-send" };
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        to: "channel:town-square",
+        content: "must not escape",
+        channel: "threadchat",
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          resolveAgentRuntimeIdentityToken: async () => "runtime-identity",
+        },
+        onPlatformSendDispatch: async () => {
+          authorityActive = false;
+        },
+      }),
+    ).rejects.toThrow("agent runtime authority is no longer active");
+
+    expect(queueDelivery).not.toHaveBeenCalled();
+    expect(platformSend).not.toHaveBeenCalled();
+  });
+
   it("drops unused buffer metadata when explicit gateway media is present", async () => {
     const result = await sendThreadChatGatewayMessage({
       mediaUrl: "https://example.com/photo.png",
