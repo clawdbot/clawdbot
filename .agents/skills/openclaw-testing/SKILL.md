@@ -366,10 +366,11 @@ editing. Only a confirmed product failure changes the Code SHA. Use one
 diagnosis, one fix when needed, and one narrow retry with
 `-f rerun_group=<group>`, then reassess.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
-`install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`,
-`qa-live`, and `npm-telegram`. The old `release-checks` aggregate retry handle
-is invalid because it silently selected every release-check lane. Use the
-narrowest concrete group that covers the failed box. Do not automatically
+`install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`,
+`npm-telegram`, and `performance`. The old `release-checks` aggregate retry
+handle is invalid because it silently selected every release-check lane. `qa`
+is a direct-child manual aggregate, not an umbrella/controller retry API. Use
+the narrowest concrete group that covers the failed box. Do not automatically
 dispatch `all` after a narrow retry. For a single failed live/E2E shard, use
 `-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
 workflow only spends setup and queue time on that suite.
@@ -431,8 +432,12 @@ gh workflow run openclaw-release-checks.yml \
 ```
 
 Concrete release-check rerun groups are `install-smoke`, `cross-os`,
-`live-e2e`, `package`, `qa`, `qa-parity`, and `qa-live`. Reserve `all` for an
-intentional whole-child validation, never automatic recovery.
+`live-e2e`, `package`, `qa-parity`, and `qa-live`. Direct manual dispatch may
+use `qa` to aggregate parity and live QA, but controllers must select one of
+those two concrete groups. Reserve `all` for an intentional whole-child
+validation, never automatic recovery. Non-empty live or cross-OS filters must
+match their owning group; mismatches fail before scheduling and never widen to
+an unfiltered run.
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once as `release-package-under-test` and passes that artifact into cross-OS
 release checks, release-path Docker live/E2E checks, and Package Acceptance.

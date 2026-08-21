@@ -78,7 +78,6 @@ on:
           - cross-os
           - live-e2e
           - package
-          - qa
           - qa-parity
           - qa-live
           - npm-telegram
@@ -342,7 +341,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -1110,7 +1109,7 @@ jobs:
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
-    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","install-smoke","cross-os","live-e2e","package","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # The bounded package critical path tops out at 310 minutes; 420 leaves
     # queue/API margin. Parent timeout preserves the adopted child for exact cancellation.
@@ -1587,7 +1586,7 @@ jobs:
               plugin-prerelease)
                 plugin_prerelease_required=1
                 ;;
-              install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)
+              install-smoke|cross-os|live-e2e|package|qa-parity|qa-live)
                 release_checks_required=1
                 ;;
               performance)

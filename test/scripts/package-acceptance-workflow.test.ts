@@ -5289,7 +5289,7 @@ describe("package artifact reuse", () => {
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
-      "install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
+      "install-smoke|cross-os|live-e2e|package|qa-parity|qa-live)",
       "cancel-in-progress: false",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",

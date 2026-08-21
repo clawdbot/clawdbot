@@ -1680,6 +1680,9 @@ describe("release CI summary child correlation", () => {
     expect(() => requiredChildKeysForRerunGroup("release-checks")).toThrow(
       "release validation manifest rerun group is invalid: release-checks",
     );
+    expect(() => requiredChildKeysForRerunGroup("qa")).toThrow(
+      "release validation manifest rerun group is invalid: qa",
+    );
     const focused = validateParentManifest(
       {
         ...rawManifest({ rerunGroup: "npm-telegram" }),

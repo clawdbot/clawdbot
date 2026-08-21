@@ -271,8 +271,23 @@ describe("release validation no-push transport", () => {
     const dispatch = step(job(full, "release_checks"), "Dispatch and monitor release checks");
     const capture = step(job(release, "resolve_target"), "Capture selected inputs");
 
+    expect(umbrellaGroups).toEqual([
+      "all",
+      "ci",
+      "plugin-prerelease",
+      "install-smoke",
+      "cross-os",
+      "live-e2e",
+      "package",
+      "qa-parity",
+      "qa-live",
+      "npm-telegram",
+      "performance",
+    ]);
     expect(umbrellaGroups).not.toContain("release-checks");
+    expect(umbrellaGroups).not.toContain("qa");
     expect(releaseGroups).not.toContain("release-checks");
+    expect(releaseGroups).toContain("qa");
     expect(dispatch.run).toContain('-f rerun_group="$RERUN_GROUP"');
     expect(dispatch.run).not.toContain("child_rerun_group");
     const candidate = job(full, "prepare_release_candidate");

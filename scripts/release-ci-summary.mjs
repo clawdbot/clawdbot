@@ -86,7 +86,6 @@ const RERUN_GROUP_CHILD_KEYS = new Map([
   ["cross-os", ["releaseChecks"]],
   ["live-e2e", ["releaseChecks"]],
   ["package", ["releaseChecks"]],
-  ["qa", ["releaseChecks"]],
   ["qa-parity", ["releaseChecks"]],
   ["qa-live", ["releaseChecks"]],
   ["npm-telegram", ["npmTelegram"]],

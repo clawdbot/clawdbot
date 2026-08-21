@@ -46,7 +46,6 @@ const RERUN_GROUPS = new Set([
   "cross-os",
   "live-e2e",
   "package",
-  "qa",
   "qa-parity",
   "qa-live",
   "npm-telegram",
@@ -101,7 +100,8 @@ branch accepts only its final package version or a matching beta prerelease.
 Exact alpha tags remain supported for Tideclaw. The release profile defaults to
 beta for beta candidates and exact alpha tags, and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
-one concrete rerun_group; the removed release-checks aggregate is not accepted.`);
+one controller rerun_group; the removed release-checks aggregate and the direct
+child's manual qa aggregate are not accepted.`);
 }
 
 function run(command: string, args: string[], options: CommandOptions = {}) {
