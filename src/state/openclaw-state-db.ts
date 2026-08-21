@@ -51,6 +51,10 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
+  assertCurrentStateRuntimeSchema,
+  isOpenClawStateSchemaFastPathEligible,
+} from "./openclaw-state-db-fast-path.js";
+import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertOpenClawStateDatabaseV6ForMigration,
@@ -376,16 +380,11 @@ function ensureSchema(
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
 ): void {
   try {
-    assertSupportedSchemaVersion(db, pathname);
-    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
-      assertSqliteIntegrity(db, pathname);
-      assertCurrentStateRuntimeSchema(db, pathname);
-      const metadata = db
-        .prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-        .get() as { app_version?: unknown } | undefined;
-      if (metadata?.app_version === VERSION) {
-        return;
-      }
+    if (isOpenClawStateSchemaFastPathEligible(db, pathname)) {
+      // Recheck ownership after validation so a durable external claim made
+      // during the lock-free fast path cannot retain a writable handle.
+      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      return;
     }
   } catch {
     // Preserve the existing transactional repair and its diagnostics for drift or corruption.
@@ -555,11 +554,6 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
       },
     },
   };
-}
-
-function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
-  assertCanonicalStateSchemaShape(database, pathname);
-  assertOpenClawStateDatabaseForMaintenance(database, { pathname });
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
