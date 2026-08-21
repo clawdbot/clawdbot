@@ -384,6 +384,7 @@ export function assertPluginReleaseVersionFloors(
 }
 
 export type NpmLatestVersionResolver = (packageName: string) => string;
+export type NpmPublishedVersionResolver = (packageName: string, version: string) => boolean;
 
 function isNpmViewTimeoutError(error: unknown): error is Error & { code: "ETIMEDOUT" } {
   return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
@@ -495,6 +496,8 @@ export function collectPluginReleasePlan(params?: {
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
   npmDistTag?: "extended-stable";
+  resolveLatestVersion?: NpmLatestVersionResolver;
+  resolvePublishedVersion?: NpmPublishedVersionResolver;
 }): PluginReleasePlan {
   const gitRangeSelection = params?.gitRange
     ? collectPluginNpmGitRangeSelection({
@@ -534,11 +537,18 @@ export function collectPluginReleasePlan(params?: {
   if (explicitPublishSelection) {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin NPM release plan");
   }
-  assertPluginReleaseDependencyFreshness(selectedPublishable, "Plugin NPM release plan");
+  assertPluginReleaseDependencyFreshness(
+    selectedPublishable,
+    "Plugin NPM release plan",
+    params?.resolveLatestVersion,
+  );
 
   const all = selectedPublishable.map((plugin) =>
     Object.assign({}, plugin, {
-      alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
+      alreadyPublished: (params?.resolvePublishedVersion ?? isPluginVersionPublished)(
+        plugin.packageName,
+        plugin.version,
+      ),
     }),
   );
 

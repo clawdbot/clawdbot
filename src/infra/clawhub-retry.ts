@@ -12,6 +12,7 @@ type ClawHubResponseHandle = {
 type ClawHubRetryOptions<T extends ClawHubResponseHandle> = {
   disposeRetry: (result: T) => Promise<void>;
   retryRateLimit?: boolean;
+  signal?: AbortSignal;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -51,6 +52,7 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
   try {
     return await retryAsync(
       async () => {
+        options.signal?.throwIfAborted();
         const result = await request();
         if (isRetryableClawHubStatus(result.response.status, options.retryRateLimit === true)) {
           throw new RetryableClawHubResponse(result);
@@ -66,6 +68,7 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
           error instanceof RetryableClawHubResponse
             ? parseRetryAfterMs(error.result.response.headers)
             : undefined,
+        shouldRetry: () => options.signal?.aborted !== true,
         onRetry: async ({ err }) => {
           if (err instanceof RetryableClawHubResponse) {
             await options.disposeRetry(err.result);

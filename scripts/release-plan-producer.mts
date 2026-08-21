@@ -69,6 +69,11 @@ export type ReleasePlanSource =
       validationIntent?: never;
     });
 
+declare const verifiedReleasePlanLockBrand: unique symbol;
+export type VerifiedReleasePlanLock = ReleasePlanLock & {
+  readonly [verifiedReleasePlanLockBrand]: true;
+};
+
 type PackageManifest = PluginPackageJson;
 type ParseYaml = (source: string) => unknown;
 
@@ -873,13 +878,13 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
 export function verifyReleasePlanLock(
   lockJson: string,
   params: ReleasePlanSource,
-): ReleasePlanLock {
+): VerifiedReleasePlanLock {
   const expectedPlan = produceReleasePlan(params);
   const lock = parseReleasePlanLockJson(lockJson);
   if (canonicalReleasePlanJson(lock.plan) !== canonicalReleasePlanJson(expectedPlan)) {
     throw new Error("release plan does not match repository-derived authority");
   }
-  return lock;
+  return lock as VerifiedReleasePlanLock;
 }
 
 function requiredOption(args: string[], name: string): string {

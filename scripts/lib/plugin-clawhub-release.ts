@@ -54,6 +54,7 @@ type ClawHubTrustedPublisherDetail = {
 };
 
 type ClawHubTrustedPublisherConfig = {
+  provider?: unknown;
   repository?: unknown;
   workflowFilename?: unknown;
   environment?: unknown;
@@ -62,6 +63,12 @@ type ClawHubTrustedPublisherConfig = {
 type PluginReleasePlanItemWithPackageState = PluginReleasePlanItem & {
   packageExists: boolean;
   hasTrustedPublisher: boolean;
+};
+
+export type ClawHubPackagePublicationState = {
+  packageExists: boolean;
+  hasTrustedPublisher: boolean;
+  alreadyPublished: boolean;
 };
 
 type ClawHubPublishablePluginPackageFilters = {
@@ -103,6 +110,7 @@ function getRegistryBaseUrl(explicit?: string) {
 type ClawHubRequestOptions = {
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 type ClawHubRetryOptions = ClawHubRequestOptions & {
@@ -132,6 +140,9 @@ async function fetchClawHubRequest(
     }, timeoutMs);
     timeout.unref?.();
   });
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
 
   try {
     const response = await Promise.race([
@@ -140,14 +151,14 @@ async function fetchClawHubRequest(
         headers: {
           Accept: "application/json",
         },
-        signal: controller.signal,
+        signal,
       }),
       timeoutPromise,
     ]);
     return {
       clearTimeout: () => clearTimeout(timeout),
       response,
-      signal: controller.signal,
+      signal,
       timeoutPromise,
     };
   } catch (error) {
@@ -169,6 +180,7 @@ async function fetchClawHubRead(
       fetchClawHubRequest(url, {
         fetchImpl: options.fetchImpl,
         requestTimeoutMs: options.requestTimeoutMs,
+        signal: options.signal,
       }),
     {
       disposeRetry: async (request) => {
@@ -176,6 +188,7 @@ async function fetchClawHubRead(
         request.clearTimeout();
       },
       retryRateLimit: true,
+      signal: options.signal,
       sleep: options.sleep,
     },
   );
@@ -393,6 +406,7 @@ async function isPluginVersionPublishedOnClawHub(
   const request = await fetchClawHubRead(url, {
     fetchImpl: options.fetchImpl,
     requestTimeoutMs: options.requestTimeoutMs,
+    signal: options.signal,
     sleep: options.sleep,
   });
   const { response } = request;
@@ -426,6 +440,7 @@ async function doesClawHubPackageExist(
   const request = await fetchClawHubRead(url, {
     fetchImpl: options.fetchImpl,
     requestTimeoutMs: options.requestTimeoutMs,
+    signal: options.signal,
     sleep: options.sleep,
   });
   const { response } = request;
@@ -489,12 +504,27 @@ async function hasClawHubTrustedPublisher(
   }
 }
 
+export async function resolveClawHubPackagePublicationState(
+  plugin: Pick<PublishablePluginPackage, "packageName" | "version">,
+  options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
+): Promise<ClawHubPackagePublicationState> {
+  const packageExists = await doesClawHubPackageExist(plugin.packageName, options);
+  const hasTrustedPublisher = packageExists
+    ? await hasClawHubTrustedPublisher(plugin.packageName, options)
+    : false;
+  const alreadyPublished = packageExists
+    ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, options)
+    : false;
+  return { packageExists, hasTrustedPublisher, alreadyPublished };
+}
+
 function isOpenClawPluginTrustedPublisher(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const trustedPublisher = value as ClawHubTrustedPublisherConfig;
   return (
+    trustedPublisher.provider === "github-actions" &&
     trustedPublisher.repository === OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY &&
     trustedPublisher.workflowFilename === OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME &&
     trustedPublisher.environment == null
@@ -521,6 +551,10 @@ export async function collectPluginClawHubReleasePlan(params?: {
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
   resolveLatestVersion?: NpmLatestVersionResolver;
+  resolvePackageState?: (
+    plugin: Pick<PublishablePluginPackage, "packageName" | "version">,
+    options?: ClawHubRetryOptions & { registryBaseUrl?: string },
+  ) => Promise<ClawHubPackagePublicationState>;
   sleep?: (ms: number) => Promise<void>;
 }): Promise<PluginReleasePlan> {
   const rootDir = params?.rootDir;
@@ -565,13 +599,9 @@ export async function collectPluginClawHubReleasePlan(params?: {
       requestTimeoutMs: params?.requestTimeoutMs,
       sleep: params?.sleep,
     };
-    const packageExists = await doesClawHubPackageExist(plugin.packageName, queryOptions);
-    const hasTrustedPublisher = packageExists
-      ? await hasClawHubTrustedPublisher(plugin.packageName, queryOptions)
-      : false;
-    const alreadyPublished = packageExists
-      ? await isPluginVersionPublishedOnClawHub(plugin.packageName, plugin.version, queryOptions)
-      : false;
+    const { packageExists, hasTrustedPublisher, alreadyPublished } = await (
+      params?.resolvePackageState ?? resolveClawHubPackagePublicationState
+    )(plugin, queryOptions);
 
     return {
       extensionId: plugin.extensionId,

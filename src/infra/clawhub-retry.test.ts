@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { retryClawHubRead } from "./clawhub-retry.js";
 
 describe("retryClawHubRead", () => {
+  it("does not start or retry reads after the caller aborts", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stop ClawHub reads");
+    const request = vi.fn(async () => ({ response: new Response("unreachable") }));
+    controller.abort(reason);
+
+    await expect(
+      retryClawHubRead(request, {
+        disposeRetry: async () => {},
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("honors Retry-After and cancels the discarded response", async () => {
     const cancel = vi.fn();
     const delays: number[] = [];

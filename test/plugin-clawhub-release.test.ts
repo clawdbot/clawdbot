@@ -494,6 +494,7 @@ describe("collectPluginClawHubReleasePlan", () => {
             status: 200,
             body: {
               trustedPublisher: {
+                provider: "github-actions",
                 repository: "openclaw/openclaw",
                 workflowFilename: "plugin-clawhub-release.yml",
               },
@@ -566,6 +567,7 @@ describe("collectPluginClawHubReleasePlan", () => {
           status: 200,
           body: {
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -626,6 +628,7 @@ describe("collectPluginClawHubReleasePlan", () => {
           status: 200,
           body: {
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -676,6 +679,7 @@ describe("collectPluginClawHubReleasePlan", () => {
         return new Response(
           JSON.stringify({
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -734,6 +738,7 @@ describe("collectPluginClawHubReleasePlan", () => {
         return new Response(
           JSON.stringify({
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -793,6 +798,7 @@ describe("collectPluginClawHubReleasePlan", () => {
         return new Response(
           JSON.stringify({
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -837,6 +843,7 @@ describe("collectPluginClawHubReleasePlan", () => {
         return new Response(
           JSON.stringify({
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -945,6 +952,7 @@ describe("collectPluginClawHubReleasePlan", () => {
         return new Response(
           JSON.stringify({
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -995,6 +1003,7 @@ describe("collectPluginClawHubReleasePlan", () => {
         return new Response(
           JSON.stringify({
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },
@@ -1140,6 +1149,7 @@ describe("collectPluginClawHubReleasePlan", () => {
           status: 200,
           body: {
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
               environment: "clawhub-plugin-release",
@@ -1161,6 +1171,42 @@ describe("collectPluginClawHubReleasePlan", () => {
 
     expect(plan.candidates).toStrictEqual([]);
     expect(plan.bootstrapCandidates).toStrictEqual([]);
+    expect(plan.missingTrustedPublisher.map((plugin) => plugin.packageName)).toEqual([
+      "@openclaw/demo-plugin",
+    ]);
+  });
+
+  it("requires the GitHub Actions trusted publisher provider", async () => {
+    const repoDir = createTempPluginRepo();
+    const { fetchImpl } = createClawHubPlanFetch({
+      packages: {
+        "@openclaw/demo-plugin": { status: 200 },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            trustedPublisher: {
+              provider: "npm",
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          },
+        },
+      },
+      versions: {
+        "@openclaw/demo-plugin@2026.4.1": 404,
+      },
+    });
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(plan.candidates).toStrictEqual([]);
     expect(plan.missingTrustedPublisher.map((plugin) => plugin.packageName)).toEqual([
       "@openclaw/demo-plugin",
     ]);
@@ -1262,6 +1308,7 @@ describe("collectPluginClawHubReleasePlan", () => {
             status: 200,
             body: {
               trustedPublisher: {
+                provider: "github-actions",
                 repository: "openclaw/openclaw",
                 workflowFilename: "plugin-clawhub-release.yml",
               },
@@ -1312,6 +1359,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
           status: 200,
           body: {
             trustedPublisher: {
+              provider: "github-actions",
               repository: "openclaw/openclaw",
               workflowFilename: "plugin-clawhub-release.yml",
             },

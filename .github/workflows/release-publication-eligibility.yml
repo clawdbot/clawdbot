@@ -1,0 +1,250 @@
+name: Release Publication Eligibility
+run-name: Release publication eligibility ${{ inputs.target_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact candidate commit SHA whose publication inventory will be checked
+        required: true
+        type: string
+      target_context_ref:
+        description: Canonical refs/tags/v<version> context for the unpublished candidate
+        required: true
+        type: string
+      tooling_sha:
+        description: Exact trusted release-publish workflow commit SHA
+        required: true
+        type: string
+      tooling_ref:
+        description: Exact trusted refs/tags/release-publish/... workflow ref
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-publication-eligibility-${{ inputs.target_sha }}-${{ inputs.tooling_sha }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.16.0"
+
+jobs:
+  eligibility:
+    name: Collect publication eligibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Initialize evidence bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/publication-eligibility"
+          printf '%s\n' '{"publication_authorized":false,"status":"pending"}' \
+            > "$RUNNER_TEMP/publication-eligibility/producer-result.json"
+
+      - name: Checkout exact release tooling
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.tooling_sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify exact target and tooling identity
+        id: identity
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
+        env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          TOOLING_REF: ${{ inputs.tooling_ref }}
+          TOOLING_SHA: ${{ inputs.tooling_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "target_sha must be an exact lowercase commit SHA." >&2
+            exit 1
+          }
+          [[ "$TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "tooling_sha must be an exact lowercase commit SHA." >&2
+            exit 1
+          }
+          [[ "$TARGET_CONTEXT_REF" =~ ^refs/tags/v[^[:space:]]+$ ]] || {
+            echo "target_context_ref must be a qualified release tag context." >&2
+            exit 1
+          }
+          [[ "$TOOLING_REF" =~ ^refs/tags/release-publish/[0-9a-f]{12}-[1-9][0-9]*$ ]] || {
+            echo "tooling_ref must be an exact release-publish tag." >&2
+            exit 1
+          }
+          expected_workflow_ref="${GITHUB_REPOSITORY}/.github/workflows/release-publication-eligibility.yml@${TOOLING_REF}"
+          [[ "$TOOLING_REF" == "$GITHUB_REF" &&
+             "$TOOLING_SHA" == "$GITHUB_SHA" &&
+             "$TOOLING_SHA" == "$WORKFLOW_SHA" &&
+             "$WORKFLOW_REF" == "$expected_workflow_ref" &&
+             "$(git rev-parse HEAD)" == "$TOOLING_SHA" ]] || {
+            echo "publication eligibility must run from the exact requested tooling ref and SHA." >&2
+            exit 1
+          }
+          git cat-file -e "${TARGET_SHA}^{commit}" || {
+            echo "target_sha is not available from the trusted repository checkout." >&2
+            exit 1
+          }
+
+      - name: Setup trusted Node environment
+        id: setup
+        if: steps.identity.outcome == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+          install-deps: "true"
+          frozen-lockfile: "true"
+
+      - name: Produce canonical ReleasePlan lock
+        id: release_plan
+        if: steps.setup.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          TOOLING_REF: ${{ inputs.tooling_ref }}
+          TOOLING_SHA: ${{ inputs.tooling_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-plan"
+          node --import tsx scripts/release-plan-producer.mts \
+            --intent publish \
+            --candidate-sha "$TARGET_SHA" \
+            --candidate-ref "$TARGET_CONTEXT_REF" \
+            --tooling-sha "$TOOLING_SHA" \
+            --tooling-full-ref "$TOOLING_REF" \
+            > "$RUNNER_TEMP/release-plan/release-plan-lock.json"
+
+      - name: Upload immutable ReleasePlan
+        id: release_plan_upload
+        if: steps.release_plan.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-publication-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-plan/release-plan-lock.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Bind ReleasePlan artifact digest
+        id: release_plan_identity
+        if: steps.release_plan_upload.outcome == 'success'
+        continue-on-error: true
+        env:
+          RAW_DIGEST: ${{ steps.release_plan_upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RAW_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "ReleasePlan artifact digest must be 64 lowercase hex characters." >&2
+            exit 1
+          }
+          echo "digest=sha256:${RAW_DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect publication eligibility receipt
+        id: collect
+        if: steps.release_plan_identity.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --import tsx scripts/release-publication-eligibility.mts \
+            --release-plan-lock "$RUNNER_TEMP/release-plan/release-plan-lock.json" \
+            --receipt "$RUNNER_TEMP/publication-eligibility/release-publication-eligibility.json" \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --job eligibility \
+            --artifact-id "${{ steps.release_plan_upload.outputs.artifact-id }}" \
+            --artifact-digest "${{ steps.release_plan_identity.outputs.digest }}" \
+            2> >(tee "$RUNNER_TEMP/publication-eligibility/collector-error.txt" >&2)
+
+      - name: Record producer outcome
+        if: always()
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+          IDENTITY_OUTCOME: ${{ steps.identity.outcome }}
+          RELEASE_PLAN_IDENTITY_OUTCOME: ${{ steps.release_plan_identity.outcome }}
+          RELEASE_PLAN_OUTCOME: ${{ steps.release_plan.outcome }}
+          RELEASE_PLAN_UPLOAD_OUTCOME: ${{ steps.release_plan_upload.outcome }}
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/publication-eligibility/release-publication-eligibility.json"
+          receipt_present=false
+          [[ -f "$receipt" ]] && receipt_present=true
+          jq -n \
+            --arg checkout "$CHECKOUT_OUTCOME" \
+            --arg identity "$IDENTITY_OUTCOME" \
+            --arg setup "$SETUP_OUTCOME" \
+            --arg release_plan "$RELEASE_PLAN_OUTCOME" \
+            --arg release_plan_upload "$RELEASE_PLAN_UPLOAD_OUTCOME" \
+            --arg release_plan_identity "$RELEASE_PLAN_IDENTITY_OUTCOME" \
+            --arg collect "$COLLECT_OUTCOME" \
+            --argjson receipt_present "$receipt_present" \
+            '{
+              schema: "openclaw.release-publication-eligibility-producer-result.v1",
+              publication_authorized: false,
+              checkout: $checkout,
+              identity: $identity,
+              setup: $setup,
+              release_plan: $release_plan,
+              release_plan_upload: $release_plan_upload,
+              release_plan_identity: $release_plan_identity,
+              collect: $collect,
+              receipt_present: $receipt_present
+            }' > "$RUNNER_TEMP/publication-eligibility/producer-result.json"
+
+      - name: Upload receipt or blocker bundle
+        id: evidence_upload
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-publication-eligibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-eligibility/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fail blocked producer after evidence upload
+        if: always()
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+          EVIDENCE_UPLOAD_OUTCOME: ${{ steps.evidence_upload.outcome }}
+          IDENTITY_OUTCOME: ${{ steps.identity.outcome }}
+          RELEASE_PLAN_IDENTITY_OUTCOME: ${{ steps.release_plan_identity.outcome }}
+          RELEASE_PLAN_OUTCOME: ${{ steps.release_plan.outcome }}
+          RELEASE_PLAN_UPLOAD_OUTCOME: ${{ steps.release_plan_upload.outcome }}
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$CHECKOUT_OUTCOME" == "success" &&
+             "$IDENTITY_OUTCOME" == "success" &&
+             "$SETUP_OUTCOME" == "success" &&
+             "$RELEASE_PLAN_OUTCOME" == "success" &&
+             "$RELEASE_PLAN_UPLOAD_OUTCOME" == "success" &&
+             "$RELEASE_PLAN_IDENTITY_OUTCOME" == "success" &&
+             "$COLLECT_OUTCOME" == "success" &&
+             "$EVIDENCE_UPLOAD_OUTCOME" == "success" ]] || {
+            echo "publication eligibility was blocked; inspect the uploaded evidence bundle." >&2
+            exit 1
+          }

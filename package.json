@@ -1777,6 +1777,7 @@
     "release:plugins:clawhub:plan": "node --import tsx scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
+    "release:publication:eligibility": "node --import tsx scripts/release-publication-eligibility.mts",
     "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
     "release:prep": "node scripts/release-preflight.mjs --fix",
     "release:prep:version": "node scripts/release-preflight.mjs --fix --scope version",

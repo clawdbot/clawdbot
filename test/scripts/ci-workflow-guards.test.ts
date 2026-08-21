@@ -48,6 +48,8 @@ const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-t
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
+const RELEASE_PUBLICATION_ELIGIBILITY_WORKFLOW =
+  ".github/workflows/release-publication-eligibility.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
 const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
@@ -69,6 +71,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 ];
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
   env?: Record<string, unknown>;
   id?: string;
   if?: string;
@@ -1504,6 +1507,91 @@ ${actionRun}`;
 }
 
 describe("ci workflow guards", () => {
+  it("keeps publication eligibility read-only, exact, and evidence-preserving", () => {
+    const source = readFileSync(RELEASE_PUBLICATION_ELIGIBILITY_WORKFLOW, "utf8");
+    const workflow = parse(source);
+    const inputs = workflow.on.workflow_dispatch.inputs;
+    const eligibility = workflow.jobs.eligibility;
+    const eligibilitySteps = eligibility.steps as WorkflowStep[];
+    const exactIdentity = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Verify exact target and tooling identity"),
+      "publication eligibility exact identity step",
+    );
+    const setup = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Setup trusted Node environment"),
+      "publication eligibility trusted Node setup step",
+    );
+    const produce = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Produce canonical ReleasePlan lock"),
+      "publication eligibility ReleasePlan producer step",
+    );
+    const planUpload = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Upload immutable ReleasePlan"),
+      "publication eligibility ReleasePlan upload step",
+    );
+    const collect = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Collect publication eligibility receipt"),
+      "publication eligibility collector step",
+    );
+    const upload = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Upload receipt or blocker bundle"),
+      "publication eligibility evidence upload step",
+    );
+    const fail = expectDefined(
+      eligibilitySteps.find((step) => step.name === "Fail blocked producer after evidence upload"),
+      "publication eligibility final failure step",
+    );
+
+    expect(Object.keys(inputs).toSorted()).toEqual([
+      "target_context_ref",
+      "target_sha",
+      "tooling_ref",
+      "tooling_sha",
+    ]);
+    for (const input of Object.values(inputs) as Array<Record<string, unknown>>) {
+      expect(input).toMatchObject({ required: true, type: "string" });
+    }
+    expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(source).not.toMatch(/\b(?:id-token|packages|statuses|contents):\s*write\b/u);
+    expect(source).not.toContain("environment:");
+    expect(source).not.toContain("secrets.");
+    expect(source).not.toContain("npm publish");
+    expect(source).not.toContain("clawhub publish");
+    expect(source).not.toContain("release-candidate-checklist");
+    expect(source).not.toContain("full-release-validation");
+
+    expect(exactIdentity.run).toContain('"$TOOLING_REF" == "$GITHUB_REF"');
+    expect(exactIdentity.run).toContain('"$TOOLING_SHA" == "$WORKFLOW_SHA"');
+    expect(exactIdentity.run).toContain(
+      ".github/workflows/release-publication-eligibility.yml@${TOOLING_REF}",
+    );
+    expect(setup.with?.["cache-mode"]).toBe("restore");
+    expect(produce.run).toContain("scripts/release-plan-producer.mts");
+    expect(produce.run).toContain('--candidate-sha "$TARGET_SHA"');
+    expect(produce.run).toContain('--candidate-ref "$TARGET_CONTEXT_REF"');
+    expect(produce.run).toContain('--tooling-sha "$TOOLING_SHA"');
+    expect(produce.run).toContain('--tooling-full-ref "$TOOLING_REF"');
+    expect(planUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(planUpload.with?.["if-no-files-found"]).toBe("error");
+
+    expect(collect["continue-on-error"]).toBe(true);
+    expect(collect.run).toContain("scripts/release-publication-eligibility.mts");
+    expect(collect.run).toContain('--run-id "$GITHUB_RUN_ID"');
+    expect(collect.run).toContain('--run-attempt "$GITHUB_RUN_ATTEMPT"');
+    expect(collect.run).toContain("--job eligibility");
+    expect(collect.run).toContain(
+      '--artifact-id "${{ steps.release_plan_upload.outputs.artifact-id }}"',
+    );
+    expect(collect.run).toContain(
+      '--artifact-digest "${{ steps.release_plan_identity.outputs.digest }}"',
+    );
+    expect(upload.if).toBe("always()");
+    expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(fail.if).toBe("always()");
+    expect(eligibilitySteps.indexOf(upload)).toBeLessThan(eligibilitySteps.indexOf(fail));
+  });
+
   it("retains pending same-SHA QA calls in the shared concurrency group", () => {
     const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
     const workflowSource = readFileSync(workflowPath, "utf8");
