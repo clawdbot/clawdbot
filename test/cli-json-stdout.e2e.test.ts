@@ -295,6 +295,27 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it("renders a missing TaskFlow as one canonical JSON document without stderr", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, ["tasks", "flow", "show", "missing-flow", "--json"]);
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message:
+              "TaskFlow not found: missing-flow. Run openclaw tasks flow list to see recent flow ids.",
+          },
+        });
+        expect(result.stderr).toBe("");
+      },
+      { prefix: "openclaw-task-flow-json-failure-e2e-" },
+    );
+  });
+
   it.each([
     { name: "qr", command: ["qr"] },
     { name: "clawbot qr", command: ["clawbot", "qr"] },

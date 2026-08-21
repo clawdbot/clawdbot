@@ -10,7 +10,7 @@ continuous event recording, capture, and cleanup.
 - Do not read prepared worktrees. Pass their exact paths only to the lane helper.
 - Write only under `MANTIS_OUTPUT_DIR`.
 - Never invent a pass, hide an attempt, edit trusted facts/media, or use old chat history.
-- A visible defect is a failure. A missing harness capability is `block`, not a pass.
+- A visible defect is a failure. An unproven comparison is `block`, not a pass.
 
 ## Design the proof
 
@@ -65,13 +65,13 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 - `delete --message-id ID` (only user messages sent in this session)
 - `view --message-id ID` (scroll Desktop to the exact Telegram server message)
 - `screenshot` (returns a public inspection PNG)
-- `finish --focus-message-id ID` (focus again, stop, capture, publish facts)
-- `block --missing-primitive NAME --reason TEXT` (clean stop-report)
+- `finish [--focus-message-id ID]` (focus the named message or the latest sent message, stop, capture, publish facts)
+- `block --reason TEXT [--missing-primitive NAME]` (clean stop-report)
 - `abort` (cleanup after scenario failure)
 
 `start` returns the exact command/budget list. No generic exec/eval or raw
-Telegram API exists. If a required action is absent, use `block`; do not route
-around the credential boundary.
+Telegram API exists. If the comparison cannot prove the PR's visible behavior,
+use `block` and say why.
 Raw response events must form a complete provider response; deltas alone do not
 produce a final answer. Copy the terminal item and completed-response structure
 from `responseEvents` in `scripts/e2e/mock-openai-server.mjs`, and use
@@ -94,13 +94,21 @@ timing matters; use one `turn` for an ordinary exchange.
 
 Run comparable baseline and candidate programs. This proof has no skipped lane:
 each side ends as complete, failed, or blocked with its own trusted facts.
+Use the same scenario inputs in both lanes; only the SUT revision changes. A
+baseline lane that reproduces the defect is a successful capture. A PR-level
+pass claim requires an observed, material baseline/candidate difference caused
+by the changed behavior. Identical relevant observations are unproven: use
+`block`, never claim the PR fixed them. When the expected result is silence,
+focus the session-owned user message that triggered the silent outcome.
+Decide before finalizing each lane. If its setup did not exercise the intended
+behavior, call `block`; do not call `finish` and describe the block only in prose.
 
 ## Judge and publish
 
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
 PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
 near the bottom and the recording covers the behavior—not only its final state.
-Iterate within the three-attempt budget; all attempts remain recorded.
+Iterate as needed; all attempts remain recorded.
 
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each

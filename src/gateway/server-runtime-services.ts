@@ -195,11 +195,13 @@ function startPendingOutboundDeliveryRecovery(params: {
   log: GatewayRuntimeServiceLogger;
 }): () => Promise<void> {
   let stopped = false;
+  let migrationPending = true;
+  let initialPass = true;
   let inFlight: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
-  const recover = (startup: boolean): void => {
+  const recover = (): void => {
     if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
       return;
     }
@@ -214,16 +216,27 @@ function startPendingOutboundDeliveryRecovery(params: {
         return;
       }
       logRecovery ??= params.log.child("delivery-recovery");
-      if (startup) {
+      if (migrationPending) {
+        const cfg = initialPass ? params.cfg : getRuntimeConfig();
+        initialPass = false;
+        const { migrateLegacyPendingOutboundDeliveries } =
+          await import("../infra/outbound/delivery-queue-migration.js");
+        const migration = await migrateLegacyPendingOutboundDeliveries({
+          cfg,
+          log: logRecovery,
+        });
+        // A new scheduled-service lifecycle starts unchecked. Latch only after
+        // one pass neither skipped ownership nor left retired rows behind.
+        migrationPending = migration.skipped > 0 || migration.remaining > 0;
         await recoverPendingDeliveries({
           deliver: deliverOutboundPayloadsInternal,
           log: logRecovery,
-          cfg: params.cfg,
+          cfg,
         });
         return;
       }
-      // Startup migration runs once. Normal retries use fresh config so revoked
-      // accounts cannot inherit the authority captured at gateway startup.
+      // Normal retries use fresh config so revoked accounts cannot inherit the
+      // authority captured at gateway startup.
       await drainPendingDeliveriesCore({
         drainKey: "gateway:outbound",
         logLabel: "Outbound delivery retry",
@@ -243,9 +256,9 @@ function startPendingOutboundDeliveryRecovery(params: {
 
   // Match the queue's first backoff window without holding admission between
   // ticks; otherwise suspended/restarting gateways retain invisible work.
-  const retryTimer = setInterval(() => recover(false), computeBackoffMs(1));
+  const retryTimer = setInterval(recover, computeBackoffMs(1));
   retryTimer.unref?.();
-  recover(true);
+  recover();
   return () => {
     stopped = true;
     clearInterval(retryTimer);

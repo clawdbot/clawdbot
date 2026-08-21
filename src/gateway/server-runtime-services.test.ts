@@ -23,6 +23,8 @@ type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
+type MigrateLegacyPendingOutboundDeliveries =
+  typeof import("../infra/outbound/delivery-queue-migration.js").migrateLegacyPendingOutboundDeliveries;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -53,6 +55,9 @@ const hoisted = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
+    migrateLegacyPendingOutboundDeliveries: vi.fn<MigrateLegacyPendingOutboundDeliveries>(
+      async () => ({ moved: 0, skipped: 0, remaining: 0 }),
+    ),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
@@ -81,6 +86,10 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
   drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
+}));
+
+vi.mock("../infra/outbound/delivery-queue-migration.js", () => ({
+  migrateLegacyPendingOutboundDeliveries: hoisted.migrateLegacyPendingOutboundDeliveries,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
@@ -137,6 +146,12 @@ describe("server-runtime-services", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+    });
+    hoisted.migrateLegacyPendingOutboundDeliveries.mockReset();
+    hoisted.migrateLegacyPendingOutboundDeliveries.mockResolvedValue({
+      moved: 0,
+      skipped: 0,
+      remaining: 0,
     });
     hoisted.drainPendingDeliveries.mockReset();
     hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
@@ -558,6 +573,66 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs legacy migration once while clean periodic ticks keep draining canonical work", async () => {
+    vi.useFakeTimers();
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
+    services.heartbeatRunner.stop();
+  });
+
+  it.each([
+    {
+      name: "the pass skipped work",
+      firstPass: { moved: 0, skipped: 1, remaining: 0 },
+    },
+    {
+      name: "retired work remains",
+      firstPass: { moved: 0, skipped: 0, remaining: 1 },
+    },
+  ])("retries legacy migration when $name until a clean pass completes", async ({ firstPass }) => {
+    vi.useFakeTimers();
+    hoisted.migrateLegacyPendingOutboundDeliveries
+      .mockResolvedValueOnce(firstPass)
+      .mockResolvedValueOnce({ moved: 1, skipped: 0, remaining: 0 });
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledTimes(2);
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(2);
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledTimes(2);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    services.heartbeatRunner.stop();
+  });
+
+  it("resets legacy migration completion with the scheduled-service lifecycle", async () => {
+    vi.useFakeTimers();
+    const first = activateScheduledServicesForTest({ startCron: false });
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    await first.services.stopOutboundDeliveryRecovery();
+
+    const second = activateScheduledServicesForTest({ startCron: false });
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledTimes(2);
+    second.services.heartbeatRunner.stop();
   });
 
   it.each([

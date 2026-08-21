@@ -290,8 +290,10 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: read-write
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -325,6 +327,9 @@ jobs:
           node_modules/.bin/esbuild scripts/e2e/telegram-bot-api-proxy.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-bot-api-proxy.mjs"
+          node_modules/.bin/esbuild scripts/e2e/mock-openai-server.mjs \
+            --bundle --platform=node --format=esm --target=node24 \
+            --outfile="$toolchain_build/scripts/e2e/mock-openai-server.mjs"
           node_modules/.bin/esbuild scripts/e2e/telegram-desktop-recorder.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs"
@@ -431,6 +436,8 @@ jobs:
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-mantis-lane.mjs
           sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-bot-api-proxy.mjs" \
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs
+          sudo install -m 0444 "$toolchain_build/scripts/e2e/mock-openai-server.mjs" \
+            /usr/local/lib/mantis-toolchain/scripts/e2e/mock-openai-server.mjs
           sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs" \
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-desktop-recorder.mjs
           sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg
@@ -588,7 +595,7 @@ jobs:
           test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
 
       - name: Save exact baseline build
-        if: steps.baseline_build_cache.outputs.cache-hit != 'true'
+        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.baseline_build_cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -956,7 +963,7 @@ jobs:
               sudo jq -e '
                 .sendCount >= 1 and (.focusMessageId | test("^[0-9]+$")) and
                 .observation.truncated == false and
-                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and .actor == "bot")) and
+                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and (.actor == "user" or .actor == "bot"))) and
                 any(.invocations[]; .command == "send") and
                 any(.invocations[]; .command == "finish") and
                 (.artifacts.screenshot.bytes > 10000) and
@@ -966,7 +973,7 @@ jobs:
             fi
             if [[ "$fact_status" == "blocked" ]]; then
               sudo jq -e '
-                (.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200 and
+                (.blocked.name == null or ((.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200)) and
                 (.blocked.reason | type) == "string" and (.blocked.reason | length) > 0 and (.blocked.reason | length) <= 2000
               ' "$verdict" >/dev/null
               lane_status="blocked"
@@ -1279,6 +1286,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 

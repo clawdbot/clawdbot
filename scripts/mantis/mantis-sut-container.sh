@@ -11,6 +11,7 @@ readonly iptables_bin="/usr/sbin/iptables"
 readonly timeout_bin="/usr/bin/timeout"
 readonly network_lock_file="/run/lock/openclaw-mantis-sut-network.lock"
 readonly network_state_root="/run/openclaw-mantis-sut-networks"
+readonly mock_server_script="/usr/local/lib/mantis-toolchain/scripts/e2e/mock-openai-server.mjs"
 readonly telegram_proxy_script="/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs"
 
 die() {
@@ -629,7 +630,7 @@ readonly sut_command='
     exit "$exit_code"
   }
   trap cleanup EXIT INT TERM
-  node scripts/e2e/mock-openai-server.mjs >"$MOCK_LOG" 2>&1 &
+  node /opt/mantis/mock-openai-server.mjs >"$MOCK_LOG" 2>&1 &
   mock_pid=$!
   attempt=0
   until grep -q "mock-openai listening" "$MOCK_LOG" 2>/dev/null; do
@@ -853,6 +854,12 @@ case "$command" in
       || die "Telegram Bot API proxy owner mismatch"
     [[ -z "$(find "$telegram_proxy_script" -perm /222 -print -quit)" ]] \
       || die "Telegram Bot API proxy is writable"
+    [[ -f "$mock_server_script" && ! -L "$mock_server_script" ]] \
+      || die "missing trusted mock OpenAI server"
+    [[ "$(stat -c %u "$mock_server_script")" == "0" ]] \
+      || die "mock OpenAI server owner mismatch"
+    [[ -z "$(find "$mock_server_script" -perm /222 -print -quit)" ]] \
+      || die "mock OpenAI server is writable"
     # shellcheck disable=SC2329
     cleanup_run() {
       local result=0
@@ -879,6 +886,7 @@ case "$command" in
     "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
+      --mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
       --workdir "$repo_root" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \

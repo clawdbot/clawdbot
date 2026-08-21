@@ -299,6 +299,7 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Prepare systemd user session
@@ -669,6 +670,7 @@ jobs:
       - name: Set up source performance environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Fetch previous source performance baseline

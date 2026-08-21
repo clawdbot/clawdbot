@@ -30,8 +30,14 @@ async function setupHarness(
   const recorderControlLog = path.join(root, "recorder-control.json");
   const recorderLog = path.join(root, "recorder.log");
   const recorderCommand = path.join(root, "recorder");
+  const userDriverCommand = path.join(root, "user-driver");
+  const binDir = path.join(root, "bin");
+  const screenshot = path.join(root, "proof.png");
+  const previewGif = path.join(root, "proof.gif");
+  const trimmedVideo = path.join(root, "proof.mp4");
   fs.mkdirSync(outputRoot);
   fs.mkdirSync(sessionRoot);
+  fs.mkdirSync(binDir);
   writeJson(credentialFile, {
     groupId: "-100123456789",
     sutToken: "123456:secret-sut-token",
@@ -39,10 +45,18 @@ async function setupHarness(
   });
   writeJson(path.join(root, "mock-response.json"), { chunkDelayMs: 0, text: "initial" });
   fs.writeFileSync(
+    screenshot,
+    Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(10_001)]),
+  );
+  fs.writeFileSync(previewGif, Buffer.alloc(10_001));
+  fs.writeFileSync(trimmedVideo, Buffer.alloc(10_001));
+  fs.writeFileSync(
     recorderCommand,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}if [ "$1" = artifacts ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ artifacts: { previewGifCropped: previewGif, screenshot, trimmedVideoCropped: trimmedVideo } }))}\nfi\n`,
     { mode: 0o755 },
   );
+  fs.writeFileSync(userDriverCommand, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, "sudo"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   writeJson(path.join(sessionRoot, "candidate.active.json"), {
     attempt: 1,
     config: { mockResponse: "visible result" },
@@ -131,6 +145,8 @@ async function setupHarness(
       OPENCLAW_MANTIS_OUTPUT_ROOT: outputRoot,
       OPENCLAW_MANTIS_SESSION_ROOT: sessionRoot,
       OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD: recorderCommand,
+      OPENCLAW_TELEGRAM_USER_DRIVER_CMD: userDriverCommand,
+      PATH: `${binDir}:${process.env.PATH}`,
     },
     outputRoot,
     recorderControlLog,
@@ -278,7 +294,12 @@ describe("Telegram Mantis free-form lane", () => {
       const state = JSON.parse(
         fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
       );
-      expect(state).toMatchObject({ lastCursor: 3, observeSeconds: 2, sendCount: 1 });
+      expect(state).toMatchObject({
+        lastCursor: 3,
+        lastViewedMessageId: "101",
+        observeSeconds: 2,
+        sendCount: 1,
+      });
       expect(state.invocations.map((entry: { command: string }) => entry.command)).toEqual([
         "start",
         "send",
@@ -444,19 +465,88 @@ describe("Telegram Mantis free-form lane", () => {
     try {
       await expect(
         runLane(harness.env, ["view", "--lane", "candidate", "--message-id", "999"]),
-      ).rejects.toThrow("Message 999 was not emitted by the SUT bot in this proof session");
+      ).rejects.toThrow("Message 999 was not observed in this proof session");
       expect(harness.requests).toEqual([{ command: "events", seconds: 0, since: 0 }]);
     } finally {
       await harness.close();
     }
   });
 
-  it("does not accept the user's outbound message as SUT evidence", async () => {
+  it("keeps long-running proof sessions usable", async () => {
+    const harness = await setupHarness();
+    const active = path.join(harness.sessionRoot, "candidate.active.json");
+    const state = JSON.parse(fs.readFileSync(active, "utf8"));
+    state.startedAt = "2026-01-01T00:00:00.000Z";
+    state.observeSeconds = 900;
+    writeJson(active, state);
+    try {
+      const result = await runLane(harness.env, [
+        "observe",
+        "--lane",
+        "candidate",
+        "--seconds",
+        "1",
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
+      expect(JSON.parse(fs.readFileSync(active, "utf8"))).toMatchObject({ observeSeconds: 901 });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("keeps later proof attempts usable", async () => {
+    const harness = await setupHarness();
+    const active = path.join(harness.sessionRoot, "candidate.active.json");
+    const state = JSON.parse(fs.readFileSync(active, "utf8"));
+    state.attempt = 4;
+    writeJson(active, state);
+    try {
+      const result = await runLane(harness.env, ["requests", "--lane", "candidate"]);
+      expect(JSON.parse(result.stdout)).toEqual({ count: 0, requests: [] });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("finishes an expected-silence proof on the triggering user message", async () => {
     const harness = await setupHarness({ userOnlyEvents: true });
     try {
-      await expect(
-        runLane(harness.env, ["view", "--lane", "candidate", "--message-id", "101"]),
-      ).rejects.toThrow("Message 101 was not emitted by the SUT bot in this proof session");
+      await runLane(harness.env, ["send", "--lane", "candidate", "--text", "stay silent"]);
+      const result = await runLane(harness.env, ["finish", "--lane", "candidate"]);
+      expect(JSON.parse(result.stdout)).toEqual({
+        attempt: 1,
+        lane: "candidate",
+        status: "complete",
+      });
+      expect(
+        JSON.parse(fs.readFileSync(path.join(harness.sessionRoot, "candidate.json"), "utf8")),
+      ).toMatchObject({ focusMessageId: "101", sendCount: 1, status: "complete" });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("reports an unproven comparison without inventing a missing primitive", async () => {
+    const harness = await setupHarness();
+    try {
+      const result = await runLane(harness.env, [
+        "block",
+        "--lane",
+        "candidate",
+        "--reason",
+        "Baseline and candidate behaved identically.",
+      ]);
+      expect(JSON.parse(result.stdout)).toEqual({
+        attempt: 1,
+        lane: "candidate",
+        status: "blocked",
+      });
+      expect(
+        JSON.parse(fs.readFileSync(path.join(harness.sessionRoot, "candidate.json"), "utf8")),
+      ).toMatchObject({
+        blocked: { reason: "Baseline and candidate behaved identically." },
+        status: "blocked",
+      });
     } finally {
       await harness.close();
     }

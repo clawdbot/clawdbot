@@ -8484,7 +8484,7 @@ Update and merge these partial structured summaries.`,
       input: [
         makeUserInput(prompt),
         makeUserInput(
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`,
+          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
         ),
         failedToolOutput,
       ],

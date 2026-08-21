@@ -105,6 +105,14 @@ type RuntimeNodeInvokeParams = {
   scopes?: OperatorScope[];
 };
 
+/** A lifecycle-bound, complete-message binary channel for one node invocation. */
+type RuntimeNodeDuplexChannel = {
+  send: (message: Uint8Array) => Promise<void>;
+  onMessage: (listener: (message: Uint8Array) => void | Promise<void>) => () => void;
+  closed: Promise<unknown>;
+  close: () => void;
+};
+
 export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
@@ -134,6 +142,10 @@ export type PluginRuntime = PluginRuntimeCore & {
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+    /** Open a connection-scoped binary node command inside the trusted Gateway runtime. */
+    openDuplex: (
+      params: RuntimeNodeInvokeParams & { maxMessageBytes?: number },
+    ) => Promise<RuntimeNodeDuplexChannel>;
   };
   sandbox: {
     resolveWorkspaceAuthority: (params: {

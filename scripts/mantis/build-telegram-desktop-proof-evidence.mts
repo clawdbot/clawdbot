@@ -44,7 +44,7 @@ type TelegramDesktopProofManifest = {
   scenario: string;
   comparison: {
     baseline: { expected: string; status: string; ref?: string; sha?: string };
-    candidate: { expected: string; status: string; fixed: boolean; ref?: string; sha?: string };
+    candidate: { expected: string; status: string; ref?: string; sha?: string };
     outcome: LaneStatus;
     pass: boolean;
   };
@@ -314,7 +314,6 @@ function buildTelegramDesktopProofManifest({
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "candidate visual proof captured",
         status: candidateStatus,
-        fixed: candidateStatus === "pass",
       },
       outcome,
       pass: outcome === "pass",

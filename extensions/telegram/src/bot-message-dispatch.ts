@@ -346,7 +346,6 @@ export const dispatchTelegramMessage = async (
   const progressState = createProgressState(
     turnConfig,
     draftState,
-    () => turn,
     async () => await prepareAnswerLaneForToolProgress(turn),
   );
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
@@ -394,8 +393,7 @@ export const dispatchTelegramMessage = async (
       turn.dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      // Terminal order: stop producers, drain queued drafts, materialize accepted text,
-      // clean previews, then collapse the progress window.
+      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
       turn.progressCompositor.cancel();
       await waitForDraftEvents(turn);
       try {

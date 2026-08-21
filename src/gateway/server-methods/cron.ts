@@ -99,13 +99,47 @@ function resolveCronCreatorAuthorityCapture(
   return () => consumeCronCreatorAuthorityGrant(grant);
 }
 
-function resolveAgentRuntimeAuthorityCommitGuard(
+function resolveCronMutationCommitGuard(
   client: GatewayClient | null,
   context: GatewayRequestContext,
+  jobScope?: {
+    callerScope: CronCallerScope | undefined;
+    jobId: string;
+    allowCurrentJob?: boolean;
+    expectedConfigRevision?: string;
+  },
 ): (() => void) | undefined {
-  return client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
-    ? () => assertActiveAgentRuntimeAuthority(client, context)
-    : undefined;
+  const validatesAuthority =
+    client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
+  if (!validatesAuthority && !jobScope?.callerScope) {
+    return undefined;
+  }
+  return () => {
+    if (validatesAuthority) {
+      assertActiveAgentRuntimeAuthority(client, context);
+    }
+    if (!jobScope?.callerScope) {
+      return;
+    }
+    // The capability can expire, or the same id can acquire another owner while
+    // this request waits for the cron lock. Re-read both at the commit owner.
+    const callerScope = readCronCallerScope(client);
+    const job = context.cron.getJob(jobScope.jobId);
+    if (
+      !callerScope ||
+      !job ||
+      (jobScope.expectedConfigRevision !== undefined &&
+        resolveCronJobConfigRevision(job) !== jobScope.expectedConfigRevision) ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: jobScope.allowCurrentJob,
+      })
+    ) {
+      throw new TypeError(`unknown cron job id: ${jobScope.jobId}`);
+    }
+  };
 }
 
 function ensureActiveAgentRuntimeAuthority(params: {
@@ -639,7 +673,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       ) {
         return;
       }
-      const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+      const commitGuard = resolveCronMutationCommitGuard(client, context, {
+        callerScope,
+        jobId,
+      });
       const result = await context.cron.writeScratch(jobId, {
         content: p.content,
         expectedRevision: p.expectedRevision,
@@ -721,7 +758,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
     }
-    const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+    const commitGuard = resolveCronMutationCommitGuard(client, context);
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     try {
@@ -881,7 +918,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
       return;
     }
-    const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+    const commitGuard = resolveCronMutationCommitGuard(client, context);
     const jobId = resolveCronJobId(p);
     if (!jobId) {
       respond(
@@ -1068,9 +1105,23 @@ export const cronHandlers: GatewayRequestHandlers = {
     if (!ensureActiveAgentRuntimeAuthority({ client, context, method: "cron.remove", respond })) {
       return;
     }
+    const defaultAgentId = context.cron.getDefaultAgentId();
+    const usesCurrentJobCapability = !cronJobMatchesCallerScope({
+      job,
+      callerScope,
+      defaultAgentId,
+    });
+    const expectedConfigRevision = usesCurrentJobCapability
+      ? resolveCronJobConfigRevision(job)
+      : undefined;
     let result: Awaited<ReturnType<typeof context.cron.remove>>;
     try {
-      const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+      const commitGuard = resolveCronMutationCommitGuard(client, context, {
+        callerScope,
+        jobId,
+        allowCurrentJob: usesCurrentJobCapability,
+        expectedConfigRevision,
+      });
       result = commitGuard
         ? await context.cron.remove(jobId, { commitGuard })
         : await context.cron.remove(jobId);
@@ -1126,7 +1177,10 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
     try {
-      const commitGuard = resolveAgentRuntimeAuthorityCommitGuard(client, context);
+      const commitGuard = resolveCronMutationCommitGuard(client, context, {
+        callerScope,
+        jobId,
+      });
       result = commitGuard
         ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })
         : await context.cron.enqueueRun(jobId, p.mode ?? "force");

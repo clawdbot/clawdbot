@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { expectWindowRetiredWithoutSummary } from "./bot-message-dispatch.progress-window.test-helpers.js";
+import { expectWindowRetiredAfterFinal } from "./bot-message-dispatch.progress-window.test-helpers.js";
 import {
   describeTelegramDispatch,
   allDeliveredReplyTexts,
@@ -16,11 +16,9 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
 
-describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
+describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
   it("keeps the progress window alive under /reasoning on so commentary and tools still stream", async () => {
-    // /reasoning on removes only the 🧠 lane from the window; commentary, tool
-    // lines, and the collapse bar must still stream (Discord parity). A prior
-    // regression forced block streaming in progress mode, killing the window.
+    // Durable reasoning removes only the reasoning lane, not commentary or tool progress.
     loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -40,26 +38,16 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { commentary: true } } },
     });
 
-    // The window streamed (a preview was rendered) and collapsed into a bar
-    // counting the note + tool — proof the window was not killed.
     expect(answerDraftStream.updatePreview).toHaveBeenCalled();
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Done" });
   });
 
-  it("collapses a tool-progress-only window without deleting when reasoning is durable and the lane rotated mid-turn (on-off)", async () => {
-    // on-off cell: /reasoning on (durable), /verbose off. The window streams
-    // tool progress only; a mid-turn assistant boundary/rotation must not leave
-    // the collapse to a delete + repost. Every non-error collapse edits in place
-    // (or posts the bar durably) — NEVER a bare clear()/deleteMessage — so there
-    // is exactly one bar and no Telegram focus-jump.
+  it("retires a tool-progress-only window after durable reasoning and a mid-turn boundary", async () => {
     loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        // Durable reasoning + an assistant boundary land between tool progress
-        // and the final — the mid-turn churn that dropped the live window id.
         await dispatcherOptions.deliver(
           { text: "<think>hidden</think>", isReasoning: true },
           { kind: "block" },
@@ -79,21 +67,12 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // Collapse edited the window in place into the bar; the window was NOT
-    // deleted (no focus-jump), and exactly one bar exists.
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    const texts = allDeliveredReplyTexts();
-    expect(texts.filter((text) => text.includes("⏱️"))).toHaveLength(0); // bar is the in-place edit
-    expect(texts).toContain("Done");
+    expect(allDeliveredReplyTexts()).toContain("Done");
   });
 
   it("keeps a single stationary window when text follows durable reasoning (no mid-turn rotation)", async () => {
-    // Single-message model (Discord parity): in progress mode the window is ONE
-    // message edited through every lane handover — durable 🧠, interim answer
-    // text — and edited into the bar only at collapse. It must NOT reposition or
-    // rotate mid-turn (no new bubble, no delete), which is what caused the churn
-    // and the on-off jump. Interim answer text does not render into the window.
+    // Interim answer text must not rotate or render into the progress window.
     loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "on" } });
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -103,7 +82,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
           { text: "<think>hidden</think>", isReasoning: true },
           { kind: "block" },
         );
-        // Interim answer text mid-turn: must not spawn a new window bubble.
         await dispatcherOptions.deliver({ text: "Here is the answer" }, { kind: "block" });
         await dispatcherOptions.deliver({ text: "Here is the answer." }, { kind: "final" });
         return { queuedFinal: true };
@@ -118,20 +96,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // The one window message stays put through the whole turn: no mid-turn
-    // reposition. It is retired once at end of turn, leaving the final answer as
-    // the only surviving message.
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).not.toHaveBeenCalled();
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.finalizeToPreview).not.toHaveBeenCalled();
-    expectWindowRetiredWithoutSummary(answerDraftStream);
   });
 
   it("uses one stationary window message across a multi-boundary turn (commentary→tool→commentary→tool→final)", async () => {
-    // Single-message model (Discord parity): ONE window message id is created
-    // once and edited through every lane handover; it collapses into the bar in
-    // place at the end. Zero deletes in the happy path; the final is posted
-    // before the bar edit (task-9 order).
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -150,34 +119,22 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { commentary: true } } },
     });
 
-    // The SAME window message id is used the whole turn — no new bubble.
     const windowMessageIds = new Set(
       answerDraftStream.updatePreview.mock.calls
         .map(() => answerDraftStream.messageId())
         .filter((id) => id != null),
     );
     expect(windowMessageIds).toEqual(new Set([2001]));
-    // The window was EDITED many times (once per lane change) ...
     expect(answerDraftStream.updatePreview.mock.calls.length).toBeGreaterThan(1);
-    // A tool-only window is never deleted. It retires in place exactly once,
-    // after the final send, so the tool log survives with no mid-turn churn.
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expect(answerDraftStream.finalizeToPreview).not.toHaveBeenCalled();
     expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Final answer" });
-    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
-      requireInvocationOrder(
-        answerDraftStream.rotateToNewMessageDeferringDelete,
-        0,
-        "progress window retirement",
-      ),
-    );
+    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
-  it("keeps Claude CLI pre-tool commentary after the progress window collapses", async () => {
+  it("keeps CLI pre-tool commentary after the progress window retires", async () => {
     const markers = "Test markers: caribou-lampion-473, fromage-quantique, satellite-en-tricot";
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
@@ -202,7 +159,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expect(allDeliveredReplyTexts()).toEqual([markers, "TEST DONE"]);
   });
 
@@ -235,15 +191,13 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       ),
     ];
     expect(windowTexts.some((text) => text.includes("Interim answer prose"))).toBe(false);
-    // The final answer is delivered below the collapsed window.
     const delivered = allDeliveredReplyTexts();
     expect(delivered).toContain("The real final answer.");
     expect(delivered.some((text) => text.includes("Interim answer prose"))).toBe(false);
   });
 
   it("does not duplicate tool lines into the window under verbose", async () => {
-    // Invariant D2 (persistent XOR window): when the durable verbose lane owns
-    // tool messages, the window must render no tool line and must not count it.
+    // The durable verbose lane owns tool messages, so the progress window must not duplicate them.
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -260,12 +214,8 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // No tool line ever rendered to the window (verbose owns it durably), so the
-    // window never streamed and there is no collapse bar to count it.
     expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
-    expect(answerDraftStream.finalizeToPreview).not.toHaveBeenCalled();
-    const texts = allDeliveredReplyTexts();
-    expect(texts.some((text) => text.includes("tool call"))).toBe(false);
+    expect(allDeliveredReplyTexts()).toEqual(["Done"]);
   });
 
   it("replaces Telegram command progress items with matching command output", async () => {
@@ -340,8 +290,6 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
     ).toBeLessThan(
       requireInvocationOrder(answerDraftStream.update, 0, "first answer draft update"),
     );
-    // The window retires at end of turn; the final answer posts fresh below it.
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 

@@ -218,6 +218,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -392,6 +393,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1297,6 +1299,7 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1313,6 +1316,7 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1514,6 +1518,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 

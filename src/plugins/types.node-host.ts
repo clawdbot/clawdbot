@@ -11,6 +11,11 @@ export type OpenClawPluginNodeHostCommandAvailabilityContext = {
 export type OpenClawPluginNodeHostCommandIo = {
   emitChunk(chunk: string): Promise<void>;
   onInput(callback: (payloadJSON: string) => void): void;
+  /** Complete binary messages; available when the node host dispatches a duplex command. */
+  frames?: {
+    send(message: Uint8Array): Promise<void>;
+    onMessage(listener: (message: Uint8Array) => void | Promise<void>): () => void;
+  };
   signal: AbortSignal;
 };
 

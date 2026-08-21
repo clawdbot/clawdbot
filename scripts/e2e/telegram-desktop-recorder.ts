@@ -53,8 +53,7 @@ export {
 const REMOTE_ROOT = "/tmp/openclaw-telegram-desktop-recorder";
 const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
-const DEFAULT_PREVIEW_FPS = 24;
-const DEFAULT_PREVIEW_WIDTH = 1920;
+const DEFAULT_PREVIEW_FPS = 4;
 const PROOF_VIEWPORT_HEIGHT = 600;
 
 function proofViewport(window: RecorderSession["window"]): {
@@ -942,47 +941,47 @@ export async function stopRecorder(
   }
   const motionVideoPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.mp4");
   const motionGifPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.gif");
-  // Previews read the recovered recording; with no lease there is no video to
-  // trim, and running ffmpeg on the missing file would fail an otherwise
-  // complete cleanup.
+  // A missing lease produces no local video, so there is no preview to build.
   if (artifacts.video) {
-    await attempt("motion preview", async () => {
-      await operations.createMotionPreview({
-        crabboxBin,
-        cwd,
-        fps: DEFAULT_PREVIEW_FPS,
-        gifPath: motionGifPath,
-        run: operations.runCommand,
-        trimmedVideoPath: motionVideoPath,
-        videoPath,
-        width: DEFAULT_PREVIEW_WIDTH,
+    if (opts.crop === "telegram-window") {
+      const croppedVideoPath = path.join(
+        outputDir,
+        "telegram-desktop-recorder-session-motion-telegram-window.mp4",
+      );
+      const croppedGifPath = path.join(
+        outputDir,
+        "telegram-desktop-recorder-session-motion-telegram-window.gif",
+      );
+      await attempt("cropped motion preview", async () => {
+        await operations.createCroppedMotionPreview({
+          crabboxBin,
+          crop: proofViewport(session.window),
+          croppedGifPath,
+          croppedVideoPath,
+          cwd,
+          fps: DEFAULT_PREVIEW_FPS,
+          run: operations.runCommand,
+          videoPath,
+        });
+        artifacts.previewGifCropped = croppedGifPath;
+        artifacts.trimmedVideoCropped = croppedVideoPath;
       });
-      artifacts.previewGif = motionGifPath;
-      artifacts.trimmedVideo = motionVideoPath;
-    });
-  }
-  if (opts.crop === "telegram-window" && artifacts.trimmedVideo) {
-    const croppedVideoPath = path.join(
-      outputDir,
-      "telegram-desktop-recorder-session-motion-telegram-window.mp4",
-    );
-    const croppedGifPath = path.join(
-      outputDir,
-      "telegram-desktop-recorder-session-motion-telegram-window.gif",
-    );
-    await attempt("cropped motion preview", async () => {
-      await operations.createCroppedMotionPreview({
-        crop: proofViewport(session.window),
-        croppedGifPath,
-        croppedVideoPath,
-        cwd,
-        fps: DEFAULT_PREVIEW_FPS,
-        run: operations.runCommand,
-        videoPath: motionVideoPath,
+    } else {
+      await attempt("motion preview", async () => {
+        await operations.createMotionPreview({
+          crabboxBin,
+          cwd,
+          fps: DEFAULT_PREVIEW_FPS,
+          gifPath: motionGifPath,
+          run: operations.runCommand,
+          trimmedVideoPath: motionVideoPath,
+          videoPath,
+          width: 1920,
+        });
+        artifacts.previewGif = motionGifPath;
+        artifacts.trimmedVideo = motionVideoPath;
       });
-      artifacts.previewGifCropped = croppedGifPath;
-      artifacts.trimmedVideoCropped = croppedVideoPath;
-    });
+    }
   }
   // --keep-box keeps the whole debugging surface: the Desktop authorization stays
   // valid for WebVNC until the operator finishes; a later `stop` without it revokes.

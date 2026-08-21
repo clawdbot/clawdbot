@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCroppedMotionPreview,
   renderStartRemoteRecording,
   type RunCommand,
 } from "../../scripts/e2e/telegram-desktop-crabbox.ts";
@@ -750,6 +751,39 @@ describe("Telegram Desktop recorder remote contract", () => {
 });
 
 describe("Telegram Desktop recorder window geometry", () => {
+  it("motion-trims the cropped video without a duration-sized GIF filter", async () => {
+    const root = makeTempDir();
+    const calls: Array<{ args: string[]; command: string }> = [];
+    await createCroppedMotionPreview({
+      crabboxBin: "crabbox",
+      crop: { cropWidth: 650, height: 600, width: 650, x: 635, y: 440 },
+      croppedGifPath: path.join(root, "cropped.gif"),
+      croppedVideoPath: path.join(root, "cropped.mp4"),
+      cwd: root,
+      fps: 4,
+      run: async ({ args, command }) => {
+        calls.push({ args, command });
+        return { stderr: "", stdout: command === "crabbox" ? "{}" : "" };
+      },
+      videoPath: path.join(root, "recording.mp4"),
+    });
+
+    expect(calls.map(({ command }) => command)).toEqual(["ffmpeg", "crabbox"]);
+    expect(calls[1]?.args).toEqual(
+      expect.arrayContaining([
+        "media",
+        "preview",
+        "--fps",
+        "4",
+        "--width",
+        "650",
+        "--trimmed-video-output",
+        path.join(root, "cropped.mp4"),
+      ]),
+    );
+    expect(calls.some(({ args }) => args.includes("-filter_complex"))).toBe(false);
+  });
+
   it("parses the measured window and rejects unusable geometry", () => {
     expect(parseWindowGeometry(" 636 45 648 995 \n")).toEqual({
       height: 995,
@@ -800,8 +834,11 @@ describe("Telegram Desktop recorder window geometry", () => {
     expect(cropped).toHaveBeenCalledWith(
       expect.objectContaining({
         crop: { cropWidth: 648, height: 600, width: 648, x: 636, y: 440 },
+        fps: 4,
+        videoPath: path.join(root, "telegram-desktop-recorder-session.mp4"),
       }),
     );
+    expect(operations.createMotionPreview).not.toHaveBeenCalled();
     expect(
       sshRun.mock.calls.some(([params]) => params.command.includes("scrot -o -a 636,440,648,600")),
     ).toBe(true);
