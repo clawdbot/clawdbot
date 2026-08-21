@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { buildSystemAgentSessionInvalidatedErrorDetails } from "@openclaw/gateway-protocol";
+import {
+  buildSystemAgentInferenceUnavailableErrorDetails,
+  buildSystemAgentSessionInvalidatedErrorDetails,
+} from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
@@ -276,8 +279,63 @@ describe("CustodianSessionStore", () => {
     expect(store.abandonedTurnOutcomeUnknown).toBe(false);
     expect(store.wizardInputPending).toBe(true);
     expect(store.messages.some((message) => message.text === "Repair complete")).toBe(true);
-    expect(reconnectRequest.mock.calls.some(([method]) => method === "openclaw.chat")).toBe(true);
+    const rejoinParams = reconnectRequest.mock.calls.find(
+      ([method]) => method === "openclaw.chat",
+    )?.[1];
+    expect(rejoinParams).toBeDefined();
+    expect(rejoinParams).not.toHaveProperty("message");
   });
+
+  it.each(["replacement", "reconnect"] as const)(
+    "retries an input-free onboarding handoff after a Gateway client %s",
+    async (transition) => {
+      const initialRequest = vi.fn().mockRejectedValue(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "OpenClaw could not reach working inference",
+          details: buildSystemAgentInferenceUnavailableErrorDetails(),
+        }),
+      );
+      const { context, setGatewaySnapshot } = createContext(initialRequest);
+      const store = new CustodianSessionStore();
+
+      store.connect(context, "onboarding");
+      await waitForFast(() => expect(store.sending).toBe(false));
+      expect(store.error).toContain("OpenClaw could not reach working inference");
+      expect(store.setupRequired).toBe(true);
+      expect(store.canRetry()).toBe(true);
+      const sessionId = initialRequest.mock.calls[0]?.[1].sessionId;
+
+      if (transition === "reconnect") {
+        setGatewaySnapshot({ phase: "reconnecting", client: null });
+      }
+      const reconnectRequest = vi.fn((method: string, params: { sessionId?: string }) => {
+        if (method !== "openclaw.chat") {
+          throw new Error(`Unexpected reconnect method: ${method}`);
+        }
+        return Promise.resolve({
+          sessionId: params.sessionId,
+          reply: "Ready after restart.",
+          action: "none",
+        });
+      });
+      setGatewaySnapshot({
+        phase: "connected",
+        client: { request: reconnectRequest } as unknown as GatewayBrowserClient,
+      });
+
+      await waitForFast(() => expect(store.messages.at(-1)?.text).toBe("Ready after restart."));
+      expect(reconnectRequest).toHaveBeenCalledWith(
+        "openclaw.chat",
+        expect.objectContaining({ sessionId, welcomeVariant: "onboarding" }),
+        expect.anything(),
+      );
+      expect(reconnectRequest.mock.calls[0]?.[1]).not.toHaveProperty("message");
+      expect(store.error).toBeNull();
+      expect(store.setupRequired).toBe(false);
+      expect(store.canRetry()).toBe(false);
+    },
+  );
 
   it("reconciles racing history even when the rejoin projects a live wizard", async () => {
     const step = { id: "live-step", type: "text", message: "Continue setup" };

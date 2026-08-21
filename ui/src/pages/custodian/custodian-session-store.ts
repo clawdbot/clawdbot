@@ -515,6 +515,8 @@ export class CustodianSessionStore {
       this.requestAbort = null;
       this.sessionClient = client;
       this.sessionOwnershipKey = ownershipKey;
+      const replayableParams =
+        this.retryParams && !hasCustodianUserInput(this.retryParams) ? this.retryParams : null;
       if (this.questionReplyUncertain || this.abandonedTurnOutcomeUnknown) {
         // A SUBMITTED reply with an unknown outcome blocks the idle refresh by
         // design; only a full rejoin can settle it — the Gateway session owns
@@ -531,6 +533,13 @@ export class CustodianSessionStore {
           sessionId: this.sessionId,
           ...custodianChatParams(this.variant),
         });
+      } else if (replayableParams) {
+        // Input-free welcome/rejoin requests are safe to replay. Plugin
+        // installation can restart the Gateway immediately after activation;
+        // retry the retained handoff on the replacement client instead of
+        // leaving a working setup behind a transient UNAVAILABLE error.
+        this.rejoinBarrierPending = true;
+        void this.initializeSession(client, replayableParams);
       } else {
         void this.refreshTranscriptIfIdle();
       }
