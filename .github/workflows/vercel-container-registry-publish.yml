@@ -15,6 +15,30 @@ on:
         description: Whether the tagged Docker release includes browser images
         required: true
         type: boolean
+      trusted_workflow_ref:
+        description: Trusted release tooling ref name
+        required: true
+        type: string
+      trusted_workflow_full_ref:
+        description: Trusted release tooling full ref
+        required: true
+        type: string
+      trusted_workflow_sha:
+        description: Trusted release tooling commit SHA
+        required: true
+        type: string
+      trusted_workflow_allow_prevalidated_ref:
+        description: Allow an exact live branch outside main as trusted release tooling
+        required: true
+        type: boolean
+      release_publish_run_id:
+        description: Exact parent OpenClaw Release Publish run id
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Exact parent OpenClaw Release Publish run attempt
+        required: true
+        type: string
     secrets:
       VERCEL_TOKEN:
         required: true
@@ -22,6 +46,12 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
+  RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+  RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+  RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: ${{ inputs.trusted_workflow_allow_prevalidated_ref }}
+  RELEASE_TOOLING_FULL_REF: ${{ inputs.trusted_workflow_full_ref }}
+  RELEASE_TOOLING_REF: ${{ inputs.trusted_workflow_ref }}
+  RELEASE_TOOLING_SHA: ${{ inputs.trusted_workflow_sha }}
 
 concurrency:
   # Alias promotion is read-then-write. Serialize VCR independently so a slow
@@ -37,13 +67,19 @@ jobs:
     # Docker publication and GitHub release finalization must continue.
     continue-on-error: true
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Checkout trusted registry tooling
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.trusted_workflow_sha }}
           persist-credentials: false
+
+      - name: Validate trusted release tooling
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-tooling-identity.mjs verify-env
 
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
@@ -100,6 +136,7 @@ jobs:
       - name: Copy and verify immutable release images
         id: copy_images
         env:
+          GH_TOKEN: ${{ github.token }}
           INCLUDE_BROWSER: ${{ inputs.include_browser }}
           SOURCE_REFS: ${{ inputs.source_refs }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
@@ -180,6 +217,7 @@ jobs:
       - name: Promote and verify channel aliases
         id: promote_aliases
         env:
+          GH_TOKEN: ${{ github.token }}
           INCLUDE_BROWSER: ${{ inputs.include_browser }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
           VERSION: ${{ inputs.version }}

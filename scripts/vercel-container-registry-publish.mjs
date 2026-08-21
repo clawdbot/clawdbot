@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
+import { verifyReleaseToolingIdentityFromEnvironment } from "./release-tooling-identity.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -277,6 +278,7 @@ function verifyCleanIndex(imageRef, expectedDigests, execFileSyncImpl) {
 
 /** Publish every immutable release tag with byte-identical platform manifests. */
 export function publishVercelContainerRegistryImages(params, options = {}) {
+  const beforeMutation = options.beforeMutation ?? (() => {});
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const immutableSources = parseImmutableSourceRefs(params.sourceRefs, params.includeBrowser);
@@ -305,11 +307,14 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
     return { manifestTag, platformDigests };
   });
 
+  // A prevalidated tooling branch can move during a multi-variant copy. Recheck
+  // the exact approved identity at each registry write, not once per step.
   for (const { manifestTag, platformDigests } of variants) {
     const manifestTargetRef = `${plan.targetImage}:${manifestTag}`;
     const platformSourceRefs = ARCHITECTURES.map(
       (architecture) => `${plan.sourceImage}@${platformDigests[architecture]}`,
     );
+    beforeMutation();
     runImagetools(
       ["create", "--progress", "plain", "--tag", manifestTargetRef, ...platformSourceRefs],
       execFileSyncImpl,
@@ -326,6 +331,7 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
     for (const architecture of ARCHITECTURES) {
       const targetRef = `${plan.targetImage}:${manifestTag}-${architecture}`;
       const sourceDigest = platformDigests[architecture];
+      beforeMutation();
       runImagetools(
         [
           "create",
@@ -357,6 +363,7 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
 
 /** Promote moving aliases only after Sandbox proves the immutable image is ready. */
 export function promoteVercelContainerRegistryAliases(params, options = {}) {
+  const beforeMutation = options.beforeMutation ?? (() => {});
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const policy = resolveDockerReleasePolicy(params.version);
@@ -417,9 +424,12 @@ export function promoteVercelContainerRegistryAliases(params, options = {}) {
     }
   }
 
+  // Alias promotion runs after the potentially long Sandbox smoke. Recheck at
+  // each write so elapsed time cannot turn stale tooling into a live publisher.
   for (const { manifestDigest, manifestTag, targetRefs } of promotions) {
     const targetArgs = targetRefs.flatMap((targetRef) => ["--tag", targetRef]);
     const sourceDigestRef = `${targetImage}@${manifestDigest}`;
+    beforeMutation();
     runImagetools(
       ["create", "--prefer-index=false", ...targetArgs, sourceDigestRef],
       execFileSyncImpl,
@@ -475,23 +485,29 @@ function main() {
     if (values["source-ref"]) {
       throw new Error("--promote-aliases cannot be combined with --source-ref.");
     }
-    const result = promoteVercelContainerRegistryAliases({
-      includeBrowser: values["include-browser"] ?? false,
-      targetImage: values["target-image"],
-      version: values.version,
-    });
+    const result = promoteVercelContainerRegistryAliases(
+      {
+        includeBrowser: values["include-browser"] ?? false,
+        targetImage: values["target-image"],
+        version: values.version,
+      },
+      { beforeMutation: verifyReleaseToolingIdentityFromEnvironment },
+    );
     console.log(`Promoted ${result.channel} aliases for ${result.targetImage}:${result.version}.`);
     return;
   }
   if (!values["source-ref"]) {
     throw new Error("--source-ref is required when publishing immutable images.");
   }
-  const plan = publishVercelContainerRegistryImages({
-    includeBrowser: values["include-browser"] ?? false,
-    sourceRefs: values["source-ref"],
-    targetImage: values["target-image"],
-    version: values.version,
-  });
+  const plan = publishVercelContainerRegistryImages(
+    {
+      includeBrowser: values["include-browser"] ?? false,
+      sourceRefs: values["source-ref"],
+      targetImage: values["target-image"],
+      version: values.version,
+    },
+    { beforeMutation: verifyReleaseToolingIdentityFromEnvironment },
+  );
   console.log(
     `Published ${plan.copies.length} immutable ${plan.channel} tags to ${plan.targetImage}.`,
   );
