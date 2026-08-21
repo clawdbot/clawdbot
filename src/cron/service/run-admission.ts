@@ -93,10 +93,7 @@ export function tryAcquireCronRunSlots(
 
 /** Keep the first wake-up until capacity release consumes or cancellation clears it. */
 export function setCronRunCapacityListener(state: CronServiceState, listener: () => void): void {
-  if (state.runAdmission.capacityListener) {
-    return;
-  }
-  state.runAdmission.capacityListener = listener;
+  state.runAdmission.capacityListener ??= listener;
 }
 
 async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
