@@ -336,6 +336,34 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.heapShortfall).toBeNull();
   });
 
+  it.each([
+    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
+    ["CLI override", ["--no-dts"], {}],
+  ])("does not apply the declaration-build threshold to a %s runtime plan", (_label, args, env) => {
+    const result = resolveTsdownBuildPlan({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env,
+      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1280);
+    expect(result.heapShortfall).toBeNull();
+    expect(result.invocations).toHaveLength(2);
+  });
+
+  it("restores declaration-build admission when --dts overrides the Docker default", () => {
+    const result = resolveTsdownBuildPlan({
+      args: ["--dts"],
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+  });
+
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
     const rootDir = createTempDir("openclaw-pnpm-runner-");
     const npmExecPath = path.join(rootDir, "pnpm.cjs");

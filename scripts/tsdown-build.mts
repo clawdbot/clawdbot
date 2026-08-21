@@ -765,10 +765,6 @@ export function describeInsufficientTsdownHeap(params: MemoryLimitParams = {}) {
         `and a full build needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
         `native allocations are counted; those are not covered by --max-old-space-size.`,
       ...outcome,
-      // Deliberately not suggesting a declarations-only build. Skipping them collapses the
-      // invocation list into one larger pass that measured worse twice over: it pinned a 3GB
-      // container at its ceiling with oom_kill still 0 and never finished, which is the same
-      // thrash this guard exists to prevent. With declarations on the pass peaks near 2.5GB.
     ].join("\n"),
   };
 }
@@ -1027,8 +1023,12 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   return invocations;
 }
 
-function isFullTsdownBuildPlan(args: string[]) {
-  return !args.some(isConfigArg) && !args.some(isFilterArg);
+function isFullTsdownBuildPlan(args: string[], env: NodeJS.ProcessEnv) {
+  if (args.some(isConfigArg) || args.some(isFilterArg)) {
+    return false;
+  }
+  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
+  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
 }
 
 export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
@@ -1039,7 +1039,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
   };
   return {
     maxOldSpaceMb,
-    heapShortfall: isFullTsdownBuildPlan(params.args ?? [])
+    heapShortfall: isFullTsdownBuildPlan(params.args ?? [], params.env ?? process.env)
       ? describeInsufficientTsdownHeap(preparedParams)
       : null,
     invocations: resolveTsdownBuildInvocations(preparedParams),
