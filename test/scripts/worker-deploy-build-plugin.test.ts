@@ -48,7 +48,6 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain('import { createRequire } from "node:module";');
     expect(transformed).not.toContain("const requireUndici = createRequire(import.meta.url);");
     expect(transformed).not.toContain('requireUndici("undici")');
-    expect(plugin.transform.call({ error: fail }, transformed!, dispatcherPath)).toBe(transformed);
   });
 
   it("fails closed when the undici dispatcher bootstrap shape changes", () => {

@@ -56,13 +56,6 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
       }
       if (resolvedId === undiciDispatcherOptionsPath) {
-        if (
-          code.includes(WORKER_UNDICI_IMPORT) &&
-          code.includes("return bundledUndici;") &&
-          UNDICI_REQUIRE_BOOTSTRAP.every((fragment) => !code.includes(fragment))
-        ) {
-          return code;
-        }
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {
           this.error("undici dispatcher bootstrap changed; update the worker deploy transform");
         }
