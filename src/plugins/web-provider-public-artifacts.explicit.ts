@@ -125,7 +125,7 @@ function loadInstalledProviderEntriesFromRoot<TProvider extends object>(params: 
   suffix: string;
   isProvider: (value: unknown) => value is TProvider;
 }): Array<TProvider & { pluginId: string }> | null {
-  const mod = loadPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+  const mod = loadPluginPublicArtifactModuleFromCandidatesSync({
     pluginRoot: params.pluginRoot,
     artifactCandidates: params.artifactCandidates,
   });

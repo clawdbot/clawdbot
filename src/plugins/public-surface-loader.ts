@@ -229,18 +229,17 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
 }
 
 /** Loads the first resolvable installed-plugin public artifact from an ordered candidate list. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
-export function loadPluginPublicArtifactModuleFromCandidatesSync<T extends object>(params: {
+export function loadPluginPublicArtifactModuleFromCandidatesSync(params: {
   pluginRoot: string;
   artifactCandidates: readonly string[];
-}): T | null {
+}): Record<string, unknown> | null {
   for (const artifactBasename of params.artifactCandidates) {
     const modulePath = resolvePluginRootPublicSurfacePath({
       pluginRoot: params.pluginRoot,
       artifactBasename,
     });
     if (modulePath) {
-      return loadPluginPublicArtifactModuleSync<T>({
+      return loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
         pluginRoot: params.pluginRoot,
         artifactBasename,
       });
