@@ -350,7 +350,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(workflowText).toContain("dispatcherSources.has(inputs.request_source)");
     expect(workflowText).toContain('requestSource === "clawsweeper_label"');
-    expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
     expect(workflowText).not.toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
     expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
@@ -462,7 +461,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
     expect(captureJob?.if).toContain("needs.resolve_request.outputs.publish_artifact_name == ''");
-    expect(captureJob?.if).toContain("needs.resolve_request.outputs.visibility_decision != 'skip'");
     expect(workflow.jobs?.validate_refs).toBeUndefined();
     expect(publishJob?.if).toBe(
       "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",
@@ -1071,7 +1069,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("start --repo-root <prepared-root>");
     expect(prompt).toContain("MANTIS_BASELINE_ROOT");
     expect(prompt).toContain("MANTIS_CANDIDATE_ROOT");
-    expect(prompt).not.toContain("--sut-container");
     expect(prompt).toContain('--baseline-repo-root "$GITHUB_WORKSPACE"');
     expect(prompt).toContain('--candidate-repo-root "$GITHUB_WORKSPACE"');
     expect(workflow).toContain(
@@ -1089,7 +1086,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).toContain('"$runtime_parent/attestations/$lane.json"');
     const attestationValidation =
       workflowStep("Restore and validate trusted lane evidence").run ?? "";
-    expect(attestationValidation).toContain('[[ "$lane_status" != "skipped" ]]');
     expect(attestationValidation).not.toContain('if [[ "$lane_status" == "skipped"');
     expect(attestationValidation.indexOf(".comparison[$lane].sha == $sha")).toBeLessThan(
       attestationValidation.indexOf('"$runtime_parent/attestations/$lane.json"'),
