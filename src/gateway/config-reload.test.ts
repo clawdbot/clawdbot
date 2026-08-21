@@ -4507,6 +4507,54 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("forces a plugin reload when signaled metadata leaves config and install records identical", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: {} },
+    };
+    const installRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave",
+        installPath: "/tmp/openclaw/plugins/brave",
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        sourceConfig: activeConfig,
+        runtimeConfig: activeConfig,
+        config: activeConfig,
+        hash: "unchanged-config",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn(async () => ({ ...installRecords }));
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: activeConfig,
+      initialCompareConfig: activeConfig,
+      initialPluginInstallRecords: installRecords,
+      readPluginInstallRecords,
+    });
+
+    harness.reloader.notifyPluginMetadataChanged();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, nextConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual([]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(nextConfig).toBe(activeConfig);
+
+    // The refresh is consumed by the committed reload: a later watcher echo of
+    // identical bytes must not replace the plugin runtime generation again.
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
   it("keeps external plugin policy-only writes on the hot reload path", async () => {
     const previousConfig: OpenClawConfig = {
       gateway: { reload: {} },
