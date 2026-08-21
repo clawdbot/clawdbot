@@ -17,6 +17,7 @@ import {
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
+import { resolveDispatchTimeoutMs, startNodeInvokeBudget } from "./node-registry.invoke-budget.js";
 import type {
   NodeInvokeStreamController,
   PendingInvoke,
@@ -290,20 +291,7 @@ async function invokeNodeRegistryCore(
   if (params.signal?.aborted) {
     return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
   }
-  // Anchor the budget before the first await so pre-dispatch work spends it too.
-  // A budget that only starts at dispatch can outlive the caller's own deadline,
-  // and a send that lands after the caller already answered would contradict the
-  // dispatch provenance that answer carried.
-  const invokeStartedAtMs = Date.now();
-  // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
-  const budgetMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
-  // Only a caller that supplied a positive budget is waiting on a deadline the
-  // pre-dispatch work can overrun. Callers that omit timeoutMs keep the shared
-  // fallback as a post-dispatch pending timer, so their answer never changes
-  // from a dispatched command to an undispatched TIMEOUT.
-  const suppliedBudgetMs = resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
-  const dispatchDeadlineAtMs =
-    suppliedBudgetMs > 0 ? invokeStartedAtMs + suppliedBudgetMs : undefined;
+  const budget = startNodeInvokeBudget(params.timeoutMs);
   let node = state.context.getNode(params.nodeId);
   if (!node) {
     return { ok: false, error: { code: "NOT_CONNECTED", message: "node not connected" } };
@@ -377,13 +365,8 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: invokeParams,
   });
-  // Read the budget once every step that can spend it is behind us, so the node
-  // timeout and the pending timer below both start from what is actually left.
-  // Dispatching on an exhausted budget would hand the command to the node after
-  // the caller's deadline already answered that none had been dispatched.
-  const timeoutMs =
-    dispatchDeadlineAtMs === undefined ? budgetMs : Math.max(0, dispatchDeadlineAtMs - Date.now());
-  if (dispatchDeadlineAtMs !== undefined && timeoutMs === 0) {
+  const timeoutMs = resolveDispatchTimeoutMs(budget);
+  if (budget.dispatchDeadlineAtMs !== undefined && timeoutMs === 0) {
     return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
   }
   const payload = {
