@@ -5,6 +5,7 @@ import { Command } from "commander";
 // Config CLI tests cover config command registration, reads, writes, and output modes.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -3371,6 +3372,53 @@ describe("config cli", () => {
       ).rejects.toThrow(ExitError);
 
       expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
+    });
+
+    it("explains config mutation conflicts without changing the exit code", async () => {
+      mockWriteConfigFile.mockRejectedValueOnce(
+        new ConfigMutationConflictError("included config changed since last load"),
+      );
+
+      await expect(runConfigSet("gateway.port", "19000")).rejects.toThrow(ExitError);
+
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expectErrorIncludes(
+        "The config file changed while this command was writing (included config changed since last load), so nothing was changed. Re-run the same command to pick up the new file and try again.",
+      );
+    });
+
+    it("reports config mutation conflicts accurately in dry-run JSON", async () => {
+      mockReadConfigFileSnapshot.mockRejectedValueOnce(
+        new ConfigMutationConflictError("config changed since last load"),
+      );
+
+      await expect(
+        runConfigCommand(["config", "set", "gateway.port", "19000", "--dry-run", "--json"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        errors: [
+          {
+            kind: "conflict",
+            message:
+              "The config file changed while this command was writing (config changed since last load), so nothing was changed. Re-run the same command to pick up the new file and try again.",
+          },
+        ],
+      });
+    });
+
+    it("preserves non-conflict config mutation errors", async () => {
+      mockWriteConfigFile.mockRejectedValueOnce(new Error("permission denied"));
+
+      await expect(runConfigSet("gateway.port", "19000")).rejects.toThrow(ExitError);
+
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expectErrorIncludes("permission denied");
+      expect(mockError.mock.calls.flat().join("\n")).not.toContain(
+        "The config file changed while this command was writing",
+      );
     });
 
     it("emits structured JSON for --dry-run --json success", async () => {
