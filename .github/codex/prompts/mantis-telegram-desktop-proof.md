@@ -87,8 +87,9 @@ Iterate within the three-attempt budget; all attempts remain recorded.
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each
 lane's generated `telegram-user-crabbox-session-summary.json`. Edit only the
-human summary/expected wording. A failure or block sets `comparison.pass: false`
-and names the concrete product defect or missing primitive.
+human summary/expected wording. Name the concrete product defect or missing
+primitive when a lane fails or blocks; the workflow derives the outcome from
+trusted lane facts.
 
 ```bash
 node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \

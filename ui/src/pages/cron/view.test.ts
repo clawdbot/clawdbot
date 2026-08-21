@@ -54,7 +54,7 @@ describe("cron view list pane", () => {
       agentScoped: true,
       scopedTotal: 3,
       scopedNextWakeAtMs: Date.now() + 60_000,
-      status: { enabled: true, jobs: 99, nextWakeAtMs: null },
+      status: { enabled: true, triggersEnabled: true, jobs: 99, nextWakeAtMs: null },
     });
     const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
       entry.textContent?.trim(),
@@ -68,7 +68,7 @@ describe("cron view list pane", () => {
     const container = renderView({
       agentScoped: true,
       scopedNextWakeAtMs: Date.now() + 60_000,
-      status: { enabled: false, jobs: 3, nextWakeAtMs: null },
+      status: { enabled: false, triggersEnabled: true, jobs: 3, nextWakeAtMs: null },
     });
     const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
       entry.textContent?.trim(),
@@ -122,9 +122,21 @@ describe("cron view list pane", () => {
       '[data-test-id="cron-jobs-schedule-filter"]',
       HTMLSelectElement,
     );
-    scheduleFilter.value = "cron";
-    scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
+    expect(Array.from(scheduleFilter.options, (option) => option.value)).toEqual([
+      "all",
+      "at",
+      "every",
+      "cron",
+      "on-exit",
+      "stream",
+    ]);
+    for (const scheduleKind of ["on-exit", "stream"] as const) {
+      scheduleFilter.value = scheduleKind;
+      scheduleFilter.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onJobsFiltersChange).toHaveBeenCalledWith({
+        cronJobsScheduleKindFilter: scheduleKind,
+      });
+    }
 
     const lastStatusFilter = getElement(
       container,
@@ -291,7 +303,7 @@ describe("cron view list pane", () => {
 
   it("shows a scheduler banner only while the scheduler is off", () => {
     const off = renderView({
-      status: { enabled: false, jobs: 2 },
+      status: { enabled: false, triggersEnabled: true, jobs: 2 },
       jobs: [createJob("job-1")],
       jobsTotal: 2,
     });
@@ -301,7 +313,7 @@ describe("cron view list pane", () => {
     const footer = getElement(off, ".cron-table__footer", HTMLDivElement);
     expect(footer.textContent).toContain("1 of 2");
 
-    const on = renderView({ status: { enabled: true, jobs: 2 } });
+    const on = renderView({ status: { enabled: true, triggersEnabled: true, jobs: 2 } });
     expect(on.querySelector('[data-test-id="cron-scheduler-banner"]')).toBeNull();
   });
 
@@ -692,15 +704,23 @@ describe("cron view editor", () => {
     );
   });
 
+  it("waits for scheduler status before presenting trigger capability", () => {
+    const pending = renderView({ createOpen: true, status: null });
+
+    expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();
+    expect(pending.textContent).not.toContain("disabled by cron.triggers.enabled");
+  });
+
   it("hides trigger authoring when the operator disabled triggers but keeps clear available", () => {
     const onFormChange = vi.fn();
-    const disabled = renderView({ createOpen: true, triggersEnabled: false, onFormChange });
+    const status = { enabled: true, triggersEnabled: false, jobs: 0 };
+    const disabled = renderView({ createOpen: true, status, onFormChange });
     expect(disabled.querySelector("#cron-trigger-script")).toBeNull();
     expect(disabled.textContent).toContain("disabled by cron.triggers.enabled");
 
     const configured = renderView({
       createOpen: true,
-      triggersEnabled: false,
+      status,
       onFormChange,
       form: {
         ...DEFAULT_CRON_FORM,

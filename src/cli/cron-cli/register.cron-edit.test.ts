@@ -698,6 +698,18 @@ describe("cron edit command", () => {
     );
   });
 
+  it.each([
+    ["--model", "", "--clear-model"],
+    ["--model", "   ", "--clear-model"],
+    ["--thinking", "", "--clear-thinking"],
+    ["--thinking", "   ", "--clear-thinking"],
+  ])("rejects blank %s %j combined with %s", async (flag, value, clearFlag) => {
+    await expectCronEditRejection(
+      [flag, value, clearFlag],
+      `Use ${flag} or ${clearFlag}, not both`,
+    );
+  });
+
   it("stores an explicit wildcard with --clear-tools", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {

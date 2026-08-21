@@ -507,7 +507,7 @@ function publishTerminalLaneFacts(params: {
   facts: unknown;
   lane: Lane;
   roots: Roots;
-  status: "fail" | "pass";
+  status: "blocked" | "fail" | "pass";
   sutAttestation?: SutAttestation;
 }): void {
   const privatePublished = path.join(params.roots.sessionRoot, "published", params.lane);
@@ -1309,7 +1309,7 @@ async function finalize(
     facts,
     lane: state.lane,
     roots,
-    status: status === "complete" ? "pass" : "fail",
+    status: status === "complete" ? "pass" : status === "blocked" ? "blocked" : "fail",
     sutAttestation: state.sut.sutAttestation,
   });
   fs.rmSync(activeFile(roots.sessionRoot, state.lane), { force: true });

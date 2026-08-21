@@ -33,12 +33,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (commandShell && commandArgv) {
     throw new Error("Pass command payload either with --command or --command-argv, not both.");
   }
+  // Raw flag presence owns the set/clear mutex even when normalization omits a blank value.
+  const hasModel = typeof opts.model === "string";
   const model = normalizeOptionalString(opts.model);
-  if (model && opts.clearModel) {
+  if (hasModel && opts.clearModel) {
     throw new Error("Use --model or --clear-model, not both");
   }
+  const hasThinking = typeof opts.thinking === "string";
   const thinking = normalizeOptionalString(opts.thinking);
-  if (thinking && opts.clearThinking) {
+  if (hasThinking && opts.clearThinking) {
     throw new Error("Use --thinking or --clear-thinking, not both");
   }
   const fallbacks = parseCronFallbacks(opts.fallbacks);

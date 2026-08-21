@@ -424,6 +424,28 @@ describe("hooks CLI metadata config keys", () => {
     expect(explicitFleet).toEqual(initialConfig);
   });
 
+  it("rejects a blank hook agent before resolving a workspace", async () => {
+    configureExplicitFleet();
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "list", "--agent", "", "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toContain("--agent must not be blank");
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects a blank parent hook agent before dispatching a subcommand", async () => {
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "--agent", "", "list"], { from: "user" }),
+    ).rejects.toThrow("--agent must not be blank");
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("keeps the explicit owner in the offline hooks fallback", async () => {
     const explicitFleet = configureExplicitFleet();
 

@@ -27,7 +27,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 /**
  * @typedef {{
  *   artifacts: EvidenceArtifact[],
- *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, pass?: boolean },
+ *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, outcome?: "blocked" | "fail" | "pass", pass?: boolean },
  *   id: string,
  *   manifestDir: string,
  *   scenario: string,
@@ -385,6 +385,10 @@ function publicSummary(manifest) {
   return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
 }
 function overallStatus(manifest) {
+  const outcome = manifest.comparison?.outcome;
+  if (outcome === "blocked" || outcome === "fail" || outcome === "pass") {
+    return outcome;
+  }
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
 }
@@ -394,6 +398,9 @@ function overallStatus(manifest) {
  */
 export function shouldPublishPrComment(manifest, { requestSource } = {}) {
   if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
+    return true;
+  }
+  if (manifest.comparison?.outcome === "blocked") {
     return true;
   }
   if (requestSource === "pull_request_target") {
