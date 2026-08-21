@@ -36,6 +36,7 @@ import {
 import { isWebchatClient } from "../../../utils/message-channel.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { READ_SCOPE } from "../../operator-scopes.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -357,7 +358,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authRateLimiter,
           clientLabel,
           clientMeta,
-          allowStartupPendingConnect: isPreparedControlConnect(data),
+          allowStartupPendingConnect: isHeldRestoredAdmissionProbeConnect(data),
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
@@ -423,6 +424,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const isStartupNodePreauth = (data: RawData): boolean => {
     const parsed = parsePreauthConnectFrame(data);
     return parsed ? isStartupNodeConnect(parsed.params) : false;
+  const isHeldRestoredAdmissionProbeConnect = (data: RawData): boolean => {
+    const parsed = parsePreauthConnectFrame(data);
+    if (!parsed || !isLocalClient || hasBrowserOriginHeader) {
+      return false;
+    }
+    const connectParams = parsed.params as ConnectParams;
+    if (
+      (connectParams.role !== undefined && connectParams.role !== "operator") ||
+      connectParams.client.id !== GATEWAY_CLIENT_IDS.GATEWAY_CLIENT ||
+      connectParams.client.mode !== GATEWAY_CLIENT_MODES.BACKEND ||
+      connectParams.device !== undefined ||
+      connectParams.scopes?.length !== 1 ||
+      connectParams.scopes[0] !== READ_SCOPE
+    ) {
+      return false;
+    }
+    return buildRequestContext().getRestoredAdmissionStatus().status === "held";
   };
 
   const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
