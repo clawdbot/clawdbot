@@ -65,6 +65,21 @@ describe("byteplus plugin", () => {
     });
   });
 
+  it("declares OpenAI-compatible streaming usage support in the manifest", () => {
+    const pluginJson = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
+    );
+
+    expect(pluginJson.providerRequest?.providers).toMatchObject({
+      byteplus: {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
+      "byteplus-plan": {
+        openAICompletions: { supportsStreamingUsage: true },
+      },
+    });
+  });
+
   it("keeps Kimi catalog metadata aligned with provider capabilities", () => {
     const planKimi = BYTEPLUS_CODING_MODEL_CATALOG.find((entry) => entry.id === "kimi-k2.5");
 

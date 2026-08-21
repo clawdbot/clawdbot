@@ -17,6 +17,20 @@
   "providerAuthAliases": {
     "byteplus-plan": "byteplus"
   },
+  "providerRequest": {
+    "providers": {
+      "byteplus": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      },
+      "byteplus-plan": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
   "modelCatalog": {
     "providers": {
       "byteplus": {
