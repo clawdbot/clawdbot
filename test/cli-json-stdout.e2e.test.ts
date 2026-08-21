@@ -329,6 +329,35 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it("renders sandbox explain validation failures as one canonical JSON document", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, [
+          "sandbox",
+          "explain",
+          "--json",
+          "--agent",
+          "alpha",
+          "--session",
+          "agent:beta:main",
+        ]);
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: 'Sandbox explain agent "alpha" does not match session agent "beta".',
+          },
+        });
+        expect(result.stderr).toContain(
+          'Sandbox explain agent "alpha" does not match session agent "beta".',
+        );
+      },
+      { prefix: "openclaw-sandbox-json-failure-e2e-" },
+    );
+  });
+
   it("returns one canonical document when docs search fails", async () => {
     await withTempHome(
       async (tempHome) => {
