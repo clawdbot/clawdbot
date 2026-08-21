@@ -997,6 +997,12 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it("rejects ambiguous interactive provider flags before reset", async () => {
+    const runtime = makeRuntime();
+    await setupWizardCommand({ reset: true, nvidiaApiKey: "n", openaiApiKey: "o" }, runtime);
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+  });
+
   it("validates custom credential storage before reset", async () => {
     const runtime = makeRuntime();
     vi.stubEnv("CUSTOM_API_KEY", "");

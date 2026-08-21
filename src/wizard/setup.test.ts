@@ -32,6 +32,8 @@ type ResolvePluginSetupProvider =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
 type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
+type ResolveProviderOnboardAuthFlags =
+  typeof import("../plugins/provider-auth-choices.js").resolveProviderOnboardAuthFlags;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
 type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuthChoice;
@@ -58,6 +60,9 @@ const prepareAuthChoice = vi.hoisted(() =>
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => "demo-provider"));
 const resolveManifestProviderAuthChoice = vi.hoisted(() =>
   vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
+);
+const resolveProviderOnboardAuthFlags = vi.hoisted(() =>
+  vi.fn<ResolveProviderOnboardAuthFlags>(() => []),
 );
 const resolvePluginSetupProvider = vi.hoisted(() =>
   vi.fn<ResolvePluginSetupProvider>(() => undefined),
@@ -383,6 +388,7 @@ vi.mock("../commands/auth-choice.js", () => ({
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices: () => [],
+  resolveProviderOnboardAuthFlags,
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
@@ -672,6 +678,8 @@ describe("runSetupWizard", () => {
     resolvePluginProvidersRuntime.mockReturnValue([]);
     resolveManifestProviderAuthChoice.mockReset();
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+    resolveProviderOnboardAuthFlags.mockReset();
+    resolveProviderOnboardAuthFlags.mockReturnValue([]);
     resolvePluginSetupProvider.mockReset();
     resolvePluginSetupProvider.mockReturnValue(undefined);
     resolveProviderPluginChoice.mockReset();
@@ -2551,6 +2559,129 @@ describe("runSetupWizard", () => {
     expect(persistedConfig?.agents?.defaults?.model).toEqual({
       primary: authChoice === "ollama" ? "ollama/llama3" : "anthropic/sonnet-4.6",
     });
+  });
+
+  it.each([
+    {
+      name: "an API-key flag",
+      optionKey: "nvidiaApiKey",
+      authChoice: "nvidia-api-key",
+      cliFlag: "--nvidia-api-key",
+    },
+    {
+      name: "a provider token flag",
+      optionKey: "githubCopilotToken",
+      authChoice: "github-copilot",
+      cliFlag: "--github-copilot-token",
+    },
+  ] as const)(
+    "infers $name while preserving an existing default model",
+    async ({ optionKey, authChoice, cliFlag }) => {
+      resolveProviderOnboardAuthFlags.mockReturnValue([
+        {
+          optionKey,
+          authChoice,
+          cliFlag,
+          cliOption: `${cliFlag} <key>`,
+          description: "Provider credential",
+        },
+      ]);
+      const existingConfig: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "anthropic/sonnet-4.6" } },
+          entries: { main: { default: true } },
+        },
+      };
+      readConfigFileSnapshot.mockImplementation(async () =>
+        configSnapshot(persistedWizardConfigs().at(-1) ?? existingConfig),
+      );
+
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          [optionKey]: "provider-credential-fixture",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        buildWizardPrompter({}, { defaultSelect: "keep-model" }),
+      );
+
+      expect(prepareAuthChoice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authChoice,
+          opts: expect.objectContaining({ [optionKey]: "provider-credential-fixture" }),
+        }),
+      );
+      expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
+        primary: "anthropic/sonnet-4.6",
+      });
+    },
+  );
+
+  it("rejects ambiguous provider credential flags before writing local setup state", async () => {
+    resolveProviderOnboardAuthFlags.mockReturnValue([
+      {
+        optionKey: "nvidiaApiKey",
+        authChoice: "nvidia-api-key",
+        cliFlag: "--nvidia-api-key",
+        cliOption: "--nvidia-api-key <key>",
+        description: "NVIDIA API key",
+      },
+      {
+        optionKey: "githubCopilotToken",
+        authChoice: "github-copilot",
+        cliFlag: "--github-copilot-token",
+        cliOption: "--github-copilot-token <token>",
+        description: "GitHub Copilot token",
+      },
+    ]);
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        nvidiaApiKey: "nvidia-credential-fixture",
+        githubCopilotToken: "copilot-credential-fixture",
+      },
+      runtime,
+      buildWizardPrompter({}),
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Multiple provider credential flags"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(prepareAuthChoice).not.toHaveBeenCalled();
+    expect(ensureOnboardingConfig).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps an explicit auth skip cold when a provider credential flag is supplied", async () => {
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        nvidiaApiKey: "nvidia-credential-fixture",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(resolveProviderOnboardAuthFlags).not.toHaveBeenCalled();
+    expect(prepareAuthChoice).not.toHaveBeenCalled();
   });
 
   it("prompts for a model during explicit interactive Ollama setup", async () => {

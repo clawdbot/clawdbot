@@ -214,7 +214,9 @@ async function validateResetAuthChoice(params: {
   resetScope: ResetScope;
 }): Promise<boolean> {
   const inferredAuthChoice =
-    params.opts.authChoice || !params.opts.nonInteractive
+    params.opts.authChoice ||
+    params.opts.mode === "remote" ||
+    (!params.opts.nonInteractive && !wantsClassicInteractiveSetup(params.opts))
       ? undefined
       : inferAuthChoiceFromFlags(params.opts, {
           config: params.baseConfig,
@@ -225,11 +227,14 @@ async function validateResetAuthChoice(params: {
     return rejectOption(
       params.runtime,
       [
-        "Multiple API key flags were provided for non-interactive setup.",
+        `Multiple ${params.opts.nonInteractive ? "API key" : "provider credential"} flags were provided for ${params.opts.nonInteractive ? "non-interactive" : "interactive"} setup.`,
         "Use a single provider flag or pass --auth-choice explicitly.",
         `Flags: ${inferredAuthChoice.matches.map((match) => match.label).join(", ")}`,
       ].join("\n"),
     );
+  }
+  if (!params.opts.nonInteractive && inferredAuthChoice) {
+    return true;
   }
   const authChoice = params.opts.authChoice ?? inferredAuthChoice?.choice;
   if (!authChoice) {
