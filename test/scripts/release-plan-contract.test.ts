@@ -7,10 +7,7 @@ import {
   createReleasePlanLock,
   parseReleasePlanLockJson,
   RELEASE_PLAN_CANONICALIZATION,
-  releasePlanDigest,
   validateReleasePlan,
-  validateValidationAttemptReceipt,
-  validateValidationAttemptRequest,
 } from "../../scripts/release-plan-contract.mjs";
 
 const fixtureDir = resolve("test/fixtures");
@@ -66,7 +63,6 @@ describe("release plan contract", () => {
         purpose: "stable-publish",
         validation: {
           allowed_groups: ["all", "ci", "package"],
-          exceptions: [],
           profile: "stable",
           soak: true,
         },
@@ -80,7 +76,6 @@ describe("release plan contract", () => {
         target_context_ref: "refs/tags/null",
         validation: {
           allowed_groups: ["all", "ci", "package"],
-          exceptions: [],
           profile: "full",
           soak: true,
         },
@@ -125,33 +120,48 @@ describe("release plan contract", () => {
     ).toThrow("ascending ASCII order");
   });
 
-  it("keeps ValidationAttempt request and receipt state outside ReleasePlan", () => {
+  it("rejects arbitrary tooling routes", () => {
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        tooling: {
+          ...(sourceFixture.tooling as Record<string, unknown>),
+          ref: "refs/heads/main",
+        },
+      }),
+    ).toThrow("protected release-publish tag");
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        tooling: {
+          ...(sourceFixture.tooling as Record<string, unknown>),
+          ref: "refs/tags/release-publish/cccccccccccc-123",
+        },
+      }),
+    ).toThrow("bound to its SHA");
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        purpose: "main-qualification",
+        tag: null,
+        target_context_ref: sourceFixture.candidate_sha,
+        tooling: {
+          ...(sourceFixture.tooling as Record<string, unknown>),
+          ref: "refs/heads/feature",
+        },
+        validation: {
+          allowed_groups: ["all", "ci", "package"],
+          profile: "full",
+          soak: true,
+        },
+      }),
+    ).toThrow("trusted main");
+  });
+
+  it("keeps run and rerun state outside ReleasePlan", () => {
     const plan = validateReleasePlan(sourceFixture);
-    const planDigest = releasePlanDigest(plan);
     expect(plan).not.toHaveProperty("run_id");
     expect(plan).not.toHaveProperty("rerun_group");
-    expect(
-      validateValidationAttemptRequest({
-        schema: "openclaw.validation-attempt-request.v1",
-        plan_digest: planDigest,
-        rerun_group: "package",
-        filters: { platform: "linux", package: "openclaw" },
-        fail_fast: false,
-        reuse_evidence: true,
-      }),
-    ).toMatchObject({ plan_digest: planDigest, rerun_group: "package" });
-    expect(
-      validateValidationAttemptReceipt({
-        schema: "openclaw.validation-attempt-receipt.v1",
-        plan_digest: planDigest,
-        request_digest: `sha256:${"b".repeat(64)}`,
-        run_id: "123",
-        run_attempt: "2",
-        workflow_ref: "release-ci/example",
-        workflow_full_ref: "refs/heads/release-ci/example",
-        workflow_sha: "c".repeat(40),
-        target_sha: "a".repeat(40),
-      }),
-    ).toMatchObject({ run_attempt: "2", run_id: "123" });
+    expect(plan).not.toHaveProperty("filters");
   });
 });

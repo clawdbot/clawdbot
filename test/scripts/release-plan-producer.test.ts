@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalReleasePlanLockJson,
@@ -15,6 +15,12 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const TOOLING_CLOSURE = [
+  "scripts/release-plan-producer.mts",
+  "scripts/release-plan-contract.mjs",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/release-version.mjs",
+];
 
 function writeFixture(root: string, path: string, content: string) {
   const target = join(root, path);
@@ -22,7 +28,7 @@ function writeFixture(root: string, path: string, content: string) {
   writeFileSync(target, content);
 }
 
-function commit(root: string, message: string): string {
+function commit(root: string, message: string, options: { allowEmpty?: boolean } = {}): string {
   execFileSync("git", ["add", "."], { cwd: root });
   execFileSync(
     "git",
@@ -33,6 +39,7 @@ function commit(root: string, message: string): string {
       "user.email=test@example.invalid",
       "commit",
       "-q",
+      ...(options.allowEmpty ? ["--allow-empty"] : []),
       "-m",
       message,
     ],
@@ -41,14 +48,42 @@ function commit(root: string, message: string): string {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 }
 
+function copyToolingClosure(root: string) {
+  for (const path of TOOLING_CLOSURE) {
+    writeFixture(root, path, readFileSync(resolve(path), "utf8"));
+  }
+}
+
 function createFixtureRepo(version = "2026.8.1-beta.2") {
   const root = tempDirs.make("openclaw-release-plan-");
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
 
-  writeFixture(root, "package.json", JSON.stringify({ name: "openclaw", version }));
+  writeFixture(
+    root,
+    "package.json",
+    JSON.stringify({
+      name: "openclaw",
+      version,
+      dependencies: { "@openclaw/ai": "workspace:*" },
+    }),
+  );
+  for (const [path, name] of [
+    ["packages/ai", "@openclaw/ai"],
+    ["packages/gateway-client", "@openclaw/gateway-client"],
+    ["packages/gateway-protocol", "@openclaw/gateway-protocol"],
+  ]) {
+    writeFixture(
+      root,
+      `${path}/package.json`,
+      JSON.stringify({
+        name,
+        version,
+        openclaw: { release: { publishToNpm: true } },
+      }),
+    );
+  }
   const candidateSha = commit(root, "candidate");
   const candidateRef = `refs/tags/v${version}`;
-  execFileSync("git", ["tag", `v${version}`, candidateSha], { cwd: root });
 
   writeFixture(
     root,
@@ -89,6 +124,24 @@ function createFixtureRepo(version = "2026.8.1-beta.2") {
       "",
     ].join("\n"),
   );
+  writeFixture(
+    root,
+    ".github/workflows/openclaw-npm-release.yml",
+    [
+      "name: NPM Release",
+      "jobs:",
+      "  preflight:",
+      "    steps:",
+      "      - name: Pack publishable core packages",
+      "        env:",
+      "          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
+      "        run: |",
+      '          if [[ "$package_dir" == "packages/ai" ]] && ! node -e \'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)\'; then',
+      "            exit 0",
+      "          fi",
+      "",
+    ].join("\n"),
+  );
   for (const name of [
     "android-release.yml",
     "docker-release.yml",
@@ -98,10 +151,14 @@ function createFixtureRepo(version = "2026.8.1-beta.2") {
   ]) {
     writeFixture(root, `.github/workflows/${name}`, `name: ${name}\n`);
   }
-  writeFixture(root, "scripts/release-plan-producer.mts", "// tooling-owned fixture\n");
+  copyToolingClosure(root);
   writeFixture(root, "package.json", JSON.stringify({ name: "openclaw", version: "2099.1.1" }));
   const toolingSha = commit(root, "tooling");
-  return { candidateRef, candidateSha, root, toolingSha };
+  const toolingFullRef = `refs/tags/release-publish/${toolingSha.slice(0, 12)}-1`;
+  execFileSync("git", ["tag", toolingFullRef.slice("refs/tags/".length), toolingSha], {
+    cwd: root,
+  });
+  return { candidateRef, candidateSha, root, toolingFullRef, toolingSha };
 }
 
 function sourceParams(
@@ -114,7 +171,7 @@ function sourceParams(
     candidateSha: fixture.candidateSha,
     candidateRef: intent === "main-qualification" ? fixture.candidateSha : fixture.candidateRef,
     toolingSha: fixture.toolingSha,
-    toolingFullRef: "refs/heads/tooling",
+    toolingFullRef: fixture.toolingFullRef,
   } as const;
 }
 
@@ -141,6 +198,12 @@ describe("release plan producer", () => {
     const fixture = createFixtureRepo();
     expect(fixture.candidateSha).not.toBe(fixture.toolingSha);
     expect(() =>
+      execFileSync("git", ["cat-file", "-e", fixture.candidateRef], {
+        cwd: fixture.root,
+        stdio: "ignore",
+      }),
+    ).toThrow();
+    expect(() =>
       execFileSync(
         "git",
         ["cat-file", "-e", `${fixture.candidateSha}:scripts/release-plan-producer.mts`],
@@ -165,11 +228,14 @@ describe("release plan producer", () => {
       version: "2026.8.1-beta.2",
     });
     expect(plan.tooling).toMatchObject({
-      ref: "refs/heads/tooling",
+      ref: fixture.toolingFullRef,
       sha: fixture.toolingSha,
     });
     expect(plan.validation.allowed_groups).toEqual(["all", "ci", "package"]);
     expect(plan.inventory.packages).toEqual([
+      { name: "@openclaw/ai", targets: ["npm"], version: "2026.8.1-beta.2" },
+      { name: "@openclaw/gateway-client", targets: ["npm"], version: "2026.8.1-beta.2" },
+      { name: "@openclaw/gateway-protocol", targets: ["npm"], version: "2026.8.1-beta.2" },
       { name: "openclaw", targets: ["npm"], version: "2026.8.1-beta.2" },
     ]);
     expect(plan.inventory.platforms).toEqual([
@@ -183,17 +249,104 @@ describe("release plan producer", () => {
     ]);
   });
 
+  it("requires the final tag only for postpublish confidence", () => {
+    const fixture = createFixtureRepo();
+    expect(produceReleasePlan(sourceParams(fixture))).toMatchObject({
+      purpose: "beta-publish",
+      target_context_ref: fixture.candidateRef,
+    });
+    expect(() => produceReleasePlan(sourceParams(fixture, "postpublish-confidence"))).toThrow(
+      "published candidate tag does not resolve",
+    );
+
+    execFileSync(
+      "git",
+      ["tag", fixture.candidateRef.slice("refs/tags/".length), fixture.candidateSha],
+      {
+        cwd: fixture.root,
+      },
+    );
+    expect(produceReleasePlan(sourceParams(fixture, "postpublish-confidence"))).toMatchObject({
+      purpose: "postpublish-confidence",
+      target_context_ref: fixture.candidateRef,
+    });
+  });
+
   it("requires exact candidate and tooling identity instead of checkout HEAD", () => {
     const fixture = createFixtureRepo();
     expect(() =>
-      produceReleasePlan({ ...sourceParams(fixture), candidateSha: fixture.toolingSha }),
-    ).toThrow("candidate ref does not resolve");
+      produceReleasePlan({ ...sourceParams(fixture), candidateSha: "f".repeat(40) }),
+    ).toThrow("candidate SHA does not resolve");
+    const mismatchedToolingRef = `refs/tags/release-publish/${fixture.candidateSha.slice(0, 12)}-9`;
+    execFileSync(
+      "git",
+      ["tag", mismatchedToolingRef.slice("refs/tags/".length), fixture.toolingSha],
+      { cwd: fixture.root },
+    );
     expect(() =>
-      produceReleasePlan({ ...sourceParams(fixture), toolingSha: fixture.candidateSha }),
+      produceReleasePlan({
+        ...sourceParams(fixture),
+        toolingSha: fixture.candidateSha,
+        toolingFullRef: mismatchedToolingRef,
+      }),
     ).toThrow("tooling full ref does not resolve");
     expect(() =>
       produceReleasePlan({ ...sourceParams(fixture), candidateRef: "refs/heads/tooling" }),
-    ).toThrow("candidate ref does not resolve");
+    ).toThrow("candidate ref must be");
+  });
+
+  it("rejects a caller producer that differs from the exact tooling commit", () => {
+    const fixture = createFixtureRepo();
+    writeFixture(fixture.root, "scripts/release-plan-producer.mts", "// placeholder producer\n");
+    const toolingSha = commit(fixture.root, "different producer");
+    const toolingFullRef = `refs/tags/release-publish/${toolingSha.slice(0, 12)}-2`;
+    execFileSync("git", ["tag", toolingFullRef.slice("refs/tags/".length), toolingSha], {
+      cwd: fixture.root,
+    });
+
+    expect(() =>
+      produceReleasePlan({
+        ...sourceParams(fixture),
+        toolingSha,
+        toolingFullRef,
+      }),
+    ).toThrow("tooling import closure differs from tooling SHA");
+  });
+
+  it("matches the current publisher inventory: 93 npm and 89 ClawHub packages", () => {
+    const root = tempDirs.make("openclaw-release-plan-current-");
+    const candidateSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: resolve("."),
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", resolve("."), root]);
+    execFileSync("git", ["checkout", "-q", "--detach", candidateSha], { cwd: root });
+    copyToolingClosure(root);
+    const toolingSha = commit(root, "tooling overlay", { allowEmpty: true });
+    execFileSync("git", ["update-ref", "refs/heads/main", toolingSha], { cwd: root });
+
+    const plan = produceReleasePlan({
+      repoRoot: root,
+      intent: "main-qualification",
+      candidateSha,
+      candidateRef: candidateSha,
+      toolingSha,
+      toolingFullRef: "refs/heads/main",
+    });
+    const npmPackages = plan.inventory.packages.filter((entry) => entry.targets.includes("npm"));
+    const clawHubPackages = plan.inventory.packages.filter((entry) =>
+      entry.targets.includes("clawhub"),
+    );
+    expect(npmPackages).toHaveLength(93);
+    expect(clawHubPackages).toHaveLength(89);
+    expect(npmPackages.map((entry) => entry.name)).toEqual(
+      expect.arrayContaining([
+        "@openclaw/ai",
+        "@openclaw/gateway-client",
+        "@openclaw/gateway-protocol",
+        "openclaw",
+      ]),
+    );
   });
 
   it("rejects recomputed locks with partial groups or bogus inventory", () => {

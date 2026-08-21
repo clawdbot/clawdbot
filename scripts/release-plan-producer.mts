@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join, posix, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { collectClawHubPublishablePluginPackages } from "./lib/plugin-clawhub-release.ts";
-import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.ts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   canonicalReleasePlanJson,
@@ -31,15 +29,36 @@ type ReleasePlanSource = {
   toolingFullRef: string;
 };
 
+type PackageManifest = {
+  name?: unknown;
+  version?: unknown;
+  dependencies?: Record<string, unknown>;
+  openclaw?: {
+    build?: { bundledDist?: unknown };
+    release?: { publishToClawHub?: unknown; publishToNpm?: unknown };
+  };
+};
+
+type CorePackagePolicy = {
+  path: string;
+  dependency?: string;
+};
+
 const REPOSITORY = "openclaw/openclaw";
 const VALIDATION_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-release-publish.yml";
+const NPM_PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
 const PRODUCER_PATH = "scripts/release-plan-producer.mts";
+const EXECUTION_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
 function git(repoRoot: string, args: string[]): string {
-  return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  return execFileSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function resolveCommit(repoRoot: string, revision: string, label: string): string {
@@ -69,16 +88,19 @@ function requireQualifiedRef(value: string, label: string): string {
   return value;
 }
 
-function readGitText(repoRoot: string, commit: string, path: string): string {
+function readGitBytes(repoRoot: string, commit: string, path: string): Buffer {
   try {
     return execFileSync("git", ["show", `${commit}:${path}`], {
       cwd: repoRoot,
-      encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
     });
   } catch {
     throw new Error(`${path} is missing from ${commit}`);
   }
+}
+
+function readGitText(repoRoot: string, commit: string, path: string): string {
+  return readGitBytes(repoRoot, commit, path).toString("utf8");
 }
 
 function gitPathExists(repoRoot: string, commit: string, path: string): boolean {
@@ -93,6 +115,49 @@ function gitPathExists(repoRoot: string, commit: string, path: string): boolean 
   }
 }
 
+function collectLocalImports(source: string): string[] {
+  const imports = new Set<string>();
+  for (const pattern of [
+    /\bfrom\s+["'](\.[^"']+)["']/gu,
+    /\bimport\s*["'](\.[^"']+)["']/gu,
+    /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/gu,
+    /\bexport\s+(?:\*|\{[^}]*\})\s+from\s+["'](\.[^"']+)["']/gu,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        imports.add(match[1]);
+      }
+    }
+  }
+  return [...imports].toSorted(compareAscii);
+}
+
+function verifyToolingImportClosure(repoRoot: string, toolingSha: string) {
+  const pending = [PRODUCER_PATH];
+  const verified = new Set<string>();
+  while (pending.length > 0) {
+    const sourcePath = pending.pop();
+    if (!sourcePath || verified.has(sourcePath)) {
+      continue;
+    }
+    const toolingBytes = readGitBytes(repoRoot, toolingSha, sourcePath);
+    const executionPath = resolve(EXECUTION_ROOT, sourcePath);
+    const executionBytes = readFileSync(executionPath);
+    if (!executionBytes.equals(toolingBytes)) {
+      throw new Error(`tooling import closure differs from tooling SHA: ${sourcePath}`);
+    }
+    verified.add(sourcePath);
+    const source = toolingBytes.toString("utf8");
+    for (const specifier of collectLocalImports(source)) {
+      const importedPath = posix.normalize(posix.join(posix.dirname(sourcePath), specifier));
+      if (importedPath.startsWith("../") || importedPath === "..") {
+        throw new Error(`tooling import escapes repository root: ${sourcePath} -> ${specifier}`);
+      }
+      pending.push(importedPath);
+    }
+  }
+}
+
 function withCandidateSnapshot<T>(
   repoRoot: string,
   candidateSha: string,
@@ -102,7 +167,7 @@ function withCandidateSnapshot<T>(
   try {
     const tree = execFileSync(
       "git",
-      ["ls-tree", "-r", "-z", candidateSha, "--", "package.json", "extensions"],
+      ["ls-tree", "-r", "-z", candidateSha, "--", "package.json", "extensions", "packages"],
       { cwd: repoRoot },
     ).toString("utf8");
     const inventoryPaths: string[] = [];
@@ -111,7 +176,8 @@ function withCandidateSnapshot<T>(
       if (
         !path ||
         (path !== "package.json" &&
-          !/^extensions\/[^/]+\/(?:package\.json|README\.md)$/u.test(path))
+          !/^extensions\/[^/]+\/package\.json$/u.test(path) &&
+          !/^packages\/[^/]+\/package\.json$/u.test(path))
       ) {
         continue;
       }
@@ -185,28 +251,120 @@ function collectAllowedGroups(workflowText: string): string[] {
   return groups.toSorted(compareAscii);
 }
 
-function collectPackageInventory(snapshotRoot: string, version: string) {
-  const packages = new Map<string, { name: string; version: string; targets: Set<string> }>();
-  packages.set("openclaw", { name: "openclaw", version, targets: new Set(["npm"]) });
-  for (const plugin of collectPublishablePluginPackages(snapshotRoot)) {
-    packages.set(plugin.packageName, {
-      name: plugin.packageName,
-      version: plugin.version,
-      targets: new Set(["npm"]),
-    });
+function readPackageManifest(path: string): PackageManifest {
+  return JSON.parse(readFileSync(path, "utf8")) as PackageManifest;
+}
+
+function collectCorePackagePolicy(workflowText: string): CorePackagePolicy[] {
+  const workflow = parseYaml(workflowText) as {
+    jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
+  };
+  const declarations = Object.values(workflow.jobs ?? {}).flatMap((job) =>
+    (job.steps ?? [])
+      .map((step) => step.env?.CORE_PACKAGE_DIRS)
+      .filter((value): value is string => typeof value === "string"),
+  );
+  const [declaration] = declarations;
+  if (declarations.length !== 1 || !declaration) {
+    throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} must declare one CORE_PACKAGE_DIRS owner`);
   }
-  for (const plugin of collectClawHubPublishablePluginPackages(snapshotRoot)) {
-    const existing = packages.get(plugin.packageName);
-    if (existing && existing.version !== plugin.version) {
-      throw new Error(`plugin inventory version mismatch for ${plugin.packageName}`);
+  const paths = declaration.trim().split(/\s+/u).filter(Boolean);
+  if (
+    paths.length === 0 ||
+    new Set(paths).size !== paths.length ||
+    paths.some((path) => !/^packages\/[a-z0-9-]+$/u.test(path))
+  ) {
+    throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} has invalid CORE_PACKAGE_DIRS`);
+  }
+  const dependencyGates = new Map<string, string>();
+  for (const match of workflowText.matchAll(
+    /\[\[ "\$package_dir" == "(packages\/[a-z0-9-]+)" \]\][^\n]*dependencies\?\.\["([^"]+)"\]/gu,
+  )) {
+    if (match[1] && match[2]) {
+      dependencyGates.set(match[1], match[2]);
+    }
+  }
+  for (const path of dependencyGates.keys()) {
+    if (!paths.includes(path)) {
+      throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} gates an undeclared core package: ${path}`);
+    }
+  }
+  return paths
+    .map((path) => {
+      const dependency = dependencyGates.get(path);
+      return dependency ? { path, dependency } : { path };
+    })
+    .toSorted((left, right) => compareAscii(left.path, right.path));
+}
+
+function collectPackageInventory(
+  snapshotRoot: string,
+  rootManifest: PackageManifest,
+  corePackages: CorePackagePolicy[],
+) {
+  const version = rootManifest.version;
+  if (typeof version !== "string" || !version) {
+    throw new Error("candidate package.json version is required");
+  }
+  const packages = new Map<string, { name: string; version: string; targets: Set<string> }>();
+  const addPackage = (manifest: PackageManifest, targets: string[], source: string) => {
+    if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
+      throw new Error(`${source} must declare package name and version`);
+    }
+    const existing = packages.get(manifest.name);
+    if (existing && existing.version !== manifest.version) {
+      throw new Error(`package inventory version mismatch for ${manifest.name}`);
     }
     const entry = existing ?? {
-      name: plugin.packageName,
-      version: plugin.version,
+      name: manifest.name,
+      version: manifest.version,
       targets: new Set<string>(),
     };
-    entry.targets.add("clawhub");
-    packages.set(plugin.packageName, entry);
+    for (const target of targets) {
+      entry.targets.add(target);
+    }
+    packages.set(manifest.name, entry);
+  };
+  addPackage({ name: "openclaw", version }, ["npm"], "package.json");
+  for (const entry of readdirSync(join(snapshotRoot, "extensions"), { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const manifest = readPackageManifest(
+      join(snapshotRoot, "extensions", entry.name, "package.json"),
+    );
+    if (manifest.openclaw?.build?.bundledDist === true) {
+      continue;
+    }
+    const targets = [
+      ...(manifest.openclaw?.release?.publishToClawHub === true ? ["clawhub"] : []),
+      ...(manifest.openclaw?.release?.publishToNpm === true ? ["npm"] : []),
+    ];
+    if (targets.length > 0) {
+      addPackage(manifest, targets, `extensions/${entry.name}/package.json`);
+    }
+  }
+  for (const policy of corePackages) {
+    const manifestPath = join(snapshotRoot, policy.path, "package.json");
+    if (!existsSync(manifestPath)) {
+      if (policy.dependency && typeof rootManifest.dependencies?.[policy.dependency] === "string") {
+        throw new Error(
+          `publishable core package manifest is missing: ${policy.path}/package.json`,
+        );
+      }
+      continue;
+    }
+    const manifest = readPackageManifest(manifestPath);
+    if (policy.dependency && typeof rootManifest.dependencies?.[policy.dependency] !== "string") {
+      continue;
+    }
+    if (!policy.dependency && manifest.openclaw?.release?.publishToNpm !== true) {
+      continue;
+    }
+    if (manifest.version !== version) {
+      throw new Error(`${policy.path} version must match openclaw ${version}`);
+    }
+    addPackage(manifest, ["npm"], `${policy.path}/package.json`);
   }
   return [...packages.values()]
     .map((entry) => ({
@@ -261,19 +419,35 @@ function collectPlatformInventory(repoRoot: string, toolingSha: string, workflow
   });
 }
 
-function readCandidateInventory(repoRoot: string, candidateSha: string) {
+function readCandidateInventory(
+  repoRoot: string,
+  candidateSha: string,
+  corePackages: CorePackagePolicy[],
+) {
   return withCandidateSnapshot(repoRoot, candidateSha, (snapshotRoot) => {
-    const rootPackage = JSON.parse(readFileSync(join(snapshotRoot, "package.json"), "utf8")) as {
-      version?: unknown;
-    };
+    const rootPackage = readPackageManifest(join(snapshotRoot, "package.json"));
     if (typeof rootPackage.version !== "string" || !rootPackage.version) {
       throw new Error("candidate package.json version is required");
     }
     return {
       version: rootPackage.version,
-      packages: collectPackageInventory(snapshotRoot, rootPackage.version),
+      packages: collectPackageInventory(snapshotRoot, rootPackage, corePackages),
     };
   });
+}
+
+function requireToolingRoute(intent: ReleasePlanIntent, ref: string, toolingSha: string) {
+  const protectedMatch = /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(ref);
+  const protectedRoute = protectedMatch?.[1] === toolingSha.slice(0, 12);
+  if (intent === "main-qualification") {
+    if (ref !== "refs/heads/main" && !protectedRoute) {
+      throw new Error("main qualification tooling must use trusted main or release-publish tag");
+    }
+    return;
+  }
+  if (!protectedRoute) {
+    throw new Error(`${intent} tooling must use a release-publish tag bound to its SHA`);
+  }
 }
 
 function resolveSource(params: ReleasePlanSource) {
@@ -281,9 +455,10 @@ function resolveSource(params: ReleasePlanSource) {
   const candidateSha = requireExactSha(params.candidateSha, "candidate SHA");
   const toolingSha = requireExactSha(params.toolingSha, "tooling SHA");
   const toolingFullRef = requireQualifiedRef(params.toolingFullRef, "tooling full ref");
-  if (resolveCommit(repoRoot, params.candidateRef, "candidate ref") !== candidateSha) {
-    throw new Error("candidate ref does not resolve to the requested candidate SHA");
+  if (resolveCommit(repoRoot, candidateSha, "candidate SHA") !== candidateSha) {
+    throw new Error("candidate SHA does not resolve to itself");
   }
+  requireToolingRoute(params.intent, toolingFullRef, toolingSha);
   if (resolveCommit(repoRoot, toolingFullRef, "tooling full ref") !== toolingSha) {
     throw new Error("tooling full ref does not resolve to the requested tooling SHA");
   }
@@ -292,18 +467,27 @@ function resolveSource(params: ReleasePlanSource) {
 
 export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
   const { candidateSha, repoRoot, toolingFullRef, toolingSha } = resolveSource(params);
-  const candidate = readCandidateInventory(repoRoot, candidateSha);
+  verifyToolingImportClosure(repoRoot, toolingSha);
+  const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
+  const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
+  const npmPublicationWorkflow = readGitText(repoRoot, toolingSha, NPM_PUBLICATION_WORKFLOW_PATH);
+  const candidate = readCandidateInventory(
+    repoRoot,
+    candidateSha,
+    collectCorePackagePolicy(npmPublicationWorkflow),
+  );
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version);
   const expectedCandidateRef =
     params.intent === "main-qualification" ? candidateSha : `refs/tags/v${candidate.version}`;
   if (params.candidateRef !== expectedCandidateRef) {
     throw new Error(`${params.intent} candidate ref must be ${expectedCandidateRef}`);
   }
-  if (!gitPathExists(repoRoot, toolingSha, PRODUCER_PATH)) {
-    throw new Error(`${PRODUCER_PATH} is missing from tooling SHA ${toolingSha}`);
+  if (
+    params.intent === "postpublish-confidence" &&
+    resolveCommit(repoRoot, params.candidateRef, "published candidate tag") !== candidateSha
+  ) {
+    throw new Error("published candidate tag does not resolve to the candidate SHA");
   }
-  const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
-  const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
   return validateReleasePlan({
     schema: RELEASE_PLAN_SCHEMA,
     release_id: candidate.version,
@@ -322,7 +506,6 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
       profile: policy.profile,
       soak: policy.soak,
       allowed_groups: collectAllowedGroups(validationWorkflow),
-      exceptions: [],
     },
     inventory: {
       packages: candidate.packages,
@@ -335,8 +518,8 @@ export function verifyReleasePlanLock(
   lockJson: string,
   params: ReleasePlanSource,
 ): ReleasePlanLock {
-  const lock = parseReleasePlanLockJson(lockJson);
   const expectedPlan = produceReleasePlan(params);
+  const lock = parseReleasePlanLockJson(lockJson);
   if (canonicalReleasePlanJson(lock.plan) !== canonicalReleasePlanJson(expectedPlan)) {
     throw new Error("release plan does not match repository-derived authority");
   }

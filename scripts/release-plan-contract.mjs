@@ -5,15 +5,11 @@ import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 export const RELEASE_PLAN_SCHEMA = "openclaw.release-plan.v1";
 export const RELEASE_PLAN_LOCK_SCHEMA = "openclaw.release-plan-lock.v1";
-export const VALIDATION_ATTEMPT_REQUEST_SCHEMA = "openclaw.validation-attempt-request.v1";
-export const VALIDATION_ATTEMPT_RECEIPT_SCHEMA = "openclaw.validation-attempt-receipt.v1";
 export const RELEASE_PLAN_CANONICALIZATION = "ascii-sorted-compact-json-trailing-newline-v1";
 export const RELEASE_PLAN_MAX_BYTES = 32 * 1024;
-export const VALIDATION_ATTEMPT_REQUEST_MAX_BYTES = 8 * 1024;
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
 const ASCII_PATTERN = /^[\x20-\x7e]+$/u;
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
@@ -59,14 +55,6 @@ function digest(value, label) {
     fail(`${label} must be sha256:<64 lowercase hex characters>`);
   }
   return value;
-}
-
-function positiveIntegerString(value, label) {
-  const normalized = asciiString(value, label);
-  if (!POSITIVE_INTEGER_PATTERN.test(normalized)) {
-    fail(`${label} must be a positive integer string`);
-  }
-  return normalized;
 }
 
 function sortedUniqueStrings(value, label) {
@@ -167,30 +155,6 @@ function validatePlatforms(value) {
   return platforms;
 }
 
-function validateExceptions(value) {
-  if (!Array.isArray(value)) {
-    fail("release plan validation exceptions must be an array");
-  }
-  const exceptions = value.map((entry, index) => {
-    if (!isRecord(entry)) {
-      fail(`release plan validation exceptions[${index}] must be an object`);
-    }
-    exactKeys(entry, ["code", "reason"], `release plan validation exceptions[${index}]`);
-    return {
-      code: asciiString(entry.code, `release plan validation exceptions[${index}].code`),
-      reason: asciiString(entry.reason, `release plan validation exceptions[${index}].reason`),
-    };
-  });
-  const codes = exceptions.map((entry) => entry.code);
-  if (
-    new Set(codes).size !== codes.length ||
-    codes.some((entry, index) => index > 0 && compareAscii(codes[index - 1], entry) >= 0)
-  ) {
-    fail("release plan validation exceptions must have unique codes in ascending ASCII order");
-  }
-  return exceptions;
-}
-
 function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, version }) {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null || parsedVersion.version !== version) {
@@ -211,6 +175,20 @@ function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, v
   const expectedTag = `v${version}`;
   if (tag !== expectedTag || targetContextRef !== `refs/tags/${expectedTag}`) {
     fail(`${purpose} release plans require the exact version tag context`);
+  }
+}
+
+function validateToolingRoute(purpose, ref, toolingSha) {
+  const protectedMatch = /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(ref);
+  const protectedRoute = protectedMatch?.[1] === toolingSha.slice(0, 12);
+  if (purpose === "main-qualification") {
+    if (ref !== "refs/heads/main" && !protectedRoute) {
+      fail("main-qualification tooling must use trusted main or a protected release-publish tag");
+    }
+    return;
+  }
+  if (!protectedRoute) {
+    fail(`${purpose} tooling must use a protected release-publish tag bound to its SHA`);
   }
 }
 
@@ -268,11 +246,7 @@ export function validateReleasePlan(value) {
   if (!isRecord(value.validation)) {
     fail("release plan validation must be an object");
   }
-  exactKeys(
-    value.validation,
-    ["profile", "soak", "allowed_groups", "exceptions"],
-    "release plan validation",
-  );
+  exactKeys(value.validation, ["profile", "soak", "allowed_groups"], "release plan validation");
   const profile = asciiString(value.validation.profile, "release plan validation profile");
   if (!PROFILES.has(profile)) {
     fail(`unsupported release plan validation profile: ${profile}`);
@@ -308,7 +282,6 @@ export function validateReleasePlan(value) {
         value.validation.allowed_groups,
         "release plan validation allowed_groups",
       ),
-      exceptions: validateExceptions(value.validation.exceptions),
     },
     inventory: {
       packages: validatePackages(value.inventory.packages),
@@ -321,6 +294,7 @@ export function validateReleasePlan(value) {
   if (plan.tooling.workflow_path !== WORKFLOW_PATH) {
     fail(`release plan tooling workflow_path must be ${WORKFLOW_PATH}`);
   }
+  validateToolingRoute(plan.purpose, plan.tooling.ref, plan.tooling.sha);
   if (Buffer.byteLength(canonicalAsciiJson(plan), "ascii") > RELEASE_PLAN_MAX_BYTES) {
     fail(`release plan exceeds ${RELEASE_PLAN_MAX_BYTES} bytes`);
   }
@@ -393,84 +367,4 @@ export function parseReleasePlanLockJson(text) {
     fail("release plan lock JSON does not use canonical bytes");
   }
   return lock;
-}
-
-export function validateValidationAttemptRequest(value) {
-  if (!isRecord(value)) {
-    fail("validation attempt request must be an object");
-  }
-  exactKeys(
-    value,
-    ["schema", "plan_digest", "rerun_group", "filters", "fail_fast", "reuse_evidence"],
-    "validation attempt request",
-  );
-  if (value.schema !== VALIDATION_ATTEMPT_REQUEST_SCHEMA) {
-    fail(`validation attempt request schema must be ${VALIDATION_ATTEMPT_REQUEST_SCHEMA}`);
-  }
-  if (!isRecord(value.filters)) {
-    fail("validation attempt request filters must be an object");
-  }
-  const filters = Object.fromEntries(
-    Object.entries(value.filters)
-      .map(([key, entry]) => [
-        asciiString(key, "validation attempt request filter key"),
-        asciiString(entry, `validation attempt request filter ${key}`),
-      ])
-      .toSorted(([left], [right]) => compareAscii(left, right)),
-  );
-  if (typeof value.fail_fast !== "boolean" || typeof value.reuse_evidence !== "boolean") {
-    fail("validation attempt request fail_fast and reuse_evidence must be booleans");
-  }
-  const request = {
-    schema: VALIDATION_ATTEMPT_REQUEST_SCHEMA,
-    plan_digest: digest(value.plan_digest, "validation attempt request plan_digest"),
-    rerun_group: asciiString(value.rerun_group, "validation attempt request rerun_group"),
-    filters,
-    fail_fast: value.fail_fast,
-    reuse_evidence: value.reuse_evidence,
-  };
-  if (
-    Buffer.byteLength(canonicalAsciiJson(request), "ascii") > VALIDATION_ATTEMPT_REQUEST_MAX_BYTES
-  ) {
-    fail(`validation attempt request exceeds ${VALIDATION_ATTEMPT_REQUEST_MAX_BYTES} bytes`);
-  }
-  return request;
-}
-
-export function validateValidationAttemptReceipt(value) {
-  if (!isRecord(value)) {
-    fail("validation attempt receipt must be an object");
-  }
-  exactKeys(
-    value,
-    [
-      "schema",
-      "plan_digest",
-      "request_digest",
-      "run_id",
-      "run_attempt",
-      "workflow_ref",
-      "workflow_full_ref",
-      "workflow_sha",
-      "target_sha",
-    ],
-    "validation attempt receipt",
-  );
-  if (value.schema !== VALIDATION_ATTEMPT_RECEIPT_SCHEMA) {
-    fail(`validation attempt receipt schema must be ${VALIDATION_ATTEMPT_RECEIPT_SCHEMA}`);
-  }
-  return {
-    schema: VALIDATION_ATTEMPT_RECEIPT_SCHEMA,
-    plan_digest: digest(value.plan_digest, "validation attempt receipt plan_digest"),
-    request_digest: digest(value.request_digest, "validation attempt receipt request_digest"),
-    run_id: positiveIntegerString(value.run_id, "validation attempt receipt run_id"),
-    run_attempt: positiveIntegerString(value.run_attempt, "validation attempt receipt run_attempt"),
-    workflow_ref: asciiString(value.workflow_ref, "validation attempt receipt workflow_ref"),
-    workflow_full_ref: asciiString(
-      value.workflow_full_ref,
-      "validation attempt receipt workflow_full_ref",
-    ),
-    workflow_sha: sha(value.workflow_sha, "validation attempt receipt workflow_sha"),
-    target_sha: sha(value.target_sha, "validation attempt receipt target_sha"),
-  };
 }
