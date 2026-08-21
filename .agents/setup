@@ -42,6 +42,9 @@ install_system_packages() {
 }
 
 install_node() {
+  if [[ -x "$node_bin/node" ]]; then
+    export PATH="$node_bin:$PATH"
+  fi
   export OPENCLAW_NODE_TOOLCHAIN_ROOT="$node_toolchain_root"
   # Reuse the repository's Node release-floor and download contract used by CI.
   # shellcheck disable=SC1091
@@ -60,7 +63,8 @@ install_pnpm() {
   package_manager="$(node -p 'require("./package.json").packageManager')"
 
   if [[ ! -x "$node_bin/corepack" ]]; then
-    "$node_bin/npm" install --global corepack@latest
+    echo "[orb setup] Node toolchain does not include Corepack; remove $node_toolchain_root and rerun setup" >&2
+    return 1
   fi
   "$node_bin/corepack" enable --install-directory "$node_bin"
 
