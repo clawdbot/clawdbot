@@ -119,6 +119,9 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
     isMoonshot ||
+    // Model Studio's OpenAI-compatible reference documents `max_tokens` and does
+    // not list `max_completion_tokens`.
+    isModelStudioLike ||
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||

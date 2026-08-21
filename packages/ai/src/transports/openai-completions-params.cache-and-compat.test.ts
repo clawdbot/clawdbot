@@ -60,6 +60,40 @@ describe("openai completions params", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
+  it.each([
+    ["qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    ["dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["modelstudio", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+  ])("sends max_tokens on Model Studio provider %s", (provider, baseUrl) => {
+    // Model Studio's OpenAI-compatibility reference documents `max_tokens` and
+    // does not list `max_completion_tokens`.
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({ id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider, baseUrl }),
+      emptyContext(),
+      undefined,
+    ) as Record<string, unknown>;
+
+    expect(params).toHaveProperty("max_tokens");
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("still sends max_completion_tokens on the OpenAI endpoint", () => {
+    // Guards the change above from widening: OpenAI itself deprecated max_tokens.
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "gpt-5",
+        name: "GPT-5",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      emptyContext(),
+      undefined,
+    ) as Record<string, unknown>;
+
+    expect(params).toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("enables streaming usage compat for generic providers on native DashScope endpoints", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
