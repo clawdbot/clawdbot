@@ -33,7 +33,6 @@ type NpmLockExecInvocation = UnknownRecord & {
 type NpmLockOptions = {
   env?: NodeJS.ProcessEnv;
   installStrategy?: "hoisted" | "nested" | "shallow" | "linked" | "" | null;
-  legacyPeerDeps?: boolean;
 };
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -936,10 +935,6 @@ export function createNpmPackageLockInstallStrategyArgs(
 }
 
 export function generateNpmPackageLock(packageDir: string, options: NpmLockOptions = {}) {
-  return generateNpmPackageLockArtifacts(packageDir, options).packageLock;
-}
-
-export function generateNpmPackageLockArtifacts(packageDir: string, options: NpmLockOptions = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-npm-lock-"));
   try {
     const env = options.env ?? process.env;
@@ -947,10 +942,9 @@ export function generateNpmPackageLockArtifacts(packageDir: string, options: Npm
       readFileSync(path.join(packageDir, "package.json"), "utf8"),
     );
     const npmLockOverrides = readNpmLockOverrides();
-    const peerResolutionArgs =
-      options.legacyPeerDeps || shouldUseLegacyPeerDepsForNpmLock(packageJson)
-        ? ["--legacy-peer-deps"]
-        : [];
+    const peerResolutionArgs = shouldUseLegacyPeerDepsForNpmLock(packageJson)
+      ? ["--legacy-peer-deps"]
+      : [];
     const npmInstallArgs = [
       "install",
       "--package-lock-only",
@@ -960,12 +954,10 @@ export function generateNpmPackageLockArtifacts(packageDir: string, options: Npm
       "--no-fund",
       ...peerResolutionArgs,
     ];
-    const normalizedPackageJson = `${JSON.stringify(
-      packageJsonForNpmLock(packageJson, npmLockOverrides),
-      null,
-      2,
-    )}\n`;
-    writeFileSync(path.join(tempDir, "package.json"), normalizedPackageJson);
+    writeFileSync(
+      path.join(tempDir, "package.json"),
+      `${JSON.stringify(packageJsonForNpmLock(packageJson, npmLockOverrides), null, 2)}\n`,
+    );
     copyLocalFileDependencies(packageJson, packageDir, tempDir);
     runNpm(npmInstallArgs, tempDir, env);
     normalizeNpmLockOverrides(tempDir, npmLockOverrides, npmInstallArgs, env);
@@ -975,10 +967,7 @@ export function generateNpmPackageLockArtifacts(packageDir: string, options: Npm
       ),
     );
     assertNpmLockMatchesPnpmLock(generated);
-    return {
-      packageJson: normalizedPackageJson,
-      packageLock: `${JSON.stringify(generated, null, 2)}\n`,
-    };
+    return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1005,8 +994,7 @@ function collectPnpmLockViolations(
       !isRecord(metadata) ||
       typeof metadata.version !== "string" ||
       !metadata.version ||
-      metadata.link === true ||
-      (typeof metadata.resolved === "string" && metadata.resolved.startsWith("file:"))
+      metadata.link === true
     ) {
       continue;
     }

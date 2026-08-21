@@ -653,8 +653,7 @@ run_pnpm() {
 
 bundle_prewarmed_runtime() {
   local work_dir package_dir prefix_dir runtime_tgz runtime_directory runtime_root node_path entry_path
-  local plugin_work_dir
-  local archive_name archive_path manifest_path archive_sha version_output
+  local archive_name archive_path manifest_path archive_sha manifest_arch version_output
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-mac-runtime.XXXXXX")"
   PACKAGE_TEMP_DIRS+=("$work_dir")
   package_dir="$work_dir/package"
@@ -695,12 +694,10 @@ bundle_prewarmed_runtime() {
     return 1
   }
 
-  echo "🧩 Prewarming external plugins"
-  plugin_work_dir="$work_dir/plugins"
-  node "$ROOT_DIR/scripts/stage-macos-prewarmed-plugins.mjs" \
+  node --import tsx "$ROOT_DIR/scripts/verify-macos-prewarmed-runtime.mts" \
     --repo-root "$ROOT_DIR" \
     --runtime-root "$runtime_root" \
-    --work-dir "$plugin_work_dir"
+    --runtime-bin "$prefix_dir/tools/$runtime_directory/bin"
 
   version_output="$("$node_path" "$entry_path" --version)"
   [[ "$version_output" == *"OpenClaw ${APP_VERSION}"* ]] || {
@@ -717,7 +714,9 @@ bundle_prewarmed_runtime() {
   manifest_path="$APP_ROOT/Contents/Resources/prewarmed-runtime.json"
   /usr/bin/tar -czf "$archive_path" -C "$prefix_dir" "tools/$runtime_directory"
   archive_sha="$(/usr/bin/shasum -a 256 "$archive_path" | /usr/bin/awk '{print $1}')"
-  node - "$manifest_path" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$PRIMARY_ARCH" \
+  manifest_arch="$PRIMARY_ARCH"
+  [[ "$manifest_arch" != "x86_64" ]] || manifest_arch="x64"
+  node - "$manifest_path" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$manifest_arch" \
     "$PREWARMED_NODE_VERSION" "$runtime_directory" "$archive_name" "$archive_sha" <<'NODE'
 const fs = require("node:fs");
 const [manifestPath, appVersion, gitCommit, architecture, nodeVersion, runtimeDirectory, archiveFile, archiveSHA256] = process.argv.slice(2);

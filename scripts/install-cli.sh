@@ -1643,7 +1643,7 @@ prewarmed_manifest_value() {
 install_openclaw_from_prewarmed_runtime() {
   local schema_version app_version git_commit architecture node_version runtime_directory
   local archive_file expected_sha actual_sha current_arch stage new_runtime target_runtime backup_runtime
-  local node_path entry_path codex_entry_path version_output old_node_link wrapper_tmp backup_wrapper node_link_tmp
+  local node_path entry_path version_output old_node_link wrapper_tmp backup_wrapper node_link_tmp
 
   [[ -r "$PREWARMED_RUNTIME" ]] || fail "Prewarmed runtime archive is unreadable: $PREWARMED_RUNTIME"
   [[ -r "$PREWARMED_MANIFEST" ]] || fail "Prewarmed runtime manifest is unreadable: $PREWARMED_MANIFEST"
@@ -1695,16 +1695,9 @@ install_openclaw_from_prewarmed_runtime() {
   mv "$stage/tools/$runtime_directory" "$new_runtime"
   node_path="$new_runtime/bin/node"
   entry_path="$new_runtime/lib/node_modules/openclaw/dist/entry.js"
-  codex_entry_path="$new_runtime/lib/node_modules/openclaw/dist/extensions/codex/node_modules/@openai/codex/bin/codex.js"
   [[ -x "$node_path" ]] || fail "Prewarmed runtime is missing its Node executable"
   [[ -r "$entry_path" ]] || fail "Prewarmed runtime is missing the OpenClaw entrypoint"
-  [[ -x "$codex_entry_path" ]] || fail "Prewarmed runtime is missing its managed Codex executable"
-  ln -s \
-    "../lib/node_modules/openclaw/dist/extensions/codex/node_modules/@openai/codex/bin/codex.js" \
-    "$new_runtime/bin/codex"
   [[ "$($node_path --version 2>/dev/null || true)" == "v${node_version}" ]] || fail "Prewarmed Node version verification failed"
-  [[ "$(PATH="$new_runtime/bin:${PATH}" "$new_runtime/bin/codex" --version 2>/dev/null || true)" == codex-cli\ * ]] ||
-    fail "Prewarmed Codex version verification failed"
   version_output="$($node_path "$entry_path" --version 2>/dev/null || true)"
   [[ "$version_output" == *"OpenClaw ${app_version}"* ]] || fail "Prewarmed OpenClaw version verification failed"
   [[ "$version_output" == *"(${git_commit:0:7}"* ]] || fail "Prewarmed OpenClaw commit verification failed"
@@ -1725,7 +1718,6 @@ install_openclaw_from_prewarmed_runtime() {
   cat >"$wrapper_tmp" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="${PREFIX}/tools/node/bin:${PREFIX}/bin:\${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
 exec "${PREFIX}/tools/node/bin/node" "${PREFIX}/tools/node/lib/node_modules/openclaw/dist/entry.js" "\$@"
 EOF
   chmod +x "$wrapper_tmp"

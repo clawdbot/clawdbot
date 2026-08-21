@@ -313,37 +313,6 @@ describe("generate-npm-package-lock", () => {
     ]);
   });
 
-  it("accepts local package tarballs while validating their registry dependency closure", () => {
-    const packageKey = "zod@4.4.3";
-    expect(
-      collectPnpmLockViolations(
-        {
-          packages: {
-            "node_modules/@openclaw/demo": {
-              version: "2026.8.1",
-              resolved: "file:packs/openclaw-demo-2026.8.1.tgz",
-              integrity: "sha512-local-package",
-            },
-            "node_modules/@openclaw/demo/node_modules/zod": {
-              version: "4.4.3",
-              resolved: "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
-              integrity: "sha512-unreviewed",
-            },
-          },
-        },
-        new Set([packageKey]),
-        new Map([[packageKey, new Set(["sha512-reviewed"])]]),
-      ),
-    ).toEqual([
-      {
-        path: "node_modules/@openclaw/demo/node_modules/zod",
-        packageKey,
-        actualIntegrity: "sha512-unreviewed",
-        expectedIntegrities: ["sha512-reviewed"],
-      },
-    ]);
-  });
-
   it("normalizes npm patch-version metadata drift", () => {
     expect(
       normalizeNpmVersionDrift({

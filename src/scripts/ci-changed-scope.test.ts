@@ -389,6 +389,7 @@ describe("detectChangedScope", () => {
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
+      "scripts/verify-macos-prewarmed-runtime.mts",
     ]) {
       expect(detectChangedScope([changedPath])).toEqual({
         runNode: true,
@@ -408,9 +409,11 @@ describe("detectChangedScope", () => {
     for (const changedPath of [
       "test/scripts/codesign-mac-app.test.ts",
       "test/scripts/create-dmg.test.ts",
+      "test/scripts/install-cli-prewarmed.test.ts",
       "test/scripts/notarize-mac-artifact.test.ts",
       "test/scripts/package-mac-app.test.ts",
       "test/scripts/package-mac-dist.test.ts",
+      "test/scripts/verify-macos-prewarmed-runtime.test.ts",
     ]) {
       expect(detectChangedScope([changedPath])).toEqual({
         runNode: true,
@@ -591,7 +594,7 @@ describe("detectChangedScope", () => {
     });
     expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
       runNode: true,
-      runMacos: false,
+      runMacos: true,
       runIosBuild: false,
       runAndroid: false,
       runWindows: false,
