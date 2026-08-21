@@ -52,6 +52,11 @@ const DEFAULT_CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
 const DEFAULT_CGROUP_V1_MEMORY_MOUNT_PATH = "/sys/fs/cgroup/memory";
 const PROC_SELF_CGROUP_PATH = "/proc/self/cgroup";
 const PROC_SELF_MOUNTINFO_PATH = "/proc/self/mountinfo";
+const SERIALIZED_MAIN_CONFIG_GROUPS = [
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+  ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+];
 // memory.high throttles reclaim rather than failing allocation, so a heap sized
 // above it stalls the build instead of OOM-ing; both bounds cap the build heap.
 const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
@@ -968,11 +973,6 @@ function selectsMainConfig(args: string[]) {
   return config !== undefined && path.resolve(config) === path.resolve("tsdown.config.ts");
 }
 
-function selectsMainUnifiedBuild(args: string[]) {
-  const filter = readForwardedOption(args, ["--filter", "-F"]);
-  return selectsMainConfig(args) && filter === TSDOWN_UNIFIED_CONFIG_GROUP;
-}
-
 /** Builds declarations in dependency order without overlapping the largest graphs. */
 export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   const forwardedArgs = params.args ?? [];
@@ -994,14 +994,19 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
       : env;
 
   if (hasForwardedConfig) {
-    if (declarationsEnabled && selectsMainUnifiedBuild(forwardedArgs)) {
-      return [TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS].map((group) =>
-        resolveTsdownBuildInvocation({
-          ...params,
-          args: ["--filter", group, ...aiArgs],
-          env: declarationEnv,
-        }),
-      );
+    if (declarationsEnabled && selectsMainConfig(forwardedArgs)) {
+      const filter = readForwardedOption(forwardedArgs, ["--filter", "-F"]);
+      const firstGroupIndex =
+        filter === undefined ? 0 : filter === TSDOWN_UNIFIED_CONFIG_GROUP ? 1 : -1;
+      if (firstGroupIndex >= 0) {
+        return SERIALIZED_MAIN_CONFIG_GROUPS.slice(firstGroupIndex).map((group) =>
+          resolveTsdownBuildInvocation({
+            ...params,
+            args: ["--filter", group, ...aiArgs],
+            env: declarationEnv,
+          }),
+        );
+      }
     }
     return [resolveTsdownBuildInvocation(params)];
   }
@@ -1022,11 +1027,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     return invocations;
   }
 
-  for (const group of [
-    TSDOWN_PACKAGE_CONFIG_GROUP,
-    TSDOWN_UNIFIED_CONFIG_GROUP,
-    ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-  ]) {
+  for (const group of SERIALIZED_MAIN_CONFIG_GROUPS) {
     invocations.push(
       resolveTsdownBuildInvocation({
         ...params,

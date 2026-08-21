@@ -361,7 +361,19 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(full.heapShortfall?.fatal).toBe(true);
+    expect(full.invocations).toHaveLength(2 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(
+      full.invocations.map((invocation) => {
+        const filterIndex = invocation.args.indexOf("--filter");
+        return invocation.args[filterIndex + 1];
+      }),
+    ).toEqual([
+      TSDOWN_PACKAGE_CONFIG_GROUP,
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    ]);
     expect(packages.heapShortfall).toBeNull();
+    expect(packages.invocations).toHaveLength(1);
   });
 
   it.each([
