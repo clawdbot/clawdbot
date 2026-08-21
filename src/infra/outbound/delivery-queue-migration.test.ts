@@ -26,6 +26,7 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
+  type LegacyQueuedDelivery,
   type LegacyQueuedDeliveryPreparation,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
@@ -146,14 +147,15 @@ describe("outbound prepared queue migration", () => {
 
   it("prepares a legacy row once, fences rollback, and never reruns modifiers", async () => {
     const id = "stable-legacy-delivery";
+    const source = {
+      ...legacyEntry(id, "secret"),
+      completionRetention: "permanent",
+      replyToId: "root-message",
+      replyToMode: "batched",
+    } satisfies LegacyQueuedDelivery;
     upsertDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      entry: {
-        ...legacyEntry(id, "secret"),
-        completionRetention: "permanent",
-        replyToId: "root-message",
-        replyToMode: "batched",
-      },
+      entry: source,
       stateDir: tmpDir(),
     });
 
