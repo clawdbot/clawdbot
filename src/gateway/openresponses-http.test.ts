@@ -1845,7 +1845,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     [
       {
         label: "terminal metadata",
-        meta: { error: { kind: "incomplete_turn", message: "private provider failure" } },
+        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
         expectedPhase: "error" as const,
       },
       {
@@ -1888,7 +1888,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
           payloads: [{ text: "Command may have changed state", isError: true }],
           meta: {
             durationMs: 0,
-            agentMeta: { usage: { input: 11, output: 7, total: 18 } },
+            agentMeta: {
+              sessionId: "failed-stream-session",
+              provider: "openai",
+              model: "test-model",
+              usage: { input: 11, output: 7, total: 18 },
+            },
             ...meta,
           },
         };

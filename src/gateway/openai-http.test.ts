@@ -2044,7 +2044,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     [
       {
         label: "terminal metadata",
-        meta: { error: { kind: "incomplete_turn", message: "private provider failure" } },
+        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
         expectedPhase: "error" as const,
       },
       {
