@@ -29,7 +29,14 @@ export class AcpSessionNewOrdering {
    * that might never be released.
    */
   private establishedTrackingSaturated = false;
-  private readonly bufferedSessionUpdates = new Map<string, AnyMessage[]>();
+  /**
+   * Buffered updates in arrival order across every session. Order lives here and
+   * nowhere else: grouping by session instead would reorder updates from different
+   * sessions against each other when they are released together.
+   */
+  private readonly bufferedUpdates: { sessionId: string; message: AnyMessage }[] = [];
+  /** Per-session counts, used only to enforce the bounds above — never for ordering. */
+  private readonly bufferedCounts = new Map<string, number>();
   /** JSON-RPC IDs of in-flight `session/new` requests, used to correlate the establishing response. */
   private readonly pendingNewSessionRequestIds = new Set<string>();
   /**
@@ -168,31 +175,43 @@ export class AcpSessionNewOrdering {
 
   /** @returns false when the buffer is full and the caller must write the message through. */
   private bufferUpdate(sessionId: string, message: AnyMessage): boolean {
-    const buffered = this.bufferedSessionUpdates.get(sessionId);
-    if (buffered) {
-      if (buffered.length >= MAX_BUFFERED_UPDATES_PER_SESSION) {
+    const buffered = this.bufferedCounts.get(sessionId);
+    if (buffered === undefined) {
+      if (this.bufferedCounts.size >= MAX_BUFFERED_SESSIONS) {
         return false;
       }
-      buffered.push(message);
-      return true;
-    }
-    if (this.bufferedSessionUpdates.size >= MAX_BUFFERED_SESSIONS) {
+    } else if (buffered >= MAX_BUFFERED_UPDATES_PER_SESSION) {
       return false;
     }
-    this.bufferedSessionUpdates.set(sessionId, [message]);
+    this.bufferedUpdates.push({ sessionId, message });
+    this.bufferedCounts.set(sessionId, (buffered ?? 0) + 1);
     return true;
+  }
+
+  /** Removes one session's updates, preserving their order relative to each other. */
+  private takeBufferedUpdates(sessionId: string): AnyMessage[] {
+    if (!this.bufferedCounts.delete(sessionId)) {
+      return [];
+    }
+    const taken: AnyMessage[] = [];
+    let kept = 0;
+    for (const entry of this.bufferedUpdates) {
+      if (entry.sessionId === sessionId) {
+        taken.push(entry.message);
+        continue;
+      }
+      this.bufferedUpdates[kept] = entry;
+      kept += 1;
+    }
+    this.bufferedUpdates.length = kept;
+    return taken;
   }
 
   private drainBufferedUpdates(
     sessionId: string,
     controller: TransformStreamDefaultController<AnyMessage>,
   ): void {
-    const buffered = this.bufferedSessionUpdates.get(sessionId);
-    if (!buffered) {
-      return;
-    }
-    this.bufferedSessionUpdates.delete(sessionId);
-    for (const message of buffered) {
+    for (const message of this.takeBufferedUpdates(sessionId)) {
       controller.enqueue(message);
     }
   }
@@ -208,12 +227,11 @@ export class AcpSessionNewOrdering {
     if (this.pendingNewSessionRequestIds.size > 0) {
       return;
     }
-    for (const buffered of this.bufferedSessionUpdates.values()) {
-      for (const message of buffered) {
-        controller.enqueue(message);
-      }
+    for (const entry of this.bufferedUpdates) {
+      controller.enqueue(entry.message);
     }
-    this.bufferedSessionUpdates.clear();
+    this.bufferedUpdates.length = 0;
+    this.bufferedCounts.clear();
   }
 
   /**
@@ -222,12 +240,7 @@ export class AcpSessionNewOrdering {
    * message drains them; FIFO order within the session is preserved throughout.
    */
   private flushBufferedUpdates(sessionId: string): void {
-    const buffered = this.bufferedSessionUpdates.get(sessionId);
-    if (!buffered) {
-      return;
-    }
-    this.bufferedSessionUpdates.delete(sessionId);
-    this.releasedUpdates.push(...buffered);
+    this.releasedUpdates.push(...this.takeBufferedUpdates(sessionId));
   }
 }
 

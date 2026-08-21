@@ -295,6 +295,31 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([unrelated, update, created]);
   });
 
+  it("releases interleaved updates in global arrival order when both creations fail", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const a1 = sessionUpdate("session-a", "a1");
+    const b1 = sessionUpdate("session-b", "b1");
+    const a2 = sessionUpdate("session-a", "a2");
+    const failA = { jsonrpc: "2.0", id: 1, error: { code: -32603, message: "a" } } as AnyMessage;
+    const failB = { jsonrpc: "2.0", id: 2, error: { code: -32603, message: "b" } } as AnyMessage;
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(1) },
+      { inbound: newSessionRequest(2) },
+      { outbound: a1 },
+      { outbound: b1 },
+      { outbound: a2 },
+      { outbound: failA },
+      { outbound: failB },
+    ]);
+
+    // Neither creation returned a session ID, so nothing can establish either one and
+    // all three updates are released together. Grouping the buffer by session emits
+    // a1, a2, b1 here, which reorders b1 against a2 on the wire even though this
+    // boundary promises arrival order.
+    expect(output).toEqual([failA, failB, a1, b1, a2]);
+  });
+
   it("stops buffering once established tracking is saturated", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
