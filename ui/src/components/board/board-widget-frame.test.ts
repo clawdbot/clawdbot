@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
-import { boardWidgetSandboxPermissions, BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
+import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
   sandboxOrigin: string;
@@ -45,14 +47,39 @@ afterEach(() => {
 
 describe("board widget sandbox permissions", () => {
   it("allows new tabs only after the widget grant is active", () => {
-    expect(boardWidgetSandboxPermissions({ grantState: "pending" })).toBe(
-      "allow-scripts allow-same-origin allow-forms",
-    );
-    expect(boardWidgetSandboxPermissions({ grantState: "rejected" })).toBe(
-      "allow-scripts allow-same-origin allow-forms",
-    );
-    expect(boardWidgetSandboxPermissions({ grantState: "granted" })).toBe(
-      "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
+    const renderSandbox = (grantState: BoardWidget["grantState"]) => {
+      const widget = {
+        name: "links",
+        revision: 1,
+        grantState,
+        sandboxUrl: "/mcp-app-sandbox",
+        sandboxPort: 19124,
+        viewTicket: "ticket",
+      } as BoardWidget;
+      const lifecycle = new BoardWidgetFrameLifecycle({
+        active: () => true,
+        connected: () => true,
+        context: () =>
+          ({
+            gateway: { connection: { gatewayUrl: "https://gateway.example" } },
+          }) as ApplicationContext,
+        refreshFrame: () => undefined,
+        reportContentHeight: () => {},
+        requestUpdate: () => {},
+        resolveFrameUrl: () => () => "/widget",
+        root: () => document,
+        widget: () => widget,
+      });
+      const container = document.createElement("div");
+      render(lifecycle.render(widget), container);
+      return container.querySelector("iframe")?.getAttribute("sandbox");
+    };
+
+    const baseSandbox = "allow-scripts allow-same-origin allow-forms";
+    expect(renderSandbox("pending")).toBe(baseSandbox);
+    expect(renderSandbox("rejected")).toBe(baseSandbox);
+    expect(renderSandbox("granted")).toBe(
+      `${baseSandbox} allow-popups allow-popups-to-escape-sandbox`,
     );
   });
 });
