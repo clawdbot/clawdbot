@@ -177,9 +177,7 @@ export function normalizeMoonshotToolSchemas(
     }
     return {
       ...tool,
-      // SAFETY: normalizeMoonshotSchema only rewrites `type`/`anyOf` placement inside the
-      // schema record it is given and never changes the node's shape, so the normalized
-      // value is the same JSON Schema the tool already declared.
+      // SAFETY: normalizeMoonshotSchema only moves `type` into existing `anyOf` branches and never changes a node's shape, so the result is the same JSON Schema the tool declared.
       parameters: normalizeMoonshotSchema(tool.parameters) as AnyAgentTool["parameters"],
     };
   });
