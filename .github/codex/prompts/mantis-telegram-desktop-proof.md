@@ -35,13 +35,14 @@ Each lane starts from a public harness config:
 ```json
 {
   "mockResponse": "the mock model response",
-  "configPatch": { "session": { "sendPolicy": { "default": "deny" } } }
+  "configPatch": {}
 }
 ```
 
 `configPatch` accepts any OpenClaw root config merge patch, matching the local
 Telegram userbot. It is applied after the harness defaults, so it can replace any
-setting. Defaults already connect the leased QA user, SUT bot, Telegram proxy, and
+setting. Omit it unless the scenario needs a config change. Defaults already
+connect the leased QA user, SUT bot, Telegram proxy, and
 mock OpenAI endpoint; the QA user is the gateway owner, so owner commands such as
 `/send off` work without a patch.
 Optional field: `mockResponseChunkDelayMs`.
