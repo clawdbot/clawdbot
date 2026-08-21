@@ -53,6 +53,9 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 - `start --repo-root <prepared-root> --config <public-json>` (use
   `MANTIS_BASELINE_ROOT` or `MANTIS_CANDIDATE_ROOT` for that lane)
 - `mock --response-file <public-text> [--chunk-delay-ms N]` (change later turns)
+- `mock --response-events-file <public-json>` (replace a later Responses API turn
+  with a JSON array of raw response events; use for reasoning, tool calls, or any
+  stream shape that plain text cannot express)
 - `send --text <text>`; also `--text-file`, `--media` (document), `--reply-to`
 - `turn --text <text> --observe-seconds 15` (send + observe convenience)
 - `observe --seconds N [--since cursor]` (messages, edits, deletes, typing)

@@ -217,6 +217,33 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
+  it("streams lane-owned raw Responses API events", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-events-"));
+    const control = join(root, "response.json");
+    const events = [
+      { delta: "< / internal", type: "response.reasoning_text.delta" },
+      { delta: "VISIBLE", type: "response.output_text.delta" },
+      { response: { output: [], status: "completed" }, type: "response.completed" },
+    ];
+    try {
+      await writeFile(control, JSON.stringify({ events }));
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: "exercise raw events", stream: true }),
+        });
+        const body = await response.text();
+        expect(response.status).toBe(200);
+        for (const event of events) {
+          expect(body).toContain(`data: ${JSON.stringify(event)}`);
+        }
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("holds a lane response until the recorder reveals the outbound message", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-hold-"));
     const control = join(root, "response.json");
