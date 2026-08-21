@@ -71,6 +71,12 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 `start` returns the exact command/budget list. No generic exec/eval or raw
 Telegram API exists. If a required action is absent, use `block`; do not route
 around the credential boundary.
+Raw response events must form a complete provider response; deltas alone do not
+produce a final answer. Copy the terminal item and completed-response structure
+from `responseEvents` in `scripts/e2e/mock-openai-server.mjs`, and use
+`packages/ai/src/transports/openai-responses-stream-parity.test.ts` for reasoning
+event examples. These harness sources are safe to read; prepared proof worktrees
+remain off limits.
 For normal group turns, address the current bot with `@{sut}`; the harness
 expands it to the live SUT username. Omit it only when an unmentioned message
 is intentionally part of the scenario.
