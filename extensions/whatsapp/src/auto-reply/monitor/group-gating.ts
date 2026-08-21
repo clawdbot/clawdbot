@@ -249,13 +249,13 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   // Honor the channel implicit-mention policy (e.g. quotedBot:false) the same way
   // Slack does; without this the operator's channels.whatsapp.implicitMentions config
   // is silently ignored and every reply to a bot/self message counts as a mention.
-  // Use the resolved account's implicitMentions so WhatsApp's accounts.default->named
-  // account inheritance is respected (the generic resolver would skip that layer).
+  // inheritAccountDefault mirrors WhatsApp's accounts.default -> named-account inheritance
+  // per key, so a partial named override does not clear flags set on accounts.default.
   const implicitMentions = resolveChannelImplicitMentions({
     cfg: params.cfg,
     channel: "whatsapp",
     accountId: inboundPolicy.account.accountId,
-    resolvedAccountImplicitMentions: inboundPolicy.account.implicitMentions,
+    inheritAccountDefault: true,
   });
   const mentionDecision = resolveInboundMentionDecision({
     facts: {

@@ -22,32 +22,38 @@ export function resolveChannelImplicitMentions(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
-  // Channels that inherit account fields their own way (e.g. WhatsApp merges
-  // accounts.default into named accounts) pass the already-resolved account layer
-  // here; otherwise the generic accounts entry is used.
-  resolvedAccountImplicitMentions?: ChannelImplicitMentionsConfig;
+  // Channels whose named accounts inherit from accounts.default (e.g. WhatsApp) opt in
+  // here; the default account entry is layered per key between account and channel, so a
+  // partial named override never clears sibling flags set on accounts.default.
+  inheritAccountDefault?: boolean;
 }): ResolvedChannelImplicitMentions {
   const channelConfig = params.cfg.channels?.[params.channel] as
     | ChannelImplicitMentionsSource
     | undefined;
-  const accountConfig =
-    params.resolvedAccountImplicitMentions !== undefined
-      ? { implicitMentions: params.resolvedAccountImplicitMentions }
-      : resolveAccountEntry(channelConfig?.accounts, normalizeAccountId(params.accountId));
+  const accountConfig = resolveAccountEntry(
+    channelConfig?.accounts,
+    normalizeAccountId(params.accountId),
+  );
+  const accountDefault = params.inheritAccountDefault
+    ? resolveAccountEntry(channelConfig?.accounts, "default")?.implicitMentions
+    : undefined;
   const defaults = params.cfg.channels?.defaults?.implicitMentions;
   return {
     replyToBot:
       accountConfig?.implicitMentions?.replyToBot ??
+      accountDefault?.replyToBot ??
       channelConfig?.implicitMentions?.replyToBot ??
       defaults?.replyToBot ??
       SHIPPED_IMPLICIT_MENTION_DEFAULTS.replyToBot,
     quotedBot:
       accountConfig?.implicitMentions?.quotedBot ??
+      accountDefault?.quotedBot ??
       channelConfig?.implicitMentions?.quotedBot ??
       defaults?.quotedBot ??
       SHIPPED_IMPLICIT_MENTION_DEFAULTS.quotedBot,
     threadParticipation:
       accountConfig?.implicitMentions?.threadParticipation ??
+      accountDefault?.threadParticipation ??
       channelConfig?.implicitMentions?.threadParticipation ??
       defaults?.threadParticipation ??
       SHIPPED_IMPLICIT_MENTION_DEFAULTS.threadParticipation,

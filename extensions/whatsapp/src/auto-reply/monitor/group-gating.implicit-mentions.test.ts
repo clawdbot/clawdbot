@@ -90,4 +90,21 @@ describe("applyGroupGating implicit-mention policy", () => {
     );
     expect(res.shouldProcess).toBe(false);
   });
+
+  it("keeps accounts.default flags when a named account overrides a different flag", async () => {
+    // accounts.work only overrides replyToBot; accounts.default.quotedBot:false must survive
+    // (a partial named override must not clear sibling flags set on accounts.default).
+    const res = await applyGroupGating(
+      makeParams(
+        makeReplyToSelfMsg("work"),
+        whatsappCfg({
+          accounts: {
+            default: { implicitMentions: { quotedBot: false } },
+            work: { implicitMentions: { replyToBot: false } },
+          },
+        }),
+      ),
+    );
+    expect(res.shouldProcess).toBe(false);
+  });
 });
