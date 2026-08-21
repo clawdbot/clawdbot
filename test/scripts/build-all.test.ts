@@ -397,31 +397,11 @@ describe("resolveBuildAllSteps", () => {
     ).toEqual({ env: partialEnv, heapShortfall: null });
   });
 
-  it("requires declaration admission only when a full-profile tsdown cache will miss", () => {
+  it("requires admission whenever the full profile runs the unified runtime", () => {
     expect(
-      requiresFullBuildTsdownAdmission(true, [
-        { label: "tsdown-ai", fresh: true },
-        { label: "tsdown-unified", fresh: true },
-      ]),
-    ).toBe(false);
-    expect(
-      requiresFullBuildTsdownAdmission(true, [
-        { label: "tsdown-ai", fresh: false },
-        { label: "tsdown-unified", fresh: true },
-      ]),
-    ).toBe(false);
-    expect(
-      requiresFullBuildTsdownAdmission(true, [
-        { label: "tsdown-ai", fresh: true },
-        { label: "tsdown-unified", fresh: false },
-      ]),
+      requiresFullBuildTsdownAdmission([{ label: "tsdown-ai" }, { label: "tsdown-unified" }]),
     ).toBe(true);
-    expect(
-      requiresFullBuildTsdownAdmission(false, [
-        { label: "tsdown-ai", fresh: true },
-        { label: "tsdown-unified", fresh: true },
-      ]),
-    ).toBe(true);
+    expect(requiresFullBuildTsdownAdmission([{ label: "tsdown-ai" }])).toBe(false);
   });
 
   it("rebuilds runtime JS while reusing fresh declaration groups", () => {

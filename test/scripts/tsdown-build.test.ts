@@ -328,7 +328,7 @@ describe("resolveTsdownBuildInvocation", () => {
 
   it.each([
     ["custom config", ["--config", "custom.tsdown.config.ts"]],
-    ["filtered build", ["--filter", "openclaw-unified"]],
+    ["package-only filtered build", ["--filter", TSDOWN_PACKAGE_CONFIG_GROUP]],
   ])("does not apply full-build admission to a %s", (_label, args) => {
     const result = resolveTsdownBuildPlan({
       args,
@@ -351,6 +351,13 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(result.heapShortfall?.fatal).toBe(true);
     expect(result.invocations).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(
+      resolveTsdownBuildPlan({
+        args: ["--filter", TSDOWN_UNIFIED_CONFIG_GROUP],
+        env: {},
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      }).heapShortfall?.fatal,
+    ).toBe(true);
   });
 
   it("applies admission to the unfiltered canonical config but not a package-only selector", () => {

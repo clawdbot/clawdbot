@@ -1065,9 +1065,8 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
 
 function isFullTsdownBuildPlan(args: string[]) {
   const filter = readForwardedOption(args, ["--filter", "-F"]);
-  const selectsCompleteMainConfig =
-    selectsMainConfig(args) && (filter === undefined || filter === TSDOWN_UNIFIED_CONFIG_GROUP);
-  return (!args.some(isConfigArg) && !args.some(isFilterArg)) || selectsCompleteMainConfig;
+  const selectsUnifiedRuntime = filter === undefined || filter === TSDOWN_UNIFIED_CONFIG_GROUP;
+  return selectsUnifiedRuntime && (!args.some(isConfigArg) || selectsMainConfig(args));
 }
 
 export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
