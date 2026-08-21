@@ -172,9 +172,9 @@ export function validateFullReleaseValidationEvidence({
     );
   }
 
-  if (![3, 4].includes(manifest.version)) {
+  if (manifest.version !== 3) {
     throw new Error(
-      `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
+      `Full release validation manifest must use version 3, got ${displayValue(manifest.version)}.`,
     );
   }
   const manifestChecks = [

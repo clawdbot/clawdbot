@@ -9,97 +9,149 @@ import {
   RELEASE_PLAN_CANONICALIZATION,
   releasePlanDigest,
   validateReleasePlan,
-  validateReleasePlanLock,
+  validateValidationAttemptReceipt,
+  validateValidationAttemptRequest,
 } from "../../scripts/release-plan-contract.mjs";
 
 const fixtureDir = resolve("test/fixtures");
-const sourceFixture = JSON.parse(
-  readFileSync(resolve(fixtureDir, "release-plan-v1.source.json"), "utf8"),
-) as Record<string, unknown>;
-const lockFixture = JSON.parse(
-  readFileSync(resolve(fixtureDir, "release-plan-lock-v1.compatibility.json"), "utf8"),
-) as Record<string, unknown>;
+const sourceText = readFileSync(resolve(fixtureDir, "release-plan-v1.source.json"), "utf8");
+const lockText = readFileSync(
+  resolve(fixtureDir, "release-plan-lock-v1.compatibility.json"),
+  "utf8",
+);
+const sourceFixture = JSON.parse(sourceText) as Record<string, unknown>;
+const lockFixture = JSON.parse(lockText) as Record<string, unknown>;
 
 describe("release plan contract", () => {
-  it("matches the exact public and private-consumer compatibility fixture", () => {
-    const canonical = canonicalReleasePlanJson(sourceFixture);
-
+  it("pins exact canonical source and lock bytes as the cross-repo golden fixture", () => {
     expect(RELEASE_PLAN_CANONICALIZATION).toBe("ascii-sorted-compact-json-trailing-newline-v1");
+    expect(sourceText).toBe(canonicalReleasePlanJson(sourceFixture));
+    expect(lockText).toBe(canonicalReleasePlanLockJson(lockFixture));
     expect(createReleasePlanLock(sourceFixture)).toEqual(lockFixture);
-    expect(validateReleasePlanLock(lockFixture).plan).toEqual(sourceFixture);
-    expect(Buffer.byteLength(canonical, "ascii")).toBe(943);
-    expect(releasePlanDigest(sourceFixture)).toBe(
-      "sha256:f48b6de82045491d086c8fafb8217ea565a99a87a01e96bd01a30c9690f89462",
+    expect(parseReleasePlanLockJson(lockText)).toEqual(lockFixture);
+    expect(lockText.endsWith("\n")).toBe(true);
+    expect(lockText.slice(0, -1)).toMatch(/^[\x20-\x7e]+$/u);
+  });
+
+  it("rejects duplicate, reordered, pretty, CRLF, and non-ASCII lock bytes", () => {
+    const duplicate = lockText.replace(
+      '{"digest":',
+      `{"digest":"${String(lockFixture.digest)}","digest":`,
     );
-    expect(canonical.endsWith("\n")).toBe(true);
-    expect(canonical.slice(0, -1)).not.toMatch(/[\r\n]/u);
-    expect(canonical.slice(0, -1)).toMatch(/^[\x20-\x7e]+$/u);
-  });
-
-  it("round-trips the exact outer lock envelope", () => {
-    const canonicalLock = canonicalReleasePlanLockJson(lockFixture);
-    expect(parseReleasePlanLockJson(canonicalLock)).toEqual(lockFixture);
-    expect(Object.keys(lockFixture).toSorted()).toEqual(["digest", "plan", "schema"]);
-  });
-
-  it("rejects duplicate keys, unknown authority, and non-ASCII data", () => {
-    const canonicalLock = canonicalReleasePlanLockJson(lockFixture);
+    expect(() => parseReleasePlanLockJson(duplicate)).toThrow("duplicate key");
     expect(() =>
       parseReleasePlanLockJson(
-        canonicalLock.replace('{"digest":', `{"digest":"${String(lockFixture.digest)}","digest":`),
+        `${JSON.stringify({
+          schema: lockFixture.schema,
+          plan: lockFixture.plan,
+          digest: lockFixture.digest,
+        })}\n`,
       ),
-    ).toThrow("duplicate key");
+    ).toThrow("canonical bytes");
+    expect(() => parseReleasePlanLockJson(`${JSON.stringify(lockFixture, null, 2)}\n`)).toThrow(
+      "compact printable ASCII",
+    );
+    expect(() => parseReleasePlanLockJson(lockText.replace(/\n$/u, "\r\n"))).toThrow(
+      "exactly one trailing LF",
+    );
+    expect(() =>
+      parseReleasePlanLockJson(lockText.replace("openclaw/openclaw", "opénclaw")),
+    ).toThrow("printable ASCII");
+  });
+
+  it("enforces the purpose, version, tag, and target context matrix", () => {
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        purpose: "stable-publish",
+        validation: {
+          allowed_groups: ["all", "ci", "package"],
+          exceptions: [],
+          profile: "stable",
+          soak: true,
+        },
+      }),
+    ).toThrow("stable-publish release plan version must be stable");
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        purpose: "main-qualification",
+        tag: null,
+        target_context_ref: "refs/tags/null",
+        validation: {
+          allowed_groups: ["all", "ci", "package"],
+          exceptions: [],
+          profile: "full",
+          soak: true,
+        },
+      }),
+    ).toThrow("candidate SHA context");
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        tag: "v2026.8.1-beta.3",
+      }),
+    ).toThrow("exact version tag context");
+  });
+
+  it("rejects unknown authority, invalid ordering, and unsupported versions", () => {
     expect(() => validateReleasePlan({ ...sourceFixture, run_id: "123" })).toThrow(
       "release plan keys must be exactly",
     );
     expect(() =>
       validateReleasePlan({
         ...sourceFixture,
-        release_id: "2026.8.1-béta.2",
+        version: "2026.08.1-beta.2",
+        release_id: "2026.08.1-beta.2",
+        tag: "v2026.08.1-beta.2",
+        target_context_ref: "refs/tags/v2026.08.1-beta.2",
       }),
-    ).toThrow("printable ASCII");
-  });
-
-  it("keeps ValidationAttempt state outside ReleasePlan", () => {
-    const plan = validateReleasePlan(sourceFixture);
-    expect(plan).not.toHaveProperty("attempt");
-    expect(plan).not.toHaveProperty("run_id");
-    expect(plan).not.toHaveProperty("timestamp");
-    expect(plan).not.toHaveProperty("rerun_group");
-    expect(plan).not.toHaveProperty("filters");
-    expect(plan).not.toHaveProperty("local_path");
-  });
-
-  it("rejects unsorted inventory and purpose-policy drift", () => {
+    ).toThrow("supported release version");
     expect(() =>
       validateReleasePlan({
         ...sourceFixture,
         inventory: {
           ...(sourceFixture.inventory as Record<string, unknown>),
           packages: [
-            {
-              name: "openclaw",
-              version: "2026.8.1-beta.2",
-              targets: ["npm"],
-            },
+            { name: "openclaw", targets: ["npm"], version: "2026.8.1-beta.2" },
             {
               name: "@openclaw/example",
-              version: "2026.8.1-beta.2",
               targets: ["clawhub", "npm"],
+              version: "2026.8.1-beta.2",
             },
           ],
         },
       }),
-    ).toThrow("packages must have unique names in ascending ASCII order");
-    expect(() =>
-      validateReleasePlan({
-        ...sourceFixture,
-        validation: {
-          allowed_groups: ["all"],
-          profile: "full",
-          soak: true,
-        },
+    ).toThrow("ascending ASCII order");
+  });
+
+  it("keeps ValidationAttempt request and receipt state outside ReleasePlan", () => {
+    const plan = validateReleasePlan(sourceFixture);
+    const planDigest = releasePlanDigest(plan);
+    expect(plan).not.toHaveProperty("run_id");
+    expect(plan).not.toHaveProperty("rerun_group");
+    expect(
+      validateValidationAttemptRequest({
+        schema: "openclaw.validation-attempt-request.v1",
+        plan_digest: planDigest,
+        rerun_group: "package",
+        filters: { platform: "linux", package: "openclaw" },
+        fail_fast: false,
+        reuse_evidence: true,
       }),
-    ).toThrow("beta-publish validation policy is invalid");
+    ).toMatchObject({ plan_digest: planDigest, rerun_group: "package" });
+    expect(
+      validateValidationAttemptReceipt({
+        schema: "openclaw.validation-attempt-receipt.v1",
+        plan_digest: planDigest,
+        request_digest: `sha256:${"b".repeat(64)}`,
+        run_id: "123",
+        run_attempt: "2",
+        workflow_ref: "release-ci/example",
+        workflow_full_ref: "refs/heads/release-ci/example",
+        workflow_sha: "c".repeat(40),
+        target_sha: "a".repeat(40),
+      }),
+    ).toMatchObject({ run_attempt: "2", run_id: "123" });
   });
 });

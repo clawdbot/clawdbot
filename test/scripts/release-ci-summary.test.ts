@@ -458,7 +458,7 @@ function rawManifest({
   rerunGroup?: string;
   runId?: string;
   targetSha?: string;
-  version?: 2 | 3 | 4;
+  version?: 2 | 3;
   workflowFullRef?: string;
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
@@ -474,7 +474,7 @@ function rawManifest({
   targetRef?: string;
   targetSha: string;
   validationInputs: Record<string, string>;
-  version: 2 | 3 | 4;
+  version: 2 | 3;
   workflowFullRef?: string;
   workflowName: string;
   workflowRef: string;
@@ -520,7 +520,7 @@ function rawManifest({
     workflowName: "Full Release Validation",
     workflowRef: "main",
     ...(workflowSha ? { workflowSha } : {}),
-    ...(version >= 3
+    ...(version === 3
       ? {
           workflowFullRef: workflowFullRef ?? "refs/heads/main",
           workflowRefType: workflowRefType ?? "branch",
@@ -538,7 +538,7 @@ function trustedMainPackageFixture({
   workflowRefType,
   workflowSha = "0".repeat(40),
 }: {
-  manifestVersion?: 2 | 3 | 4;
+  manifestVersion?: 2 | 3;
   parentPath?: string;
   targetSha?: string;
   workflowFullRef?: string;
@@ -1511,42 +1511,39 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it.each([3, 4] as const)(
-    "accepts v%s SHA-pinned producer identity with exact-target evidence reuse",
-    (manifestVersion) => {
-      const workflowSha = "7".repeat(40);
-      const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
-      const fixture = trustedMainPackageFixture({
-        manifestVersion,
-        workflowFullRef: `refs/heads/${workflowRef}`,
-        workflowRef,
-        workflowSha,
-      });
-      fixture.manifest.targetRef = fixture.targetSha;
-      fixture.manifest.evidenceReuse = {
-        changedPaths: [],
-        evidenceSha: fixture.targetSha,
-        policy: "exact-target-full-validation-v1",
-        runId: "29071366024",
-        selectedRunId: "29071366024",
-      };
+  it("accepts SHA-pinned producer identity with exact-target evidence reuse", () => {
+    const workflowSha = "7".repeat(40);
+    const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowSha,
+    });
+    fixture.manifest.targetRef = fixture.targetSha;
+    fixture.manifest.evidenceReuse = {
+      changedPaths: [],
+      evidenceSha: fixture.targetSha,
+      policy: "exact-target-full-validation-v1",
+      runId: "29071366024",
+      selectedRunId: "29071366024",
+    };
 
-      expect(
-        validateTrustedProducerIdentity(
-          {
-            manifest: fixture.manifest,
-            parentRun: fixture.parentRun,
-          },
-          fixture.client,
-          { sourceSha: "c".repeat(40) },
-          "main",
-        ),
-      ).toMatchObject({
-        producerOnTrustedMainLineage: true,
-        workflowRefProof: `manifest-v${manifestVersion}-sha-pinned-main-ancestry`,
-      });
-    },
-  );
+    expect(
+      validateTrustedProducerIdentity(
+        {
+          manifest: fixture.manifest,
+          parentRun: fixture.parentRun,
+        },
+        fixture.client,
+        { sourceSha: "c".repeat(40) },
+        "main",
+      ),
+    ).toMatchObject({
+      producerOnTrustedMainLineage: true,
+      workflowRefProof: "manifest-v3-sha-pinned-main-ancestry",
+    });
+  });
 
   it("rejects a SHA-pinned evidenceReuse field even when false", () => {
     const workflowSha = "7".repeat(40);
