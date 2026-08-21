@@ -284,24 +284,13 @@ suite.define(() => {
       await expect.poll(() => headers.first().locator(".chat-side-panel-toggle").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
+      // Keyboard focus on a header action marks the pane active.
+      await headers.first().getByRole("button", { name: "Close pane" }).focus();
       const cells = page.locator(".chat-split-view__cell");
-      const actionRows = headers.locator(".chat-pane__actions");
-      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
-      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
-      expect(
-        await headers
-          .first()
-          .locator(".chat-pane__close-pane")
-          .evaluate((button) => {
-            (button as HTMLElement).focus();
-            return document.activeElement === button;
-          }),
-      ).toBe(false);
-
-      await panes.first().click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
-      await expect.poll(() => actionRows.first().isVisible()).toBe(true);
-      await expect.poll(() => actionRows.last().isVisible()).toBe(false);
+      await expect
+        .poll(() => headers.last().getByRole("button", { name: "Close pane" }).isVisible())
+        .toBe(true);
       const paneEmphasis = await cells.evaluateAll((nodes) =>
         nodes.map((cell) => {
           const style = getComputedStyle(cell);
@@ -321,8 +310,6 @@ suite.define(() => {
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
-      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
-      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
       const targetHeader = headers.first();
       await expect
         .poll(() =>
