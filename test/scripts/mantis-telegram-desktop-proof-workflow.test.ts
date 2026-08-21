@@ -1054,6 +1054,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).toContain(
       "sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container",
     );
+    expect(workflow).toContain("node_modules/.bin/esbuild scripts/e2e/mock-openai-server.mjs");
+    expect(workflow).toContain(
+      'sudo install -m 0444 "$toolchain_build/scripts/e2e/mock-openai-server.mjs"',
+    );
+    expect(wrapper).toContain("node /opt/mantis/mock-openai-server.mjs");
+    expect(wrapper).toContain(
+      '--mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly"',
+    );
+    expect(wrapper).not.toContain("node scripts/e2e/mock-openai-server.mjs");
     expect(workflow).toContain('sudo usermod -aG mantis-proof "$recorder_user"');
     expect(workflow).toContain(
       "mantis-sut ALL=(root) NOPASSWD: /usr/local/sbin/openclaw-mantis-sut-container",
