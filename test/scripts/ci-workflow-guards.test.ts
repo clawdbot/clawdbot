@@ -3326,9 +3326,7 @@ NODE
       expect(evaluateWorkflowExpression(setup.with?.["dependency-cache"], context), jobName).toBe(
         "false",
       );
-      expect(evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context), jobName).toBe(
-        "true",
-      );
+      expect(setup.with?.["cache-mode"], jobName).toBe("restore");
     }
   });
 
@@ -3423,6 +3421,130 @@ NODE
     });
   });
 
+  it("keeps setup cache access explicit and isolates every cache write", () => {
+    const setupActionPaths = [
+      ".github/actions/setup-node-env/action.yml",
+      ".github/actions/setup-pnpm-store-cache/action.yml",
+    ];
+    const legacyInputs = [
+      "save-actions-cache",
+      "save-dependency-cache",
+      "save-node-compile-cache",
+      "save-vitest-fs-cache",
+      "use-actions-cache",
+    ];
+    for (const actionPath of setupActionPaths) {
+      const action = parse(readFileSync(actionPath, "utf8"));
+      const steps = action.runs.steps as WorkflowStep[];
+      expect(action.inputs["cache-mode"].default, actionPath).toBe("off");
+      for (const legacyInput of legacyInputs) {
+        expect(action.inputs, `${actionPath}: ${legacyInput}`).not.toHaveProperty(legacyInput);
+      }
+      expect(
+        steps.filter(
+          (step) =>
+            step.uses?.startsWith("actions/cache@") || step.uses?.startsWith("actions/cache/save@"),
+        ),
+        actionPath,
+      ).toEqual([]);
+      expect(
+        steps.filter((step) => step.uses?.startsWith("actions/cache/restore@")).length,
+        actionPath,
+      ).toBeGreaterThan(0);
+      const validation = expectDefined(
+        steps.find((step) => step.run?.includes("off|restore|read-write")),
+        `${actionPath} cache-mode validation`,
+      );
+      expect(validation.run).toContain("Invalid cache-mode input");
+    }
+
+    const callers: Array<{ file: string; mode: unknown; step: WorkflowStep }> = [];
+    const directCaches: Array<{ file: string; step: WorkflowStep }> = [];
+    for (const file of [
+      ...findYamlFiles(".github/workflows"),
+      ...findYamlFiles(".github/actions"),
+    ]) {
+      const parsed = parse(readFileSync(file, "utf8"));
+      const stepLists = [
+        ...Object.values(parsed?.jobs ?? {}).map(
+          (job) => (job as { steps?: WorkflowStep[] }).steps ?? [],
+        ),
+        (parsed?.runs?.steps ?? []) as WorkflowStep[],
+      ];
+      for (const step of stepLists.flat()) {
+        if (step.uses?.startsWith("actions/cache")) {
+          directCaches.push({ file, step });
+        }
+        if (
+          step.uses === "./.github/actions/setup-node-env" ||
+          step.uses?.endsWith("/.github/actions/setup-node-env") ||
+          step.uses === "./.github/actions/setup-pnpm-store-cache" ||
+          step.uses?.endsWith("/.github/actions/setup-pnpm-store-cache")
+        ) {
+          callers.push({ file, mode: step.with?.["cache-mode"], step });
+        }
+      }
+    }
+    expect(callers.length).toBeGreaterThan(0);
+    for (const caller of callers) {
+      const staticMode = ["off", "restore", "read-write"].includes(String(caller.mode));
+      const conditionalMode =
+        typeof caller.mode === "string" &&
+        caller.mode.startsWith("${{") &&
+        caller.mode.includes("'restore'") &&
+        (caller.mode.includes("'off'") || caller.mode.includes("'read-write'"));
+      expect(staticMode || conditionalMode, `${caller.file}: ${caller.step.name}`).toBe(true);
+      for (const legacyInput of legacyInputs) {
+        expect(caller.step.with, `${caller.file}: ${legacyInput}`).not.toHaveProperty(legacyInput);
+      }
+    }
+    const writeAuthorizedCallers = callers.filter(
+      (caller) =>
+        caller.mode === "read-write" ||
+        (typeof caller.mode === "string" && caller.mode.includes("'read-write'")),
+    );
+    expect(writeAuthorizedCallers).toHaveLength(4);
+    expect(writeAuthorizedCallers).toEqual(
+      expect.arrayContaining([
+        {
+          file: ".github/workflows/ci-build-artifacts-testbox.yml",
+          mode: expect.stringContaining("'read-write'"),
+          step: expect.objectContaining({ name: "Setup Node environment" }),
+        },
+        {
+          file: ".github/workflows/mantis-telegram-desktop-proof.yml",
+          mode: "read-write",
+          step: expect.objectContaining({ name: "Setup Node environment" }),
+        },
+        {
+          file: ".github/workflows/openclaw-npm-release.yml",
+          mode: "read-write",
+          step: expect.objectContaining({ name: "Setup Node environment" }),
+        },
+        {
+          file: ".github/workflows/vitest-cache-warm.yml",
+          mode: "read-write",
+          step: expect.objectContaining({ name: "Setup Node environment" }),
+        },
+      ]),
+    );
+
+    const nodeCachePathPattern =
+      /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
+    for (const { file, step } of directCaches) {
+      if (step.uses?.startsWith("actions/cache/save@")) {
+        expect(String(step.if), `${file}: ${step.name}`).toContain(
+          ".outputs.cache-mode == 'read-write'",
+        );
+      }
+      if (step.uses?.startsWith("actions/cache@")) {
+        expect(nodeCachePathPattern.test(String(step.with?.path)), `${file}: ${step.name}`).toBe(
+          false,
+        );
+      }
+    }
+  });
+
   it("owns one exact immutable semantic dependency cache", () => {
     const actionSource = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     const ciSource = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -3442,21 +3564,25 @@ NODE
     const setupPnpm = step("Setup pnpm");
     const install = step("Install dependencies");
     const installScript = expectDefined(install.run, "Install dependencies script");
-    const save = step("Save exact dependency cache");
     const cachePaths =
       "node_modules\nui/node_modules\npackages/*/node_modules\nexamples/*/node_modules\n.cache/openclaw-pnpm-store\n";
 
+    expect(action.inputs["cache-mode"].default).toBe("off");
     expect(action.inputs["dependency-cache"].default).toBe("false");
-    expect(action.inputs["save-dependency-cache"].default).toBe("false");
+    expect(action.inputs).not.toHaveProperty("save-dependency-cache");
+    expect(action.inputs).not.toHaveProperty("save-actions-cache");
+    expect(action.inputs).not.toHaveProperty("use-actions-cache");
     expect(action.inputs).not.toHaveProperty("sticky-disk");
     expect(action.inputs).not.toHaveProperty("save-sticky-disk");
     expect(actionSource).not.toContain("useblacksmith/stickydisk");
 
-    expect(configureStore.if).toBe("inputs.dependency-cache == 'true'");
+    expect(configureStore.if).toBe(
+      "inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'",
+    );
     expect(configureStore.run).toContain(
       'echo "PNPM_CONFIG_STORE_DIR=$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"',
     );
-    expect(resolve.if).toBe("inputs.dependency-cache == 'true'");
+    expect(resolve.if).toBe("inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'");
     expect(resolve.run).toContain('node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs"');
     expect(resolve.run).toContain("${GITHUB_REPOSITORY:?}-node-deps-v2");
     expect(resolve.run).toContain("${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}");
@@ -3471,7 +3597,7 @@ NODE
     }
     expect(actionSteps.indexOf(prepare)).toBeLessThan(actionSteps.indexOf(restore));
     expect(restore).toMatchObject({
-      if: "inputs.dependency-cache == 'true'",
+      if: "inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'",
       uses: CACHE_V5,
       with: { key: "${{ steps.dependency-cache-key.outputs.key }}", path: cachePaths },
     });
@@ -3485,12 +3611,11 @@ NODE
     );
     expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(prepareFallback));
     expect(actionSteps.indexOf(prepareFallback)).toBeLessThan(actionSteps.indexOf(setupPnpm));
-    expect(setupPnpm.with?.["use-actions-cache"]).toContain(
+    expect(setupPnpm.with?.["cache-mode"]).toContain(
       "steps.dependency-cache.outputs.cache-hit != 'true'",
     );
-    expect(setupPnpm.with?.["use-actions-cache"]).toContain(
-      "inputs.dependency-cache != 'true' && inputs.use-actions-cache == 'true'",
-    );
+    expect(setupPnpm.with?.["cache-mode"]).toContain("inputs.cache-mode != 'off'");
+    expect(setupPnpm.with?.["cache-mode"]).toContain("'restore' || 'off'");
     expect(actionSteps.indexOf(restore)).toBeLessThan(actionSteps.indexOf(setupPnpm));
 
     expect(installScript).toContain("install_args+=(--package-import-method=hardlink)");
@@ -3506,16 +3631,13 @@ NODE
     expect(installScript).toContain(
       'echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"',
     );
-    expect(save).toMatchObject({
-      uses: "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
-      with: { key: "${{ steps.dependency-cache-key.outputs.key }}", path: cachePaths },
-    });
-    expect(save.if).toContain("inputs.save-dependency-cache == 'true'");
-    expect(save.if).toContain("steps.dependency-cache.outputs.cache-hit != 'true'");
-    expect((save as WorkflowStep & { "continue-on-error"?: boolean })["continue-on-error"]).toBe(
-      true,
-    );
-    expect(actionSteps.indexOf(save)).toBe(actionSteps.indexOf(install) + 1);
+    expect(
+      actionSteps.some(
+        (candidate) =>
+          candidate.uses?.startsWith("actions/cache@") ||
+          candidate.uses?.startsWith("actions/cache/save@"),
+      ),
+    ).toBe(false);
 
     const dependencySetups = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
       ((job as { steps?: WorkflowStep[] }).steps ?? []).flatMap((candidate) =>
@@ -3525,24 +3647,19 @@ NODE
           : [],
       ),
     );
-    const writers = dependencySetups.filter(
-      ({ step: candidate }) => candidate.with?.["save-dependency-cache"] === "true",
-    );
-    expect(writers).toHaveLength(1);
-    expect(writers[0]?.jobName).toBe("preflight");
-    expect(writers[0]?.step).toMatchObject({
+    const preflightRestore = dependencySetups.find(({ jobName }) => jobName === "preflight");
+    expect(preflightRestore?.step).toMatchObject({
       if: expect.stringContaining("steps.manifest.outputs.run_node == 'true'"),
       with: {
+        "cache-mode": "restore",
         "dependency-cache": "true",
-        "save-actions-cache": "true",
-        "save-dependency-cache": "true",
-        "use-actions-cache": "true",
+        "install-bun": "false",
       },
     });
-    expect(writers[0]?.step.if).toContain("github.ref == 'refs/heads/main'");
-    expect(writers[0]?.step.if).toContain("github.event_name == 'pull_request'");
-    expect(writers[0]?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    expect(writers[0]?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid'");
+    expect(preflightRestore?.step.if).toContain("github.ref == 'refs/heads/main'");
+    expect(preflightRestore?.step.if).toContain("github.event_name == 'pull_request'");
+    expect(preflightRestore?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+    expect(preflightRestore?.step.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid'");
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
       "vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
     );
@@ -3575,7 +3692,7 @@ NODE
       expect(Array.isArray(needs) ? needs : [needs], jobName).toContain("preflight");
       expect(consumer.with, jobName).not.toHaveProperty("save-dependency-cache");
       expect(consumer.with?.["dependency-cache"], jobName).toContain("'true' || 'false'");
-      expect(consumer.with?.["use-actions-cache"], jobName).toContain("'false' || 'true'");
+      expect(consumer.with?.["cache-mode"], jobName).toBe("restore");
       expect(consumer.with?.["dependency-cache"], jobName).toContain(
         "vars.OPENCLAW_CI_RUNNER_BACKEND",
       );
@@ -3590,16 +3707,6 @@ NODE
           }),
           `${jobName} ${runnerBackend} dependency cache`,
         ).toBe("false");
-        expect(
-          evaluateWorkflowExpression(consumer.with?.["use-actions-cache"], {
-            eventName: "push",
-            matrix: { node_version: "24.x" },
-            repository: "openclaw/openclaw",
-            runnerBackend,
-            runAttempt: 1,
-          }),
-          `${jobName} ${runnerBackend} Actions cache`,
-        ).toBe("true");
       }
     }
     for (const { jobName, step: setup } of Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
@@ -3609,7 +3716,21 @@ NODE
     )) {
       expect(setup.with, jobName).not.toHaveProperty("sticky-disk");
       expect(setup.with, jobName).not.toHaveProperty("save-sticky-disk");
+      expect(["off", "restore", "read-write"], jobName).toContain(setup.with?.["cache-mode"]);
     }
+
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const dependencySave = warmer.jobs.warm.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Save exact dependency cache",
+    );
+    expect(dependencySave).toMatchObject({
+      uses: "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: {
+        key: "${{ steps.setup-node-env.outputs.dependency-cache-key }}",
+        path: cachePaths,
+      },
+    });
+    expect(dependencySave.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -3800,13 +3921,13 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       (step: WorkflowStep) => step.name === "Install dependencies",
     );
     const cacheStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Restore and save build-all cache",
+      (step: WorkflowStep) => step.name === "Restore build-all cache",
     );
 
     expect(action.inputs["build-all-cache-scope"].default).toBe("");
     expect(cacheStep).toMatchObject({
-      if: "inputs.build-all-cache-scope != ''",
-      uses: "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      if: "inputs.cache-mode != 'off' && inputs.build-all-cache-scope != ''",
+      uses: CACHE_V5,
       with: { path: ".artifacts/build-all-cache" },
     });
     expect(cacheStep.with.key).toContain("build-all-v1-${{ inputs.build-all-cache-scope }}");
@@ -3817,6 +3938,18 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(action.runs.steps.indexOf(installStep)).toBeLessThan(
       action.runs.steps.indexOf(cacheStep),
     );
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const buildSave = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Save build-all cache",
+    );
+    expect(buildSave).toMatchObject({
+      uses: "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: {
+        key: "${{ steps.setup-node-env.outputs.build-all-cache-key }}",
+        path: ".artifacts/build-all-cache",
+      },
+    });
+    expect(buildSave.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
 
     const privateQaWorkflows = [
       ".github/workflows/mantis-discord-smoke.yml",
@@ -4058,9 +4191,6 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
-    const writerStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Restore and save Vitest transform cache",
-    );
     const readerStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Restore Vitest transform cache",
     );
@@ -4069,9 +4199,6 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
     const compileEpochStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Select Node compile cache epoch",
-    );
-    const compileWriterStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Restore and save Node compile cache",
     );
     const compileReaderStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Restore Node compile cache",
@@ -4098,10 +4225,9 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}";
 
     expect(setupNodeStep.with).toMatchObject({
+      "cache-mode": "restore",
       "node-compile-cache": "true",
       "node-compile-cache-scope": "test",
-      "save-vitest-fs-cache":
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && matrix.save_vitest_fs_cache && 'true' || 'false' }}",
       "vitest-fs-cache": "true",
     });
     expect(setupNodeStep.with).not.toHaveProperty("save-node-compile-cache");
@@ -4109,10 +4235,10 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(action.inputs).not.toHaveProperty("runtime-cache-sticky-disk");
     expect(action.inputs["vitest-fs-cache"].default).toBe("false");
     expect(action.inputs["restore-test-caches"].default).toBe("false");
-    expect(action.inputs["save-vitest-fs-cache"].default).toBe("false");
+    expect(action.inputs).not.toHaveProperty("save-vitest-fs-cache");
     expect(action.inputs["node-compile-cache"].default).toBe("false");
     expect(action.inputs["node-compile-cache-scope"].default).toBe("test");
-    expect(action.inputs["save-node-compile-cache"].default).toBe("false");
+    expect(action.inputs).not.toHaveProperty("save-node-compile-cache");
     expect(
       action.runs.steps.some((step: WorkflowStep) =>
         step.name?.includes("transform cache sticky disk"),
@@ -4123,25 +4249,15 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         step.name?.includes("compile cache sticky disk"),
       ),
     ).toBe(false);
-    expect(writerStep.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
-    expect(writerStep.if).toContain("inputs.save-vitest-fs-cache == 'true'");
-    expect(writerStep.if).toContain("runner.os != 'Windows'");
-    expect(writerStep.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(writerStep.with.key).toContain("vitest-fs-v3-protected-");
-    expect(writerStep.with.key).toContain("github.run_id");
-    expect(writerStep.with.key).toContain("github.run_attempt");
-    expect(writerStep.with.key).not.toContain("pull_request");
-    expect(writerStep.with["restore-keys"]).toContain("**/tsconfig*.json");
-    expect(writerStep.with.key).toContain("src/state/*.sql");
-    expect(writerStep.with["restore-keys"]).toContain("src/state/*.sql");
-    expect(writerStep.with.key).toContain("!**/node_modules/**");
-    expect(writerStep.with["restore-keys"]).toContain("!**/node_modules/**");
     expect(readerStep.uses).toBe(CACHE_V5);
+    expect(readerStep.if).toContain("inputs.cache-mode != 'off'");
     expect(readerStep.if).toContain("inputs.restore-test-caches == 'true'");
-    expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
     expect(readerStep.if).toContain("runner.os != 'Windows'");
     expect(readerStep.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
+    expect(readerStep.with.key).toContain("vitest-fs-v3-protected-");
+    expect(readerStep.with.key).toContain("github.run_id");
+    expect(readerStep.with.key).toContain("github.run_attempt");
+    expect(readerStep.with["restore-keys"]).toContain("**/tsconfig*.json");
     expect(readerStep.with.key).toContain("!**/node_modules/**");
     expect(readerStep.with.key).toContain("src/state/*.sql");
     expect(configureStep.env.CACHE_GENERATION).toContain("!**/node_modules/**");
@@ -4150,32 +4266,27 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
     expect(configureStep.run).not.toContain("protected Vitest transform seed");
-    expect(configureStep.env.CACHE_WRITER).toBe(
-      "${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}",
-    );
+    expect(configureStep.env.CACHE_WRITER).toBe("0");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=");
     expect(compileEpochStep.run).toContain('if [ "$CACHE_SCOPE" = "build" ]');
     expect(compileEpochStep.run).toContain("date -u +%Y%m%d");
     expect(compileEpochStep.run).toContain("GITHUB_RUN_ID");
-    expect(compileWriterStep.with.key).toContain(
+    expect(compileReaderStep.with.key).toContain(
       "node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-",
     );
-    expect(compileWriterStep.with.key).toContain("steps.node-compile-cache-epoch.outputs.value");
-    expect(compileWriterStep.with.key).not.toContain("pull_request");
+    expect(compileReaderStep.with.key).toContain("steps.node-compile-cache-epoch.outputs.value");
+    expect(compileReaderStep.with.key).not.toContain("pull_request");
     expect(compileEpochStep.if).toContain("inputs.restore-test-caches == 'true'");
+    expect(compileReaderStep.if).toContain("inputs.cache-mode != 'off'");
     expect(compileReaderStep.if).toContain("inputs.restore-test-caches == 'true'");
-    expect(compileReaderStep.with["restore-keys"]).toBe(compileWriterStep.with["restore-keys"]);
     expect(compileConfigureStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE=$cache_root");
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE_PORTABLE=1");
-    expect(compileConfigureStep.env.CACHE_WRITER).toBe(
-      "${{ inputs.save-node-compile-cache == 'true' && '1' || '0' }}",
-    );
+    expect(compileConfigureStep.run).toContain("OPENCLAW_NODE_COMPILE_CACHE_WRITER=0");
     expect(buildSetupNodeStep.with).toMatchObject({
+      "cache-mode": "restore",
       "node-compile-cache": "true",
       "node-compile-cache-scope": "build",
-      "save-node-compile-cache":
-        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}",
     });
     expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
       setupNodeStep.with["node-compile-cache-scope"],
@@ -4281,15 +4392,14 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const warmStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Warm transform and compile caches",
     );
-    const maintainStoreStep = warmer.jobs.warm.steps.find(
-      (step: WorkflowStep) => step.name === "Maintain dependency store budget",
-    );
+    const warmerSteps = warmer.jobs.warm.steps as WorkflowStep[];
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
     expect(warmer.concurrency.group).toBe("vitest-cache-warm");
     // hosted-mode cache recovery needs a maintainer-operated fallback when the
     // scheduled seed is missing or stale.
     expect(warmer.on).toHaveProperty("workflow_dispatch");
+    expect(warmer.on.push.branches).toEqual(["main"]);
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
     expect(warmer.jobs.warm["runs-on"]).toBe(
@@ -4307,19 +4417,45 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
     expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
     expect(warmerSetup.with).toMatchObject({
+      "build-all-cache-scope": "full",
+      "cache-mode": "read-write",
+      "dependency-cache": "true",
       "node-compile-cache-scope": "test",
-      "save-actions-cache": "true",
-      "save-node-compile-cache": "true",
-      "save-vitest-fs-cache": "true",
-      "use-actions-cache": "true",
+      "node-compile-cache": "true",
+      "vitest-fs-cache": "true",
     });
-    expect(warmerSetup.with).not.toHaveProperty("dependency-cache");
+    for (const legacyInput of [
+      "save-actions-cache",
+      "save-dependency-cache",
+      "save-node-compile-cache",
+      "save-vitest-fs-cache",
+      "use-actions-cache",
+    ]) {
+      expect(warmerSetup.with).not.toHaveProperty(legacyInput);
+    }
+    const saveSteps = warmerSteps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
+    expect(saveSteps.map((step) => step.name)).toEqual([
+      "Save Node toolchain cache",
+      "Save exact dependency cache",
+      "Save pnpm store cache",
+      "Save Vitest transform cache",
+      "Save Node compile cache",
+      "Save build-all cache",
+      "Save dist build cache",
+    ]);
+    for (const saveStep of saveSteps) {
+      expect(saveStep.if, saveStep.name).toContain(
+        "steps.setup-node-env.outputs.cache-mode == 'read-write'",
+      );
+    }
+    expect(warmerSteps.indexOf(warmStep)).toBeLessThan(
+      warmerSteps.findIndex((step) => step.name === "Save Vitest transform cache"),
+    );
     // No close-time cleanup workflow is needed; Actions cache LRU/TTL expires
     // old hosted-writer and warmer generations.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
     expect(seedStep.if).toBeUndefined();
     expect(warmStep.if).toBeUndefined();
-    expect(maintainStoreStep).toBeUndefined();
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -4429,7 +4565,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(hostedLintCache.if).toBe(
       "matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))",
     );
-    expect(hostedLintCache.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
+    expect(hostedLintCache.uses).toBe(CACHE_V5);
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
     const fingerprintReference = "${{ steps.extension-boundary-inputs.outputs.fingerprint }}";
     expect(boundaryCache.with.key).toBe(
@@ -5269,8 +5405,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
     expect(macosNodeSetup.with).toMatchObject({
+      "cache-mode": "restore",
       "install-bun": "false",
-      "save-actions-cache": "true",
     });
   });
 
@@ -6404,7 +6540,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(uiBrowserCache).toMatchObject({
       if: "needs.preflight.outputs.compatibility_target != 'true'",
-      uses: "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      uses: CACHE_V5,
       with: {
         key: "${{ runner.os }}-playwright-chromium-" + playwrightVersion,
         path: "~/.cache/ms-playwright",
@@ -6485,12 +6621,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
+      "cache-mode": "restore",
       "node-version": "24.x",
       "install-bun": "false",
       "dependency-cache":
         "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
-      "use-actions-cache":
-        "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
     } as const;
     const expectedUiE2eSetup = {
       ...expectedSharedUiE2eSetup,
@@ -6540,7 +6675,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: true, dependencyCache: "true", useActionsCache: "false" },
+        expected: { blacksmith: true, dependencyCache: "true" },
       },
       {
         name: "same-repo pull request with GitHub backend",
@@ -6551,7 +6686,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           runnerBackend: "github",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false" },
       },
       {
         name: "same-repo pull request with hybrid backend",
@@ -6562,7 +6697,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           runnerBackend: "hybrid",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false" },
       },
       {
         name: "same-repo pull request retry",
@@ -6572,7 +6707,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false" },
       },
       {
         // Runner routing follows contributor trust; the exact dependency cache
@@ -6585,7 +6720,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: true, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: true, dependencyCache: "false" },
       },
       {
         name: "fork pull request from unknown author",
@@ -6596,7 +6731,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false" },
       },
       {
         name: "workflow dispatch",
@@ -6605,7 +6740,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false", useActionsCache: "true" },
+        expected: { blacksmith: false, dependencyCache: "false" },
       },
       {
         name: "canonical push retry",
@@ -6614,7 +6749,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           repository: "openclaw/openclaw",
           runAttempt: 2,
         },
-        expected: { blacksmith: true, dependencyCache: "true", useActionsCache: "false" },
+        expected: { blacksmith: true, dependencyCache: "true" },
       },
     ] as const;
     for (const {
@@ -6640,10 +6775,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           evaluateWorkflowExpression(setup.with?.["dependency-cache"], context),
           assertionName,
         ).toBe(expected.dependencyCache);
-        expect(
-          evaluateWorkflowExpression(setup.with?.["use-actions-cache"], context),
-          assertionName,
-        ).toBe(expected.useActionsCache);
+        expect(setup.with?.["cache-mode"], assertionName).toBe("restore");
       }
     }
 
@@ -6921,7 +7053,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.jobs["ci-gate"].needs).toContain("sqlite-session-lifecycle");
   });
 
-  it("restores the dist build cache before building and saves only cache misses", () => {
+  it("restores dist in PR CI and saves it only from the trusted warmer", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const stepNames = buildArtifactSteps.map((step: WorkflowStep) => step.name);
@@ -6931,8 +7063,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const buildDistStep = buildArtifactSteps.find(
       (step: WorkflowStep) => step.name === "Build dist",
     );
-    const saveStep = buildArtifactSteps.find(
-      (step: WorkflowStep) => step.name === "Save dist build cache",
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const warmerSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    const saveStep = expectDefined(
+      warmerSteps.find((step) => step.name === "Save dist build cache"),
+      "trusted dist cache save",
     );
 
     expect(stepNames.indexOf("Restore dist build cache")).toBeLessThan(
@@ -6941,18 +7076,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(stepNames.indexOf("Build dist")).toBeLessThan(
       stepNames.indexOf("Pack built runtime artifacts"),
     );
-    expect(stepNames.indexOf("Run built artifact checks")).toBeLessThan(
-      stepNames.indexOf("Save dist build cache"),
-    );
+    expect(stepNames).not.toContain("Save dist build cache");
     expect(restoreStep.uses).toBe(CACHE_V5);
     expect(buildDistStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
     expect(saveStep.uses).toBe("actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae");
-    expect(saveStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
-    expect(saveStep.with.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
+    expect(saveStep.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
+    expect(saveStep.with?.key).toBe("${{ runner.os }}-dist-build-v3-${{ github.sha }}");
     expect(restoreStep.with.path).toContain("dist/");
     expect(restoreStep.with.path).toContain("dist-runtime/");
     expect(restoreStep.with.path).toContain("packages/*/dist/");
-    expect(saveStep.with.path).toContain("packages/*/dist/");
+    expect(saveStep.with?.path).toContain("packages/*/dist/");
     expect(restoreStep.with.key).toContain("dist-build-v3-");
     expect(
       buildArtifactSteps.find((step: WorkflowStep) => step.name === "Pack built runtime artifacts")
@@ -6960,6 +7093,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContain("packages/*/dist");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
+    expect(warmerSteps.indexOf(saveStep)).toBeGreaterThan(
+      warmerSteps.findIndex((step) => step.name === "Warm build cache"),
+    );
     expect(buildArtifactSteps.map((step: WorkflowStep) => step.name)).not.toContain(
       "Cache dist build",
     );
@@ -6970,6 +7106,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const steps = workflow.jobs["build-artifacts"].steps;
     const resolveSeedsStep = steps.find(
       (step: WorkflowStep) => step.name === "Resolve release dist cache seeds",
+    );
+    const setupStep = expectDefined(
+      steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Testbox Node setup",
     );
     const restoreStep = steps.find(
       (step: WorkflowStep) => step.name === "Restore dist build cache",
@@ -6983,6 +7123,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifyStep.run).toContain("test -f packages/ai/dist/internal/runtime.mjs");
     expect(saveStep.with.path).toContain("packages/*/dist/");
     expect(saveStep.with.key).toContain("dist-build-v2-");
+    expect(setupStep.with["cache-mode"]).toContain("'read-write'");
+    expect(saveStep.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
   });
 
   it("keeps the full built TUI PTY suite out of the artifact canary gate", () => {
@@ -7758,7 +7900,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         false,
       );
       expect(setupStep.with?.["install-deps"]).toBe("false");
-      expect(setupStep.with?.["use-actions-cache"]).toBe("false");
+      expect(setupStep.with?.["cache-mode"]).toBe("off");
       expect(selectedCheckout).toMatchObject({
         env: {
           EXPECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_revision }}",

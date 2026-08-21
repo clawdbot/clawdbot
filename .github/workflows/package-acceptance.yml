@@ -466,6 +466,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "true"
@@ -808,6 +809,7 @@ jobs:
       - name: Setup package validation dependencies
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "true"

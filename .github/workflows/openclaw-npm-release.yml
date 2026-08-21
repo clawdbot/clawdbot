@@ -149,8 +149,10 @@ jobs:
           fi
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: read-write
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           build-all-cache-scope: full
@@ -281,7 +283,7 @@ jobs:
         run: pnpm ui:build
 
       - name: Save preflight build outputs
-        if: steps.dist_build_cache.outputs.cache-hit != 'true'
+        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.dist_build_cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -994,6 +996,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 

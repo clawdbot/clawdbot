@@ -333,7 +333,10 @@ describe("minimal npm extended-stable workflow", () => {
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");
+    const setup = step(preflight, "Setup Node environment");
+    expect(setup.with?.["cache-mode"]).toBe("read-write");
     expect(save.uses).toContain("actions/cache/save@");
+    expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
   });
 

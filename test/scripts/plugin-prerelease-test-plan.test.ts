@@ -543,6 +543,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           name: "Setup Node environment",
           uses: "./.github/actions/setup-node-env",
           with: {
+            "cache-mode": "restore",
             "install-bun": "false",
           },
         },
@@ -766,6 +767,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(
       inspector.steps.find((step: WorkflowStep) => step.name === "Setup Node environment").with,
     ).toEqual({
+      "cache-mode": "restore",
       "install-bun": "false",
     });
     const inspectorRun = inspector.steps.find(
