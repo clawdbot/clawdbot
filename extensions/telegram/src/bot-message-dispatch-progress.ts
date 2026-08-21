@@ -75,6 +75,8 @@ export function createProgressState(
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     updateOnLineChange: true,
+    resetRollingLinesOnPlanStepChange: true,
+    derivePlanStatusHeadline: true,
     shouldStartNow: (line) => typeof line !== "string" && line?.kind === "tool",
     // renderTelegramProgressDraftPreview draws the work lines from `lines` in
     // headline/checklist mode, so they must not also arrive inside the text.

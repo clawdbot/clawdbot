@@ -22,6 +22,49 @@ function renderToolLine(name: string) {
 }
 
 describe("renderTelegramProgressDraftPreview", () => {
+  it("nests workflow details beneath the active plan step in every preview format", () => {
+    const lines = ["exec", "Read"].map((name, index) => {
+      const line = buildChannelProgressDraftLine(
+        {
+          event: "tool",
+          toolCallId: `call-${index + 1}`,
+          name,
+          phase: "start",
+          args: name === "exec" ? { command: "echo alpha" } : { file_path: "/tmp/x.ts" },
+        },
+        { commandText: "raw" },
+      );
+      if (!line) {
+        throw new Error(`expected a progress line for ${name}`);
+      }
+      return line;
+    });
+    const status = "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test";
+
+    const html = renderTelegramProgressDraftPreview(status, lines, false, true);
+    const rich = renderTelegramProgressDraftPreview(status, lines, true, true);
+
+    expect(html.text).toMatch(/▸ Patch<br>↳ .*Exec.*<br>↳ .*Read.*<br>▢ Test/u);
+    expect(rich.text).toMatch(/▸ Patch\n↳ 🛠️ .*\n↳ 📖 .*\n▢ Test/u);
+    expect(JSON.stringify(rich.richMessage)).toContain("↳ ");
+  });
+
+  it("keeps unplanned progress flat", () => {
+    const line = buildChannelProgressDraftLine({
+      event: "tool",
+      toolCallId: "call-1",
+      name: "exec",
+      phase: "start",
+    });
+    if (!line) {
+      throw new Error("expected a progress line for exec");
+    }
+
+    expect(renderTelegramProgressDraftPreview("Working", [line], false, true).text).toBe(
+      "Working<br><b>🛠️ Exec</b>",
+    );
+  });
+
   it("prints one tool icon per line for every backend spelling", () => {
     for (const name of ["Bash", "bash", "exec"]) {
       const rendered = renderToolLine(name);

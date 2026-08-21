@@ -58,6 +58,38 @@ type ChannelProgressDraftUpdateOptions = {
   lines?: readonly ChannelProgressDraftCompositorLine[];
 };
 
+function normalizePlanStepText(step: string | undefined): string {
+  return step?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function resolveActivePlanStepKey(steps: readonly AgentPlanStep[] | undefined): string | undefined {
+  if (!steps?.length) {
+    return undefined;
+  }
+  const activeIndex = steps.findIndex((entry) => entry.status === "in_progress");
+  if (activeIndex >= 0) {
+    return `active:${normalizePlanStepText(steps[activeIndex]?.step)}`;
+  }
+  return steps.every((entry) => entry.status === "completed") ? "completed" : undefined;
+}
+
+function resolvePlanStatusHeadline(steps: readonly AgentPlanStep[] | undefined): string {
+  if (!steps?.length) {
+    return "";
+  }
+  const currentIndex = steps.findIndex((entry) => entry.status === "in_progress");
+  const fallbackIndex = steps.findIndex((entry) => entry.status === "pending");
+  const stepIndex = currentIndex >= 0 ? currentIndex : fallbackIndex;
+  if (stepIndex >= 0) {
+    const step = normalizePlanStepText(steps[stepIndex]?.step);
+    const counter = `${stepIndex + 1}/${steps.length}`;
+    return step ? `⏳ ${counter} · ${step}` : `⏳ ${counter}`;
+  }
+  return steps.every((entry) => entry.status === "completed")
+    ? `✅ ${steps.length}/${steps.length}`
+    : "";
+}
+
 /** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
   entry: StreamingCompatEntry | null | undefined;
@@ -72,6 +104,10 @@ export function createChannelProgressDraftCompositor(params: {
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   /** Publish when structured lines change even if the rendered text does not. */
   updateOnLineChange?: boolean;
+  /** Drop the previous plan step's rolling rows when the active step changes. */
+  resetRollingLinesOnPlanStepChange?: boolean;
+  /** Derive a status headline from plan state when the channel has no authored status text. */
+  derivePlanStatusHeadline?: boolean;
   /**
    * Set when the channel renders `update`'s structured `lines` itself, so the
    * composed text carries only the status block (label, headline, checklist).
@@ -134,6 +170,7 @@ export function createChannelProgressDraftCompositor(params: {
   let narrationText = "";
   let planSteps: AgentPlanStep[] | undefined;
   let planExplanation = "";
+  let activePlanStepKey: string | undefined;
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
   const diffStatTracker = createProgressDraftDiffStatTracker({
@@ -168,9 +205,12 @@ export function createChannelProgressDraftCompositor(params: {
     const preambleIsFresh =
       preambleAt !== undefined && now() - preambleAt < PROGRESS_STATUS_PREAMBLE_FRESH_MS;
     const effectiveNarration = narrationText || planExplanation;
-    return preambleText && (preambleIsFresh || !effectiveNarration)
-      ? preambleText
-      : effectiveNarration;
+    const authoredStatus =
+      preambleText && (preambleIsFresh || !effectiveNarration) ? preambleText : effectiveNarration;
+    return (
+      authoredStatus ||
+      (params.derivePlanStatusHeadline === true ? resolvePlanStatusHeadline(planSteps) : "")
+    );
   };
 
   const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) => {
@@ -203,23 +243,28 @@ export function createChannelProgressDraftCompositor(params: {
     };
   };
 
-  const clearProgressState = (suppressed: boolean) => {
-    clearPreambleExpiryTimer();
-    progressSuppressed = suppressed;
+  const clearRollingProgressLines = () => {
     lines = [];
-    lastRenderedText = "";
-    lastRenderedLines = lines;
-    lastRenderedDiffStatKey = "";
     reasoningRawText = "";
     lastReasoningLine = undefined;
     lastIdLessCommentaryId = undefined;
     lastIdLessCommentaryBare = "";
+  };
+
+  const clearProgressState = (suppressed: boolean) => {
+    clearPreambleExpiryTimer();
+    progressSuppressed = suppressed;
+    clearRollingProgressLines();
+    lastRenderedText = "";
+    lastRenderedLines = lines;
+    lastRenderedDiffStatKey = "";
     preambleText = "";
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
     planSteps = undefined;
     planExplanation = "";
+    activePlanStepKey = undefined;
     diffStatTracker.reset();
     lastStartRendered = false;
   };
@@ -523,7 +568,18 @@ export function createChannelProgressDraftCompositor(params: {
       ) {
         return false;
       }
-      planSteps = steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
+      const nextPlanSteps =
+        steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
+      const nextActivePlanStepKey = resolveActivePlanStepKey(nextPlanSteps);
+      if (
+        params.resetRollingLinesOnPlanStepChange === true &&
+        activePlanStepKey !== undefined &&
+        nextActivePlanStepKey !== activePlanStepKey
+      ) {
+        clearRollingProgressLines();
+      }
+      activePlanStepKey = nextActivePlanStepKey;
+      planSteps = nextPlanSteps;
       planExplanation = options?.explanation?.replace(/\s+/g, " ").trim() ?? "";
       if (!planSteps && !planExplanation) {
         if (!gate.hasStarted) {

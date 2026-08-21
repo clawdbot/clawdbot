@@ -93,6 +93,76 @@ describe("createChannelProgressDraftCompositor", () => {
     });
   });
 
+  it("optionally scopes rolling lines to the active plan step", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      update: vi.fn(),
+      resetRollingLinesOnPlanStepChange: true,
+    });
+
+    await progress.pushToolProgress("🛠️ Early command", { startImmediately: true });
+    await progress.pushPlanProgress([
+      { step: "Prepare", status: "completed" },
+      { step: "Inspect", status: "in_progress" },
+      { step: "Patch", status: "pending" },
+    ]);
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ Early command"]);
+
+    await progress.pushPlanProgress(
+      [
+        { step: "Prepare", status: "completed" },
+        { step: "Inspect", status: "in_progress" },
+        { step: "Patch", status: "pending" },
+      ],
+      { explanation: "Still inspecting." },
+    );
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ Early command"]);
+
+    await progress.pushPlanProgress([
+      { step: "Inspect", status: "in_progress" },
+      { step: "Patch", status: "pending" },
+    ]);
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ Early command"]);
+
+    await progress.pushPlanProgress([
+      { step: "Inspect", status: "completed" },
+      { step: "Patch", status: "in_progress" },
+    ]);
+    expect(progress.getSnapshot().lines).toEqual([]);
+
+    await progress.pushToolProgress("🛠️ Patch command", { startImmediately: true });
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ Patch command"]);
+
+    await progress.pushPlanProgress([
+      { step: "Inspect", status: "completed" },
+      { step: "Patch", status: "completed" },
+    ]);
+    expect(progress.getSnapshot().lines).toEqual([]);
+    expect(await progress.pushToolProgress("🛠️ Late command", { startImmediately: true })).toBe(
+      true,
+    );
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ Late command"]);
+  });
+
+  it("keeps rolling lines across plan steps when scoping is not enabled", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      update: vi.fn(),
+    });
+
+    await progress.pushPlanProgress([
+      { step: "Inspect", status: "in_progress" },
+      { step: "Patch", status: "pending" },
+    ]);
+    await progress.pushToolProgress("🛠️ Inspect command", { startImmediately: true });
+    await progress.pushPlanProgress([
+      { step: "Inspect", status: "completed" },
+      { step: "Patch", status: "in_progress" },
+    ]);
+
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ Inspect command"]);
+  });
+
   it("publishes partial-preview tool lines without enabling progress-only plans", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
@@ -646,6 +716,67 @@ describe("createChannelProgressDraftCompositor", () => {
     // headline must decline so it cannot replace those documented lines.
     expect(await progress.pushPreambleHeadline("Reading the workspace.")).toBe(false);
     expect(progress.hasStatusHeadline).toBe(false);
+  });
+
+  it("derives a stable headline from plan state when authored status is absent", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { label: "Working", commentary: true } },
+      },
+      update,
+      derivePlanStatusHeadline: true,
+    });
+
+    await progress.pushPlanProgress([
+      { step: "Read system time", status: "completed" },
+      { step: "Read   kernel version", status: "in_progress" },
+      { step: "Read disk usage", status: "pending" },
+    ]);
+    expect(progress.getSnapshot().statusHeadline).toBe("⏳ 2/3 · Read kernel version");
+    expect(update).toHaveBeenLastCalledWith(
+      "Working\n\n⏳ 2/3 · Read kernel version\n\n✅ Read system time\n▸ Read kernel version\n▢ Read disk usage",
+      expect.objectContaining({ flush: true }),
+    );
+
+    await progress.pushPlanProgress([
+      { step: "Read system time", status: "completed" },
+      { step: "Read kernel version", status: "completed" },
+      { step: "Read disk usage", status: "pending" },
+    ]);
+    expect(progress.getSnapshot().statusHeadline).toBe("⏳ 3/3 · Read disk usage");
+
+    await progress.pushPlanProgress([
+      { step: "Read system time", status: "completed" },
+      { step: "Read kernel version", status: "completed" },
+      { step: "Read disk usage", status: "completed" },
+    ]);
+    expect(progress.getSnapshot().statusHeadline).toBe("✅ 3/3");
+  });
+
+  it("does not derive a plan headline unless the channel opts in", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Working" } } },
+      update: vi.fn(),
+    });
+
+    await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }]);
+
+    expect(progress.getSnapshot().statusHeadline).toBeUndefined();
+  });
+
+  it("keeps an authored plan explanation ahead of the derived plan headline", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Working" } } },
+      update: vi.fn(),
+      derivePlanStatusHeadline: true,
+    });
+
+    await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
+      explanation: "Applying the revised plan.",
+    });
+
+    expect(progress.getSnapshot().statusHeadline).toBe("Applying the revised plan.");
   });
 
   it("holds a preamble headline until the gate starts and hides the implicit label", async () => {

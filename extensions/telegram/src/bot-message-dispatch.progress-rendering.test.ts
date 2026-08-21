@@ -94,8 +94,66 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview("▸ Patch\n▢ Test", "<b>▸ Patch</b><br>▢ Test"),
+      telegramProgressPreview(
+        "⏳ 1/2 · Patch\n▸ Patch\n▢ Test",
+        "<b>⏳ 1/2 · Patch</b><br>▸ Patch<br>▢ Test",
+      ),
     );
+  });
+
+  it("keeps only the current plan step's tool rows and clears them on completion", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [
+          { step: "Inspect", status: "in_progress" },
+          { step: "Patch", status: "pending" },
+        ],
+      });
+      await replyOptions?.onToolStart?.({
+        name: "Read",
+        phase: "start",
+        toolCallId: "inspect-1",
+      });
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).toContain("↳");
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).toContain("Read");
+
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+        ],
+      });
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("Read");
+
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        toolCallId: "patch-1",
+      });
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).toContain("↳");
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).toContain("Exec");
+
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "completed" },
+        ],
+      });
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("Exec");
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("↳");
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: false } } },
+    });
   });
 
   it("renders the headline immediately when the preamble arrives after tool progress", async () => {

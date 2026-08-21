@@ -55,11 +55,11 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part            | Purpose                                                                           |
-| --------------- | --------------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
-| Label           | Optional starter/status line such as `Working`.                                   |
-| Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
+| Part            | Purpose                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status headline | On Discord and Telegram, the model preamble; Telegram falls back to the active plan step when authored status is absent, while Discord adds a utility filler. |
+| Label           | Optional starter/status line such as `Working`.                                                                                                               |
+| Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`.                                                                             |
 
 The status headline sits above the rolling progress lines and both stay visible,
 so one message answers what the agent is doing and how far it has got.
