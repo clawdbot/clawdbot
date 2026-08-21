@@ -215,6 +215,20 @@ describeControlUiE2e("GitHub link hover cards", () => {
       ],
     });
     await page.goto(`${server.baseUrl}chat`);
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("controlUi.githubPreview")).map((request) => request.params),
+      )
+      .toEqual([
+        {
+          kind: "issue",
+          number: 99817,
+          owner: "a-very-long-organization-name",
+          repo: "a-very-long-repository-name",
+        },
+        { kind: "issue", number: 999999, owner: "openclaw", repo: "openclaw" },
+        { kind: "issue", number: 99815, owner: "openclaw", repo: "openclaw" },
+      ]);
 
     const message = page.locator(".chat-text").filter({ hasText: "Review" });
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
@@ -252,7 +266,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "−12");
     await expectText(card, "3 files");
     await expect.poll(() => card.locator("img").count()).toBe(1);
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(4);
     const pullBox = await card.boundingBox();
     expect(pullBox).not.toBeNull();
     expect(pullBox!.x).toBeGreaterThanOrEqual(0);
@@ -266,13 +280,13 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expectText(card, "octocat");
     await expectText(card, "4 comments");
     await expect.poll(() => card.locator("img").count()).toBe(1);
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(5);
 
     await page.mouse.move(1, 1);
     await expect.poll(() => card.count()).toBe(0);
     await issueLink.hover();
     await expectText(card, "4 comments");
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(2);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(5);
 
     await page.mouse.move(1, 1);
     await page.getByRole("link", { exact: true, name: "repository" }).hover();
@@ -282,7 +296,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     const missingLink = page.getByRole("link", { name: "missing item" });
     await missingLink.hover();
     await expectText(card, "GitHub preview unavailable");
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(3);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(6);
     expect(await missingLink.getAttribute("href")).toBe(
       "https://github.com/openclaw/openclaw/issues/999999",
     );
@@ -292,7 +306,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
     await pullLink.hover();
     await expectText(card, "Merged");
-    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(3);
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(6);
     await page.mouse.move(1, 1);
 
     await pullLink.focus();

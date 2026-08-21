@@ -43,6 +43,8 @@ import {
 import { scheduleChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
+  protected githubPreviewPrewarmAbortController = new AbortController();
+
   protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
     if (!this.presented) {
       sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
@@ -174,6 +176,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (!state) {
       return;
     }
+    this.githubPreviewPrewarmAbortController.abort();
+    const prewarmController = new AbortController();
+    this.githubPreviewPrewarmAbortController = prewarmController;
     const requestVersion = ++this.deferredSessionHydrationRequestVersion;
     const connectionGeneration = this.connectionGeneration;
     const client = state.client;
@@ -196,6 +201,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           void this.probeSessionDiscussion(sessionKey);
           this.hydrateSessionCompanion(sessionKey);
           void this.refreshSessionPullRequests();
+          if (client && this.presented) {
+            void import("../../components/github-prewarm.runtime.ts").then(
+              ({ prewarm }) =>
+                prewarm(
+                  this,
+                  client,
+                  prewarmController.signal,
+                  () => isCurrent() && this.presented,
+                ),
+              () => undefined,
+            );
+          }
         }
         complete();
       });
