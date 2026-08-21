@@ -1056,6 +1056,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           configured: account.configured,
           extra: {
             port: runtime?.port ?? null,
+            tokenStatus: account.tokenStatus,
           },
         }),
       }),
