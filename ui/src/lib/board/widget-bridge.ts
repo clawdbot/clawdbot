@@ -181,7 +181,7 @@ export class BoardWidgetBridgeController {
         return await this.client.request("board.action", {
           ticket: this.ticket,
           action,
-          params: (actionParams ?? {}) as Record<string, unknown>,
+          params: actionParams ?? {},
         });
       }
       case "cron.trigger":
