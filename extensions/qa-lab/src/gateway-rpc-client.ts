@@ -75,6 +75,7 @@ export async function startQaGatewayRpcClient(params: {
   wsUrl: string;
   token: string;
   logs: () => string;
+  scopes?: Array<"operator.read" | "operator.write" | "operator.admin">;
 }): Promise<QaGatewayRpcClient> {
   const wrapError = (error: unknown) => formatQaGatewayRpcError(error, params.logs);
   let stopped = false;
@@ -92,7 +93,7 @@ export async function startQaGatewayRpcClient(params: {
     clientName: "gateway-client",
     deviceIdentity: null,
     mode: "backend",
-    scopes: ["operator.admin"],
+    scopes: params.scopes ?? ["operator.admin"],
     onHelloOk: () => {
       connection.connected = true;
       connection.resolve();

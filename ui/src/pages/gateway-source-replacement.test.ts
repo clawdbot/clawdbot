@@ -5,9 +5,11 @@ import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { SessionsRouteData } from "./sessions/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
+import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
 import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
@@ -116,8 +118,11 @@ function contextWithClient(
   } as unknown as ApplicationContext;
 }
 
-function contextWithMutableGateway(client: GatewayBrowserClient) {
-  const context = contextWithClient(client, { connected: true });
+function contextWithMutableGateway(
+  client: GatewayBrowserClient,
+  options: { agentsList?: unknown } = {},
+) {
+  const context = contextWithClient(client, { connected: true, agentsList: options.agentsList });
   let currentSnapshot = context.gateway.snapshot;
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const gateway = {
@@ -209,7 +214,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: Date.now(),
       error: null,
     } satisfies UsageRouteData;
@@ -253,7 +258,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result: staleResult,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -292,7 +297,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -342,7 +347,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -399,7 +404,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       },
       result,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -466,6 +471,133 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     expect(page.skillsReport).toBe(report);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("hydrates linked skill verdicts without reloading accepted route data", async () => {
+    const verdict = {
+      registry: "https://clawhub.ai",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      requestedSlug: "agentreceipt",
+      requestedVersion: "1.2.3",
+      securityStatus: "clean",
+    };
+    const request = vi.fn(async () => ({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [verdict],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
+    const context = contextWithClient(client, { connected: true, agentsList });
+    const report = {
+      skills: [
+        createSkill({
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        }),
+      ],
+    } as SkillsRouteData["report"];
+    const page = createPage("openclaw-skills-page", context) as TestPage & {
+      routeData: SkillsRouteData;
+      skillsReport: SkillsRouteData["report"];
+      clawhubVerdicts: Record<string, unknown>;
+    };
+    page.routeData = {
+      gateway: context.gateway,
+      gatewaySnapshot: context.gateway.snapshot,
+      agents: context.agents,
+      agentsList,
+      selectedAgentId: "main",
+      report,
+      error: null,
+    } as SkillsRouteData;
+
+    document.body.append(page);
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" }),
+    );
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(page.skillsReport).toBe(report);
+    expect(
+      page.clawhubVerdicts[
+        clawhubVerdictKey({
+          registry: "https://clawhub.ai",
+          slug: "agentreceipt",
+          version: "1.2.3",
+        })
+      ],
+    ).toEqual(verdict);
+  });
+
+  it("discards pending route verdicts when the connected gateway lifecycle ends", async () => {
+    const pending = deferred<{ schema: string; items: unknown[] }>();
+    const request = vi.fn((method: string) =>
+      method === "skills.securityVerdicts" ? pending.promise : Promise.resolve({ skills: [] }),
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
+    const harness = contextWithMutableGateway(client, { agentsList });
+    const report = {
+      skills: [
+        createSkill({
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        }),
+      ],
+    } as SkillsRouteData["report"];
+    const page = createPage("openclaw-skills-page", harness.context) as TestPage & {
+      routeData: SkillsRouteData;
+      clawhubVerdicts: Record<string, unknown>;
+      clawhubVerdictsLoading: boolean;
+      clawhubVerdictsError: string | null;
+    };
+    page.routeData = {
+      gateway: harness.context.gateway,
+      gatewaySnapshot: harness.context.gateway.snapshot,
+      agents: harness.context.agents,
+      agentsList,
+      selectedAgentId: "main",
+      report,
+      error: null,
+    } as SkillsRouteData;
+
+    document.body.append(page);
+    await waitForFast(() => expect(page.clawhubVerdictsLoading).toBe(true));
+    harness.emitConnected(false);
+    pending.resolve({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        {
+          registry: "https://clawhub.ai",
+          ok: true,
+          decision: "pass",
+          requestedSlug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          securityStatus: "clean",
+        },
+      ],
+    });
+    await pending.promise;
+    await page.updateComplete;
+
+    expect(page.clawhubVerdicts).toEqual({});
+    expect(page.clawhubVerdictsLoading).toBe(false);
+    expect(page.clawhubVerdictsError).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("defers fallback skills loading until route data is initialized and invalidated", async () => {
@@ -554,19 +686,19 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const client = {} as GatewayBrowserClient;
     const page = createPage("openclaw-usage-page", contextWithClient(client)) as TestPage & {
       usageResult: unknown;
-      providerUsageSummary: unknown;
+      providerUsage: unknown;
       usageSelectedSessions: string[];
     };
     document.body.append(page);
     await page.updateComplete;
     page.usageResult = { sessions: [{ key: "old" }] };
-    page.providerUsageSummary = { providers: [{ provider: "old" }] };
+    page.providerUsage = { ok: true, value: { providers: [{ provider: "old" }] } };
     page.usageSelectedSessions = ["old"];
 
     await replaceContext(page, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.providerUsageSummary).toBeNull();
+    expect(page.providerUsage).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });
 

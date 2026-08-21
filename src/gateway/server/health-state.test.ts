@@ -29,6 +29,7 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
   getRuntimeConfigAppliedHash: () => "internal-applied-hash",
+  getRuntimeConfigSourceSnapshot: () => null,
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({

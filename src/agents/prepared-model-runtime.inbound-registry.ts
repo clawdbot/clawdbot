@@ -1,6 +1,16 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import {
+  listRuntimePluginIdsFromRegistry,
+  registryMatchesManifestPluginIds,
+} from "../plugins/active-runtime-registry.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir,
+  getActivePluginRuntimeSubagentMode,
+} from "../plugins/runtime.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
@@ -45,13 +55,41 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     if (existing) {
       return existing;
     }
-    const registry = loadAgentRuntimePluginRegistryHandle({
+    const activeRegistry = getActivePluginRegistry();
+    const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+    // Reuse is generation-bound: the requesting snapshot must BE the process-current
+    // published generation, or a leaked/older active registry could satisfy the
+    // manifest match (bundled records compare by id+origin only) and serve another
+    // generation's plugins. Identity, not equivalence, is the authority check here.
+    const currentGenerationSnapshot = getCurrentPluginMetadataSnapshot({
       config: input.config,
-      env: input.env ?? process.env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-      metadataSnapshot,
+      workspaceDir: metadataSnapshot.workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
     });
+    const reusableGatewayRegistry =
+      input.allowGatewaySubagentBinding === true &&
+      input.env === undefined &&
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+      activeRegistry &&
+      currentGenerationSnapshot === metadataSnapshot &&
+      (activeWorkspaceDir === undefined || activeWorkspaceDir === metadataSnapshot.workspaceDir) &&
+      registryMatchesManifestPluginIds(
+        activeRegistry,
+        metadataSnapshot.manifestRegistry.plugins,
+        listRuntimePluginIdsFromRegistry(activeRegistry),
+      )
+        ? activeRegistry
+        : undefined;
+    const registry =
+      reusableGatewayRegistry ??
+      loadAgentRuntimePluginRegistryHandle({
+        config: input.config,
+        env: input.env ?? process.env,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        metadataSnapshot,
+        preferBuiltPluginArtifacts: true,
+      });
     registries.set(key, registry);
     return registry;
   };
@@ -62,6 +100,7 @@ export function prepareWorkspacePluginRegistries(
   input: PreparedModelRuntimeInput,
   metadataSnapshot: PluginMetadataSnapshot,
   loadInboundRegistry?: PreparedInboundRegistryLoader,
+  preferBuiltPluginArtifacts = false,
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
@@ -74,15 +113,29 @@ export function prepareWorkspacePluginRegistries(
   const inboundPluginRegistry = input.readOnly
     ? undefined
     : loadInboundRegistry?.(input, metadataSnapshot);
+  // Extending the reused Gateway generation inherits its artifact preference: the
+  // Gateway loader realizes built artifacts, so the delta load must not re-import
+  // the same plugins through source transforms. Isolated loads keep source truth.
+  const extendsActiveGatewayGeneration =
+    inboundPluginRegistry !== undefined && inboundPluginRegistry === getActivePluginRegistry();
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
-          ...(input.loadRuntimePlugins ? { basePluginIds: [] } : {}),
+          ...(input.loadRuntimePlugins
+            ? { basePluginIds: [] }
+            : inboundPluginRegistry
+              ? { basePluginIds: listRuntimePluginIdsFromRegistry(inboundPluginRegistry) }
+              : {}),
           config: input.config,
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
           metadataSnapshot,
+          // Lifecycle-selected callers and delta loads extending the active Gateway
+          // generation both stay on built artifacts; isolated loads keep source truth.
+          ...(preferBuiltPluginArtifacts || extendsActiveGatewayGeneration
+            ? { preferBuiltPluginArtifacts: true }
+            : {}),
           selections: input.runtimePluginSelections,
         })
       : inboundPluginRegistry;

@@ -34,11 +34,17 @@ function recorder() {
 }
 
 describe("dashboard tool", () => {
-  it("declares every action, no client capability guard, and stable-name/size guidance", () => {
+  it("declares every action, no client capability guard, sizing, and the dashboard threshold", () => {
     const tool = createDashboardTool();
+    const directoryDescription = tool.description.slice(0, 177);
     expect(tool.requiredClientCaps).toBeUndefined();
     expect(tool.description).toContain("stable names");
     expect(tool.description).toContain("sm=3x3");
+    expect(directoryDescription).toMatch(
+      /(?:single|one[- ]off|ad hoc).{0,40}visualizations?.{0,40}inline/i,
+    );
+    expect(directoryDescription).toContain("explicit dashboard request");
+    expect(directoryDescription).toContain("multiple non-code visualizations");
     expect(tool.parameters).toMatchObject({
       additionalProperties: false,
       properties: {

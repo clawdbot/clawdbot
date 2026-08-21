@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { boundCodeModeResult, toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
@@ -217,7 +218,6 @@ export async function runCodeModeScriptHeadless(params: {
     const swarmEnabled = false;
     const codeModeRunId = `cm_headless_${randomUUID()}`;
     const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
-    const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const preparedSource = await awaitCodeModeDeadline({
@@ -231,6 +231,9 @@ export async function runCodeModeScriptHeadless(params: {
       namespaceRuntime.descriptors,
       params.extraNamespaces ?? [],
     );
+    const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
+      reservedNames: namespaces.map((descriptor) => descriptor.globalName),
+    });
     const source = `${headlessNamespaceFreezePrelude(namespaces)}${preparedSource}`;
     const parentToolCallId = `headless:${randomUUID()}`;
     let result = normalizeCodeModeWorkerResult(
@@ -238,7 +241,7 @@ export async function runCodeModeScriptHeadless(params: {
         input: {
           kind: "exec",
           source,
-          catalog,
+          catalog: catalogProjection.guestBindings,
           apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
           namespaces,
           swarmEnabled,
@@ -281,7 +284,6 @@ export async function runCodeModeScriptHeadless(params: {
       // excluding list/get would bypass the same headless tool-call budget.
       const requestedToolCalls = newRequests.filter(
         (request) =>
-          request.method === "call" ||
           request.method === "callValue" ||
           request.method === "nodes" ||
           request.method === "namespace",
@@ -301,6 +303,7 @@ export async function runCodeModeScriptHeadless(params: {
           pendingRequests: newRequests,
           config,
           runtime,
+          catalogProjection,
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,

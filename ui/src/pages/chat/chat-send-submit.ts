@@ -195,6 +195,7 @@ export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
   opts?: ChatSendSubmitOptions,
+  submissionAction?: Event,
 ) {
   const previousDraft = host.chatMessage;
   const userMessage = (messageOverride ?? host.chatMessage).trim();
@@ -470,7 +471,7 @@ export async function handleSendChat(
   // Keep their guards independent so submitting one cannot suppress the other.
   const submitKind = requestedEditId ? "queued-edit" : "message";
   const submitKey = chatSubmitKey(host, submitKind, effectiveMessage, attachmentsToSend);
-  await withChatSubmitGuard(host, submitKey, async () => {
+  const submitMessage = async () => {
     if (host.chatLoading) {
       // A terminal event can render before its authoritative leaf arrives.
       // Reuse the in-flight history request before fencing the follow-up send.
@@ -593,7 +594,8 @@ export async function handleSendChat(
       // The reconnect queue owns the quote; later offline turns must not reuse it.
       host.chatReplyTarget = null;
     }
-  });
+  };
+  await withChatSubmitGuard(host, submitKey, submitMessage, submissionAction);
 }
 
 function prependReplyQuote(

@@ -658,8 +658,11 @@ AI CLI backend such as `claude-cli` or `my-cli`.
 - Use `prepareExecution` for backend-owned launch environment or temporary
   auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
   limit selected for the run, so native-compaction backends can align their
-  own threshold without provider-specific core branches. It also receives the
-  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
+  own threshold without provider-specific core branches. Its optional
+  `ctx.thinkingLevel` is the effective `off`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `adaptive`, or `max` selection for backends that apply the
+  level through launch environment or staged configuration. It also receives
+  the core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
   `ctx.toolAvailability.native` list plus canonical

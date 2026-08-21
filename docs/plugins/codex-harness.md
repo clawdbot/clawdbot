@@ -89,12 +89,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0` or newer. The plugin still ships and manages the
-  exact `@openai/codex` `0.147.0` artifact, so a `codex` command on `PATH` does
-  not affect normal startup. Explicit custom, remote, and macOS desktop-owned
-  app-servers must report valid SemVer at or above that managed baseline.
-  Newer versions initialize with a warning; acceptance permits an attempt and
-  is not readiness or capability proof.
+- Codex app-server `0.147.0` or newer. The plugin ships and manages the exact
+  `@openai/codex` `0.148.0` artifact, so a `codex` command on `PATH` does not
+  affect normal startup. Explicit custom, remote, and macOS desktop-owned
+  app-servers must report valid SemVer at or above the supported minimum.
+  Versions newer than the managed artifact initialize with a warning;
+  acceptance permits an attempt and is not readiness or capability proof.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -271,13 +271,63 @@ Changing auth order does not make a custom, Completions, HTTP, or
 request-overridden route Codex-compatible. Valid model-scoped Fast-mode and
 cutoff controls are runtime controls, not request overrides.
 
+### Restricted turns and ring zero
+
+OpenClaw applies Codex restrictions per turn, not as a permanent session mode.
+An existing session can therefore run one restricted turn and return to its
+normal Codex thread on the next unrestricted turn. When a restriction is
+temporary, OpenClaw preserves the normal thread binding and uses a temporary
+restricted thread where necessary.
+
+An ordinary **policy-restricted turn** occurs when an explicit OpenClaw tool
+policy cannot be mapped safely onto Codex's native tool surface. Common
+triggers include:
+
+- a finite `tools.allow` list or an internal per-run allowlist
+- `disableTools` or a sender/group policy that denies all tools
+- a `tools.deny` entry with a wildcard, tool group, unknown name, or name that
+  is not in the Codex harness's audited safe-deny set
+- an applicable agent, provider, group, sender, sandbox, subagent, inherited,
+  scheduled, or runtime tool policy with one of those restrictions
+
+Default tool-profile narrowing alone does not trigger this mode. A deny list
+containing only audited OpenClaw-owned tools can also stay on the normal native
+surface; the harness enforces those denies without disabling unrelated Codex
+capabilities. See [Native tool-policy enforcement](/plugins/sdk-agent-harness#native-tool-policy-enforcement)
+for the generic harness contract and [Codex harness reference](/plugins/codex-harness-reference#restricted-turns)
+for the current Codex rules.
+
+For an ordinary policy-restricted turn, OpenClaw disables Codex native Code
+Mode, removes environment selections, disables and verifies inherited and
+configured MCP servers, disables native hook relays, and filters OpenClaw
+dynamic tools through the effective policy. The bounded workspace `AGENTS.md`
+snapshot still reaches the model as thread-level developer instructions because
+project instructions are context, not tool authority.
+
+**Ring zero** is stronger and separate. It is the host-owned OpenClaw system
+agent used for setup and repair operations. The host activates it with the
+single `openclaw` tool; normal agent config cannot opt a chat into ring zero.
+Ring-zero turns keep only that host-scoped tool, replace ambient Codex
+instructions with host-authored setup instructions, disable native tools and
+MCP servers, and suppress workspace project documents, including the
+`AGENTS.md` developer-instruction carrier.
+
+Other narrow internal modes also suppress project documents: lightweight
+bootstrap turns, message-only source replies, and tool-disabled internal turns.
+They share some isolation settings with policy-restricted turns but are not
+synonyms for ring zero.
+
 ### Project instructions
 
 Codex loads `AGENTS.md` files through native project-document discovery. For
 normal app-server threads, OpenClaw raises Codex's aggregate root-to-working-
 directory budget from the upstream 32 KiB default to a bounded 128 KiB so later
-scoped instructions are not silently clipped. Lightweight and restricted turns
-set the native project-document budget to zero instead.
+scoped instructions are not silently clipped. Ordinary conversation tool-policy
+restrictions preserve that budget because project instructions are context, not
+tool authority. Their isolated native environment cannot read workspace files,
+so OpenClaw supplies the bounded workspace `AGENTS.md` snapshot as thread-level
+developer instructions. Lightweight, ring-zero, message-only, and tool-disabled
+internal turns set the native project-document budget to zero instead.
 
 This byte budget is separate from the character-based workspace bootstrap
 limits configured through `agents.defaults.bootstrapMaxChars` and

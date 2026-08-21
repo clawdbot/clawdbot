@@ -1,4 +1,5 @@
 import {
+  GatewayProtocolRequestTimeoutError,
   getGatewaySessionMessageSubscriptionCoordinator,
   releaseGatewaySessionMessageSubscription,
   resetGatewaySessionMessageSubscriptionCoordinator,
@@ -46,6 +47,8 @@ type SessionScopedOperationsHost = {
   agentId: () => string | null;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
 };
+
+const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
 
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
@@ -124,10 +127,26 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
         : null;
     const subscription = await getGatewaySessionMessageSubscriptionCoordinator(scope.client, {
       keysEquivalent: areUiSessionKeysEquivalent,
-    }).acquire(normalizedKey, {
-      agentId,
-      ...(options.includeApprovals ? { includeApprovals: true } : {}),
-    });
+    })
+      .acquire(normalizedKey, {
+        agentId,
+        ...(options.includeApprovals ? { includeApprovals: true } : {}),
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof AggregateError &&
+          error.errors[0] instanceof GatewayProtocolRequestTimeoutError &&
+          error.errors[0].requestSent &&
+          host.connection.isCurrent(scope) &&
+          !retiredFailedSubscriptionRecoveries.has(error)
+        ) {
+          // Failed compensation cannot prove privileged observers were removed;
+          // closing their owning socket invokes authoritative Gateway cleanup.
+          retiredFailedSubscriptionRecoveries.add(error);
+          scope.client.forceReconnect("session subscription recovery failed");
+        }
+        throw error;
+      });
     ownedSubscriptions.add(subscription);
     if (!host.connection.isCurrent(scope)) {
       await unsubscribeMessages(subscription).catch(() => undefined);

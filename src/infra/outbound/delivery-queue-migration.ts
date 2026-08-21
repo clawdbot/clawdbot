@@ -9,8 +9,7 @@ import {
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
-  loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
+  countPendingDeliveryQueueEntries,
   terminalizePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
 import {
@@ -52,47 +51,6 @@ import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const LEGACY_PREPARATION_LEASE_MS = 5 * 60_000;
 const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
-
-type LegacyPreparedQueuedDelivery = QueuedDelivery &
-  Parameters<typeof normalizeOutboundReplyFacts>[0];
-
-function hasLegacyReplyFields(entry: LegacyPreparedQueuedDelivery): boolean {
-  return Object.hasOwn(entry, "replyToId") || Object.hasOwn(entry, "replyToMode");
-}
-
-function canonicalizePreparedReplyFields(entry: LegacyPreparedQueuedDelivery): QueuedDelivery {
-  const { replyToId, replyToMode, reply: storedReply, ...canonical } = entry;
-  const reply = normalizeOutboundReplyFacts({ reply: storedReply, replyToId, replyToMode });
-  return { ...canonical, ...(reply ? { reply } : {}) };
-}
-
-function migratePreparedReplyFields(queueName: string, stateDir?: string): void {
-  const entries = loadDeliveryQueueEntries(queueName, stateDir) as LegacyPreparedQueuedDelivery[]; // SAFETY: callers pass prepared namespaces; beta rows add only legacy reply fields.
-  for (const entry of entries) {
-    if (!hasLegacyReplyFields(entry)) {
-      continue;
-    }
-    const migrated = canonicalizePreparedReplyFields(entry);
-    if (
-      replacePendingDeliveryQueueEntry({
-        queueName,
-        expectedEntry: entry,
-        replacementEntry: migrated,
-        stateDir,
-      })
-    ) {
-      continue;
-    }
-    const current = loadDeliveryQueueEntry(
-      queueName,
-      entry.id,
-      stateDir,
-    ) as LegacyPreparedQueuedDelivery | null; // SAFETY: same prepared namespace/id; replacement keeps shape or removes row.
-    if (current && hasLegacyReplyFields(current)) {
-      throw new Error(`Prepared delivery ${entry.id} changed during reply migration`);
-    }
-  }
-}
 
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
@@ -508,14 +466,20 @@ async function finalizePreparedMigration(params: {
   }
 }
 
-const activeLegacyMigrations = new Map<string, Promise<{ moved: number; skipped: number }>>();
+type LegacyOutboundDeliveryMigrationResult = {
+  moved: number;
+  skipped: number;
+  remaining: number;
+};
+
+const activeLegacyMigrations = new Map<string, Promise<LegacyOutboundDeliveryMigrationResult>>();
 
 /** Migrates every unchanged pre-D4 pending row before canonical recovery scans. */
 export async function migrateLegacyPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-}): Promise<{ moved: number; skipped: number }> {
+}): Promise<LegacyOutboundDeliveryMigrationResult> {
   const migrationKey = params.stateDir ?? "<default-state>";
   return await getOrCreatePromise(
     activeLegacyMigrations,
@@ -529,11 +493,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-}): Promise<{ moved: number; skipped: number }> {
-  // Beta rows can exist in either prepared namespace. Canonicalize them before
-  // any recovery owner sees the row; interrupted migrations then resume normally.
-  migratePreparedReplyFields(OUTBOUND_DELIVERY_QUEUE_NAME, params.stateDir);
-  migratePreparedReplyFields(OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, params.stateDir);
+}): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();
@@ -598,5 +558,13 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   if (moved > 0 || skipped > 0) {
     params.log.info(`Legacy delivery migration settled moved=${moved} skipped=${skipped}`);
   }
-  return { moved, skipped };
+  const remaining = countPendingDeliveryQueueEntries(
+    [
+      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+    ],
+    params.stateDir,
+  );
+  return { moved, skipped, remaining };
 }

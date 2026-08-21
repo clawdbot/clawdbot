@@ -86,10 +86,10 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-nested-combinator-race",
         {
           code: `const value = await Promise.race([
-              Promise.all([tools.callValue("fake_nested_race_never", {})]),
-              tools.callValue("fake_nested_race_fast", {}),
+              Promise.all([fake_nested_race_never({})]),
+              fake_nested_race_fast({}),
             ]);
-            void tools.callValue("fake_nested_race_release", {});
+            void fake_nested_race_release({});
             return value;`,
         },
       ),
@@ -140,7 +140,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
           code: `
             const ids = [];
             for (let index = 0; index < 5; index += 1) {
-              const called = await tools.callValue("fake_create_ticket", { value: index });
+              const called = await fake_create_ticket({ value: index });
               ids.push(called.input.value);
             }
             return ids;
@@ -186,10 +186,10 @@ describe("Code Mode bridge settlement and cancellation", () => {
         {
           code: `
             const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
-            await tools.callValue("fake_terminal_input", { data: "status\\n" });
+            await fake_terminal_input({ data: "status\\n" });
             clearTimeout(cancelled);
             await new Promise((resolve) => setTimeout(resolve, 5));
-            return await tools.callValue("fake_terminal_read", {});
+            return await fake_terminal_read({});
           `,
         },
       ),
@@ -258,10 +258,10 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-later-winner",
         {
           code: `const value = await Promise.race([
-              tools.callValue("fake_first", {}),
-              tools.callValue("fake_second", {}),
+              fake_first({}),
+              fake_second({}),
             ]);
-            void tools.callValue("fake_first_release", {});
+            void fake_first_release({});
             return value;`,
         },
       ),
@@ -279,27 +279,27 @@ describe("Code Mode bridge settlement and cancellation", () => {
   it.each([
     {
       label: "directly",
-      auditCode: 'void tools.callValue("fake_early_audit", {});',
+      auditCode: "void fake_early_audit({});",
     },
     {
       label: "in a detached already-settled Promise.race",
-      auditCode: 'void Promise.race([tools.callValue("fake_early_audit", {}), Promise.resolve()]);',
+      auditCode: "void Promise.race([fake_early_audit({}), Promise.resolve()]);",
     },
     {
       label: "in a detached Promise.all",
-      auditCode: 'void Promise.all([tools.callValue("fake_early_audit", {})]);',
+      auditCode: "void Promise.all([fake_early_audit({})]);",
     },
     {
       label: "in a detached Promise.allSettled",
-      auditCode: 'void Promise.allSettled([tools.callValue("fake_early_audit", {})]);',
+      auditCode: "void Promise.allSettled([fake_early_audit({})]);",
     },
     {
       label: "in a detached Promise.any",
-      auditCode: 'void Promise.any([tools.callValue("fake_early_audit", {})]);',
+      auditCode: "void Promise.any([fake_early_audit({})]);",
     },
     {
       label: "in a detached Promise.race",
-      auditCode: 'void Promise.race([tools.callValue("fake_early_audit", {})]);',
+      auditCode: "void Promise.race([fake_early_audit({})]);",
     },
   ])(
     "drains a detached audit started $label before an awaited nested call",
@@ -359,8 +359,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
           "code-call-early-detached-audit",
           {
             code: `${auditCode}
-            const value = await tools.callValue("fake_awaited_fast", {});
-            void tools.callValue("fake_early_audit_release", {});
+            const value = await fake_awaited_fast({});
+            void fake_early_audit_release({});
             return value;`,
           },
         ),
@@ -438,11 +438,11 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-race-detached-audit",
         {
           code: `const value = await Promise.race([
-              tools.callValue("fake_race_winner", {}),
-              tools.callValue("fake_race_loser", {}),
+              fake_race_winner({}),
+              fake_race_loser({}),
             ]);
-            void tools.callValue("fake_race_audit", {});
-            void tools.callValue("fake_race_loser_release", {});
+            void fake_race_audit({});
+            void fake_race_loser_release({});
             return value;`,
         },
       ),
@@ -487,8 +487,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-detached",
         {
-          code: `void tools.callValue("fake_detached_first", {});
-            void tools.callValue("fake_detached_second", {});
+          code: `void fake_detached_first({});
+            void fake_detached_second({});
             return "done";`,
         },
       ),
@@ -558,10 +558,10 @@ describe("Code Mode bridge settlement and cancellation", () => {
           `code-call-${combinator}-fast`,
           {
             code: `const value = await Promise.${combinator}([
-                tools.callValue("fake_slow", {}),
-                tools.callValue("fake_fast", {}),
+                fake_slow({}),
+                fake_fast({}),
               ]);
-              void tools.callValue("fake_slow_release", {});
+              void fake_slow_release({});
               return value;`,
           },
         ),
@@ -632,12 +632,12 @@ describe("Code Mode bridge settlement and cancellation", () => {
         {
           code: `try {
             await Promise.all([
-              tools.callValue("fake_failed", {}),
-              tools.callValue("fake_slow", {}),
+              fake_failed({}),
+              fake_slow({}),
             ]);
             return "unexpected success";
           } catch (error) {
-            void tools.callValue("fake_slow_release", {});
+            void fake_slow_release({});
             return error.message;
           }`,
         },
@@ -679,7 +679,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-post-dispatch-failure",
         {
           code: `
-            await tools.callValue("fake_side_effect", {});
+            await fake_side_effect({});
             throw new Error("after dispatch");
           `,
         },
@@ -732,7 +732,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
         "code-call-oversized-search",
         {
-          code: 'return await tools.callValue("fake_oversized_search", {});',
+          code: "return await fake_oversized_search({});",
         },
       ),
     );
@@ -787,7 +787,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-abort",
-        { code: "await tools.fake_stuck({}); return 'done';" },
+        { code: "await fake_stuck({}); return 'done';" },
         controller.signal,
       ),
     );
@@ -868,7 +868,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         try {
-          const rows = await tools.callValue("fake_policy_block", {});
+          const rows = await fake_policy_block({});
           return rows.map((row) => row.id);
         } catch (error) {
           return error.message;

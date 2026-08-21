@@ -229,6 +229,7 @@ describe("worker environment protocol schemas", () => {
             id: "aws",
             providerId: "crabbox",
             trust: "disposable",
+            executionMode: "remote-exec",
             machines: [
               {
                 id: "standard",
@@ -239,6 +240,8 @@ describe("worker environment protocol schemas", () => {
               },
             ],
           },
+          { id: "worker", providerId: "static-ssh", executionMode: "worker-turn" },
+          { id: "legacy", providerId: "static-ssh" },
         ],
       }),
     ).toBe(true);
@@ -252,6 +255,12 @@ describe("worker environment protocol schemas", () => {
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
         profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
       }),
     ).toBe(false);
     expect(

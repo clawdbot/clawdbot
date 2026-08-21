@@ -27,7 +27,7 @@ import {
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
   sessionModelOverrideChangesApplied,
 } from "../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -269,7 +269,6 @@ export async function applySessionModelSelection(
       };
     }
   }
-
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;

@@ -98,6 +98,7 @@ export async function deliverOutboundPayloadsCore(
         // Carry its source index without polluting the persisted platform route.
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
+      onDirectAdapterHandoff: params.onDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
     });

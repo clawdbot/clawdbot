@@ -772,7 +772,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const pushState = vi.spyOn(window.history, "pushState");
     const replaceState = vi.spyOn(window.history, "replaceState");
@@ -915,7 +915,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStarted = deferred<void>();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
@@ -937,7 +937,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("resolves runtime startup when the bare default route is not found", async () => {
+  it("resolves runtime startup when the initial route is not found", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     saveSettings({
@@ -945,7 +945,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/about");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStart = vi
       .spyOn(runtime.router, "start")

@@ -181,6 +181,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
             claimAgentRunContext(params.runId, {
               ...existingContext,
+              agentId: params.agentId ?? existingContext?.agentId,
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,

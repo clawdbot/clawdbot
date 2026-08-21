@@ -233,6 +233,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       params.abortSignal?.throwIfAborted();
       platformSendStarted = true;
     },
+    onDirectAdapterHandoff: async () => {
+      params.abortSignal?.throwIfAborted();
+      await params.onPlatformSendDispatch?.();
+      params.abortSignal?.throwIfAborted();
+    },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
       // Once any payload returns an identity, unknown-after-send protects the whole batch.

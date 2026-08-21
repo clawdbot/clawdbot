@@ -11,12 +11,14 @@ describe("readDraftCloudProfiles", () => {
           id: " zeta ",
           providerId: " static-ssh ",
           trust: "disposable",
+          executionMode: "worker-turn",
           settings: { token: "hidden" },
         },
         {
           id: "aws",
           providerId: "crabbox",
           trust: "persistent",
+          executionMode: "remote-exec",
           machines: [
             {
               id: "standard",
@@ -31,7 +33,12 @@ describe("readDraftCloudProfiles", () => {
           ],
         },
         { id: "legacy", providerId: "static-ssh" },
-        { id: "invalid-trust", providerId: "crabbox", trust: "temporary" },
+        {
+          id: "invalid-trust",
+          providerId: "crabbox",
+          trust: "temporary",
+          executionMode: "sandbox",
+        },
         { id: "", providerId: "crabbox" },
         { id: "missing-provider" },
       ]),
@@ -40,6 +47,7 @@ describe("readDraftCloudProfiles", () => {
         id: "aws",
         providerId: "crabbox",
         trust: "persistent",
+        executionMode: "remote-exec",
         machines: [
           {
             id: "standard",
@@ -51,9 +59,24 @@ describe("readDraftCloudProfiles", () => {
           { id: "fast", label: "Fast" },
         ],
       },
-      { id: "invalid-trust", providerId: "crabbox", trust: undefined },
-      { id: "legacy", providerId: "static-ssh", trust: undefined },
-      { id: "zeta", providerId: "static-ssh", trust: "disposable" },
+      {
+        id: "invalid-trust",
+        providerId: "crabbox",
+        trust: undefined,
+        executionMode: undefined,
+      },
+      {
+        id: "legacy",
+        providerId: "static-ssh",
+        trust: undefined,
+        executionMode: undefined,
+      },
+      {
+        id: "zeta",
+        providerId: "static-ssh",
+        trust: "disposable",
+        executionMode: "worker-turn",
+      },
     ]);
   });
 });

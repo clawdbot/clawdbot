@@ -529,7 +529,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         candidateFastMode: params.candidateFastMode,
         candidateModelOptions: params.candidateModelOptions,
       });
-      const modelOutputDir = path.join(runsDir, sanitizePathPart(model));
+      const modelOutputDir = path.join(runsDir, `${index + 1}-${sanitizePathPart(model)}`);
       const runStartedAt = Date.now();
       logCharacterEvalProgress(
         params.progress,

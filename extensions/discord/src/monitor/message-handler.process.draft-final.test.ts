@@ -147,6 +147,28 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(draftStream.messageId()).toBeUndefined();
   });
 
+  it("preserves a delivered final when its first stale-preview cleanup fails", async () => {
+    const draftStream = createMockDraftStream();
+    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+    const runtimeError = vi.fn();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
+      runtime: { log: vi.fn(), error: runtimeError },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(runtimeError).not.toHaveBeenCalled();
+    expectFreshFinalText("Hello\nWorld");
+  });
+
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });

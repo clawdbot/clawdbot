@@ -662,6 +662,7 @@ jobs:
       - name: Setup Node environment for installer smoke
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
           install-deps: "true"
 
@@ -796,6 +797,7 @@ jobs:
       - name: Setup Node environment for Bun smoke
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "true"
           install-deps: "true"
 
@@ -829,5 +831,6 @@ jobs:
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
           install-deps: "true"

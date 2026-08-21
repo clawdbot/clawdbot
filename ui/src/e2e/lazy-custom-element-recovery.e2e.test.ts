@@ -14,6 +14,7 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/lazy-custom-element-recovery");
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { height: 900, width: 1280 };
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 
@@ -173,17 +174,21 @@ suite.define(() => {
   }
 
   it("restores the command-palette action after a real stale-chunk reload", async () => {
-    await mkdir(artifactDir, { recursive: true });
+    if (captureUiProof) {
+      await mkdir(artifactDir, { recursive: true });
+    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
-      recordVideo: { dir: artifactDir, size: viewport },
       serviceWorkers: "block",
       viewport,
+      ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
     });
     let video: Video | null = null;
     try {
       const page = await context.newPage();
-      video = page.video();
+      if (captureUiProof) {
+        video = page.video();
+      }
       const failure = await installChunkFailure(
         page,
         /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
@@ -198,24 +203,28 @@ suite.define(() => {
       const error = await expectRealChunkFailure(page, "command palette");
       await expect.poll(failure.headCount).toBe(1);
       expect(failure.chunkRequestCount()).toBe(1);
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "failure.png"),
-      });
+      if (captureUiProof) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "failure.png"),
+        });
+      }
 
       await retryThroughReload(page, error);
       await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
 
       await expect.poll(failure.chunkRequestCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
-      await page.waitForTimeout(250);
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "recovered.png"),
-      });
+      if (captureUiProof) {
+        await page.waitForTimeout(250);
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "recovered.png"),
+        });
+      }
     } finally {
       await suite.closeBrowserContext(context);
-      if (video) {
+      if (captureUiProof && video) {
         await video.saveAs(path.join(artifactDir, "recovery.webm"));
       }
     }

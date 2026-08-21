@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -35,7 +36,10 @@ function findStringAlias(key: string) {
 
 describe("Control UI Vite config", () => {
   it("emits Brotli and gzip variants only for bundled compressible assets", () => {
-    const source = "console.log('precompressed');\n".repeat(200);
+    const source = Array.from(
+      { length: 200 },
+      (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
+    ).join("");
     const variants = createControlUiPrecompressedAssetVariants("assets/app-AbCd1234.js", source);
 
     expect(variants.map((variant) => variant.fileName)).toEqual([
@@ -44,6 +48,9 @@ describe("Control UI Vite config", () => {
     ]);
     expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
     expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
+    expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
+      "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
+    );
     expect(createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
     expect(createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
     expect(createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
@@ -373,6 +380,18 @@ describe("Control UI Vite config", () => {
       find: "@openclaw/normalization-core/phone-presentation",
       replacement: path.join(repoRoot, "packages/normalization-core/src/phone-presentation.ts"),
     });
+    const resultAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/result",
+    );
+    const rootAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core",
+    );
+    expect(aliases[resultAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/result",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),
+    });
+    expect(resultAliasIndex).toBeGreaterThanOrEqual(0);
+    expect(rootAliasIndex).toBeGreaterThan(resultAliasIndex);
   });
 
   it("uses Node package resolution for external packages inherited by worktrees", () => {

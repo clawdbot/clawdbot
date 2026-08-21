@@ -1900,9 +1900,10 @@ describe("stuck session diagnostics threshold", () => {
   it("clears queued diagnostic state after no-active-work recovery", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockResolvedValue({
-      status: "noop",
-      action: "none",
+      status: "released",
+      action: "release_lane",
       reason: "no_active_work",
+      released: 0,
       sessionId: "s1",
       sessionKey: "main",
     });
@@ -1932,8 +1933,8 @@ describe("stuck session diagnostics threshold", () => {
     expect(state.queueDepth).toBe(0);
     requireMatchingRecord(
       events,
-      { type: "session.state", state: "idle", reason: "stuck_recovery:noop", queueDepth: 0 },
-      "noop state clear event",
+      { type: "session.state", state: "idle", reason: "stuck_recovery:released", queueDepth: 0 },
+      "released state clear event",
     );
   });
 
@@ -1984,9 +1985,10 @@ describe("stuck session diagnostics threshold", () => {
     const events: DiagnosticEventPayload[] = [];
     let resolveRecovery:
       | ((outcome: {
-          status: "noop";
-          action: "none";
+          status: "released";
+          action: "release_lane";
           reason: "no_active_work";
+          released: number;
           sessionId: string;
           sessionKey: string;
         }) => void)
@@ -1994,9 +1996,10 @@ describe("stuck session diagnostics threshold", () => {
     const recoverStuckSession = vi.fn(
       () =>
         new Promise<{
-          status: "noop";
-          action: "none";
+          status: "released";
+          action: "release_lane";
           reason: "no_active_work";
+          released: number;
           sessionId: string;
           sessionKey: string;
         }>((resolve) => {
@@ -2033,9 +2036,10 @@ describe("stuck session diagnostics threshold", () => {
       );
 
       resolveRecovery?.({
-        status: "noop",
-        action: "none",
+        status: "released",
+        action: "release_lane",
         reason: "no_active_work",
+        released: 0,
         sessionId: "s1",
         sessionKey: "main",
       });

@@ -13,6 +13,7 @@ export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
 export {
   listAgentIds,
+  resolveConfiguredAgentId,
   resolveDefaultAgentId,
   resolveSessionAgentIds,
 } from "../agents/agent-scope.js";
@@ -32,6 +33,14 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
+export {
+  listMemoryArtifactProvenance,
+  readMemoryArtifactProvenance,
+} from "../memory/memory-artifact-provenance.js";
+export type {
+  MemoryArtifactOriginClass,
+  MemoryArtifactProvenance,
+} from "../memory/memory-artifact-provenance.js";
 export {
   clearMemoryPluginState,
   listMemoryCorpusSupplements,

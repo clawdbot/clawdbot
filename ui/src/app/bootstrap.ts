@@ -324,6 +324,12 @@ export function bootstrapApplication(
     !releasedSessionQuery &&
     firstRunDefaultLanding &&
     !parseAgentSessionKey(settings.sessionKey);
+  let resolveInitialFirstRunDecision: (() => void) | null = null;
+  const initialFirstRunDecision = deferInitialLocationUntilGateway
+    ? new Promise<void>((resolve) => {
+        resolveInitialFirstRunDecision = resolve;
+      })
+    : null;
   const initialLocationReady = (
     documentMode || focusLocation
       ? Promise.resolve(applicationLocation)
@@ -552,20 +558,35 @@ export function bootstrapApplication(
         },
         () => sessionPathBuilderReady,
       ];
-      if (!deferInitialLocationUntilGateway) {
-        steps.push(() =>
-          startModelSetupFirstRunRedirectAfterLocation({
-            context,
-            enabled: firstRunRedirectEnabled,
-            history,
-            initialLocationReady,
-          }),
-        );
-      }
+      // Resolve first-run setup before routing: the default Chat route owns the
+      // workspace graph, which setup users would otherwise fetch and discard.
+      steps.push(() =>
+        startModelSetupFirstRunRedirectAfterLocation({
+          context,
+          enabled: firstRunRedirectEnabled,
+          history,
+          initialLocationReady: deferInitialLocationUntilGateway
+            ? Promise.resolve(applicationLocation)
+            : initialLocationReady,
+          ...(deferInitialLocationUntilGateway
+            ? {
+                redirect: () =>
+                  history.replace({
+                    ...locationForRoute("model-setup", basePath),
+                    search: "?firstRun=1",
+                  }),
+                onInitialDecision: () => resolveInitialFirstRunDecision?.(),
+              }
+            : {}),
+        }),
+      );
       steps.push(() => {
         void config.refresh({ skipWithoutAuthCandidate: true });
       });
       if (startsApplicationRouter) {
+        if (initialFirstRunDecision) {
+          steps.push(() => initialFirstRunDecision);
+        }
         steps.push(async () => {
           const pendingNavigation = pendingRouterStartNavigation;
           pendingRouterStartNavigation = null;
@@ -579,12 +600,12 @@ export function bootstrapApplication(
       }
       if (deferInitialLocationUntilGateway) {
         steps.push(() => {
-          // The bare /chat route remains not-found while disconnected. Its shell
-          // fallback is gated on the same connected defaults, so both paths converge.
+          // The router claims the connected Gateway session before persisted
+          // location normalization can install a competing retained Chat pane.
           startupLifecycle.trackDisposer(
             startModelSetupFirstRunRedirectAfterLocation({
               context,
-              enabled: firstRunRedirectEnabled,
+              enabled: false,
               history,
               initialLocationReady,
               installLocation: async (location) => {

@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -180,6 +181,18 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids;
 }
 
+/** Returns a configured agent id or throws the canonical CLI selection error. */
+export function resolveConfiguredAgentId(cfg: OpenClawConfig, agentId: string): string {
+  if (!listAgentIds(cfg).includes(agentId)) {
+    // formatCliCommand, not a literal: under a profile or container the bare command is wrong,
+    // so a hint that cannot be pasted back is worse than none.
+    throw new Error(
+      `Unknown agent id "${agentId}". Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
+  }
+  return agentId;
+}
+
 export function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
@@ -240,6 +253,18 @@ export function resolveAmbientOwnerAgentId(
   context?: AgentSelectionContext,
 ): string {
   return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
+}
+
+/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+export function resolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+  context?: AgentSelectionContext,
+): string {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
+  }
+  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
 }
 
 /**

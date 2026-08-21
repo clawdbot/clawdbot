@@ -11,9 +11,14 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -23,6 +28,11 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../message-action-turn-capability.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
@@ -1444,6 +1454,113 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("does not send or queue after delegated authority closes during delivery preflight", async () => {
+    const enteredDelivery = createDeferred<null>();
+    const resumeDelivery = createDeferred<null>();
+    const platformSend = vi.fn();
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async (params: { onPlatformSendDispatch?: () => Promise<void> }) => {
+        enteredDelivery.resolve(null);
+        await resumeDelivery.promise;
+        await params.onPlatformSendDispatch?.();
+        platformSend();
+        return [{ channel: "slack", messageId: "must-not-send" }];
+      },
+    );
+    let authorityActive = true;
+    const context = {
+      ...makeContext(),
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+    } as GatewayRequestContext;
+    const request = runSendWithClient(
+      {
+        channel: "slack",
+        to: "channel:C1",
+        message: "must not escape",
+        sessionKey: "agent:main:slack:channel:C1",
+        idempotencyKey: "idem-send-delivery-authority-race",
+      },
+      agentRuntimeClient("agent:main:slack:channel:C1"),
+      context,
+    );
+    await enteredDelivery.promise;
+    authorityActive = false;
+    resumeDelivery.resolve(null);
+
+    const { respond } = await request;
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+    expect(deliveryCall()?.skipQueue).toBe(true);
+    expect(platformSend).not.toHaveBeenCalled();
+  });
+
+  it("does not send after turn capability closes while delegated authority remains active", async () => {
+    const enteredDelivery = createDeferred<null>();
+    const resumeDelivery = createDeferred<null>();
+    const platformSend = vi.fn();
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async (params: { onPlatformSendDispatch?: () => Promise<void> }) => {
+        enteredDelivery.resolve(null);
+        await resumeDelivery.promise;
+        await params.onPlatformSendDispatch?.();
+        platformSend();
+        return [{ channel: "slack", messageId: "must-not-send" }];
+      },
+    );
+    const sessionKey = "agent:main:slack:channel:C1";
+    const operationalRunInstance = createOperationalRunInstanceRef("run-turn-capability-race");
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const messageActionTurnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: operationalRunInstance.runId,
+      sessionKey,
+    });
+    const client = {
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime" as const,
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance,
+          delegatedAuthority: { kind: "local" as const, ...delegatedAuthority },
+          messageActionContext: {
+            ...messageActionContextFromSessionKeyForTests(sessionKey),
+            turnCapability: messageActionTurnCapability,
+          },
+        },
+      },
+    };
+    const context = {
+      ...makeContext(),
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    } as GatewayRequestContext;
+
+    try {
+      const request = runSendWithClient(
+        {
+          channel: "slack",
+          to: "channel:C1",
+          message: "must not escape",
+          sessionKey,
+          idempotencyKey: "idem-send-turn-capability-race",
+        },
+        client,
+        context,
+      );
+      await enteredDelivery.promise;
+      expect(revokeMessageActionTurnCapability(messageActionTurnCapability)).toBe(true);
+      resumeDelivery.resolve(null);
+
+      const { respond } = await request;
+      expect(firstRespondCall(respond)[0]).toBe(false);
+      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expect(platformSend).not.toHaveBeenCalled();
+    } finally {
+      revokeMessageActionTurnCapability(messageActionTurnCapability);
+      releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    }
   });
 
   it("cancels a prepared terminal receipt when authority closes before action dispatch", async () => {

@@ -177,7 +177,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementRuntime
-        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
+        ? {
+            workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace,
+            workerPlacementRunnerAvailabilityReader: workerPlacementRuntime.runnerAvailability,
+          }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }

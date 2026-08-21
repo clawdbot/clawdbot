@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
   compareSidebarSessionRowsByMode,
@@ -260,6 +261,57 @@ describe("sidebar navigation lineage ownership", () => {
     parentSessionKey: navigationParent.key,
     spawnedBy: controlParent.key,
   };
+
+  it.each([
+    { name: "exact", rootKey: child.key, cachedKey: child.key },
+    { name: "equivalent", rootKey: child.key.toUpperCase(), cachedKey: child.key },
+    { name: "main alias", rootKey: "main", cachedKey: "agent:main:main" },
+  ])(
+    "keeps the canonical root authoritative over an $name cached child key",
+    async ({ rootKey, cachedKey }) => {
+      const row = (key: string, status: "available" | "offline"): GatewaySessionRow => ({
+        ...child,
+        key,
+        placement: {
+          state: "active",
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          stateChangedAtMs: 1,
+          environmentId: "worker:device",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "manifest",
+          remoteWorkspaceDir: "/workspace",
+          runner: { kind: "device", status },
+        },
+      });
+      const canonical = {
+        ...row(rootKey, "offline"),
+        parentSessionKey: undefined,
+        spawnedBy: undefined,
+      };
+      const cached = row(cachedKey, "available");
+      const hidden = row("agent:main:subagent:hidden", "available");
+
+      const known = collectKnownSessionRows([canonical], {
+        [navigationParent.key]: [cached, hidden],
+      });
+
+      expect(known.get(canonical.key)).toBe(canonical);
+      expect(known.get(hidden.key)).toBe(hidden);
+      expect(known).toHaveLength(2);
+      const request = vi.fn();
+      const lineage = await fetchSessionLineage({
+        client: createTestGatewayClient(request),
+        sessionKey: cached.key,
+        knownRows: known,
+        isCurrent: () => true,
+      });
+      expect(lineage?.topmostRow).toBe(canonical);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
 
   it("projects a known child exactly once under its explicit navigation parent", () => {
     const projected = projectSessionTree({

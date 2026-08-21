@@ -7,6 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  listActiveDegradedSecretOwners,
+  setActiveCredentialDegradedOwner,
+} from "./runtime-degraded-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
@@ -208,6 +212,14 @@ describe("secrets runtime provider and media surfaces", () => {
       const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
         await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
+      setActiveCredentialDegradedOwner({
+        ownerKind: "account",
+        ownerId: "telegram:work",
+        state: "unavailable",
+        paths: ["channels.telegram.accounts.work.tokenFile"],
+        refKeys: [],
+        reason: "credential file is unavailable",
+      });
       const runtimeSourceConfig: OpenClawConfig = {
         ...initial.sourceConfig,
         logging: { level: "debug" },
@@ -241,6 +253,9 @@ describe("secrets runtime provider and media surfaces", () => {
       expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
       expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
       expect(getRuntimeConfigSourceSnapshot()).toEqual(runtimeSourceConfig);
+      expect(listActiveDegradedSecretOwners()).toContainEqual(
+        expect.objectContaining({ ownerKind: "account", ownerId: "telegram:work" }),
+      );
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

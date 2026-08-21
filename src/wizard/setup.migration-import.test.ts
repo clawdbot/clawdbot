@@ -144,12 +144,12 @@ describe("setup migration import options", () => {
     });
   });
 
-  it("offers bundled manifest migration providers before plugin activation", () => {
+  it("lists bundled providers for the nested migration source picker", () => {
     expect(initialOptions).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ providerId: "codex", label: "Codex" }),
-        expect.objectContaining({ providerId: "claude", label: "Claude" }),
-        expect.objectContaining({ providerId: "hermes", label: "Hermes" }),
+        expect.objectContaining({ providerId: "codex", label: "Import from Codex" }),
+        expect.objectContaining({ providerId: "claude", label: "Import from Claude" }),
+        expect.objectContaining({ providerId: "hermes", label: "Import from Hermes" }),
       ]),
     );
   });

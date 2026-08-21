@@ -27,6 +27,7 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
+const SESSION_PLACEMENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-session-placement.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
 const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
@@ -47,11 +48,19 @@ export function formatControlUiCatalogFallbackDriftError(): string {
 }
 
 async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  return await loadControlUiSourceCatalog(SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH);
+  return await loadControlUiSourceCatalog(
+    SOURCE_LOCALE_PATH,
+    ACTIVITY_SOURCE_LOCALE_PATH,
+    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
+  );
 }
 
 async function readSourceLocaleRaw(): Promise<string> {
-  return await readControlUiSourceCatalog(SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH);
+  return await readControlUiSourceCatalog(
+    SOURCE_LOCALE_PATH,
+    ACTIVITY_SOURCE_LOCALE_PATH,
+    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
+  );
 }
 
 function extractPlaceholders(text: string): string[] {

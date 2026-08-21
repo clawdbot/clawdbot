@@ -989,6 +989,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const sharedStateTarget =
         candidate.agentDir === undefined &&
         resolveSharedAuthStoreOwnership(env).location === "state-db";
+      // A shared candidate on a legacy root names the main agent dir explicitly: it resolves to the
+      // same database, but an undefined agent dir would enter the shared-write bootstrap and could
+      // record state-db ownership midway through this import. Doctor stays the only owner of that flip.
+      const transactionAgentDir =
+        sharedStateTarget || candidate.agentDir !== undefined
+          ? candidate.agentDir
+          : resolveSharedMainAuthAgentDir(env);
       let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
         prepareAuthProfileSourceReceipt({
           pathname,
@@ -1160,7 +1167,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(
-            candidate.agentDir,
+            transactionAgentDir,
             (database) => {
               const authoritative = loadAuthProfileMigrationTargetStore(
                 candidate.agentDir,

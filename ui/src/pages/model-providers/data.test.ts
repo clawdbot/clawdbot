@@ -174,6 +174,51 @@ describe("buildModelProviderCards", () => {
     ]);
   });
 
+  it("keeps a credential-less missing route visible beside CLI OAuth", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "missing",
+          profiles: [],
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "expiring",
+          profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+  });
+
+  it("preserves missing MiniMax OAuth beside a separate API key", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "MINIMAX_API_KEY" },
+        },
+        {
+          provider: "minimax-portal",
+          displayName: "MiniMax",
+          status: "missing",
+          profiles: [],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
+  });
+
   it("prefers usage.status snapshots over the auth-status embed", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,

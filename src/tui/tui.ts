@@ -1037,12 +1037,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return name ? `${id} (${name})` : id;
   };
 
-  const resolveSessionSelection = (raw?: string) => {
+  const resolveSessionSelection = (raw?: string, agentId = state.currentAgentId) => {
     return resolveTuiSessionSelection({
       raw,
       cfg: config,
       sessionScope: state.sessionScope,
-      currentAgentId: state.currentAgentId,
+      currentAgentId: agentId,
       sessionMainKey: state.sessionMainKey,
     });
   };

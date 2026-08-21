@@ -1,6 +1,6 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -29,6 +29,7 @@ function preparePluginLoadContext(
   env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,
   metadataSnapshot: PluginMetadataSnapshot,
+  preferBuiltPluginArtifacts: boolean,
 ): PluginRuntimeLoadContext & { metadataSnapshot: PluginMetadataSnapshot } {
   const { config } = input;
   const workspaceDir = metadataSnapshot.workspaceDir ?? input.workspaceDir;
@@ -44,6 +45,7 @@ function preparePluginLoadContext(
       workspaceDir,
       metadataSnapshot: preparedMetadataSnapshot,
       manifestRegistry: metadataSnapshot.manifestRegistry,
+      preferBuiltPluginArtifacts,
     }),
     metadataSnapshot,
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
@@ -61,9 +63,10 @@ export function prepareOwnedPluginLoadContext(
   env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,
   preparedMetadataSnapshot?: PluginMetadataSnapshot,
+  preferBuiltPluginArtifacts = false,
 ): PluginMetadataSnapshot {
   const metadataSnapshot = preparedMetadataSnapshot ?? resolveColdMetadataSnapshot(input, env);
-  preparePluginLoadContext(input, env, registry, metadataSnapshot);
+  preparePluginLoadContext(input, env, registry, metadataSnapshot, preferBuiltPluginArtifacts);
   return metadataSnapshot;
 }
 
@@ -71,10 +74,15 @@ function resolveColdMetadataSnapshot(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
 ): PluginMetadataSnapshot {
-  const resolvedMetadataSnapshot = loadPluginMetadataSnapshot({
+  // Resolve (slot-probing) instead of load: in the gateway the published current
+  // generation satisfies this read, which keeps snapshot identity stable for the
+  // generation-bound registry reuse in the inbound loader.
+  const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.workspaceDir
+      ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
+      : {}),
     ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
       ? {
           pluginIdScope: createAgentRuntimeMetadataPluginIdScope({

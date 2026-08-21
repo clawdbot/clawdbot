@@ -387,6 +387,26 @@ run_case_local_password() {
   echo "QA_ASSERT cli.gateway-auth-storage.password pass"
 }
 
+run_case_multi_agent() {
+  set_isolated_openclaw_env multi-agent
+  node scripts/e2e/lib/onboard/write-config.mjs multi-agent "$OPENCLAW_CONFIG_PATH"
+
+  openclaw_e2e_run_logged multi-agent node "$OPENCLAW_ENTRY" onboard \
+    --non-interactive \
+    --accept-risk \
+    --flow quickstart \
+    --mode local \
+    --auth-choice skip \
+    --skip-channels \
+    --skip-skills \
+    --skip-daemon \
+    --skip-ui \
+    --skip-health
+
+  assert_onboard_config multi-agent
+  echo "QA_ASSERT cli.multi-agent-onboarding pass"
+}
+
 run_case_remote_non_interactive() {
   set_isolated_openclaw_env remote-non-interactive
   # Smoke test non-interactive remote config write.
@@ -446,7 +466,7 @@ validate_local_basic_log() {
 }
 
 run_selected_cases() {
-  local selected_cases="${OPENCLAW_ONBOARD_E2E_CASES:-guided-skip-ui,local-basic,remote-non-interactive,reset,channels,skills}"
+  local selected_cases="${OPENCLAW_ONBOARD_E2E_CASES:-guided-skip-ui,local-basic,multi-agent,remote-non-interactive,reset,channels,skills}"
   local case_name
   local -a cases=()
   IFS="," read -r -a cases <<<"$selected_cases"
@@ -456,6 +476,7 @@ run_selected_cases() {
       local-basic) run_case_local_basic ;;
       local-auth-refs) run_case_local_auth_refs ;;
       local-password) run_case_local_password ;;
+      multi-agent) run_case_multi_agent ;;
       remote-non-interactive) run_case_remote_non_interactive ;;
       reset) run_case_reset ;;
       channels) run_case_channels ;;

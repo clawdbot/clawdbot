@@ -145,6 +145,7 @@ export type ChannelHandlerParams = {
   preparedMessageId?: string;
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
+  onDirectAdapterHandoff?: () => Promise<void>;
   onPlatformSendDispatch?: () => Promise<void>;
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
@@ -201,6 +202,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
+  /** @internal Revalidate caller authority before direct adapter code can run. */
+  onDirectAdapterHandoff?: () => Promise<void>;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */

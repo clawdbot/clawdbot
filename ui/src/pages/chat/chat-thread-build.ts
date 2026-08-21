@@ -24,6 +24,7 @@ import {
   buildCompactionDividerItem,
   buildResetDividerItem,
   clearWorkingProgress,
+  projectContextCompactionActivity,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
@@ -214,7 +215,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
   for (let i = 0; i < history.length; i++) {
-    const msg = history[i];
+    const msg = projectContextCompactionActivity(history[i]);
     const itemKey = historyKeys[i] ?? messageKey(msg, i);
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {

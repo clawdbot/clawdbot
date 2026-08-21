@@ -10,11 +10,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  clearMemoryPluginState,
-  type MemoryFlushPlan,
-  registerMemoryCapability,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
@@ -1914,22 +1910,7 @@ describe("Codex app-server dynamic tool build", () => {
     vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => undefined,
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/day.md",
-        recordWriteProvenance,
-      }),
-    });
-
-    try {
+    {
       let turnTainted = false;
       const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
       params.config = { tools: { fs: { workspaceOnly: true } } };
@@ -2011,11 +1992,16 @@ describe("Codex app-server dynamic tool build", () => {
         content: "fresh owner note\n",
       });
 
-      expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
-        "agent",
-        "untrusted",
-        "untrusted",
-        "agent",
+      await expect(
+        Promise.all(
+          ["memory/trusted.md", "memory/network.md", "memory/fresh.md"].map((relativePath) =>
+            readMemoryArtifactProvenance({ workspaceDir, relativePath }),
+          ),
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({ originClass: "agent" }),
       ]);
       await expect(fs.readFile(path.join(workspaceDir, "memory/trusted.md"), "utf8")).resolves.toBe(
         "network edit\n",
@@ -2023,8 +2009,6 @@ describe("Codex app-server dynamic tool build", () => {
       await expect(fs.readFile(path.join(workspaceDir, "memory/network.md"), "utf8")).resolves.toBe(
         "network note\n",
       );
-    } finally {
-      clearMemoryPluginState();
     }
   });
 

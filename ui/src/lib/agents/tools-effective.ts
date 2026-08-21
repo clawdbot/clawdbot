@@ -28,6 +28,9 @@ type ToolsEffectiveState = {
   toolsEffectiveResultKey?: string | null;
 };
 
+// Session/model keys can recur; only the exact dispatch may publish or retire its owner.
+const requestOwners = new WeakMap<ToolsEffectiveState, symbol>();
+
 export function buildToolsEffectiveRequestKey(
   state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
   params: { agentId: string; sessionKey: string },
@@ -47,6 +50,7 @@ export async function loadToolsEffective(
     onError?: (error: unknown) => string;
   } = {},
 ) {
+  const client = state.client;
   const resolvedAgentId = params.agentId.trim();
   const resolvedSessionKey = params.sessionKey.trim();
   const requestKey = buildToolsEffectiveRequestKey(state, {
@@ -54,7 +58,7 @@ export async function loadToolsEffective(
     sessionKey: resolvedSessionKey,
   });
   if (
-    !state.client ||
+    !client ||
     !state.connected ||
     !resolvedAgentId ||
     !resolvedSessionKey ||
@@ -62,7 +66,13 @@ export async function loadToolsEffective(
   ) {
     return;
   }
-  const isCurrentRequest = () => options.isCurrent?.() ?? true;
+  const requestOwner = Symbol("effective-tools-request");
+  requestOwners.set(state, requestOwner);
+  const isCurrentRequest = () =>
+    state.client === client &&
+    state.connected &&
+    requestOwners.get(state) === requestOwner &&
+    (options.isCurrent?.() ?? true);
   const shouldIgnoreResponse = () =>
     !isCurrentRequest() || (options.ignoreResponse?.(resolvedAgentId, requestKey) ?? false);
   state.toolsEffectiveLoading = true;
@@ -71,7 +81,7 @@ export async function loadToolsEffective(
   state.toolsEffectiveError = null;
   state.toolsEffectiveResult = null;
   try {
-    const result = await state.client.request<ToolsEffectiveResult>("tools.effective", {
+    const result = await client.request<ToolsEffectiveResult>("tools.effective", {
       agentId: resolvedAgentId,
       sessionKey: resolvedSessionKey,
     });
@@ -87,6 +97,7 @@ export async function loadToolsEffective(
     state.toolsEffectiveError = options.onError?.(error) ?? formatUiError(error);
   } finally {
     if (isCurrentRequest() && state.toolsEffectiveLoadingKey === requestKey) {
+      requestOwners.delete(state);
       state.toolsEffectiveLoadingKey = null;
       state.toolsEffectiveLoading = false;
     }
@@ -94,6 +105,7 @@ export async function loadToolsEffective(
 }
 
 export function resetToolsEffectiveState(state: ToolsEffectiveState) {
+  requestOwners.delete(state);
   state.toolsEffectiveResult = null;
   state.toolsEffectiveResultKey = null;
   state.toolsEffectiveError = null;

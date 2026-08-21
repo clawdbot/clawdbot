@@ -4,8 +4,7 @@
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
-import type { WebSocket } from "ws";
+import { buildRemoteCommand, sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
 import { resolveExecServerPath } from "./path-uri.js";
@@ -20,7 +19,7 @@ const CLOSED_PROCESS_EVICTION_MS = 60_000;
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
-  socket: WebSocket,
+  notify: ManagedProcess["emitNotification"],
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "process/start params");
@@ -48,11 +47,7 @@ export async function startProcess(
     terminationRequested: false,
     child: null,
     waiters: [],
-    emitNotification: (method, notificationParams) => {
-      if (socket.readyState === 1) {
-        socket.send(JSON.stringify({ jsonrpc: "2.0", method, params: notificationParams }));
-      }
-    },
+    emitNotification: notify,
     evictProcess: () => {
       if (managed.evictionTimer) {
         return;
@@ -91,14 +86,11 @@ async function runProcess(
   managed: ManagedProcess,
   params: { argv: string[]; cwd: string; env: Record<string, string> },
 ): Promise<void> {
-  const backend = execServer.sandbox.backend;
-  if (!backend) {
-    throw new Error("OpenClaw sandbox backend is unavailable.");
-  }
+  const backend = execServer.backend;
   throwIfProcessStartCancelled(managed);
   const remoteExec = prepareSandboxChildExec(backend, params.env);
   const execSpec = await backend.buildExecSpec({
-    command: shellCommandFromArgv(params.argv),
+    command: buildRemoteCommand(params.argv),
     workdir: params.cwd,
     env: remoteExec.env,
     // This bridge currently owns only pipe-backed child processes. Asking the
@@ -336,14 +328,6 @@ function notifyProcessWaiters(managed: ManagedProcess): void {
 
 function hasChunksAtOrAfter(managed: ManagedProcess, afterSeq: number): boolean {
   return managed.chunks.some((chunk) => chunk.seq > afterSeq);
-}
-
-function shellCommandFromArgv(argv: string[]): string {
-  return argv.map(shellEscape).join(" ");
-}
-
-function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function requireProcess(processes: Map<string, ManagedProcess>, processId: string): ManagedProcess {
