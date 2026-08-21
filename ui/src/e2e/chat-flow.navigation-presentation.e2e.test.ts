@@ -460,6 +460,7 @@ suite.define(() => {
         )
         .toBe(true);
 
+      await headers.first().getByRole("button", { name: "Close pane" }).focus();
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
       await expect.poll(() => cells.last().getAttribute("class")).not.toContain("--active");
 
