@@ -14,9 +14,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 
-export const DEVICE_WORKER_PROVIDER_ID = "device";
+export { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 const DEVICE_WORKER_DORMANCY_MS = 14 * 24 * 60 * 60 * 1_000;
 
 type DeviceWorkerRuntimeOptions = {
@@ -89,7 +90,7 @@ function requireDeviceId(profile: WorkerProfile): string {
 }
 
 function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerHost.capacity === "available";
+  return node.workerHost.capacity.available > 0;
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {

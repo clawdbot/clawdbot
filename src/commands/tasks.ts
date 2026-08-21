@@ -9,7 +9,7 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
-import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -330,7 +330,7 @@ export async function tasksShowCommand(
     } else {
       runtime.error(message);
     }
-    runtime.exit(1);
+    runtime.exit(1, opts.json ? { resetStream: process.stderr } : undefined);
     return;
   }
 
@@ -497,6 +497,7 @@ async function runTaskRecoveryCommand(
       ),
     );
   } catch (error) {
+    rethrowExpectedCliError(error);
     runtime.error(
       sanitizeTerminalText(
         `Task delivery ${action} requires a live Gateway: ${error instanceof Error ? error.message : String(error)}`,

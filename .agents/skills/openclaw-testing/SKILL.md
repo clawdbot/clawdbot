@@ -310,9 +310,11 @@ package with `run_release_soak=true` or explicit focused groups.
 Stable-publish uses `release_profile=stable`.
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 That helper is for regular releases. Extended-stable dispatches Full Release
@@ -321,11 +323,15 @@ Validation directly from and against `extended-stable/YYYY.M.33` with
 replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
 classification and run-identity rules.
 
-The helper pins the Tooling SHA on trusted `main`, passes the resolved Code SHA
-as `expected_sha`, and records the canonical release branch as context. It
-infers `beta` for alpha/beta package versions and `stable` for
-stable/correction versions. Pass `-f release_profile=full` only for the broad
-advisory provider/media sweep. Do not make `full` faster by silently dropping
+The helper verifies and pins the recorded Tooling SHA on trusted `main`, passes
+the resolved Code SHA as `expected_sha`, and records the canonical release
+branch as context. Reuse that SHA for the release; never refresh it from moving
+`main`. Regular release branches accept only their final package version or a
+matching beta prerelease. Tideclaw alpha validation uses its matching alpha
+branch and exact alpha tag. The helper infers `beta` for beta candidates and
+exact alpha tags, and `stable` for stable/correction versions. Pass
+`-f release_profile=full` only for the broad advisory provider/media sweep. Do
+not make `full` faster by silently dropping
 suites; use the bounded phase that matches the release decision.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
@@ -360,10 +366,12 @@ editing. Only a confirmed product failure changes the Code SHA. Use one
 diagnosis, one fix when needed, and one narrow retry with
 `-f rerun_group=<group>`, then reassess.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
-`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
-`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box. Do not automatically dispatch `all` after a narrow retry. For a
-single failed live/E2E shard, use
+`install-smoke`, `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`,
+`npm-telegram`, and `performance`. The old `release-checks` aggregate retry
+handle is invalid because it silently selected every release-check lane. `qa`
+is a direct-child manual aggregate, not an umbrella/controller retry API. Use
+the narrowest concrete group that covers the failed box. Do not automatically
+dispatch `all` after a narrow retry. For a single failed live/E2E shard, use
 `-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
 workflow only spends setup and queue time on that suite.
 
@@ -420,11 +428,16 @@ gh workflow run openclaw-release-checks.yml \
   -f provider=openai \
   -f mode=both \
   -f release_profile=stable \
-  -f rerun_group=all
+  -f rerun_group=<concrete-group>
 ```
 
-Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
-`package`, `qa`, `qa-parity`, and `qa-live`.
+Concrete release-check rerun groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa-parity`, and `qa-live`. Direct manual dispatch may
+use `qa` to aggregate parity and live QA, but controllers must select one of
+those two concrete groups. Reserve `all` for an intentional whole-child
+validation, never automatic recovery. Non-empty live or cross-OS filters must
+match their owning group; mismatches fail before scheduling and never widen to
+an unfiltered run.
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once as `release-package-under-test` and passes that artifact into cross-OS
 release checks, release-path Docker live/E2E checks, and Package Acceptance.

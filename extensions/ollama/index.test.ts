@@ -2119,6 +2119,8 @@ describe("ollama plugin", () => {
     expect(result.provider.baseUrl).toBe("https://ollama.com");
     expect(result.provider.models?.map((model: { id: string }) => model.id)).toEqual([
       "minimax-m2.7",
+      "minimax-m3",
+      "kimi-k3",
       "glm-5.1",
       "glm-5.2",
     ]);
@@ -2128,6 +2130,20 @@ describe("ollama plugin", () => {
         contextWindow: 196_608,
         reasoning: true,
         input: ["text"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "minimax-m3",
+        contextWindow: 524_288,
+        reasoning: true,
+        input: ["text", "image"],
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      }),
+      expect.objectContaining({
+        id: "kimi-k3",
+        contextWindow: 1_048_576,
+        reasoning: true,
+        input: ["text", "image"],
         compat: { supportsTools: true, supportsUsageInStreaming: true },
       }),
       expect.objectContaining({

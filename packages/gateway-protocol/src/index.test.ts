@@ -570,6 +570,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",

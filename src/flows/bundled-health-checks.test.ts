@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import {
   registerBundledHealthChecks,
@@ -14,6 +15,12 @@ const STATE_DEFERRED_CHECK_ID = "memory-core/managed-local-embedding-setup";
 const mocks = vi.hoisted(() => ({
   registerCodexManagedAppServerDoctorChecks: vi.fn(),
   inspectEmbeddingProviderSetup: vi.fn(),
+  loadBundledPluginManifestRegistry: vi.fn(
+    (): PluginManifestRegistry => ({
+      plugins: [],
+      diagnostics: [],
+    }),
+  ),
   loadPluginManifestRegistryForPluginRegistry: vi.fn(() => ({
     plugins: [],
     diagnostics: [],
@@ -21,6 +28,13 @@ const mocks = vi.hoisted(() => ({
   registerCuaDriverDoctorChecks: vi.fn(),
   registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
+  registerWorkerProviderDoctorChecks: vi.fn(),
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(
+    ({ dirName }: { dirName: string }) =>
+      dirName === "crabbox"
+        ? { registerWorkerProviderDoctorChecks: mocks.registerWorkerProviderDoctorChecks }
+        : null,
+  ),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
     dirName === "memory-core"
       ? {
@@ -44,10 +58,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
 }));
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry.js")>()),
+  loadBundledPluginManifestRegistry: mocks.loadBundledPluginManifestRegistry,
+}));
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurface: mocks.resolveProviderPolicySurface,
 }));
 vi.mock("../plugins/public-surface-loader.js", () => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync:
+    mocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
 
@@ -120,7 +140,7 @@ describe("registerBundledHealthChecks", () => {
 
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "memory-core",
-      artifactBasename: "api.js",
+      artifactBasename: "doctor-health-api.js",
     });
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalledWith(
       expect.objectContaining({ dirName: "llama-cpp" }),
@@ -156,6 +176,7 @@ describe("registerBundledHealthChecks", () => {
     });
     expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
     expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
+    expect(mocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -286,6 +307,50 @@ describe("registerBundledHealthChecks", () => {
     expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledWith({
       registerHealthCheck: expect.any(Function),
     });
+  });
+
+  it("loads configured worker-provider health through its bundled manifest owner", () => {
+    mocks.loadBundledPluginManifestRegistry.mockReturnValueOnce({
+      plugins: [
+        {
+          id: "crabbox",
+          origin: "bundled",
+          contracts: { workerProviders: ["crabbox"] },
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/bundled/crabbox",
+          source: "/bundled/crabbox/index.js",
+          manifestPath: "/bundled/crabbox/openclaw.plugin.json",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    registerBundledHealthChecks({
+      cfg: { cloudWorkers: { profiles: { aws: { provider: "crabbox" } } } },
+      cwd: workspaceDir,
+    });
+
+    expect(mocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
+      dirName: "crabbox",
+      artifactCandidates: ["doctor-health-api.js"],
+    });
+    expect(mocks.registerWorkerProviderDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+    });
+  });
+
+  it("does not load health artifacts for a configured provider without a bundled owner", () => {
+    registerBundledHealthChecks({
+      cfg: { cloudWorkers: { profiles: { development: { provider: "static-ssh" } } } },
+      cwd: workspaceDir,
+    });
+
+    expect(mocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync).not.toHaveBeenCalled();
+    expect(mocks.registerWorkerProviderDoctorChecks).not.toHaveBeenCalled();
   });
 
   it("loads managed Codex health when an effective model route selects Codex", () => {

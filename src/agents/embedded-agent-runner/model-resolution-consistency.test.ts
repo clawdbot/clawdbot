@@ -1,8 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  prepareModelRunCapabilities,
+  resolvePreparedModelThinkingCompat,
+} from "../model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../model-catalog.types.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 
 const STATIC_MODEL_ID = "claude-haiku-4-5";
 const PROVIDER = "anthropic";
+const resolveHookModelSelectionMock = vi.hoisted(() =>
+  vi.fn(async ({ provider, modelId }: { provider: string; modelId: string }) => ({
+    provider,
+    modelId,
+  })),
+);
 
 const emptyModelRegistry = {
   find: vi.fn((_provider: string, _modelId: string) => null),
@@ -20,6 +31,7 @@ const staticCatalogModel = {
   input: ["text", "image"],
   contextWindow: 200_000,
   maxTokens: 64_000,
+  compat: { supportsLongCacheRetention: false },
 };
 
 const resolveModelAsyncMock = vi.fn(
@@ -39,7 +51,10 @@ const resolveModelAsyncMock = vi.fn(
       modelRegistry: options?.modelRegistry ?? emptyModelRegistry,
     };
     if (options?.allowBundledStaticCatalogFallback) {
-      return { ...stores, model: staticCatalogModel };
+      return {
+        ...stores,
+        model: { ...staticCatalogModel, provider, id: modelId, name: modelId },
+      };
     }
     return {
       ...stores,
@@ -77,12 +92,7 @@ vi.mock("../prepared-model-runtime.js", () => ({
 vi.mock("./run/setup.js", () => ({
   buildBeforeModelResolveAttachments: vi.fn(() => []),
   createNativeModelOwnedRuntimeModel: vi.fn(),
-  resolveHookModelSelection: vi.fn(
-    async ({ provider, modelId }: { provider: string; modelId: string }) => ({
-      provider,
-      modelId,
-    }),
-  ),
+  resolveHookModelSelection: resolveHookModelSelectionMock,
   resolveNativeModelOwnedHarnessId: vi.fn(() => undefined),
 }));
 
@@ -152,7 +162,50 @@ vi.mock("./logger.js", () => ({
 const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
 
+function createPreparedModelRuntime(config: Record<string, unknown>) {
+  return {
+    agentDir: "/tmp/agents/main/agent",
+    config,
+    workspaceDir: "/tmp/openclaw-model-resolution",
+    pluginRegistry: {},
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
+  };
+}
+
 describe("embedded model resolution consistency", () => {
+  beforeEach(() => {
+    resolveHookModelSelectionMock.mockReset().mockImplementation(async ({ provider, modelId }) => ({
+      provider,
+      modelId,
+    }));
+  });
+
+  it("resolves an explicit alias configured only on the selected agent", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: { "openai/gpt-5.6-luna": { alias: "global-luna" } },
+        },
+        entries: {
+          worker: {
+            models: { "anthropic/claude-haiku-4-5": { alias: "worker-haiku" } },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveInitialEmbeddedRunModel({
+        config,
+        agentId: "worker",
+        model: "worker-haiku",
+      }),
+    ).toEqual({ provider: "anthropic", modelId: "claude-haiku-4-5" });
+  });
+
   it("resolves the same undated configured model for chat and manual compaction", async () => {
     const config = {
       agents: {
@@ -162,15 +215,7 @@ describe("embedded model resolution consistency", () => {
       },
     };
     const target = resolveInitialEmbeddedRunModel({ config });
-    const preparedModelRuntime = {
-      agentDir: "/tmp/agents/main/agent",
-      config,
-      workspaceDir: "/tmp/openclaw-model-resolution",
-      pluginRegistry: {},
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
-    };
+    const preparedModelRuntime = createPreparedModelRuntime(config);
 
     const chat = await resolveEmbeddedRunModelSetup({
       runParams: {
@@ -211,4 +256,115 @@ describe("embedded model resolution consistency", () => {
       id: STATIC_MODEL_ID,
     });
   });
+
+  it("resolves route-bound thinking compatibility for the final model", () => {
+    const capability = {
+      provider: PROVIDER,
+      modelId: STATIC_MODEL_ID,
+      agentRuntime: "openclaw",
+      route: { api: staticCatalogModel.api, baseUrl: staticCatalogModel.baseUrl },
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    } as const;
+
+    expect(
+      resolvePreparedModelThinkingCompat({
+        capability,
+        model: staticCatalogModel,
+        agentRuntime: "openclaw",
+      }),
+    ).toEqual(capability.compat);
+  });
+
+  it("keeps configured provider routes off harness-scoped thinking capability", () => {
+    const compat = { supportedReasoningEfforts: ["max", "ultra"] };
+    const preparedCatalog: ModelCatalogEntry[] = [
+      {
+        provider: PROVIDER,
+        id: STATIC_MODEL_ID,
+        name: STATIC_MODEL_ID,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.example/codex",
+        compat,
+      },
+    ];
+    const configuredCatalog: ModelCatalogEntry[] = [
+      {
+        provider: PROVIDER,
+        id: STATIC_MODEL_ID,
+        name: STATIC_MODEL_ID,
+        api: "anthropic-messages",
+        baseUrl: staticCatalogModel.baseUrl,
+      },
+    ];
+
+    expect(
+      prepareModelRunCapabilities(
+        [preparedCatalog, configuredCatalog],
+        [PROVIDER, STATIC_MODEL_ID, "codex"],
+      ).modelThinkingCapability,
+    ).toEqual({
+      provider: PROVIDER,
+      modelId: STATIC_MODEL_ID,
+      agentRuntime: "codex",
+      compat,
+    });
+  });
+
+  it("resolves harness-scoped thinking compatibility across prepared auth routes", () => {
+    const compat = { supportedReasoningEfforts: ["max", "ultra"] } as const;
+
+    expect(
+      resolvePreparedModelThinkingCompat({
+        capability: {
+          provider: PROVIDER,
+          modelId: STATIC_MODEL_ID,
+          agentRuntime: "codex",
+          compat,
+        },
+        model: {
+          ...staticCatalogModel,
+          api: "openai-responses",
+          baseUrl: "https://api.example/v1",
+        },
+        agentRuntime: "codex",
+      }),
+    ).toEqual(compat);
+  });
+
+  it.each([
+    {
+      name: "model",
+      model: { ...staticCatalogModel, id: "hook-rerouted-model" },
+      agentRuntime: "openclaw",
+    },
+    {
+      name: "physical route",
+      model: { ...staticCatalogModel, baseUrl: "https://other.example/v1" },
+      agentRuntime: "openclaw",
+    },
+    {
+      name: "agent harness",
+      model: staticCatalogModel,
+      agentRuntime: "codex",
+    },
+  ])(
+    "does not apply prepared thinking compatibility to a different $name",
+    ({ model, agentRuntime }) => {
+      const result = resolvePreparedModelThinkingCompat({
+        capability: {
+          provider: PROVIDER,
+          modelId: STATIC_MODEL_ID,
+          agentRuntime: "openclaw",
+          route: { api: staticCatalogModel.api, baseUrl: staticCatalogModel.baseUrl },
+          compat: { supportedReasoningEfforts: ["max"] },
+        },
+        model,
+        agentRuntime,
+      });
+
+      expect(result).toBeUndefined();
+    },
+  );
 });

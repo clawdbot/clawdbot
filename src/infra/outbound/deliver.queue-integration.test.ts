@@ -622,9 +622,9 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledTimes(2);
   });
 
-  it("never acknowledges a platform send that returns no message identity", async () => {
+  it("never acknowledges route-only metadata as a platform message identity", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi.fn().mockResolvedValue({});
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "", toJid: "!route-only:example" });
     const deliveryIntentId = "cron-direct-delivery:v1:no-platform-identity";
     const params = {
       cfg: {} as OpenClawConfig,

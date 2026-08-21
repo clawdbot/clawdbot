@@ -124,7 +124,7 @@ function gatewayLooksStopped(status: DaemonStatus): boolean {
 }
 
 function gatewayServiceIsInstalled(status: DaemonStatus): boolean {
-  return Boolean(status.service.command || status.service.loaded);
+  return Boolean(status.service.command || status.service.loadState.status === "loaded");
 }
 
 function nativeServiceTargetsGateway(status: DaemonStatus): boolean {

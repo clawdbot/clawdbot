@@ -140,20 +140,32 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
   return Boolean(host.chatSending || host.chatRunId);
 }
 
-export function hasAbortableSessionRun(host: {
+type SessionRunHost = {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
-}): boolean {
-  if (host.chatRunId) {
-    return true;
-  }
+};
+
+export function hasDirectSessionRun(host: SessionRunHost): boolean {
   return Boolean(
+    host.chatRunId ||
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
-        (isSessionRunActive(session) || session.hasActiveSubagentRun === true),
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
+  );
+}
+
+export function hasAbortableSessionRun(host: SessionRunHost): boolean {
+  return (
+    hasDirectSessionRun(host) ||
+    Boolean(
+      host.sessionsResult?.sessions.some(
+        (session) =>
+          areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+          session.hasActiveSubagentRun === true,
+      ),
+    )
   );
 }
 

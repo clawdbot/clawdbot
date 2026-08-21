@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DuplicateAgentDirError } from "./agent-dirs.js";
 import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
+import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 describe("restoreEnvChangesIfUnchanged", () => {
@@ -53,6 +54,21 @@ describe("restoreEnvChangesIfUnchanged", () => {
 });
 
 describe("loadConfig env restoration", () => {
+  it("returns resolution facts with a valid synchronous load", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: { auth: { mode: "token", token: "${MISSING_GATEWAY_TOKEN}" } },
+      });
+      const config = createConfigIO({
+        env: { HOME: home } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn: () => {}, error: () => {} },
+      }).loadConfig();
+
+      expect([...(getConfigResolutionFacts(config) ?? [])]).toEqual(["gateway.auth.token"]);
+    });
+  });
+
   it("restores newly set env var after INVALID_CONFIG is thrown", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

@@ -10,15 +10,21 @@ export {
 export { transformTransportMessages } from "../agents/transport-message-transform.js";
 export {
   describeToolResultMediaPlaceholder,
+  describeUnsupportedToolResultMedia,
   extractToolResultText,
+  formatToolResultText,
+  isImageWithMediaPayload,
 } from "@openclaw/ai/internal/shared";
 export {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
+  finalizeTerminalToolCallArguments,
   finalizeTransportStream,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   mergeTransportHeaders,
+  parseTerminalToolCallArguments,
   sanitizeTransportPayloadText,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

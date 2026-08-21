@@ -4,6 +4,8 @@ import { hasOperatorAdminAccess } from "./operator-access.ts";
 
 const SCOPE_UPGRADE_BANNER_DISMISSED_KEY = "openclaw.control.scopeUpgradeBannerDismissed.v1";
 
+export const SCOPE_UPGRADE_DETAILS_EVENT = "openclaw:scope-upgrade-details";
+
 export function hasDismissedScopeUpgradeBanner(): boolean {
   try {
     return globalThis.localStorage?.getItem(SCOPE_UPGRADE_BANNER_DISMISSED_KEY) === "1";

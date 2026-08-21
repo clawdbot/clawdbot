@@ -97,9 +97,15 @@ describe("staged worker placement result recovery", () => {
   it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
     const workspacePath = path.join(root, "same-worker-staged-result");
     const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
+    const prepareAcceptedWorkspacePublication = vi.fn(async () => {
+      throw new Error("publication snapshot rejected");
+    });
+    const publishAcceptedWorkspace = vi.fn(async () => undefined);
     const harness = createHarness(placementStore, {
       workspacePath,
       priorWorkspaceResultConflict: { paths: ["old.txt"], stagedResultRef: priorConflictRef },
+      prepareAcceptedWorkspacePublication,
+      publishAcceptedWorkspace,
     });
     const active = harness.placements.seedActive(2);
     harness.markEnvironmentOwnerEpoch(2);
@@ -146,6 +152,8 @@ describe("staged worker placement result recovery", () => {
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+    expect(prepareAcceptedWorkspacePublication).toHaveBeenCalledWith(claim);
+    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
     expect(
       (
         await runCommandWithTimeout(
@@ -168,6 +176,58 @@ describe("staged worker placement result recovery", () => {
         )
       ).code,
     ).not.toBe(0);
+  });
+
+  it("publishes an accepted result after cleanup removed its staged ref", async () => {
+    const workspacePath = path.join(root, "accepted-result-missing-ref");
+    const originalHarness = createHarness(placementStore, { workspacePath });
+    const active = originalHarness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "accepted-result-missing-ref-claim",
+      runId: "accepted-result-missing-ref-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const staged = await stagePendingResult({
+      store: placementStore,
+      claim,
+      workspacePath,
+      base: "base\n",
+      current: "worker\n",
+    });
+    placementStore.acceptWorkspaceResult(claim);
+    placementStore.handoffWorkspaceResultRecovery(claim);
+    expect(
+      (
+        await runCommandWithTimeout(
+          ["git", "-C", workspacePath, "update-ref", "-d", staged.stagedResultRef],
+          { timeoutMs: 10_000 },
+        )
+      ).code,
+    ).toBe(0);
+    const publishAcceptedWorkspace = vi.fn(async () => undefined);
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restartedHarness = createHarness(restartedStore, {
+      workspacePath,
+      publishAcceptedWorkspace,
+    });
+    restartedHarness.markEnvironmentDestroyed();
+
+    await restartedHarness.service.reconcile();
+
+    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
+    expect(restartedHarness.placements.current()).toMatchObject({
+      state: "reclaimed",
+      turnClaim: null,
+    });
+    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
   });
 
   it("does not destroy the worker while a nested session operation is running", async () => {

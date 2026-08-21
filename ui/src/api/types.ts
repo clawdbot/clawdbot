@@ -440,6 +440,7 @@ export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
   placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
   icon?: string;
+  channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   surface?: string;
@@ -554,6 +555,8 @@ export type {
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;
 export type CronJobsEnabledFilter = NonNullable<CronListParams["enabled"]>;
+export type CronJobsScheduleKindFilter = NonNullable<CronListParams["scheduleKind"]>;
+export type CronJobsTriggerFilter = NonNullable<CronListParams["trigger"]>;
 export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
 export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
 export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];
@@ -563,6 +566,7 @@ export type CronPayload = ProtocolCronJob["payload"];
 
 export type CronStatus = {
   enabled: boolean;
+  triggersEnabled: boolean;
   jobs: number;
   nextWakeAtMs?: number | null;
 };
@@ -701,6 +705,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  tags?: string[];
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
@@ -719,6 +724,12 @@ export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
 export type ToolsCatalogResult =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
+export type ToolsGitHubStatusResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubStatusResult;
+export type ToolsGitHubAuthorizeStartResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizeStartResult;
+export type ToolsGitHubAuthorizePollResult =
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizePollResult;
 export type ToolsEffectiveEntry =
   import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
 export type ToolsEffectiveResult =

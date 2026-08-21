@@ -103,6 +103,7 @@ export type TaskRegistrySummary = {
   failures: number;
   byStatus: TaskStatusCounts;
   byRuntime: TaskRuntimeCounts;
+  warning?: string;
 };
 
 export type TaskEventKind = TaskStatus | "progress";

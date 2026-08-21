@@ -2,11 +2,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { resolveStaticSessionMcpServerNames } from "../../../agents/agent-bundle-mcp-runtime-config.js";
-import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../../../agents/agent-scope.js";
 import { resolveCodexMcpToolOverridesForAgent } from "../../../agents/cli-runner/bundle-mcp-codex.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { tryResolveCronDefaultAgentId } from "../../../cron/agent-id.js";
 import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
@@ -27,6 +29,7 @@ import {
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
 } from "./repair-plan.js";
+import { rethrowSqliteSchemaVersionError } from "./schema-safety.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
 import { noteCronDeliveryTargetAdvisory, noteCronModelOverrides } from "./warnings.js";
 
@@ -156,6 +159,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
@@ -200,6 +204,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
       );
     }
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     findings.push(
       legacyCronStoreFinding({
         message: `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
@@ -253,6 +258,26 @@ export async function collectLegacyCronStoreHealthFindings(params: {
         message: line.replace(/^- /u, ""),
         path: sqliteStorePath,
         requirement: "legacy-cron-store-shape",
+      }),
+    );
+  }
+  for (const job of normalized.legacyTriggerScriptJobs) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Legacy cron trigger script for ${job} can be migrated to canonical direct tool calls.`,
+        path: sqliteStorePath,
+        requirement: "legacy-cron-trigger-script",
+      }),
+    );
+  }
+  for (const job of normalized.unsupportedLegacyTriggerScriptJobs) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Legacy cron trigger script for ${job} cannot be safely migrated automatically.`,
+        path: sqliteStorePath,
+        requirement: "unsupported-legacy-cron-trigger-script",
+        fixHint:
+          "Inspect the automation and update its trigger script manually to use direct tool calls.",
       }),
     );
   }
@@ -334,6 +359,7 @@ export async function maybeRepairLegacyCronStore(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     const reason = err instanceof Error ? err.message : String(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
@@ -373,6 +399,7 @@ export async function maybeRepairLegacyCronStore(params: {
       );
     }
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     const reason = err instanceof Error ? err.message : String(err);
     note(
       [
@@ -467,6 +494,16 @@ export async function maybeRepairLegacyCronStore(params: {
   }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
+  if (normalized.unsupportedLegacyTriggerScriptJobs.length > 0) {
+    note(
+      [
+        "Legacy cron trigger scripts cannot be safely migrated automatically:",
+        ...normalized.unsupportedLegacyTriggerScriptJobs.map((job) => `- ${job}`),
+        "Inspect each automation and update its trigger script manually to use direct tool calls.",
+      ].join("\n"),
+      "Cron",
+    );
+  }
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
@@ -507,7 +544,7 @@ export async function maybeRepairLegacyCronStore(params: {
         const agentId =
           typeof job.agentId === "string" && job.agentId.trim()
             ? job.agentId.trim()
-            : tryResolveCronDefaultAgentId(params.cfg);
+            : tryResolveAmbientOwnerAgentId(params.cfg);
         if (!agentId) {
           return false;
         }
@@ -540,6 +577,11 @@ export async function maybeRepairLegacyCronStore(params: {
     note(incompleteInheritedAuthorityAdvisory, "Cron");
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
+  if (normalized.legacyTriggerScriptJobs.length > 0) {
+    previewLines.push(
+      `- ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} will be migrated to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}`,
+    );
+  }
   if (legacyStoreDetected) {
     previewLines.unshift(
       legacyImportCount > 0

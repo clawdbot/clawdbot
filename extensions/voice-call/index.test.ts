@@ -187,10 +187,6 @@ function firstRuntimeConfig(): VoiceCallRuntime["config"] | undefined {
   return options?.config;
 }
 
-function expectWarningIncludes(text: string): void {
-  expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
-}
-
 function expectRedactedVoiceCallStatus(value: unknown): void {
   expect(value).toEqual({
     callId: "call-1",
@@ -247,7 +243,13 @@ describe("voice-call plugin", () => {
     noopLogger.debug.mockClear();
     runtimeStub = createRuntimeStub();
     callGatewayFromCliMock.mockReset();
-    callGatewayFromCliMock.mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:18789"));
+    callGatewayFromCliMock.mockRejectedValue(
+      Object.assign(new Error("gateway transport failed"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+        connectionDetails: { url: "ws://127.0.0.1:18789" },
+      }),
+    );
     vi.mocked(createVoiceCallRuntime).mockReset();
     vi.mocked(createVoiceCallRuntime).mockImplementation(async () => runtimeStub);
   });
@@ -337,22 +339,26 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("does not log a startup error when provider setup is incomplete", async () => {
+  it("reports degraded service health when provider setup is incomplete", async () => {
     vi.stubEnv("TWILIO_ACCOUNT_SID", "");
     vi.stubEnv("TWILIO_AUTH_TOKEN", "");
     vi.stubEnv("TWILIO_FROM_NUMBER", "");
     const { service } = setup({ provider: "twilio" });
+    const reportFailure = vi.fn();
 
-    await service?.start(createServiceContext());
+    await service?.start({
+      ...createServiceContext(),
+      serviceHealth: { reportFailure, clearFailure: vi.fn() },
+    });
 
     expect(createVoiceCallRuntime).not.toHaveBeenCalled();
-    expect(
-      noopLogger.error.mock.calls.some(([message]) =>
-        String(message).includes("Failed to start runtime"),
-      ),
-    ).toBe(false);
-    expectWarningIncludes("Runtime not started; setup incomplete");
-    expectWarningIncludes("TWILIO_ACCOUNT_SID");
+    expect(noopLogger.error.mock.calls.flat().join("\n")).toContain(
+      "Runtime not started: setup incomplete",
+    );
+    expect(noopLogger.error.mock.calls.flat().join("\n")).toContain("TWILIO_ACCOUNT_SID");
+    expect(reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("TWILIO_ACCOUNT_SID") }),
+    );
   });
 
   it("registers Twilio configs with SecretRef auth tokens", async () => {

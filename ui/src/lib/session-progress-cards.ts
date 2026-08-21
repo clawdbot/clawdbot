@@ -1,13 +1,16 @@
 import type {
   ProgressCard,
   ProgressCardGetResult,
+  ProgressCardPutResult,
   ProgressCardStep,
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 
 const PROGRESS_CARD_GET_METHOD = "progressCard.get";
+const PROGRESS_CARD_PUT_METHOD = "progressCard.put";
 const PROGRESS_CARD_CHANGED_EVENT = "progressCard.changed";
 const CACHE_LIMIT = 100;
 
@@ -16,11 +19,15 @@ type CachedProgressCard = {
   revision: number | null;
 };
 
+type SessionProgressCardLoadError = "access-denied" | "unavailable";
+
 export type SessionProgressCardStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
   unwatch: (owner: object) => void;
   load: (sessionKey: string) => Promise<ProgressCard | null>;
+  dismiss: (card: ProgressCard) => Promise<boolean>;
   get: (sessionKey: string) => ProgressCard | null | undefined;
+  getError: (sessionKey: string) => SessionProgressCardLoadError | undefined;
   subscribe: (listener: () => void) => () => void;
 };
 
@@ -87,6 +94,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
 function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
   const watchedByOwner = new Map<object, Set<string>>();
   const cache = new Map<string, CachedProgressCard>();
+  const errors = new Map<string, SessionProgressCardLoadError>();
   const loads = new Map<string, Promise<ProgressCard | null>>();
   const loadGenerations = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -140,6 +148,9 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     if (!client) {
       return null;
     }
+    if (errors.delete(sessionKey)) {
+      notify();
+    }
     const generation = loadGenerations.get(sessionKey) ?? 0;
     const clientAtRequest = client;
     const request = client
@@ -155,6 +166,20 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         remember(sessionKey, { card, revision: card?.revision ?? null });
         notify();
         return card;
+      })
+      .catch((error: unknown) => {
+        if (
+          (loadGenerations.get(sessionKey) ?? 0) === generation &&
+          gateway.snapshot.client === clientAtRequest
+        ) {
+          const accessDenied =
+            error instanceof GatewayRequestError &&
+            isRecord(error.details) &&
+            error.details.code === "SESSION_PARTICIPATION_REQUIRED";
+          errors.set(sessionKey, accessDenied ? "access-denied" : "unavailable");
+          notify();
+        }
+        throw error;
       })
       .finally(() => {
         if (loads.get(sessionKey) === request) {
@@ -185,6 +210,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         loadGenerations.set(sessionKey, (loadGenerations.get(sessionKey) ?? 0) + 1);
       }
       cache.clear();
+      errors.clear();
       loads.clear();
       notify();
     }
@@ -208,12 +234,14 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     }
     if (revision === null) {
       loadGenerations.set(sessionKey, (loadGenerations.get(sessionKey) ?? 0) + 1);
+      errors.delete(sessionKey);
       remember(sessionKey, { card: null, revision: null });
       notify();
       return;
     }
     loadGenerations.set(sessionKey, (loadGenerations.get(sessionKey) ?? 0) + 1);
     cache.delete(sessionKey);
+    errors.delete(sessionKey);
     if (watchedKeys().has(sessionKey)) {
       const active = loads.get(sessionKey);
       if (active) {
@@ -264,7 +292,27 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     watch,
     unwatch: (owner) => watch(owner, []),
     load,
+    dismiss: async (card) => {
+      const client = gateway.snapshot.client;
+      if (!client) {
+        return false;
+      }
+      const result = await client.request<ProgressCardPutResult>(PROGRESS_CARD_PUT_METHOD, {
+        sessionKey: card.sessionKey,
+        expectedRevision: card.revision,
+      });
+      const dismissed = result.card === null;
+      if (dismissed && cache.get(card.sessionKey)?.revision === card.revision) {
+        remember(card.sessionKey, { card: null, revision: null });
+        notify();
+      } else if (result.card) {
+        remember(card.sessionKey, { card: result.card, revision: result.card.revision });
+        notify();
+      }
+      return dismissed;
+    },
     get: (sessionKey) => cache.get(sessionKey)?.card,
+    getError: (sessionKey) => errors.get(sessionKey),
     subscribe: (listener) => {
       listeners.add(listener);
       attach();

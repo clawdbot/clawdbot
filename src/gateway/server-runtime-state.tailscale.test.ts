@@ -145,7 +145,7 @@ describe("managed Tailscale gateway ingress", () => {
     expect(managed.status).toBe(200);
   });
 
-  it("requires the Funnel marker on the dedicated Funnel listener", async () => {
+  it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
       getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
@@ -174,9 +174,49 @@ describe("managed Tailscale gateway ingress", () => {
       path: "/ready",
       headers: { ...baseHeaders, "tailscale-funnel-request": "?1" },
     });
+    const malformedMarker = await requestStatus({
+      host: endpoint.host,
+      port: endpoint.port,
+      path: "/ready",
+      headers: { ...baseHeaders, "tailscale-funnel-request": "true" },
+    });
 
-    expect(missingMarker.status).toBe(403);
+    expect(missingMarker.status).toBe(200);
     expect(marked.status).toBe(200);
+    expect(malformedMarker.status).toBe(403);
+  });
+
+  it("rejects external Funnel ingress when gateway auth is disabled", async () => {
+    const auth = { mode: "none" as const, allowTailscale: false };
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
+      openAiChatCompletionsEnabled: true,
+      resolvedAuth: auth,
+      getResolvedAuth: () => auth,
+    });
+    openServers.push(runtime);
+    await runtime.startListening();
+    const address = runtime.httpServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected ordinary gateway listener");
+    }
+
+    await expect(
+      requestStatus({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/v1/models",
+        headers: {
+          "x-forwarded-for": "203.0.113.10",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "gateway.example",
+          "tailscale-funnel-request": "?1",
+        },
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      requestStatus({ host: "127.0.0.1", port: address.port, path: "/v1/models" }),
+    ).resolves.toMatchObject({ status: 200 });
   });
 
   it("isolates protected Funnel auth lockout by the validated source", async () => {

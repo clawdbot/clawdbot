@@ -493,6 +493,7 @@ async function resolveModelOverride(params: {
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: currentProvider,
   });
   const catalog = await loadPreparedModelCatalog({
@@ -536,6 +537,7 @@ async function resolveModelOverride(params: {
 
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
+    agentId: params.agentId,
     raw,
     defaultProvider: currentProvider,
     aliasIndex,

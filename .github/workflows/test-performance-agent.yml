@@ -110,6 +110,7 @@ jobs:
         if: steps.gate.outputs.run_agent == 'true'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Ensure test performance agent key exists

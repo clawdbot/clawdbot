@@ -11,8 +11,8 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
-  listAgentIds,
   resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId,
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
@@ -33,6 +33,7 @@ import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
@@ -77,14 +78,17 @@ type HooksReportTarget = {
 
 function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
   const requested = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
   const requestedAgentId = requested ? normalizeAgentId(requested) : undefined;
-  if (requestedAgentId && !listAgentIds(config).includes(requestedAgentId)) {
-    throw new Error(
-      `Unknown agent id "${requested}". Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
-    );
+  if (requestedAgentId) {
+    resolveConfiguredAgentId(config, requestedAgentId);
   }
   const agentId =
     requestedAgentId ??
+    // Status reporting narrows to one workspace, so it keeps demanding an explicit
+    // choice rather than adopting the system agent and hiding the other agents' hooks.
     tryResolveLegacyCompatibilityAgentId(config) ??
     resolveDefaultAgentId(config, {
       surface: "hooks status reporting",
@@ -261,6 +265,7 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 }
 
 function exitHooksCliWithError(err: unknown): never {
+  rethrowExpectedCliError(err);
   defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
   defaultRuntime.exit(1);
   throw new Error("unreachable");
@@ -615,6 +620,9 @@ export function registerHooksCli(program: Command): void {
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
     const parentAgent = hooks.opts<{ agent?: string }>().agent;
+    if (parentAgent !== undefined && !parentAgent.trim()) {
+      throw new Error("--agent must not be blank");
+    }
     if (
       parentAgent &&
       actionCommand !== hooks &&

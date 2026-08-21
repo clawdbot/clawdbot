@@ -7,7 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/plugin-bundled-view-recovery");
-const bundledChunk = /\/assets\/[^/]+\.js(?:\?.*)?$/;
+const bundledChunk = /\/assets\/logbook-view-[^/]+\.js(?:\?.*)?$/;
 
 const suite = createControlUiE2eSuite({
   name: "Control UI bundled plugin lazy-view recovery",

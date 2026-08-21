@@ -74,7 +74,7 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
+  const events = await loadTranscriptEvents(scope);
   if (events.length === 0) {
     return { compacted: false, reason: "no transcript" };
   }

@@ -243,7 +243,7 @@ type EmbeddedAgentParams = {
   isFinalFallbackAttempt?: boolean;
   onAgentEvent?: (evt: {
     stream: string;
-    data: { isError?: boolean; name?: string; phase?: string };
+    data: { completed?: boolean; isError?: boolean; name?: string; phase?: string };
   }) => void;
 };
 
@@ -262,6 +262,7 @@ type CompactEmbeddedAgentSessionParams = {
   modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
+  sessionEntry?: SessionEntry;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -305,6 +306,43 @@ function requireCompactEmbeddedAgentSessionCall(index = 0) {
 
 describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
+
+  async function runProjectedCompaction(completed: boolean, followupRun = createTestFollowupRun()) {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onAgentEvent?.({ stream: "compaction", data: { phase: "end", completed } });
+      return {
+        payloads: [],
+        meta: { agentMeta: { sessionId: "session-rotated" } },
+      };
+    });
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+    return { followupRun, result, sessionKey, storePath };
+  }
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-unit-"));
@@ -433,57 +471,11 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("runs exactly one auto-reply memory flush turn, rotates, and persists metadata", async () => {
-    const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
-
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (params: {
-        onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
-      }) => {
-        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
-        return {
-          payloads: [],
-          meta: { agentMeta: { sessionId: "session-rotated" } },
-        };
-      },
-    );
-
     const followupRun = createTestFollowupRun({
       authProfileId: "anthropic:work",
       authProfileIdSource: "user",
     });
-    const result = await runMemoryFlushIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              memoryFlush: {},
-            },
-          },
-        },
-      },
-      followupRun,
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
-      defaultModel: "anthropic/claude-opus-4-6",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+    const { result, sessionKey, storePath } = await runProjectedCompaction(true, followupRun);
 
     expect(result.outcome).toBe("completed");
     expect(result.sessionEntry?.sessionId).toBe("session-rotated");
@@ -535,17 +527,17 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
   });
 
-  it("records the least-trusted provenance across a multi-write flush", async () => {
-    const recordWriteProvenance = vi.fn(async () => {});
-    registerMemoryFlushPlanResolverForTest(() => ({
-      softThresholdTokens: 4_000,
-      forceFlushTranscriptBytes: 1_000_000_000,
-      reserveTokensFloor: 20_000,
-      prompt: "Pre-compaction memory flush.\nNO_REPLY",
-      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
-      relativePath: "memory/2023-11-14.md",
-      recordWriteProvenance,
-    }));
+  it("does not rotate or increment for an incomplete projected compaction end", async () => {
+    const { followupRun, result, storePath } = await runProjectedCompaction(false);
+
+    expect(result.sessionEntry?.sessionId).toBe("session");
+    expect(followupRun.run.sessionId).toBe("session");
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+    expect(loadMainSessionEntry(storePath).compactionCount).toBe(1);
+  });
+
+  it("inherits requester taint across a multi-write flush", async () => {
     const targetPath = path.join(rootDir, "memory", "2023-11-14.md");
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, "trusted existing line\n", "utf8");
@@ -585,27 +577,12 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(recordWriteProvenance).toHaveBeenCalledOnce();
-    expect(recordWriteProvenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contentBefore: "trusted existing line\n",
-        contentAfter: "trusted existing line\nfirst untrusted line\nsecond untrusted line\n",
-        originClass: "untrusted",
-      }),
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ initialTurnTainted: true }),
     );
   });
 
   it("downgrades an owner-directed flush after a network-tainted embedded turn", async () => {
-    const recordWriteProvenance = vi.fn(async () => {});
-    registerMemoryFlushPlanResolverForTest(() => ({
-      softThresholdTokens: 4_000,
-      forceFlushTranscriptBytes: 1_000_000_000,
-      reserveTokensFloor: 20_000,
-      prompt: "Pre-compaction memory flush.\nNO_REPLY",
-      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
-      relativePath: "memory/2023-11-14.md",
-      recordWriteProvenance,
-    }));
     const storePath = path.join(rootDir, "tainted-owner-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
@@ -677,8 +654,8 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(recordWriteProvenance).toHaveBeenCalledWith(
-      expect.objectContaining({ originClass: "untrusted" }),
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({ initialTurnTainted: true }),
     );
   });
 
@@ -853,9 +830,15 @@ describe("runMemoryFlushIfNeeded", () => {
     const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
     runEmbeddedAgentMock.mockImplementationOnce(
       async (params: {
-        onAgentEvent?: (event: { stream: string; data: { phase: string } }) => void;
+        onAgentEvent?: (event: {
+          stream: string;
+          data: { phase: string; completed?: boolean };
+        }) => void;
       }) => {
-        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
         return {
           payloads: [
             { text: "normal silent maintenance reply" },
@@ -1128,18 +1111,6 @@ describe("runMemoryFlushIfNeeded", () => {
       afterRegistration: false,
       setup: (error: Error) => {
         ensureMemoryFlushTargetFileMock.mockRejectedValueOnce(error);
-      },
-    },
-    {
-      stage: "provenance baseline read",
-      afterRegistration: false,
-      setup: (error: Error) => {
-        registerMemoryFlushPlanResolverForTest(() => ({
-          ...createMemoryFlushPlan(),
-          recordWriteProvenance: vi.fn(async () => undefined),
-        }));
-        const spy = vi.spyOn(fsCore.promises, "readFile").mockRejectedValueOnce(error);
-        return () => spy.mockRestore();
       },
     },
     {
@@ -1882,7 +1853,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("passes runtime policy session key to preflight compaction sandbox resolution", async () => {
+  it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -1903,6 +1874,8 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokens: 120,
       totalTokensFresh: true,
       totalTokensVersion: 1,
+      permissionMode: "full",
+      sessionRoot: "/tmp/workspace",
     };
 
     await runPreflightCompactionIfNeeded({
@@ -1930,6 +1903,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionKey).toBe("agent:main:main");
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
+    expect(compactCall.sessionEntry).toBe(sessionEntry);
   });
 
   it.each([

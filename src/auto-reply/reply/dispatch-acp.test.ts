@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AcpElicitationHandler } from "@openclaw/acp-core/runtime/types";
 import { detectMime } from "@openclaw/media-core/mime";
 // Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -598,6 +599,34 @@ describe("tryDispatchAcpReplyCore", () => {
       clearSink();
       clearCollection();
     }
+  });
+
+  it("passes one turn-scoped elicitation handler and fences it after admission closes", async () => {
+    setReadyAcpResolution();
+    let onElicitation: AcpElicitationHandler | undefined;
+    managerMocks.runTurn.mockImplementationOnce(async (input: unknown) => {
+      const turn = input as {
+        onElicitation?: typeof onElicitation;
+        onEvent?: (event: unknown) => Promise<void>;
+      };
+      onElicitation = turn.onElicitation;
+      await turn.onEvent?.({ type: "done" });
+    });
+
+    await runDispatch({ bodyForAgent: "ask me" });
+
+    expect(onElicitation).toBeTypeOf("function");
+    const response = await onElicitation!(
+      {
+        mode: "url",
+        sessionId: "acp-session",
+        message: "Continue",
+        elicitationId: "url-1",
+        url: "https://example.com",
+      },
+      { requestId: "rpc-1", signal: new AbortController().signal },
+    );
+    expect(response.action).toBe("cancel");
   });
 
   it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {

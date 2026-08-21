@@ -1196,6 +1196,114 @@ describe("release CI summary child correlation", () => {
     });
   });
 
+  it("accepts canonical SHA-pinned v3 evidence exactly bound to a protected tooling tag", () => {
+    const workflowSha = "7".repeat(40);
+    const workflowRef = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+    const trustedWorkflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      targetSha: "8".repeat(40),
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowRef,
+      workflowSha,
+    });
+    fixture.manifest.targetRef = fixture.targetSha;
+
+    expect(
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          trustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+          trustedWorkflowRef,
+          trustedWorkflowSha: workflowSha,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toMatchObject({
+      producerOnTrustedMainLineage: false,
+      trustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+      trustedWorkflowRef,
+      root: {
+        workflowRef,
+        workflowRefProof: "manifest-v3-protected-tag-exact-sha",
+        workflowSha,
+      },
+    });
+  });
+
+  it("rejects protected-tag evidence from a same-name branch or older ancestor", () => {
+    const trustedWorkflowSha = "7".repeat(40);
+    const trustedWorkflowRef = `release-publish/${trustedWorkflowSha.slice(0, 12)}-123`;
+    const validFixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowSha: trustedWorkflowSha,
+    });
+
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: validFixture.runId,
+          trustedWorkflowFullRef: `refs/heads/${trustedWorkflowRef}`,
+          trustedWorkflowRef,
+          trustedWorkflowSha,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        validFixture.client,
+      ),
+    ).toThrow("must be a protected tag");
+
+    const olderWorkflowSha = "6".repeat(40);
+    const olderWorkflowRef = `release-ci/${olderWorkflowSha.slice(0, 12)}-1783705000000`;
+    const olderFixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      targetSha: "8".repeat(40),
+      workflowFullRef: `refs/heads/${olderWorkflowRef}`,
+      workflowRef: olderWorkflowRef,
+      workflowSha: olderWorkflowSha,
+    });
+    olderFixture.manifest.targetRef = olderFixture.targetSha;
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: olderFixture.runId,
+          trustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+          trustedWorkflowRef,
+          trustedWorkflowSha,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        olderFixture.client,
+      ),
+    ).toThrow("does not match trusted tooling");
+
+    const sameNameFixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowFullRef: `refs/heads/${trustedWorkflowRef}`,
+      workflowRef: trustedWorkflowRef,
+      workflowSha: trustedWorkflowSha,
+    });
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: sameNameFixture.runId,
+          trustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+          trustedWorkflowRef,
+          trustedWorkflowSha,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        sameNameFixture.client,
+      ),
+    ).toThrow("canonical release-ci branch");
+  });
+
   it.each(["main", "refs/heads/main"])(
     "accepts a REST workflow path qualified with %s",
     (qualifiedRef) => {
@@ -1595,6 +1703,23 @@ describe("release CI summary child correlation", () => {
     expect(manifest.rerunGroup).toBe("all");
   });
 
+  it.each([
+    [2, "release-checks"],
+    [2, "qa"],
+    [3, "release-checks"],
+    [3, "qa"],
+  ] as const)("keeps historical v%s %s manifests readable", (version, rerunGroup) => {
+    const workflowSha = version === 3 ? "b".repeat(40) : undefined;
+    const manifest = validateParentManifest(rawManifest({ rerunGroup, version, workflowSha }), {
+      runAttempt: 2,
+      runId: "29090000000",
+      workflowSha,
+    });
+
+    expect(manifest.rerunGroup).toBe(rerunGroup);
+    expect(manifest.version).toBe(version);
+  });
+
   it("binds v3 manifests to their immutable producer workflow SHA", () => {
     const workflowSha = "b".repeat(40);
     const manifest = validateParentManifest(rawManifest({ version: 3, workflowSha }), {
@@ -1677,6 +1802,12 @@ describe("release CI summary child correlation", () => {
   });
 
   it("requires the child mapped by rerunGroup and scans only selected in-progress workflows", () => {
+    expect(() => requiredChildKeysForRerunGroup("release-checks")).toThrow(
+      "release validation manifest rerun group is invalid: release-checks",
+    );
+    expect(() => requiredChildKeysForRerunGroup("qa")).toThrow(
+      "release validation manifest rerun group is invalid: qa",
+    );
     const focused = validateParentManifest(
       {
         ...rawManifest({ rerunGroup: "npm-telegram" }),

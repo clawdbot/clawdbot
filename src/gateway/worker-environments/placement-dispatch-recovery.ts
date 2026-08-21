@@ -5,19 +5,12 @@ import {
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchPlacement,
   type WorkerFailedDispatchPlacement,
-  type WorkerStartingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import {
   recoverPendingWorkspaceResults,
   type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
 import type { WorkerEnvironmentService } from "./service.js";
-
-function isStartingPlacement(
-  placement: WorkerDispatchPlacement,
-): placement is WorkerStartingDispatchPlacement {
-  return placement.state === "starting";
-}
 
 function isFailedPlacement(
   placement: WorkerDispatchPlacement,
@@ -128,78 +121,6 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
   };
 
-  const resumeStarting = async (placement: WorkerStartingDispatchPlacement): Promise<void> => {
-    const environment = placement.environmentId
-      ? environments.get(placement.environmentId)
-      : undefined;
-    const expectedBundle = placement.workerBundleHash;
-    const hasSyncedWorkspace = Boolean(
-      placement.workspaceBaseManifestRef && placement.remoteWorkspaceDir,
-    );
-    const canResume =
-      environment &&
-      expectedBundle &&
-      environment.bootstrapReceipt?.bundleHash === expectedBundle &&
-      supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) &&
-      hasSyncedWorkspace;
-    if (!canResume) {
-      const error = new Error("Interrupted worker dispatch cannot safely resume");
-      await failure.teardownEnvironment({
-        placement,
-        environmentId: placement.environmentId,
-        ownerEpoch: environment?.ownerEpoch ?? null,
-        primaryError: error,
-      });
-      return;
-    }
-    try {
-      const ownerEpoch =
-        environment.state === "attached" &&
-        environment.attachedSessionIds.length === 1 &&
-        environment.attachedSessionIds[0] === placement.sessionId
-          ? environment.ownerEpoch
-          : environment.state === "ready" || environment.state === "idle"
-            ? (
-                await environments.attachSession({
-                  environmentId: environment.environmentId,
-                  ownerEpoch: environment.ownerEpoch,
-                  sessionId: placement.sessionId,
-                })
-              ).ownerEpoch
-            : undefined;
-      if (ownerEpoch === undefined) {
-        throw new Error(`Worker environment cannot resume dispatch from ${environment.state}`);
-      }
-      await environments.startTunnel({ environmentId: environment.environmentId, ownerEpoch });
-      await deps.runActivationBarrier({
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        executionMode: placement.executionMode,
-        activate: () => {
-          const activated = placements.transition({
-            sessionId: placement.sessionId,
-            from: "starting",
-            to: "active",
-            expectedGeneration: placement.generation,
-            patch: { activeOwnerEpoch: ownerEpoch },
-          });
-          if (activated.state !== "active") {
-            throw new Error("Worker dispatch activation did not produce an active placement");
-          }
-          return activated;
-        },
-      });
-    } catch (error) {
-      await failure.teardownEnvironment({
-        placement,
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        primaryError: error,
-      });
-    }
-  };
-
   const reconcile = async (): Promise<void> => {
     await environments.reconcileOnce();
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
@@ -216,16 +137,42 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       if (placement.state === "local" || placement.state === "reclaimed") {
         continue;
       }
+      if (placement.state === "provisioning") {
+        const environment = placement.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        const exactEnvironment =
+          environment?.environmentId === placement.environmentId ? environment : undefined;
+        if (
+          exactEnvironment &&
+          exactEnvironment.destroyRequestedAtMs === null &&
+          (exactEnvironment.state === "requested" ||
+            exactEnvironment.state === "provisioning" ||
+            exactEnvironment.state === "bootstrapping" ||
+            ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
+              supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
+        ) {
+          // Transient provider or node-enrollment failure retains its exact durable operation.
+          continue;
+        }
+        await failure.teardownEnvironment({
+          placement,
+          environmentId: exactEnvironment?.environmentId ?? null,
+          ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
+          primaryError: new Error(
+            exactEnvironment
+              ? `Provisioning worker environment cannot be recovered from ${exactEnvironment.state}`
+              : "Provisioning worker environment record is missing",
+          ),
+        });
+        continue;
+      }
       if (placement.state === "active") {
         await adoptActive(placement);
         continue;
       }
       if (isFailedPlacement(placement)) {
         await failure.retryFailedTeardown(placement);
-        continue;
-      }
-      if (isStartingPlacement(placement)) {
-        await resumeStarting(placement);
         continue;
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);

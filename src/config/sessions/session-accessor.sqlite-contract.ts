@@ -80,6 +80,8 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
 
 export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous authority check run inside the append transaction. */
+  beforeCommitInTransaction?: () => void;
 };
 
 export type TranscriptEventAppendError =

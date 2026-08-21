@@ -102,11 +102,7 @@ extension OpenClawChatViewModel {
             self.updateActiveSessionRunIDs([])
             return
         }
-        if let activeRunIDs = session.activeRunIds {
-            self.updateActiveSessionRunIDs(activeRunIDs)
-        } else if session.hasActiveRun == false {
-            self.updateActiveSessionRunIDs([])
-        }
+        self.updateActiveSessionRunIDs(session.activeRunIds ?? [])
     }
 
     func ownsLiveTelemetryRun(_ runID: String) -> Bool {

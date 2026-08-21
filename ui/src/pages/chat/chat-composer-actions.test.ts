@@ -165,7 +165,7 @@ describe("renderChatComposer controls", () => {
       onQueueSteer,
       queue: [
         { id: "queued-1", text: "tighten the plan", createdAt: 1 },
-        { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
+        { id: "pending-1", text: "already sent", createdAt: 2, pendingRunId: "run-1" },
         { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
         {
           id: "waiting-idle-1",
@@ -175,7 +175,7 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
+    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
     expect(steer).toHaveLength(2);
     steer[0]?.click();
     steer[1]?.click();
@@ -294,10 +294,10 @@ describe("renderChatComposer controls", () => {
         textarea.value = liveDraft;
       }
 
-      pressComposerEnter(container, modifiers);
+      const action = pressComposerEnter(container, modifiers);
 
       expect(onSend).toHaveBeenCalledOnce();
-      expect(onSend).toHaveBeenCalledWith("steer");
+      expect(onSend).toHaveBeenCalledWith("steer", action);
     },
   );
 
@@ -319,9 +319,27 @@ describe("renderChatComposer controls", () => {
         sendShortcut,
       });
 
-      pressComposerEnter(container, { altKey, ctrlKey: true });
+      const action = pressComposerEnter(container, { altKey, ctrlKey: true });
 
-      expect(onSend.mock.calls).toEqual([[]]);
+      expect(onSend.mock.calls).toEqual([[undefined, action]]);
+    },
+  );
+
+  it.each(["keyboard", "pointer"] as const)(
+    "passes the original %s submission event through the composer",
+    (kind) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({ draft: "Repeat this message", onSend });
+      const action =
+        kind === "keyboard"
+          ? pressComposerEnter(container)
+          : new MouseEvent("click", { bubbles: true, cancelable: true });
+
+      if (kind === "pointer") {
+        primaryButton(container).dispatchEvent(action);
+      }
+
+      expect(onSend).toHaveBeenCalledWith(undefined, action);
     },
   );
 

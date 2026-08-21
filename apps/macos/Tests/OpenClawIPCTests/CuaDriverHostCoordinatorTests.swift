@@ -58,6 +58,43 @@ struct CuaDriverHostCoordinatorTests {
         #expect(launcher.processes.allSatisfy { !$0.isRunning })
     }
 
+    @Test func `elevation host refuses CUA enablement before spawning a child`() async throws {
+        let root = self.shortTemporaryDirectory("elevation-host")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = CuaProcessLauncherProbe()
+        let coordinator = CuaDriverHostCoordinator(
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true },
+            enablementAllowed: {
+                AppLaunchRuntimePlan(arguments: ["OpenClaw", "--elevation-host"]).allowsCuaComputerControl
+            })
+
+        await coordinator.setEnabled(true)
+
+        #expect(launcher.launches.isEmpty)
+        #expect(coordinator.workerEndpoint == nil)
+
+        let normalCoordinator = CuaDriverHostCoordinator(
+            artifactURL: { root.appendingPathComponent("cua-driver") },
+            applicationSupportURL: { root },
+            bundleIdentifier: { "ai.openclaw.test" },
+            processLauncher: { launch, onTermination in
+                launcher.launch(launch, onTermination: onTermination)
+            },
+            readinessProbe: { _ in true },
+            enablementAllowed: {
+                AppLaunchRuntimePlan(arguments: ["OpenClaw"]).allowsCuaComputerControl
+            })
+        await normalCoordinator.setEnabled(true)
+        #expect(await self.waitForReadyLaunch(1, launcher: launcher, coordinator: normalCoordinator))
+        await normalCoordinator.setEnabled(false)
+    }
+
     @Test func `socket directory is random owner-only and cleanup removes only its owned leaf`() throws {
         let root = self.shortTemporaryDirectory("socket")
         defer { try? FileManager.default.removeItem(at: root) }

@@ -11,6 +11,7 @@ export function renderDesktopPanelHeader(options: {
   fullscreenControl: TemplateResult;
   onClose: () => void;
   onDock: (dock: "bottom" | "right") => void;
+  onOpenWindow: () => void;
 }) {
   return html`
     <header class="rail-header bp-header">
@@ -33,6 +34,15 @@ export function renderDesktopPanelHeader(options: {
           @click=${() => options.onDock("right")}
         >
           ${icons.panelRightOpen}
+        </button>
+        <button
+          class="rail-header__action bp-icon bp-open-window"
+          type="button"
+          title=${t("desktop.openWindow")}
+          aria-label=${t("desktop.openWindow")}
+          @click=${options.onOpenWindow}
+        >
+          ${icons.externalLink}
         </button>
         ${options.fullscreenControl}
         <button

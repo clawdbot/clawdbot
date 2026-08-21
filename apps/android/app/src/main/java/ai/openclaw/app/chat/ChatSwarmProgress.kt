@@ -278,6 +278,7 @@ internal fun buildChatSwarmGroups(
 
 private fun swarmDotStatus(row: ChatSessionEntry): ChatSwarmDotStatus? =
   when {
+    row.status == "queued" -> ChatSwarmDotStatus.Queued
     row.status == "running" || row.hasActiveRun == true -> ChatSwarmDotStatus.Running
     row.status == "done" -> ChatSwarmDotStatus.Done
     row.status == "failed" || row.status == "killed" || row.status == "timeout" -> ChatSwarmDotStatus.Failed

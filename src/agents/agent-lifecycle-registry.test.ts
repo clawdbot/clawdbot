@@ -6,11 +6,14 @@ import {
   claimCompletedAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
+import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   beginAgentDeletion,
+  captureAgentLifecycleBinding,
   claimCompletedAgentDeletion,
   isAgentDeletionBlocked,
+  matchesAgentLifecycleBinding,
 } from "./agent-lifecycle-registry.js";
 
 const tempDirs: string[] = [];
@@ -40,6 +43,39 @@ afterEach(() => {
 });
 
 describe("agent lifecycle registry", () => {
+  it("binds legacy and recreated agents to distinct durable incarnations", () => {
+    const options = createOptions();
+    const config = { agents: { entries: { main: {} } } };
+    const legacy = captureAgentLifecycleBinding(config, "MAIN", options);
+
+    expect(legacy).toEqual({ agentId: "main", provenance: null });
+    expect(legacy && matchesAgentLifecycleBinding(config, legacy, options)).toBe(true);
+
+    recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 42 });
+    expect(legacy && matchesAgentLifecycleBinding(config, legacy, options)).toBe(false);
+    const recreated = captureAgentLifecycleBinding(config, "main", options);
+    expect(recreated).toEqual({
+      agentId: "main",
+      provenance: {
+        agentId: "main",
+        createdVia: "operator",
+        creatorAgentId: null,
+        createdAtMs: 42,
+      },
+    });
+  });
+
+  it("refuses capture and matching while deletion owns the agent id", () => {
+    const options = createOptions();
+    const config = { agents: { entries: { main: {} } } };
+    const binding = captureAgentLifecycleBinding(config, "main", options);
+    const deletion = beginAgentDeletion(createEntry("main"), options);
+
+    expect(captureAgentLifecycleBinding(config, "main", options)).toBeUndefined();
+    expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
+    deletion.rollback();
+  });
+
   it("keeps a committed deletion fenced until recreation claims cleanup", () => {
     const options = createOptions();
     const deletion = beginAgentDeletion(createEntry("Recreated-Agent"), options);

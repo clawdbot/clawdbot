@@ -62,10 +62,8 @@ import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
-  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   WS_HANDSHAKE_PHASES,
   type GatewayIngressWebSocket,
-  type GatewayWorkerIngress,
   type GatewayWsClient,
   type WsHandshakePhase,
 } from "./ws-types.js";
@@ -96,6 +94,7 @@ type GatewayWsSharedHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -189,6 +188,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
+    isPendingWorkerNodeSetup,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -210,10 +210,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const connId = randomUUID();
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
-    const workerIngress: GatewayWorkerIngress =
-      ingressSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] ?? "loopback";
     const publicWorkerIngress =
-      workerIngress === "public" ? takePublicWorkerIngress(socket) : undefined;
+      connectionKind === "worker" ? takePublicWorkerIngress(socket) : undefined;
     const connectionPreauthBudget =
       ingressSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ?? preauthConnectionBudget;
     const { remoteAddr, remotePort, localAddr, localPort, endpoint } = resolveSocketAddress(socket);
@@ -663,7 +661,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         connId,
         service: workerConnectionService,
         isStartupPending,
-        ingress: workerIngress,
         send,
         close,
         isClosed: () => closed,
@@ -715,6 +712,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
+      isPendingWorkerNodeSetup,
       gatewayMethods,
       events,
       extraHandlers,

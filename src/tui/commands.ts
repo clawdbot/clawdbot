@@ -21,7 +21,16 @@ const FAST_LEVELS = ["status", "auto", "on", "off"];
 const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
-const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
+const USAGE_COMMAND_VALUES = [
+  "off",
+  "tokens",
+  "full",
+  "cost",
+  "reset",
+  "inherit",
+  "clear",
+  "default",
+];
 
 type ParsedCommand = {
   name: string;
@@ -123,9 +132,9 @@ const TUI_COMMAND_ROWS = [
   ],
   [
     "usage",
-    "Toggle per-response usage line",
-    "/usage <off|tokens|full|reset|inherit|clear|default>",
-    USAGE_FOOTER_LEVELS,
+    "Toggle per-response usage line or show cost summary",
+    "/usage <off|tokens|full|cost|reset|inherit|clear|default>",
+    USAGE_COMMAND_VALUES,
   ],
   [
     "elevated",

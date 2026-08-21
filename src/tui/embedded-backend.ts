@@ -958,6 +958,25 @@ export class EmbeddedTuiBackend implements TuiBackend {
       : { text: result.text };
   }
 
+  async runUsageCostCommand(opts: Parameters<NonNullable<TuiBackend["runUsageCostCommand"]>>[0]) {
+    await this.ready;
+    const { cfg, canonicalKey, storePath, entry } = loadSessionEntry(
+      opts.sessionKey,
+      opts.agentId ? { agentId: opts.agentId } : undefined,
+    );
+    const { formatSessionUsageCostSummary } =
+      await import("../auto-reply/reply/commands-session-cost.runtime.js");
+    return {
+      text: await formatSessionUsageCostSummary({
+        cfg,
+        sessionKey: canonicalKey ?? opts.sessionKey,
+        agentId: opts.agentId,
+        sessionEntry: entry,
+        storePath,
+      }),
+    };
+  }
+
   private enqueuePendingLocalMessage(params: {
     runScope: { sessionKey: string; agentId?: string };
     message: string;

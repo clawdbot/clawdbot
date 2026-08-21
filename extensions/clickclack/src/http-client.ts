@@ -474,7 +474,10 @@ export function createClickClackClient(options: ClientOptions) {
       nonce?: string;
     }): Promise<ClickClackUpload> => {
       const form = new FormData();
-      const bytes = new Uint8Array(params.buffer);
+      const bytes: Uint8Array<ArrayBuffer> =
+        params.buffer.buffer instanceof ArrayBuffer
+          ? new Uint8Array(params.buffer.buffer, params.buffer.byteOffset, params.buffer.byteLength)
+          : Uint8Array.from(params.buffer);
       form.append("file", new Blob([bytes], { type: params.contentType }), params.filename);
       const query = new URLSearchParams({ workspace_id: params.workspaceId });
       if (params.nonce) {

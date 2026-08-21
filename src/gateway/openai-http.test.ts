@@ -16,12 +16,12 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -2498,10 +2498,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     "separates streamed content from the terminal finish for an official SDK $name",
     async ({ fail, providerTerminal, expected, protocolError }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const terminalAdmission = createDeferred<{
-        active: number;
-        drained: { drained: boolean; active: number };
-      }>();
+      const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
@@ -2518,9 +2515,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         // Agent settlement schedules the terminal in a later microtask. The
         // request must remain admitted until Node finishes the actual stream.
         const active = getActiveGatewayRootWorkCount();
-        void waitForActiveGatewayRootWork(0).then((drained) => {
-          terminalAdmission.resolve({ active, drained });
-        });
+        terminalAdmission.resolve({ active });
       });
       agentCommandMock.mockClear();
       agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -2593,7 +2588,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           wireResponse.promise,
         ]);
         expect(admission.active).toBe(idleRootCount + 1);
-        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(parseSseDataLines(wire).at(-1)).toBe("[DONE]");
         expect(lifecycleTerminals).toEqual([fail ? "error" : "end"]);
 
@@ -3563,6 +3557,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             openAiChatCompletionsEnabled: true,
           });
 
+          const incognitoSessionKey = "agent:main:dashboard:incognito-openai-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: incognitoSessionKey },
+            {
+              sessionId: "session-incognito-openai-http",
+              updatedAt: 1,
+              incognito: true,
+              visibility: "shared",
+            },
+          );
+
           for (const stream of [false, true]) {
             for (const { scopes, senderIsOwner } of [
               { scopes: "operator.write", senderIsOwner: false },
@@ -3593,6 +3598,44 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
             }
           }
+
+          const trustedProxyHeaders = {
+            "x-forwarded-for": "198.51.100.42",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": "operator@example.com",
+          };
+          for (const requestedSessionKey of [
+            incognitoSessionKey,
+            "dashboard:incognito-openai-http",
+          ]) {
+            agentCommandMock.mockClear();
+            const denied = await postChatCompletions(
+              port,
+              { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+              {
+                ...trustedProxyHeaders,
+                "x-openclaw-scopes": "operator.write",
+                "x-openclaw-session-key": requestedSessionKey,
+              },
+            );
+            expect(denied.status).toBe(403);
+            await denied.text();
+            expect(agentCommandMock).not.toHaveBeenCalled();
+          }
+
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const allowed = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openai-http",
+            },
+          );
+          expect(allowed.status).toBe(200);
+          await allowed.text();
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
           agentCommandMock.mockClear();
           const unauthorized = await postChatCompletions(
@@ -3718,10 +3761,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(await cleanupAdmissionClosed.promise).toBe(false);
       expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-      expect(await waitForActiveGatewayRootWork(0)).toEqual({
-        drained: false,
-        active: idleRootCount + 1,
-      });
     } finally {
       finishAgentCleanup.resolve();
     }

@@ -15,7 +15,6 @@ import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { resolveSkillDisplayName } from "./skill-contract.js";
 import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
-import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -30,6 +29,7 @@ export interface Skill {
   description: string;
   filePath: string;
   baseDir: string;
+  /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
   source: string;
   sourceInfo: SourceInfo;
@@ -254,7 +254,6 @@ function loadSkillFromFile(
         description: frontmatter.description,
         filePath,
         baseDir: skillDir,
-        promptVersion: computeSkillPromptVersion(rawContent),
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
         disableModelInvocation: invocation.disableModelInvocation,

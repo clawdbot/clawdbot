@@ -1,5 +1,5 @@
 // Control UI browser proof covers the config snapshot and guarded-write lifecycle.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -59,6 +59,22 @@ function configSchemaResponse() {
         tools: {
           type: "object",
           title: "Tools",
+          properties: {
+            elevated: {
+              type: "object",
+              properties: {
+                allowFrom: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "array",
+                    items: {
+                      anyOf: [{ type: "string", pattern: "^[0-9]+$" }, { type: "number" }],
+                    },
+                  },
+                },
+              },
+            },
+          },
           additionalProperties: true,
         },
       },
@@ -240,10 +256,12 @@ suite.define(() => {
 }
 `;
         await rawEditor.fill(rawDraft);
+        const rawSave = page.getByRole("button", { name: "Save", exact: true });
+        await expect.poll(() => rawSave.isEnabled()).toBe(true);
         await capture(page, "02-raw-draft.png");
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
-        await page.getByRole("button", { name: "Save", exact: true }).click();
+        await rawSave.click();
         await expect
           .poll(async () => (await gateway.getRequests("config.set")).length)
           .toBe(setRequestsBeforeRawSave + 1);
@@ -370,6 +388,145 @@ suite.define(() => {
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saved");
         await capture(page, "06-replacement-save.png");
+      },
+    );
+  });
+
+  it("keeps a dirty draft and adopts an opaque revision after an unchanged reconnect", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const config = {
+          laboratory: { endpoint: "initial-api", retryBudget: 2 },
+          tools: {},
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(config, "legacy-raw-hash"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+
+        expect(
+          (
+            await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
+          )?.status(),
+        ).toBe(200);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("initial-api");
+        await endpoint.fill("retained-draft");
+
+        const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(config, "hmac-sha256:v1:opaque-current"),
+        );
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(getsBeforeReconnect + 1);
+        await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
+
+        const saveIndicator = page.locator("openclaw-settings-save-indicator");
+        await expect
+          .poll(() => saveIndicator.textContent())
+          .toContain("Autosave paused after reconnect");
+        await capture(page, "07-opaque-revision-reconnect.png");
+
+        await gateway.deferNext("config.set");
+        await saveIndicator.getByRole("button", { name: "Save", exact: true }).click();
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(save.baseHash).toBe("hmac-sha256:v1:opaque-current");
+        expect(JSON.parse(String(save.raw))).toMatchObject({
+          laboratory: { endpoint: "retained-draft", retryBudget: 2 },
+        });
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(
+            { ...config, laboratory: { ...config.laboratory, endpoint: "retained-draft" } },
+            "hmac-sha256:v1:opaque-next",
+          ),
+        );
+        await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
+        await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
+      },
+    );
+  });
+
+  it("preserves untouched 64-bit identifier strings during an unrelated form save", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const identifier = "1048113311314608148";
+        const initialConfig = {
+          laboratory: { endpoint: "before-save", retryBudget: 2 },
+          tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "id-snapshot-1"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+
+        expect(
+          (
+            await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
+          )?.status(),
+        ).toBe(200);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("before-save");
+        await capture(page, "08-id-before-unrelated-save.png");
+
+        await gateway.deferNext("config.set");
+        await endpoint.fill("after-save");
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        const submitted = JSON.parse(String(save.raw)) as typeof initialConfig;
+        expect(save.baseHash).toBe("id-snapshot-1");
+        expect(String(save.raw)).toContain(`"${identifier}"`);
+        expect(String(save.raw)).not.toContain(String(Number(identifier)));
+        expect(submitted).toEqual({
+          laboratory: { endpoint: "after-save", retryBudget: 2 },
+          tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+        });
+        expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
+        expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
+
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await writeFile(
+            path.join(uiProofArtifactDir, "09-id-config-set-payload.json"),
+            `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
+          );
+        }
+        await gateway.resolveDeferred("config.set");
+        const saveIndicator = page.locator("openclaw-settings-save-indicator");
+        await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+
+        await page.reload();
+        await expect.poll(() => endpoint.inputValue()).toBe("after-save");
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        const rawEditor = page.locator(".config-raw-field textarea");
+        await rawEditor.waitFor();
+        await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
+        await capture(page, "10-id-after-unrelated-save.png");
       },
     );
   });

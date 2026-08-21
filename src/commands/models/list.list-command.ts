@@ -93,7 +93,9 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
-  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
+    kind: "read",
+  });
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
@@ -107,7 +109,7 @@ export async function modelsListCommand(
   const providerFilter = parsedProviderFilter
     ? providerAliasCanonicalizer.provider(parsedProviderFilter)
     : undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot, agentId);
   if (providerFilter) {
     const knownProviderIds = new Set(
       [

@@ -69,6 +69,8 @@ function createContext(opts?: {
   const invoke = vi.fn(
     async (params?: {
       onDispatchReady?: (invokeId: string) => void;
+      onProgress?: (chunk: string) => void;
+      isDispatchAuthorized?: () => boolean;
     }): Promise<NodeInvokeResult> => {
       params?.onDispatchReady?.("invoke-1");
       return {
@@ -84,7 +86,11 @@ function createContext(opts?: {
       getRuntimeConfig:
         opts?.getRuntimeConfig ??
         (() => ({ gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } } })),
-      nodeRegistry: { get: () => nodeSession, invoke },
+      nodeRegistry: {
+        get: () => nodeSession,
+        getForPairingGeneration: () => nodeSession,
+        invoke,
+      },
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
       pluginApprovalManager: opts?.pluginApprovalManager,
@@ -281,6 +287,77 @@ describe("applyPluginNodeInvokePolicy", () => {
       isDispatchAuthorized: expect.any(Function),
       onDispatchReady: expect.any(Function),
     });
+  });
+
+  it("streams approved dangerous commands through the existing scoped policy transport", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const nodeSession = createNodeSession();
+    nodeSession.pairingGeneration = "paired-generation-1";
+    const reviewer = createOperatorClient();
+    reviewer.connId = "conn-owner-approval";
+    setDangerousDemoCommandRegistry([
+      createDemoPolicy(async (policyContext) => {
+        expect(policyContext.client?.scopes).toEqual(["operator.approvals"]);
+        const approval = await policyContext.approvals?.request({
+          title: "Open fixture duplex",
+          description: "Approve the declared node command",
+        });
+        if (approval?.decision !== "allow-once") {
+          return { ok: false, code: "APPROVAL_DENIED", message: "node command was not approved" };
+        }
+        return await policyContext.invokeNode();
+      }),
+    ]);
+    const { context, invoke } = createContext({
+      nodeSession,
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([reviewer]),
+    });
+    let runtimeCurrent = true;
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      idleTimeoutMs: 5_000,
+      isRuntimeCurrent: () => runtimeCurrent,
+    };
+    invoke.mockImplementationOnce(async (params) => {
+      params?.onDispatchReady?.("approved-duplex-invoke");
+      params?.onProgress?.("approved-duplex-progress");
+      return { ok: true, payload: { approved: true }, payloadJSON: null, error: null };
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: {
+        ...createOperatorClient(),
+        internal: {
+          syntheticClient: true,
+          pluginRuntimeOwnerId: DEMO_PLUGIN_ID,
+          nodeInvokeStream: stream,
+        },
+      },
+      nodeSession,
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      nodeInvokeStream: stream,
+    });
+
+    const approval = await expectSinglePendingApproval(manager);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(manager.resolve(approval.id, "allow-once")).toBe(true);
+
+    await expect(resultPromise).resolves.toMatchObject({ ok: true });
+    expect(stream.onDispatchReady).toHaveBeenCalledWith("approved-duplex-invoke");
+    expect(stream.onProgress).toHaveBeenCalledWith("approved-duplex-progress");
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedConnId: "conn-1",
+        expectedPairingGeneration: "paired-generation-1",
+        idleTimeoutMs: 5_000,
+      }),
+    );
+
+    runtimeCurrent = false;
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
   });
 
   it("classifies exact arguments before the policy handler and transport", async () => {

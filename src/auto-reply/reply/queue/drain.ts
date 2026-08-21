@@ -280,6 +280,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.skipProviderRuntimeHints === true,
     execution.silentExpected === true,
     execution.allowEmptyAssistantReplyAsSilent === true,
+    execution.terminalReplyExpectation ?? "",
     execution.suppressNextUserMessagePersistence === true,
     execution.suppressTranscriptOnlyAssistantPersistence === true,
     execution.blockReplyBreak,
@@ -522,7 +523,11 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 }
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
-  return item.disableCollectBatching === true || hasRuntimeOnlyFollowupMetadata(item);
+  return (
+    item.disableCollectBatching === true ||
+    item.run.skillWorkshopProposalRevision !== undefined ||
+    hasRuntimeOnlyFollowupMetadata(item)
+  );
 }
 
 type AggregateCancellation = {

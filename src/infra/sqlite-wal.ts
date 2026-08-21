@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
+import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
@@ -58,7 +59,7 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
 };
 
 function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): number {
-  const normalizedTimeoutMs = normalizeNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
+  const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
   db.exec(`PRAGMA busy_timeout = ${normalizedTimeoutMs};`);
   return normalizedTimeoutMs;
 }
@@ -84,13 +85,6 @@ export function configureSqlitePreSchemaPragmas(
     configureSqliteBusyTimeout(db, options.busyTimeoutMs);
   }
   enableIncrementalAutoVacuumForFreshDatabase(db);
-}
-
-function normalizeNonNegativeInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
 }
 
 function findExistingVolumePaths(
@@ -439,11 +433,11 @@ export function configureSqliteWalMaintenance(
 ): SqliteWalMaintenance {
   const busyTimeoutMs =
     options.busyTimeoutMs === undefined ? 0 : configureSqliteBusyTimeout(db, options.busyTimeoutMs);
-  const autoCheckpointPages = normalizeNonNegativeInteger(
+  const autoCheckpointPages = normalizeSqliteNonNegativeInteger(
     options.autoCheckpointPages ?? DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
     "autoCheckpointPages",
   );
-  const checkpointIntervalMs = normalizeNonNegativeInteger(
+  const checkpointIntervalMs = normalizeSqliteNonNegativeInteger(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );

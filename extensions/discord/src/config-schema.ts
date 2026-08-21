@@ -119,6 +119,7 @@ const DiscordVoiceAutoJoinSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
+    whenOccupied: z.boolean().optional(),
   })
   .strict();
 

@@ -374,9 +374,9 @@ export async function writeVoiceWavFile(
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
+  scheduleTempCleanup(workspace.dir);
   const wav = buildWavBuffer(pcm);
   const filePath = await workspace.write("segment.wav", wav);
-  scheduleTempCleanup(workspace.dir);
   return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
 }
 

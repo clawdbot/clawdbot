@@ -1,6 +1,8 @@
 import { vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
 import type {
   ChannelDirectoryEntryKind,
+  ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
@@ -41,6 +43,96 @@ export const directOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async () => ({ channel: "test", messageId: "test" }),
 };
+
+export function createMessageActionContextFixture() {
+  const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
+    jsonResult({ ok: true }),
+  );
+  const readWorkspaceTestPlugin: ChannelPlugin = {
+    ...workspaceTestPlugin,
+    actions: {
+      describeMessageTool: () => ({ actions: ["read"] }),
+      handleAction: handleWorkspaceAction,
+    },
+  };
+  const localChatTestPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({
+      id: "localchat",
+      label: "Local Chat",
+      docsPath: "/channels/localchat",
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+    }),
+    meta: {
+      id: "localchat",
+      label: "Local Chat",
+      selectionLabel: "Local Chat (local)",
+      docsPath: "/channels/localchat",
+      blurb: "Local chat test stub.",
+      aliases: ["local"],
+    },
+    outbound: directOutbound,
+    messaging: {
+      normalizeTarget: (raw) => raw.trim() || undefined,
+      targetResolver: {
+        looksLikeId: (raw) => raw.trim().length > 0,
+        hint: "<handle|chat_id:ID>",
+      },
+    },
+  };
+  const resolvedDmTestPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({
+      id: "slackdm",
+      label: "Resolved DM",
+      capabilities: { chatTypes: ["direct"], media: true },
+    }),
+    outbound: directOutbound,
+    messaging: {
+      normalizeTarget: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+          return undefined;
+        }
+        const userId = trimmed.replace(/^user:/i, "");
+        return /^user:/i.test(trimmed)
+          ? `user:${userId.toLowerCase()}`
+          : `channel:${trimmed.toLowerCase()}`;
+      },
+      targetResolver: {
+        looksLikeId: (raw) => /^(?:user:)?[UW][A-Z0-9]+$/i.test(raw.trim()),
+        hint: "<user:ID>",
+        resolveTarget: async ({ input }) => {
+          const userId = input.trim().replace(/^user:/i, "");
+          return /^[UW][A-Z0-9]+$/i.test(userId)
+            ? { to: userId, kind: "user", source: "normalized" }
+            : null;
+        },
+      },
+    },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) =>
+        target.toLowerCase() ===
+        toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
+    },
+  };
+  return {
+    handleWorkspaceAction,
+    setup(): void {
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "workspace", source: "test", plugin: readWorkspaceTestPlugin },
+          { pluginId: "directchat", source: "test", plugin: directChatTestPlugin },
+          { pluginId: "forum", source: "test", plugin: forumTestPlugin },
+          { pluginId: "localchat", source: "test", plugin: localChatTestPlugin },
+          { pluginId: "slackdm", source: "test", plugin: resolvedDmTestPlugin },
+        ]),
+      );
+      handleWorkspaceAction.mockClear();
+    },
+    cleanup(): void {
+      setActivePluginRegistry(createTestRegistry([]));
+    },
+  };
+}
 
 export const runDryAction = (params: {
   cfg: OpenClawConfig;

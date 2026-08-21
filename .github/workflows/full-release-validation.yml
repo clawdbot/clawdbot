@@ -13,6 +13,11 @@ on:
         required: false
         default: ""
         type: string
+      trusted_workflow_json:
+        description: Trusted release tooling identity JSON
+        required: false
+        default: ""
+        type: string
       target_context_ref:
         description: Optional canonical release branch or tag context for an exact-SHA target
         required: false
@@ -74,12 +79,10 @@ on:
           - all
           - ci
           - plugin-prerelease
-          - release-checks
           - install-smoke
           - cross-os
           - live-e2e
           - package
-          - qa
           - qa-parity
           - qa-live
           - npm-telegram
@@ -162,6 +165,7 @@ env:
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.16.0"
+  RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
 
 jobs:
   resolve_target:
@@ -170,6 +174,9 @@ jobs:
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
+      trusted_workflow_json: ${{ steps.tooling_identity.outputs.json }}
+      live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
+      cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
     steps:
       - name: Checkout trusted workflow helper
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -179,6 +186,28 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: false
+
+      - name: Resolve trusted workflow identity
+        id: tooling_identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_IDENTITY_JSON: ${{ inputs.trusted_workflow_json }}
+          WORKFLOW_CONTRACT: ${{ env.RELEASE_ISOLATION_TOOLING_CONTRACT }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          identity="$(
+            node workflow/scripts/release-tooling-identity.mjs resolve \
+              --repository "$GITHUB_REPOSITORY" \
+              --workflow-contract "$WORKFLOW_CONTRACT" \
+              --workflow-ref "$WORKFLOW_REF" \
+              --workflow-full-ref "$WORKFLOW_FULL_REF" \
+              --workflow-sha "$WORKFLOW_SHA" \
+              --requested-identity-json "$REQUESTED_IDENTITY_JSON"
+          )"
+          echo "json=${identity}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve target SHA
         id: resolve
@@ -192,15 +221,119 @@ jobs:
             --expected-sha "$EXPECTED_SHA" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Validate suite filters
+        id: filters
+        env:
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          RAW_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RAW_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
+        run: |
+          set -euo pipefail
+          source "$RELEASE_FILTER_VALIDATOR"
+          validate_release_suite_filters \
+            "$RERUN_GROUP" \
+            "$RAW_LIVE_SUITE_FILTER" \
+            "$RAW_CROSS_OS_SUITE_FILTER" \
+            controller
+          {
+            printf 'live_suite_filter=%s\n' "$RELEASE_FILTER_LIVE_SUITE_FILTER"
+            printf 'cross_os_suite_filter=%s\n' "$RELEASE_FILTER_CROSS_OS_SUITE_FILTER"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target package manifest
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          path: target
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
       - name: Validate release inputs
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_REF: ${{ inputs.ref }}
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" && "$RELEASE_PROFILE" != "beta" ]]; then
             echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
             exit 1
+          fi
+
+          context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
+          context_ref="${context_ref#refs/heads/}"
+          context_ref="${context_ref#refs/tags/}"
+          target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
+          extended_stable_line=""
+          release_version_pattern=""
+          expected_version=""
+          identity_kind=""
+          if [[ "$context_ref" =~ ^release/([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}"
+            release_version_pattern="${expected_version//./\\.}"
+            identity_kind="release branch"
+            if [[ "$target_version" != "$expected_version" &&
+                  ! "$target_version" =~ ^${release_version_pattern}-beta\.[1-9][0-9]*$ ]]; then
+              echo "Target package version ${target_version} does not belong to release branch ${context_ref}; expected ${expected_version} or a beta prerelease of it." >&2
+              exit 1
+            fi
+          elif [[ "$context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
+            extended_stable_line="${BASH_REMATCH[1]%.33}"
+            identity_kind="extended-stable branch"
+          elif [[ "$context_ref" =~ ^v([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}"
+            identity_kind="release tag"
+          elif [[ -n "$TARGET_CONTEXT_REF" ]]; then
+            echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
+            exit 1
+          fi
+          if [[ "$identity_kind" == "extended-stable branch" ]]; then
+            if [[ ! "$target_version" =~ ^([0-9]{4}\.([1-9]|1[0-2]))\.([1-9][0-9]*)$ ]] ||
+               [[ "${BASH_REMATCH[1]}" != "$extended_stable_line" ]] ||
+               (( 10#${BASH_REMATCH[3]} < 33 )); then
+              echo "Target package version ${target_version} does not belong to extended-stable branch ${context_ref}; expected a final ${extended_stable_line}.PATCH version with PATCH >= 33." >&2
+              exit 1
+            fi
+          elif [[ -n "$expected_version" &&
+                "$identity_kind" != "release branch" &&
+                "$target_version" != "$expected_version" ]]; then
+            echo "Target package version ${target_version} does not match ${identity_kind} ${context_ref}; expected ${expected_version}." >&2
+            exit 1
+          fi
+          if [[ -n "$TARGET_CONTEXT_REF" ]]; then
+            if [[ ! "$TARGET_REF" =~ ^[a-f0-9]{40}$ || "$TARGET_REF" != "$TARGET_SHA" ]]; then
+              echo "target_context_ref requires ref to be the resolved full Validation SHA." >&2
+              exit 1
+            fi
+            repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
+            if [[ "$identity_kind" == "release tag" ]]; then
+              remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}^{}" | awk 'NR == 1 { print $1 }')"
+              if [[ -z "$remote_sha" ]]; then
+                remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}" | awk 'NR == 1 { print $1 }')"
+              fi
+              if [[ "$remote_sha" != "$TARGET_SHA" ]]; then
+                echo "Target SHA ${TARGET_SHA} does not match release tag ${context_ref} at ${remote_sha:-missing}." >&2
+                exit 1
+              fi
+            else
+              remote_sha="$(git ls-remote --heads "$repository_url" "refs/heads/${context_ref}" | awk 'NR == 1 { print $1 }')"
+              if [[ -z "$remote_sha" ]]; then
+                echo "Release context branch ${context_ref} does not resolve." >&2
+                exit 1
+              fi
+              comparison_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_SHA}...${remote_sha}" --jq .status)"
+              if [[ "$comparison_status" != "ahead" && "$comparison_status" != "identical" ]]; then
+                echo "Target SHA ${TARGET_SHA} is not reachable from release context branch ${context_ref} at ${remote_sha}." >&2
+                exit 1
+              fi
+            fi
           fi
 
       - name: Summarize target
@@ -219,8 +352,8 @@ jobs:
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ steps.filters.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ steps.filters.outputs.cross_os_suite_filter }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
         run: |
           plugin_prerelease_node_exclusions="$(jq -c . <<< "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")"
@@ -230,6 +363,7 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Validation SHA: \`${TARGET_SHA}\`"
             echo "- Tooling SHA: \`${TOOLING_SHA}\`"
+            echo "- Frozen tuple: \`${TARGET_SHA} / ${TOOLING_SHA} / ${RERUN_GROUP}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
@@ -257,7 +391,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "release-checks" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -271,7 +405,7 @@ jobs:
               echo "- Published-package Telegram E2E: \`${RELEASE_PACKAGE_SPEC}\`"
             elif [[ "$RERUN_GROUP" == "npm-telegram" ]]; then
               echo "- Package Telegram E2E: focused rerun requires \`release_package_spec\` or \`npm_telegram_package_spec\`"
-            elif [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "release-checks" || "$RERUN_GROUP" == "package" ]]; then
+            elif [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "package" ]]; then
               if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
                 echo "- Package Telegram E2E: deferred by \`skip_package_telegram_e2e\`"
               else
@@ -340,8 +474,8 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -351,6 +485,7 @@ jobs:
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
+          TRUSTED_WORKFLOW_JSON: ${{ needs.resolve_target.outputs.trusted_workflow_json }}
         run: |
           set -euo pipefail
           # Lane-selection inputs must match the prior run's manifest exactly;
@@ -386,10 +521,17 @@ jobs:
               allowUnreleasedChangelog: $allowUnreleasedChangelog,
               pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
             }')"
+          trusted_workflow_json="${TRUSTED_WORKFLOW_JSON}"
+          trusted_workflow_ref="$(jq -er '.ref | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
+          trusted_workflow_full_ref="$(jq -er '.fullRef | select(type == "string" and length > 0)' <<< "$trusted_workflow_json")"
+          trusted_workflow_sha="$(jq -er '.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<< "$trusted_workflow_json")"
           bash workflow/scripts/github/find-reusable-release-validation.sh \
             --target-sha "$TARGET_SHA" \
             --workflow-sha "$GITHUB_SHA" \
             --workflow-ref "$WORKFLOW_REF" \
+            --trusted-workflow-ref "$trusted_workflow_ref" \
+            --trusted-workflow-full-ref "$trusted_workflow_full_ref" \
+            --trusted-workflow-sha "$trusted_workflow_sha" \
             --release-profile "$RELEASE_PROFILE" \
             --run-release-soak "$RUN_RELEASE_SOAK" \
             --inputs-json "$inputs_json" \
@@ -447,7 +589,7 @@ jobs:
   prepare_release_candidate:
     name: Prepare shared release candidate
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && contains(fromJSON('["all","plugin-prerelease","release-checks","cross-os","live-e2e","package"]'), inputs.rerun_group) }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && (contains(fromJSON('["all","plugin-prerelease","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) }}
     permissions:
       actions: read
       contents: read
@@ -633,7 +775,7 @@ jobs:
             local workflow="$1"
             local dispatch_run_name="$2"
             shift 2
-            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id
+            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id started_epoch elapsed_seconds elapsed_minutes
 
             encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
             current_workflow_sha="$(
@@ -722,6 +864,7 @@ jobs:
             fi
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+            started_epoch="$(date +%s)"
 
             fail_fast_failed_jobs() {
               if [[ "$FAIL_FAST" != "true" ]]; then
@@ -792,9 +935,9 @@ jobs:
               poll_count=$((poll_count + 1))
               if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
-              fi
-              if (( poll_count % 10 == 0 )); then
-                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                elapsed_seconds=$(( $(date +%s) - started_epoch ))
+                elapsed_minutes=$(( elapsed_seconds / 60 ))
+                echo "Still waiting on ${workflow} after ${elapsed_minutes}m: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: (.url // .html_url)}' || true
               fi
               sleep 60
@@ -905,10 +1048,6 @@ jobs:
                 fi
                 echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
               } >> "$GITHUB_STEP_SUMMARY"
-              child_rerun_group="$RERUN_GROUP"
-              if [[ "$child_rerun_group" == "release-checks" ]]; then
-                child_rerun_group=all
-              fi
               args=(
                 -f ref="$TARGET_SHA"
                 -f expected_sha="$TARGET_SHA"
@@ -919,7 +1058,7 @@ jobs:
                 -f fail_fast="$FAIL_FAST"
                 -f allow_unreleased_changelog="$ALLOW_UNRELEASED_CHANGELOG"
                 -f skip_package_telegram_e2e="$SKIP_PACKAGE_TELEGRAM_E2E"
-                -f rerun_group="$child_rerun_group"
+                -f rerun_group="$RERUN_GROUP"
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
                 args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
@@ -1028,7 +1167,7 @@ jobs:
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
-    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","install-smoke","cross-os","live-e2e","package","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # The bounded package critical path tops out at 310 minutes; 420 leaves
     # queue/API margin. Parent timeout preserves the adopted child for exact cancellation.
@@ -1055,8 +1194,8 @@ jobs:
           FAIL_FAST: ${{ inputs.fail_fast }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -1153,6 +1292,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
@@ -1432,8 +1572,11 @@ jobs:
           echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ -z "${RELEASE_PACKAGE_SPEC// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             case "$RERUN_GROUP" in
-              all|plugin-prerelease|release-checks|cross-os|live-e2e|package)
+              all|plugin-prerelease|cross-os|package)
                 candidate_required=1
+                ;;
+              live-e2e)
+                [[ -n "${LIVE_SUITE_FILTER// }" ]] || candidate_required=1
                 ;;
             esac
           fi
@@ -1501,7 +1644,7 @@ jobs:
               plugin-prerelease)
                 plugin_prerelease_required=1
                 ;;
-              release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)
+              install-smoke|cross-os|live-e2e|package|qa-parity|qa-live)
                 release_checks_required=1
                 ;;
               performance)
@@ -1673,8 +1816,8 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}

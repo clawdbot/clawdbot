@@ -130,6 +130,13 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
       }
   );
 
+export class SessionEntryLifecycleUpsertConflictError extends Error {
+  constructor(readonly sessionKey: string) {
+    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+    this.name = "SessionEntryLifecycleUpsertConflictError";
+  }
+}
+
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
   resetBoundaryReason?: SessionResetBoundaryReason;
@@ -157,6 +164,7 @@ export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;
   removedEntries: number;
   removedSessionKeys: string[];
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;

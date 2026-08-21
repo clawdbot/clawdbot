@@ -20,10 +20,15 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { projectMcpCallToolResultContent } from "./mcp-content.js";
+import {
+  projectMcpCallToolResult,
+  setMcpCodeModeGuestResult,
+  setMcpCodeModeGuestResultFromAgentResult,
+} from "./mcp-content.js";
 import { isMcpToolAllowed } from "./mcp-tool-filter.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { AnyAgentTool } from "./tools/common.js";
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
@@ -100,38 +105,10 @@ function toAgentToolResult(params: {
   toolName: string;
   result: CallToolResult;
 }): AgentToolResult<unknown> {
-  const content = projectMcpCallToolResultContent(params.result);
-  const normalizedContent: AgentToolResult<unknown>["content"] =
-    content.length > 0
-      ? content
-      : ([
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                status: params.result.isError === true ? "error" : "ok",
-                server: params.serverName,
-                tool: params.toolName,
-              },
-              null,
-              2,
-            ),
-          },
-        ] as AgentToolResult<unknown>["content"]);
-  const details: Record<string, unknown> = {
+  return projectMcpCallToolResult(params.result, {
     mcpServer: params.serverName,
     mcpTool: params.toolName,
-  };
-  if (params.result.structuredContent !== undefined) {
-    details.structuredContent = params.result.structuredContent;
-  }
-  if (params.result.isError === true) {
-    details.status = "error";
-  }
-  return {
-    content: normalizedContent,
-    details,
-  };
+  });
 }
 
 function toJsonAgentToolResult(params: {
@@ -139,11 +116,21 @@ function toJsonAgentToolResult(params: {
   operation: string;
   value: unknown;
 }): AgentToolResult<unknown> {
-  return {
+  const publicValue = toToolSearchJsonSafe(
+    params.operation === "resources_list" && Array.isArray(params.value)
+      ? { resources: params.value }
+      : params.operation === "prompts_list" && Array.isArray(params.value)
+        ? { prompts: params.value }
+        : params.value,
+  );
+  if (isRecord(publicValue)) {
+    delete publicValue._meta;
+  }
+  const result: AgentToolResult<unknown> = {
     content: [
       {
         type: "text",
-        text: JSON.stringify(params.value, null, 2),
+        text: JSON.stringify(publicValue, null, 2),
       },
     ],
     details: {
@@ -152,6 +139,7 @@ function toJsonAgentToolResult(params: {
       untrustedMcpOutput: true,
     },
   };
+  return setMcpCodeModeGuestResult(result, publicValue);
 }
 
 function requireStringArg(input: unknown, key: string): string {
@@ -220,6 +208,7 @@ function addMcpUtilityTool(params: {
     description: params.description,
     parameters: normalizeToolParameterSchema(params.parameters as never),
     executionMode: params.executionMode,
+    ...(params.execute ? { resultContentSource: "network" as const } : {}),
     execute:
       params.execute ??
       (async () => {
@@ -311,6 +300,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
       description: tool.description || tool.fallbackDescription,
       parameters: normalizeToolParameterSchema(tool.inputSchema),
       executionMode,
+      ...(params.createExecute && !sessionDeniedOnly
+        ? { resultContentSource: "network" as const }
+        : {}),
       execute:
         (!sessionDeniedOnly ? params.createExecute?.(tool) : undefined) ??
         (async () => {
@@ -464,7 +456,7 @@ export async function materializeBundleMcpToolsForRun(params: {
         if (!Object.hasOwn(catalog.servers, tool.serverName)) {
           const connect = runtime.requesterConnect?.createExecute(tool.serverName);
           if (connect) {
-            return await connect(toolCallId, input);
+            return setMcpCodeModeGuestResultFromAgentResult(await connect(toolCallId, input));
           }
         }
         runtime.markUsed();

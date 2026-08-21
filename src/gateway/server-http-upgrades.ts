@@ -41,8 +41,6 @@ import type { PreauthConnectionBudget } from "./server/preauth-connection-budget
 import { markPublicWorkerIngress } from "./server/public-worker-ingress-context.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
-  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
-  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
@@ -119,11 +117,18 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   preauthConnectionBudget: PreauthConnectionBudget;
   preauthBudgetKey: string | undefined;
   ingressName: "Gateway" | "Worker";
+  isStartupPending?: () => boolean;
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
+  const allowsRestartStartupPreauth =
+    ingressName === "Gateway" &&
+    isGatewayRestartDraining() &&
+    getGatewaySuspendAdmissionPhase() === "accepting" &&
+    params.isStartupPending?.() === true;
   if (
     isGatewayWorkAdmissionClosed() &&
+    !allowsRestartStartupPreauth &&
     (ingressName === "Worker" ||
       isGatewayRestartDraining() ||
       getGatewaySuspendAdmissionPhase() !== "prepared")
@@ -192,6 +197,7 @@ export function attachGatewayUpgradeHandler(opts: {
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  isStartupPending?: () => boolean;
   ingressTransport?: GatewayIngressTransport;
   reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }) {
@@ -269,7 +275,6 @@ export function attachGatewayUpgradeHandler(opts: {
             ingressName: "Worker",
             prepareSocket: (workerSocket) => {
               workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
-              workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "public";
               markPublicWorkerIngress(workerSocket, {
                 clientIp: requestClientIp,
                 rateLimiter: publicRateLimiter,
@@ -430,6 +435,7 @@ export function attachGatewayUpgradeHandler(opts: {
           preauthConnectionBudget,
           preauthBudgetKey: requestClientIp,
           ingressName: "Gateway",
+          isStartupPending: opts.isStartupPending,
         });
       } catch {
         throw new Error("gateway websocket upgrade failed");
@@ -440,37 +446,5 @@ export function attachGatewayUpgradeHandler(opts: {
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
       socket.destroy();
     });
-  });
-}
-
-/** Attach the loopback-only worker ingress and force every accepted socket into worker mode. */
-export function attachWorkerGatewayUpgradeHandler(params: {
-  httpServer: HttpServer;
-  wss: WebSocketServer;
-  preauthConnectionBudget: PreauthConnectionBudget;
-  log?: { warn: (message: string) => void };
-}): void {
-  params.httpServer.on("upgrade", (req, socket, head) => {
-    try {
-      handleBudgetedGatewayWebSocketUpgrade({
-        req,
-        socket,
-        head,
-        wss: params.wss,
-        preauthConnectionBudget: params.preauthConnectionBudget,
-        preauthBudgetKey: req.socket.remoteAddress,
-        ingressName: "Worker",
-        prepareSocket: (workerSocket) => {
-          workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
-          workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
-          workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "loopback";
-        },
-      });
-    } catch (error) {
-      params.log?.warn(
-        `worker websocket upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      socket.destroy();
-    }
   });
 }

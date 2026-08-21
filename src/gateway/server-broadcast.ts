@@ -9,7 +9,10 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
-import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import {
+  GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
+  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+} from "./events.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -30,7 +33,7 @@ import type {
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Pairing scope is for device-pairing handshakes only; chat transcript events
 // require operator-level session access. Pairing-scoped and node-role clients
@@ -69,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
+  [GATEWAY_EVENT_DEVICE_PAIR_CHANGED]: [PAIRING_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
   "device.pair.setup.completed": [PAIRING_SCOPE],
@@ -235,21 +239,7 @@ export function createGatewayBroadcaster(params: {
       opts?.agentId,
     );
     const isTargeted = Boolean(targetConnIds);
-    if (shouldLogWs()) {
-      const logMeta: Record<string, unknown> = {
-        event,
-        seq: "per-client",
-        clients: params.clients.size,
-        targets: targetConnIds ? targetConnIds.size : undefined,
-        dropIfSlow: opts?.dropIfSlow,
-        presenceVersion: opts?.stateVersion?.presence,
-        healthVersion: opts?.stateVersion?.health,
-      };
-      if (event === "agent") {
-        Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
-      }
-      logWs("out", "event", logMeta);
-    }
+    let outboundEventLogged = false;
     let frameBase:
       | {
           eventJSON: string;
@@ -308,6 +298,24 @@ export function createGatewayBroadcaster(params: {
         // Scoped clients opt out of cross-session fanout, including critical observer announces.
         // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
         continue;
+      }
+      if (!outboundEventLogged) {
+        outboundEventLogged = true;
+        logWs("out", "event", () => {
+          const logMeta: Record<string, unknown> = {
+            event,
+            seq: "per-client",
+            clients: params.clients.size,
+            targets: targetConnIds ? targetConnIds.size : undefined,
+            dropIfSlow: opts?.dropIfSlow,
+            presenceVersion: opts?.stateVersion?.presence,
+            healthVersion: opts?.stateVersion?.health,
+          };
+          if (event === "agent") {
+            Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
+          }
+          return logMeta;
+        });
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;

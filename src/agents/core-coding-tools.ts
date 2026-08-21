@@ -7,6 +7,7 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
+  resolveAdaptiveReadMaxBytes,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -88,6 +89,7 @@ type CoreCodingToolsOptions = {
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
+  skillInstructionPaths?: readonly string[];
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -141,8 +143,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             createTool: options.baseToolFactories?.createReadTool,
           })
         : createOpenClawReadTool(
-            options.baseToolFactories?.createReadTool(options.codingRoot) ??
-              createReadTool(options.codingRoot),
+            (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
+              maxBytes: resolveAdaptiveReadMaxBytes(options),
+            }),
             {
               modelContextWindowTokens: options.modelContextWindowTokens,
               imageSanitization: options.imageSanitization,
@@ -167,6 +170,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         wrapReadToolWithSkillContent(guarded, options.skillsSnapshot?.resolvedSkills, {
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
+          cwd: options.codingRoot,
+          containerWorkdir: sandbox?.containerWorkdir,
+          instructionPaths: options.skillInstructionPaths,
         }),
       );
     }

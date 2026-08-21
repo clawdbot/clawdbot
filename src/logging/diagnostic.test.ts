@@ -713,11 +713,9 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     // Warning stays throttled: still only the single 60s warning.
-    expect(stuckEvents).toHaveLength(1);
     expect(stuckEvents.map((event) => event.ageMs)).toEqual([60_000]);
     // Recovery was not suppressed by the warning backoff on the 90s tick.
     expect(recoverStuckSession).toHaveBeenCalledTimes(2);
-    expect(recoveryRequests).toHaveLength(2);
     expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000]);
   });
 
@@ -1902,9 +1900,10 @@ describe("stuck session diagnostics threshold", () => {
   it("clears queued diagnostic state after no-active-work recovery", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockResolvedValue({
-      status: "noop",
-      action: "none",
+      status: "released",
+      action: "release_lane",
       reason: "no_active_work",
+      released: 0,
       sessionId: "s1",
       sessionKey: "main",
     });
@@ -1934,8 +1933,8 @@ describe("stuck session diagnostics threshold", () => {
     expect(state.queueDepth).toBe(0);
     requireMatchingRecord(
       events,
-      { type: "session.state", state: "idle", reason: "stuck_recovery:noop", queueDepth: 0 },
-      "noop state clear event",
+      { type: "session.state", state: "idle", reason: "stuck_recovery:released", queueDepth: 0 },
+      "released state clear event",
     );
   });
 
@@ -1986,9 +1985,10 @@ describe("stuck session diagnostics threshold", () => {
     const events: DiagnosticEventPayload[] = [];
     let resolveRecovery:
       | ((outcome: {
-          status: "noop";
-          action: "none";
+          status: "released";
+          action: "release_lane";
           reason: "no_active_work";
+          released: number;
           sessionId: string;
           sessionKey: string;
         }) => void)
@@ -1996,9 +1996,10 @@ describe("stuck session diagnostics threshold", () => {
     const recoverStuckSession = vi.fn(
       () =>
         new Promise<{
-          status: "noop";
-          action: "none";
+          status: "released";
+          action: "release_lane";
           reason: "no_active_work";
+          released: number;
           sessionId: string;
           sessionKey: string;
         }>((resolve) => {
@@ -2035,9 +2036,10 @@ describe("stuck session diagnostics threshold", () => {
       );
 
       resolveRecovery?.({
-        status: "noop",
-        action: "none",
+        status: "released",
+        action: "release_lane",
         reason: "no_active_work",
+        released: 0,
         sessionId: "s1",
         sessionKey: "main",
       });

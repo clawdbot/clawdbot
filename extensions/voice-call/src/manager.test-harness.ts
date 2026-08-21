@@ -231,6 +231,7 @@ export function createEventManagerHarness() {
       storePath,
       webhookUrl: null,
       activeTurnCalls: new Set(),
+      endCallOperations: new Map(),
       transcriptWaiters: new Map(),
       maxDurationTimers: new Map(),
       initialMessageInFlight: new Set(),

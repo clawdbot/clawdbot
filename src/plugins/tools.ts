@@ -1177,11 +1177,9 @@ function resolvePluginToolLoadState(params: {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
-  const usePreparedRuntime =
-    preparedLoadContext !== undefined &&
-    (baseConfig === preparedLoadContext.rawConfig || baseConfig === preparedLoadContext.config) &&
-    env === preparedLoadContext.env &&
-    params.context.workspaceDir === preparedLoadContext.workspaceDir;
+  // The prepared runtime already owns one immutable Gateway plugin generation. Per-turn config
+  // and workspace projections cannot invalidate that executable graph or reopen discovery.
+  const usePreparedRuntime = preparedLoadContext !== undefined && env === preparedLoadContext.env;
   const context = usePreparedRuntime
     ? preparedLoadContext
     : resolvePluginRuntimeLoadContext({

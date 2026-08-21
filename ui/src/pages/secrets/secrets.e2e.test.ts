@@ -116,7 +116,7 @@ suite.define(() => {
             "secrets.store.set": {
               sequence: [
                 { ok: true, reloaded: false },
-                { ok: true, reloaded: true, warningCount: 0 },
+                { ok: true, reloaded: true, warningCount: 2 },
                 { ok: true, reloaded: false },
                 { ok: true, reloaded: false },
               ],
@@ -130,22 +130,46 @@ suite.define(() => {
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
+        await addDialog.getByText("Agent-readable environment", { exact: true }).waitFor();
+        expect(
+          await addDialog.getByRole("radio", { name: /Agent-readable environment/u }).isChecked(),
+        ).toBe(true);
+        await addDialog.getByText(/The agent can print, transmit, or persist it/u).waitFor();
         await addDialog.getByLabel("Name", { exact: true }).fill("SERVICE_URL");
         await addDialog.getByLabel("Value", { exact: true }).fill("https://service.test");
         await capture(page, "02-add-dialog.png");
         await addDialog.getByRole("button", { name: "Save", exact: true }).click();
-        await page.getByRole("status").getByText("Saved SERVICE_URL.").waitFor();
+        await page
+          .getByRole("status")
+          .getByText(
+            "Saved SERVICE_URL as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
+          )
+          .waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const secretDialog = page.locator('openclaw-modal-dialog[label="Add"]');
         await secretDialog.getByLabel("Name", { exact: true }).fill("SERVICE_API_KEY");
-        expect(await secretDialog.locator('input[type="checkbox"]').isChecked()).toBe(true);
+        expect(
+          await secretDialog.getByRole("radio", { name: /Protected secret/u }).isChecked(),
+        ).toBe(true);
         await secretDialog.getByLabel("Value", { exact: true }).fill("super-secret-material");
         await secretDialog.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
         await capture(page, "02-secret-allowed-hosts.png");
         await secretDialog.getByRole("button", { name: "Save", exact: true }).click();
-        await page.getByRole("status").getByText("Saved SERVICE_API_KEY.").waitFor();
+        await page
+          .getByRole("status")
+          .getByText(
+            "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. 2 runtime warnings.",
+          )
+          .waitFor();
         expect(await page.content()).not.toContain("super-secret-material");
+        await page.getByRole("columnheader", { name: "Access" }).waitFor();
+        expect(await page.getByRole("row", { name: /SERVICE_URL/u }).textContent()).toContain(
+          "Agent-readable environment",
+        );
+        expect(await page.getByRole("row", { name: /SERVICE_API_KEY/u }).textContent()).toContain(
+          "Protected secret",
+        );
         expect(await page.getByRole("row", { name: /SERVICE_API_KEY/u }).textContent()).toContain(
           "api.example.com",
         );
@@ -155,10 +179,15 @@ suite.define(() => {
         await bulkDialog
           .getByRole("textbox", { name: "Value", exact: true })
           .fill('BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test');
-        await bulkDialog.getByText("1 secret detected").waitFor();
+        await bulkDialog.getByText("1 protected secret detected").waitFor();
         await capture(page, "03-bulk-add-dialog.png");
         await bulkDialog.getByRole("button", { name: "Save", exact: true }).click();
-        await page.getByRole("status").getByText("Saved 2 entries.").waitFor();
+        await page
+          .getByRole("status")
+          .getByText(
+            "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
+          )
+          .waitFor();
 
         const bulkRow = page.getByRole("row", { name: /BULK_URL/u });
         await bulkRow.getByRole("button", { name: "Actions: BULK_URL" }).click();
