@@ -56,6 +56,74 @@ describe("release plan contract", () => {
     ).toThrow("printable ASCII");
   });
 
+  it("rejects values that JSON.stringify would erase or coerce", () => {
+    const withUndefined = { ...sourceFixture, ignored: undefined };
+    expect(JSON.stringify(withUndefined)).toBe(JSON.stringify(sourceFixture));
+    expect(() => canonicalReleasePlanJson(withUndefined)).toThrow("unsupported undefined");
+
+    const withNan = { ...sourceFixture, tag: Number.NaN };
+    expect(JSON.stringify(withNan)).toBe(JSON.stringify({ ...sourceFixture, tag: null }));
+    expect(() => canonicalReleasePlanJson(withNan)).toThrow("must be finite");
+
+    for (const value of [
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      () => undefined,
+      Symbol("ignored"),
+      1n,
+    ]) {
+      expect(() => canonicalReleasePlanJson({ ...sourceFixture, ignored: value })).toThrow(
+        "canonical JSON",
+      );
+    }
+    expect(() => canonicalReleasePlanJson({ ...sourceFixture, ignored: -0 })).toThrow(
+      "negative zero",
+    );
+  });
+
+  it("rejects non-tree and non-data JSON structures", () => {
+    const sparseGroups = ["all", , "package"];
+    expect(JSON.stringify(sparseGroups)).toBe('["all",null,"package"]');
+    expect(() =>
+      canonicalReleasePlanJson({
+        ...sourceFixture,
+        validation: {
+          ...(sourceFixture.validation as Record<string, unknown>),
+          allowed_groups: sparseGroups,
+        },
+      }),
+    ).toThrow("must be dense");
+
+    const augmentedGroups = ["all", "ci", "package"];
+    Object.defineProperty(augmentedGroups, "metadata", { enumerable: true, value: "ignored" });
+    expect(() =>
+      canonicalReleasePlanJson({
+        ...sourceFixture,
+        validation: {
+          ...(sourceFixture.validation as Record<string, unknown>),
+          allowed_groups: augmentedGroups,
+        },
+      }),
+    ).toThrow("no extra properties");
+
+    const cyclic = { ...sourceFixture } as Record<string, unknown>;
+    cyclic.self = cyclic;
+    expect(() => canonicalReleasePlanJson(cyclic)).toThrow("must not contain cycles");
+
+    const nonPlain = Object.assign(new (class ReleasePlan {})(), sourceFixture);
+    expect(() => canonicalReleasePlanJson(nonPlain)).toThrow("must be plain");
+
+    const accessor = { ...sourceFixture };
+    Object.defineProperty(accessor, "hidden", {
+      enumerable: true,
+      get: () => "ignored",
+    });
+    expect(() => canonicalReleasePlanJson(accessor)).toThrow("enumerable data properties");
+
+    const symbolKey = { ...sourceFixture, [Symbol("ignored")]: true };
+    expect(() => canonicalReleasePlanJson(symbolKey)).toThrow("must use string keys");
+  });
+
   it("enforces the purpose, version, tag, and target context matrix", () => {
     expect(() =>
       validateReleasePlan({
