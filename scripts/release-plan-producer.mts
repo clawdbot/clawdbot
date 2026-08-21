@@ -31,7 +31,11 @@ import {
   type ReleaseValidationProfile,
 } from "./release-validation-intent.mjs";
 
-export type ReleasePlanIntent = "publish" | "postpublish-confidence" | "main-qualification";
+export type ReleasePlanIntent =
+  | "publish"
+  | "diagnostic"
+  | "postpublish-confidence"
+  | "main-qualification";
 export type MainQualificationValidationIntent = Extract<
   ReleaseValidationIntent,
   "main-daily" | "main-weekly"
@@ -439,6 +443,14 @@ export function deriveReleasePlanPolicy(
   if (validationIntent !== undefined) {
     throw new Error("validation intent is only valid for main-qualification");
   }
+  if (intent === "diagnostic") {
+    const purpose = "diagnostic";
+    return {
+      ...resolveReleaseValidationIntent(releaseValidationIntentForPurpose(purpose)),
+      purpose,
+      tag: null,
+    };
+  }
   if (intent === "postpublish-confidence") {
     const purpose = "postpublish-confidence";
     return {
@@ -446,6 +458,9 @@ export function deriveReleasePlanPolicy(
       purpose,
       tag: `v${version}`,
     };
+  }
+  if (intent !== "publish") {
+    throw new Error("unsupported release plan intent");
   }
   const purpose = parsed.channel === "stable" ? "stable-publish" : "beta-publish";
   return {
@@ -693,7 +708,11 @@ function resolveSource(params: ReleasePlanSource) {
     workflowSha: toolingSha,
     ...(params.runGh ? { runGh: params.runGh } : {}),
   });
-  if (params.intent !== "main-qualification" && verifiedTooling.route !== "protected-tag") {
+  if (
+    params.intent !== "diagnostic" &&
+    params.intent !== "main-qualification" &&
+    verifiedTooling.route !== "protected-tag"
+  ) {
     throw new Error(`${params.intent} tooling must use a release-publish tag bound to its SHA`);
   }
   return { candidateSha, repoRoot, toolingFullRef, toolingSha };
@@ -712,8 +731,12 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
     collectCorePackagePolicy(npmPublicationWorkflow, parseYaml),
   );
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
+  // ReleasePlan binds the candidate bytes. A branch used only to make the FRV
+  // workflow reachable is dispatch state and must not become plan authority.
   const expectedCandidateRef =
-    params.intent === "main-qualification" ? candidateSha : `refs/tags/v${candidate.version}`;
+    params.intent === "diagnostic" || params.intent === "main-qualification"
+      ? candidateSha
+      : `refs/tags/v${candidate.version}`;
   if (params.candidateRef !== expectedCandidateRef) {
     throw new Error(`${params.intent} candidate ref must be ${expectedCandidateRef}`);
   }
@@ -774,8 +797,10 @@ function requiredOption(args: string[], name: string): string {
 function main() {
   const args = process.argv.slice(2);
   const intent = requiredOption(args, "--intent") as ReleasePlanIntent;
-  if (!["publish", "postpublish-confidence", "main-qualification"].includes(intent)) {
-    throw new Error("--intent must be publish, postpublish-confidence, or main-qualification");
+  if (!["publish", "diagnostic", "postpublish-confidence", "main-qualification"].includes(intent)) {
+    throw new Error(
+      "--intent must be publish, diagnostic, postpublish-confidence, or main-qualification",
+    );
   }
   const source = {
     candidateSha: requiredOption(args, "--candidate-sha"),

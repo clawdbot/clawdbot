@@ -9,6 +9,7 @@ export const RELEASE_VALIDATION_INTENTS = Object.freeze({
 const PURPOSE_INTENTS = Object.freeze({
   "beta-publish": Object.freeze(["release-beta"]),
   "stable-publish": Object.freeze(["release-stable"]),
+  diagnostic: Object.freeze(["diagnostic-full"]),
   "postpublish-confidence": Object.freeze(["diagnostic-full"]),
   "main-qualification": Object.freeze(["main-daily", "main-weekly"]),
 });

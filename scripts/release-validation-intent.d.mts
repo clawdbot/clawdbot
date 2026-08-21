@@ -10,6 +10,7 @@ export type ReleaseValidationProfile = "beta" | "stable" | "full";
 export type ReleaseValidationPurpose =
   | "beta-publish"
   | "stable-publish"
+  | "diagnostic"
   | "postpublish-confidence"
   | "main-qualification";
 

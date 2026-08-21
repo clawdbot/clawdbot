@@ -26,6 +26,7 @@ describe("release validation intent", () => {
   it.each([
     ["beta-publish", "release-beta"],
     ["stable-publish", "release-stable"],
+    ["diagnostic", "diagnostic-full"],
     ["postpublish-confidence", "diagnostic-full"],
   ] as const)("maps %s to %s", (purpose, intent) => {
     expect(releaseValidationIntentForPurpose(purpose)).toBe(intent);

@@ -235,7 +235,10 @@ function sourceParams(
   const source = {
     repoRoot: fixture.root,
     candidateSha: fixture.candidateSha,
-    candidateRef: intent === "main-qualification" ? fixture.candidateSha : fixture.candidateRef,
+    candidateRef:
+      intent === "diagnostic" || intent === "main-qualification"
+        ? fixture.candidateSha
+        : fixture.candidateRef,
     toolingSha: fixture.toolingSha,
     toolingFullRef: fixture.toolingFullRef,
     runGh: trustedToolingGh(fixture.toolingFullRef, fixture.toolingSha),
@@ -289,6 +292,14 @@ describe("release plan producer", () => {
       soak: true,
       tag: "v2026.8.1-beta.2",
     });
+    expect(deriveReleasePlanPolicy("diagnostic", "2026.8.1-beta.2")).toEqual({
+      intent: "diagnostic-full",
+      profile: "full",
+      publishable: false,
+      purpose: "diagnostic",
+      soak: true,
+      tag: null,
+    });
     expect(() => deriveReleasePlanPolicy("main-qualification", "2026.8.1-beta.2")).toThrow(
       "requires an explicit validation intent",
     );
@@ -313,6 +324,9 @@ describe("release plan producer", () => {
     expect(() => deriveReleasePlanPolicy("publish", "2026.08.1")).toThrow(
       "unsupported release version",
     );
+    expect(() =>
+      deriveReleasePlanPolicy("unexpected" as ReleasePlanIntent, "2026.8.1-beta.2"),
+    ).toThrow("unsupported release plan intent");
   });
 
   it("reads candidate inventory and tooling policy from genuinely different commits", () => {
@@ -405,6 +419,44 @@ describe("release plan producer", () => {
         intent: "diagnostic-full",
         profile: "full",
         soak: true,
+      },
+    });
+  });
+
+  it("produces tagless diagnostics from trusted main or protected tooling", () => {
+    const fixture = createFixtureRepo();
+    expect(produceReleasePlan(sourceParams(fixture, "diagnostic"))).toMatchObject({
+      candidate_sha: fixture.candidateSha,
+      purpose: "diagnostic",
+      tag: null,
+      target_context_ref: fixture.candidateSha,
+      tooling: {
+        ref: fixture.toolingFullRef,
+        sha: fixture.toolingSha,
+      },
+      validation: {
+        intent: "diagnostic-full",
+        profile: "full",
+        soak: true,
+      },
+    });
+
+    expect(
+      produceReleasePlan({
+        ...sourceParams(fixture, "diagnostic"),
+        toolingFullRef: "refs/heads/main",
+        runGh: (args) => {
+          expect(args[1]).toBe(`repos/openclaw/openclaw/compare/${fixture.toolingSha}...main`);
+          return JSON.stringify({ status: "identical" });
+        },
+      }),
+    ).toMatchObject({
+      purpose: "diagnostic",
+      tag: null,
+      target_context_ref: fixture.candidateSha,
+      tooling: {
+        ref: "refs/heads/main",
+        sha: fixture.toolingSha,
       },
     });
   });

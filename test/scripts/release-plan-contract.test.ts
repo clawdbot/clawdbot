@@ -230,6 +230,65 @@ describe("release plan contract", () => {
     ).toBe("main-weekly");
   });
 
+  it("keeps diagnostic plans tagless, non-publishable, and distinct from qualification", () => {
+    const diagnosticPlan = validateReleasePlan({
+      ...sourceFixture,
+      purpose: "diagnostic",
+      tag: null,
+      target_context_ref: sourceFixture.candidate_sha,
+      tooling: {
+        ...(sourceFixture.tooling as Record<string, unknown>),
+        ref: "refs/heads/main",
+      },
+      validation: {
+        allowed_groups: ["all", "ci", "package"],
+        intent: "diagnostic-full",
+        profile: "full",
+        soak: true,
+      },
+    });
+    expect(diagnosticPlan).toMatchObject({
+      purpose: "diagnostic",
+      tag: null,
+      target_context_ref: sourceFixture.candidate_sha,
+      validation: {
+        intent: "diagnostic-full",
+        profile: "full",
+        soak: true,
+      },
+    });
+    expect(diagnosticPlan.purpose).not.toBe("main-qualification");
+    expect(diagnosticPlan.purpose).not.toBe("postpublish-confidence");
+
+    expect(() =>
+      validateReleasePlan({
+        ...diagnosticPlan,
+        tag: sourceFixture.tag,
+        target_context_ref: sourceFixture.target_context_ref,
+      }),
+    ).toThrow("diagnostic release plans require a null tag and candidate SHA context");
+    expect(() =>
+      validateReleasePlan({
+        ...diagnosticPlan,
+        validation: {
+          ...diagnosticPlan.validation,
+          intent: "release-beta",
+          profile: "beta",
+          soak: false,
+        },
+      }),
+    ).toThrow("diagnostic does not allow validation intent");
+    expect(() =>
+      validateReleasePlan({
+        ...diagnosticPlan,
+        tooling: {
+          ...diagnosticPlan.tooling,
+          ref: "refs/heads/feature",
+        },
+      }),
+    ).toThrow("diagnostic tooling must use trusted main or a protected release-publish tag");
+  });
+
   it("rejects unknown authority, invalid ordering, and unsupported versions", () => {
     expect(() => validateReleasePlan({ ...sourceFixture, run_id: "123" })).toThrow(
       "release plan keys must be exactly",

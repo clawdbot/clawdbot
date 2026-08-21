@@ -248,9 +248,9 @@ function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, v
   if (purpose === "stable-publish" && parsedVersion.channel !== "stable") {
     fail("stable-publish release plan version must be stable");
   }
-  if (purpose === "main-qualification") {
+  if (purpose === "diagnostic" || purpose === "main-qualification") {
     if (tag !== null || targetContextRef !== candidateSha) {
-      fail("main-qualification release plans require a null tag and candidate SHA context");
+      fail(`${purpose} release plans require a null tag and candidate SHA context`);
     }
     return;
   }
@@ -263,9 +263,9 @@ function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, v
 function validateToolingRoute(purpose, ref, toolingSha) {
   const protectedMatch = /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(ref);
   const protectedRoute = protectedMatch?.[1] === toolingSha.slice(0, 12);
-  if (purpose === "main-qualification") {
+  if (purpose === "diagnostic" || purpose === "main-qualification") {
     if (ref !== "refs/heads/main" && !protectedRoute) {
-      fail("main-qualification tooling must use trusted main or a protected release-publish tag");
+      fail(`${purpose} tooling must use trusted main or a protected release-publish tag`);
     }
     return;
   }
