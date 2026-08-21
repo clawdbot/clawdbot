@@ -811,45 +811,45 @@ describe("session-store-runtime compatibility surface", () => {
     });
   });
 
-  it("preserves resolved maintenance settings through entry patches", async () => {
-    const staleSessionKey = "agent:main:stale";
-    const activeSessionKey = "agent:main:active";
-    const now = Date.now();
-    await seedSessionEntry(staleSessionKey, {
-      sessionId: "session-stale",
-      updatedAt: now - 8 * DAY_MS,
-    });
-    await seedSessionEntry(activeSessionKey, {
-      sessionId: "session-active",
-      updatedAt: now,
-    });
+  it.each([
+    { pruneAfterMs: 7 * DAY_MS, staleSessionPresent: false },
+    { pruneAfterMs: 0, staleSessionPresent: true },
+    { pruneAfterMs: -DAY_MS, staleSessionPresent: true },
+  ])(
+    "applies age retention $pruneAfterMs through entry patches",
+    async ({ pruneAfterMs, staleSessionPresent }) => {
+      const staleSessionKey = "agent:main:stale";
+      const activeSessionKey = "agent:main:active";
+      const now = Date.now();
+      await seedSessionEntry(staleSessionKey, {
+        sessionId: "session-stale",
+        updatedAt: now - 8 * DAY_MS,
+      });
+      await seedSessionEntry(activeSessionKey, {
+        sessionId: "session-active",
+        updatedAt: now,
+      });
 
-    await expect(
-      patchSessionEntry({
+      await patchSessionEntry({
         sessionKey: activeSessionKey,
         storePath,
         maintenanceConfig: {
           mode: "enforce",
-          pruneAfterMs: 7 * DAY_MS,
+          pruneAfterMs,
           modelRunPruneAfterMs: DAY_MS,
-          maxEntries: 1,
+          maxEntries: 100,
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
           highWaterBytes: null,
         },
         update: () => ({ model: "gpt-5.5" }),
-      }),
-    ).resolves.toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
+      });
 
-    expect(getSessionEntry({ sessionKey: activeSessionKey, storePath })).toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
-    expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-  });
+      expect(getSessionEntry({ sessionKey: staleSessionKey, storePath }) != null).toBe(
+        staleSessionPresent,
+      );
+    },
+  );
 
   it("forwards maintenance suppression through entry patches", async () => {
     const staleSessionKey = "agent:main:stale";

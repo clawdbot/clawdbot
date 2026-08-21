@@ -75,6 +75,9 @@ function hasStaleSqliteSessionEntryCandidate(
   maxAgeMs: number,
   isCandidate: (key: string, entry: SessionEntry) => boolean,
 ): boolean {
+  if (maxAgeMs <= 0) {
+    return false;
+  }
   const cutoffMs = Date.now() - maxAgeMs;
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
