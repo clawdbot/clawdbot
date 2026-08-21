@@ -132,13 +132,32 @@ export function isPluginExplicitlySelectedByAlias(
   // Promoting the unset context-engine default marked whichever plugin carries that id explicitly
   // selected and suppressed a replacement's edge for a plugin startup never selects.
   const slots = cfg.plugins?.slots;
-  const memorySelection = resolveSlotSelection("memory", slots?.memory);
-  if (memorySelection.kind !== "off" && canonicalId(memorySelection.pluginId) === target) {
-    return true;
-  }
+  // The context-engine slot is the one explicit-selection cause the workspace gate exempts, so it
+  // selects even for an untrusted workspace plugin.
   const authoredContextEngine = normalizeSlotValue(slots?.contextEngine);
   if (authoredContextEngine && canonicalId(authoredContextEngine) === target) {
     return true;
+  }
+  // The memory branch sits *after* that gate, so it never rescues a workspace plugin that is
+  // neither allowlisted nor entry-enabled: startup returns `workspace-disabled-by-default` first.
+  // Reading slot presence alone marked such a plugin selected here while the runtime never loads
+  // it, which is the disagreement this predicate exists to prevent, pointing the other way.
+  const memorySelection = resolveSlotSelection("memory", slots?.memory);
+  if (memorySelection.kind !== "off" && canonicalId(memorySelection.pluginId) === target) {
+    const isWorkspaceOrigin =
+      manifestRegistry?.plugins.some(
+        (plugin) => plugin.origin === "workspace" && canonicalId(plugin.id) === target,
+      ) === true;
+    const trustedByPolicy =
+      (Array.isArray(cfg.plugins?.allow) &&
+        cfg.plugins.allow.some((id) => typeof id === "string" && canonicalId(id) === target)) ||
+      Object.entries(cfg.plugins?.entries ?? {}).some(
+        ([writtenId, entry]) =>
+          canonicalId(writtenId) === target && isRecord(entry) && entry.enabled === true,
+      );
+    if (!isWorkspaceOrigin || trustedByPolicy) {
+      return true;
+    }
   }
   const allow = cfg.plugins?.allow;
   if (

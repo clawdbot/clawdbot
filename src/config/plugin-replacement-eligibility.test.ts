@@ -183,12 +183,19 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     { slot: "memory", config: { plugins: { slots: { memory: "clickclack-plus" } } } },
     { slot: "contextEngine", config: { plugins: { slots: { contextEngine: "clickclack-plus" } } } },
   ])("sees a plugin pinned to the $slot slot", ({ config }) => {
+    // Global origin on purpose: the workspace gate below covers the untrusted-workspace case, and
+    // this one is about the slot arms themselves.
+    const globalRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "clickclack-plus", origin: "global", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+
     expect(
       isPluginExplicitlySelectedByAlias(
         config as unknown as OpenClawConfig,
         "clickclack-plus",
-        canonicalId,
-        registry,
+        createManifestPluginAliasResolver(globalRegistry),
+        globalRegistry,
       ),
     ).toBe(true);
   });
@@ -230,6 +237,71 @@ describe("isPluginExplicitlySelectedByAlias", () => {
         "legacy",
         createManifestPluginAliasResolver(legacyRegistry),
         legacyRegistry,
+      ),
+    ).toBe(true);
+  });
+
+  // Codex review P2 on #123209: the workspace gate in `resolvePluginActivationDecisionShared` runs
+  // BEFORE the memory-slot branch and exempts only `selected-context-engine-slot`
+  // (`config-activation-shared.ts:186-201`). So for an untrusted workspace plugin the memory slot
+  // does not rescue it and the context-engine slot does — pinned both ways by
+  // `config-state.test.ts:671-690`.
+  it("does not let the memory slot select an untrusted workspace plugin", () => {
+    const workspaceRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "memory-core", origin: "workspace", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      plugins: { slots: { memory: "memory-core" } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "memory-core",
+        createManifestPluginAliasResolver(workspaceRegistry),
+        workspaceRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    { how: "plugins.allow", extra: { allow: ["memory-core"] } },
+    { how: "an enabled entry", extra: { entries: { "memory-core": { enabled: true } } } },
+  ])("lets the memory slot select a workspace plugin trusted through $how", ({ extra }) => {
+    const workspaceRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "memory-core", origin: "workspace", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      plugins: { slots: { memory: "memory-core" }, ...extra },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "memory-core",
+        createManifestPluginAliasResolver(workspaceRegistry),
+        workspaceRegistry,
+      ),
+    ).toBe(true);
+  });
+
+  it("still lets the context-engine slot select an untrusted workspace plugin", () => {
+    const workspaceRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "lossless-claw", origin: "workspace", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      plugins: { slots: { contextEngine: "lossless-claw" } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "lossless-claw",
+        createManifestPluginAliasResolver(workspaceRegistry),
+        workspaceRegistry,
       ),
     ).toBe(true);
   });
