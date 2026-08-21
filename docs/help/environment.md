@@ -219,7 +219,7 @@ A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning
 
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
-This only applies to string values inside `openclaw.json`. It does not run on environment variable values themselves, so `${VAR}` written inside an `.env` file (for example `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace`) stays literal. Docker does not interpolate `.env` files loaded through `env_file:`; only the `environment:` mapping in `docker-compose.yml` gets resolved against the host shell before the container starts. Set `OPENCLAW_*_DIR`/`OPENCLAW_*_PATH` variables in `.env` to a fully-resolved absolute path, or a `~`-relative one.
+This only applies to string values inside `openclaw.json`. It does not run on environment variable values themselves, so `${VAR}` written inside an `.env` file (for example `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace`) stays literal. Docker does not interpolate `.env` files loaded through `env_file:`; only the `environment:` mapping in `docker-compose.yml` gets resolved against the host shell before the container starts. Set `OPENCLAW_*_DIR`/`OPENCLAW_*_PATH` variables to a fully-resolved absolute path — `~` is not expanded for these. Also note that a workspace-local `.env` file drops the entire `OPENCLAW_*` namespace (it's untrusted input); set these variables in the trusted global `.env` instead — `$OPENCLAW_STATE_DIR/.env`, or `~/.openclaw/.env` by default.
 
 ## Secret refs vs `${ENV}` strings
 
