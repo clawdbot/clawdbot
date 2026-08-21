@@ -19,6 +19,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import {
   logAnnounceGiveUp,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -361,7 +362,13 @@ export async function completeTerminalEffects(
     });
   }
 
-  if (!suppressSessionEffects) {
+  // This write stamps the registry's own derived status (`timeout`) and end
+  // timing onto the CHILD's session entry. For an unconfirmed child that is
+  // both a terminal effect on a possibly-live session and self-defeating: the
+  // child's session entry is the only independent record of whether it is
+  // still running, and overwriting it would make our own guess look like the
+  // child's own stop evidence. Leave it to the child until a stop is observed.
+  if (!suppressSessionEffects && !shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -508,6 +515,11 @@ async function completeTerminalCleanup(
   if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
     return;
   }
+  // Closing the child's browser sessions and retiring its run-mode MCP runtime
+  // both tear down resources a still-live child is using. A bare deadline is
+  // not evidence that it stopped, so they wait for the observed stop that
+  // promotes this row out of `child-unconfirmed`.
+  const deferChildRuntimeTeardown = shouldDeferTerminalCleanupForUnconfirmedChild(entry);
   refreshSessionEffectsSuppression();
   if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
     return;
@@ -523,7 +535,11 @@ async function completeTerminalCleanup(
   // with a sync check-then-set. The retire + announce tail below must still
   // run for every caller, so a slow or held first browser cleanup cannot
   // strand a duplicate caller's completion behind it.
-  if (!suppressSessionEffects && entry.browserCleanupDispatchedAt === undefined) {
+  if (
+    !suppressSessionEffects &&
+    !deferChildRuntimeTeardown &&
+    entry.browserCleanupDispatchedAt === undefined
+  ) {
     let dispatchedBrowserCleanup = false;
     let cleanupBrowserSessions: typeof cleanupBrowserSessionsForLifecycleEnd | undefined =
       params.cleanupBrowserSessionsForLifecycleEnd;
@@ -578,7 +594,7 @@ async function completeTerminalCleanup(
     }
   }
 
-  if (!suppressSessionEffects) {
+  if (!suppressSessionEffects && !deferChildRuntimeTeardown) {
     if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
       return;
     }

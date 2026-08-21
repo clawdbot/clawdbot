@@ -18,6 +18,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
@@ -54,6 +55,13 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
     params.entry.execution.outcome?.status !== "timeout" ||
     typeof params.entry.execution.endedAt !== "number"
   ) {
+    return false;
+  }
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(params.entry)) {
+    // A published `child-unconfirmed` timeout records that nothing was ever
+    // observed to stop the child. It is provisional by construction, so a later
+    // lifecycle callback carrying real stop evidence must be able to settle it;
+    // preserving it here is what would leave the row permanently unpromotable.
     return false;
   }
   const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
@@ -301,8 +309,31 @@ export async function completeSubagentRunAttempt(
         });
     if (expiredDeadlineMs !== undefined) {
       endedAt = expiredDeadlineMs;
-      completionOutcome = { status: "timeout" };
+      completionOutcome = {
+        status: "timeout",
+        // This caller observed an end past the stored deadline, so only its
+        // timing is clamped back — the stop itself is evidence. An already
+        // unconfirmed disposition stays unconfirmed; nothing here observed it.
+        timeoutDisposition:
+          completionOutcome.status === "timeout"
+            ? (completionOutcome.timeoutDisposition ?? "child-stopped")
+            : "child-stopped",
+      };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+    }
+    if (
+      shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
+      !(
+        completionOutcome.status === "timeout" &&
+        completionOutcome.timeoutDisposition === "child-unconfirmed"
+      )
+    ) {
+      // Authoritative stop evidence promotes this row out of the deferred,
+      // non-terminal cleanup state. Reopen cleanup so the terminal effects that
+      // were withheld while the child might still have been running can run now.
+      entry.cleanupHandled = false;
+      entry.cleanupCompletedAt = undefined;
+      mutated = true;
     }
     const killIntent = entry.killIntent;
     if (killIntent) {

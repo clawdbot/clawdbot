@@ -396,8 +396,8 @@ export const startSubagentAnnounceCleanupFlow = (
   // A run completed on its deadline with no observed child stop keeps its child
   // session: deleting it would destroy a session that may still be in use, and
   // the announce this flow is about to send says exactly that the child may
-  // still be running. `entry.cleanup` is untouched, so the archive deadline
-  // still arms and the sweeper performs the deletion once retention expires.
+  // still be running. `entry.cleanup` is untouched, so the run's real mode is
+  // restored the moment observed stop evidence promotes the row.
   const cleanup = resolveEffectiveCleanupMode(entry);
   let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
   if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {

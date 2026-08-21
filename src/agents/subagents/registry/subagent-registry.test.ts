@@ -2330,23 +2330,118 @@ describe("subagent registry seam flow", () => {
     const deleteCalls = () =>
       mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete");
     expect(deleteCalls()).toHaveLength(0);
-    // Deferred, not cancelled. The row keeps cleanup: "delete", so the archive
-    // pass still owns the deletion. This config disables auto-archive
-    // (archiveAfterMinutes: 0), which must not leave the child session unowned:
-    // a deferred cleanup arms the default window instead of no deadline at all.
+    // Deferred, not cancelled. The row keeps cleanup: "delete" so the real mode
+    // is restored the moment a stop is observed.
     const completedRun = findRequesterRun("run-unconfirmed-delete-cleanup");
     expect(completedRun?.cleanup).toBe("delete");
     expect(completedRun?.execution.outcome?.timeoutDisposition).toBe("child-unconfirmed");
-    expect(completedRun?.archiveAtMs).toBe(startedAt + 1_000 + 60 * 60_000);
+    // Regression (openclaw-odqn round 2, finding 2): this config sets
+    // archiveAfterMinutes: 0, the documented no-auto-archive opt-out. Round 1
+    // overrode it with a 60-minute floor so the deferred deletion would have an
+    // owner; that turned a documented opt-out into a blind deletion timer. The
+    // owner is observed stop evidence, never a clock, so zero stays zero.
+    expect(completedRun?.archiveAtMs).toBeUndefined();
+    // The child's own session entry must not have been stamped terminal by our
+    // guess either — it is the only independent record of the child's liveness.
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
 
+    // Long past any retention window, with the child session still reporting
+    // running: no clock may delete it, and the row must survive so a later
+    // observed stop can still settle it.
     vi.setSystemTime(startedAt + 1_000 + 61 * 60_000);
     await mod.testing.sweepOnceForTests();
-    expect(deleteCalls()).toHaveLength(1);
-    expect(deleteCalls()[0]?.[0]).toMatchObject({
-      method: "sessions.delete",
-      params: expect.objectContaining({ expectedSessionId: "sess-unconfirmed" }),
+    expect(deleteCalls()).toHaveLength(0);
+    expect(findRequesterRun("run-unconfirmed-delete-cleanup")).toBeDefined();
+
+    // The child finally records its own stop. That is authoritative evidence,
+    // so the sweeper promotes the row and the deferred cleanup completes.
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt + 1_000 + 62 * 60_000,
+        endedAt: startedAt + 1_000 + 62 * 60_000,
+        status: "done",
+        sessionId: "sess-unconfirmed",
+        lifecycleRevision: "rev-unconfirmed",
+      }),
+    );
+    vi.setSystemTime(startedAt + 1_000 + 63 * 60_000);
+    await mod.testing.sweepOnceForTests();
+    // Promotion re-opens the cleanup that was withheld, so the delete-mode row
+    // settles and retires, and the terminal tails that never ran for the
+    // unconfirmed row finally run against the observed stop.
+    await waitForFast(() => {
+      expect(findRequesterRun("run-unconfirmed-delete-cleanup")).toBeUndefined();
+      expect(mocks.onSubagentEnded).toHaveBeenCalled();
     });
-    expect(findRequesterRun("run-unconfirmed-delete-cleanup")).toBeUndefined();
+    // The child's session entry gets its real terminal timing only now, from an
+    // observed stop rather than from our own deadline guess.
+    expect(mocks.patchSessionEntryCore).toHaveBeenCalled();
+    // Still exactly one announce: promotion settles cleanup, it does not
+    // re-notify the parent.
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs no terminal cleanup tails for an unconfirmed child until an observed stop promotes it", async () => {
+    // Regression (openclaw-odqn round 2, finding 1): round 1 only withheld
+    // sessions.delete. Cleanup bookkeeping still tore down internal session
+    // effects, retired the child's MCP runtime, stamped a terminal status onto
+    // the child's session entry, and reported the child completed to the
+    // context engine — all against a child the announce says may still be live.
+    const startedAt = Date.now();
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt,
+        status: "running",
+        sessionId: "sess-no-tails",
+        lifecycleRevision: "rev-no-tails",
+      }),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-unconfirmed-no-tails",
+      task: "unconfirmed child runs no terminal tails",
+      cleanup: "keep",
+      runTimeoutSeconds: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitForFast(() => {
+      expect(
+        findRequesterRun("run-unconfirmed-no-tails")?.execution.outcome?.timeoutDisposition,
+      ).toBe("child-unconfirmed");
+    });
+    // The parent still gets woken — that is the point of completing the row.
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    // …but nothing the child owns may be torn down yet.
+    expect(mocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
+    expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+
+    // An observed stop promotes the row, and only then do the tails run.
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt + 30_000,
+        endedAt: startedAt + 30_000,
+        status: "done",
+        sessionId: "sess-no-tails",
+        lifecycleRevision: "rev-no-tails",
+      }),
+    );
+    vi.setSystemTime(startedAt + 40_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      expect(mocks.onSubagentEnded).toHaveBeenCalled();
+    });
+    expect(mocks.removeInternalSessionEffectsSession).toHaveBeenCalled();
   });
 
   it("skips silent-cleanup session deletion for an unconfirmed child but keeps it for an observed stop", async () => {
@@ -2808,7 +2903,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps published explicit timeout stable when late lifecycle timeout arrives", async () => {
+  it("promotes an unconfirmed explicit timeout when a late lifecycle abort observes the stop", async () => {
     const startedAt = Date.now();
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": { status: "timeout" },
@@ -2830,7 +2925,11 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => {
       const completedRun = findRequesterRun("run-timeout-late-lifecycle-timeout");
       expect(completedRun?.execution.endedAt).toBe(startedAt + 1_000);
-      expect(completedRun?.execution.outcome?.status).toBe("timeout");
+      expectRecordFields(
+        completedRun?.execution.outcome,
+        { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+        "published unconfirmed timeout outcome",
+      );
     });
 
     const lifecycleHandler = getLifecycleHandler();
@@ -2847,20 +2946,29 @@ describe("subagent registry seam flow", () => {
     });
     await vi.advanceTimersByTimeAsync(30_000);
 
+    // Regression (openclaw-odqn round 2, finding 1): this coverage previously
+    // asserted the published timeout was frozen against every later callback,
+    // which is exactly what made `child-unconfirmed` a state nothing could ever
+    // leave. A lifecycle `end` with `aborted` IS an observed stop, so it must be
+    // able to settle the row. The outcome stays a deadline-clamped timeout —
+    // recomputed against the observed start the event reports — but the
+    // disposition promotes, which is what re-arms terminal cleanup.
     await waitForFast(() => {
       const run = findRequesterRun("run-timeout-late-lifecycle-timeout");
-      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
       expectRecordFields(
         run?.execution.outcome,
         {
           status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
+          timeoutDisposition: "child-stopped",
+          startedAt: startedAt + 10,
+          endedAt: startedAt + 1_010,
           elapsedMs: 1_000,
         },
-        "stable published lifecycle timeout outcome",
+        "promoted lifecycle timeout outcome",
       );
+      expect(run?.execution.endedAt).toBe(startedAt + 1_010);
     });
+    // Promotion settles cleanup; it does not re-notify the parent.
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 

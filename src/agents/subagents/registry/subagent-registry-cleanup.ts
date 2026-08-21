@@ -34,17 +34,28 @@ export function resolveCleanupCompletionReason(
 }
 
 /**
- * True when this run was completed on a deadline alone and nothing was ever
- * observed to stop the child (`child-unconfirmed`). The row is terminal so the
- * parent gets woken, but the child may still be running, so terminal cleanup
- * must not yet submit the `sessions.delete` that removes its session and
- * transcript, nor remove the attachments directory it may still be writing to.
+ * True while this run is in the durable, non-terminal-cleanup `child-unconfirmed`
+ * state: it was completed on a deadline alone and nothing was ever observed to
+ * stop the child.
  *
- * Deferral, not cancellation: `entry.cleanup` is left untouched, so the archive
- * deadline still arms for delete-mode runs and the sweeper deletes the session
- * once the retention window expires. Any real stop observed before then — by a
- * later `agent.wait`, a lifecycle event, or session reconciliation — settles the
- * row through the ordinary path.
+ * The registry row is terminal so the parent gets woken, but the child may still
+ * be running, so **no terminal effect may run against it**: not the
+ * `sessions.delete` that removes its session and transcript, not its attachments
+ * directory, not its browser sessions, not its MCP runtimes, not the internal
+ * session-effects teardown, and not the context-engine "this child ended" report.
+ *
+ * Only authoritative stop evidence promotes the row out of this state, never a
+ * clock. Two owners produce that evidence:
+ *
+ * - **push** — a later lifecycle callback settles the run; the published
+ *   provisional timeout is explicitly not preserved against it
+ *   (`shouldPreservePublishedExplicitRunTimeout`), and the promotion reopens
+ *   cleanup so the withheld effects finally run.
+ * - **pull** — the sweeper re-reads the child's own persisted session entry
+ *   (`settleSubagentRunFromSessionStore`). A terminal status there promotes the
+ *   row; a `running` status defers it again, so retention never deletes a child
+ *   that is still alive and `archiveAfterMinutes: 0` keeps its documented
+ *   no-auto-archive meaning.
  */
 export function shouldDeferTerminalCleanupForUnconfirmedChild(entry: SubagentRunRecord): boolean {
   const outcome = entry.execution.outcome;
@@ -71,8 +82,8 @@ export function shouldDeleteSubagentAttachments(
   cleanup?: "delete" | "keep",
 ): boolean {
   if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-    // A live child may still be writing here; the sweeper removes the directory
-    // when it retires the row.
+    // A live child may still be writing here; the directory is removed once an
+    // observed stop promotes the row and the ordinary owner retires it.
     return false;
   }
   return (cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep;

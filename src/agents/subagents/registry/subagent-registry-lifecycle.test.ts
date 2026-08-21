@@ -492,6 +492,47 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("defers child runtime teardown for an unconfirmed child but not for an observed stop", async () => {
+    // Regression (openclaw-odqn round 2, finding 1): closing the child's
+    // browser sessions and retiring its run-mode MCP runtime are terminal
+    // effects on resources a still-live child is using. A bare deadline is not
+    // evidence it stopped, so neither may run until the stop is observed.
+    const unconfirmed = createRunEntry({ expectsCompletionMessage: false });
+    const unconfirmedController = createLifecycleController({ entry: unconfirmed });
+
+    await completeRun(unconfirmedController, unconfirmed, {
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      triggerCleanup: true,
+    });
+
+    expect(unconfirmed.execution.outcome).toMatchObject({
+      status: "timeout",
+      timeoutDisposition: "child-unconfirmed",
+    });
+    expect(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    ).not.toHaveBeenCalled();
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+    expect(internalSessionEffectsMocks.removeInternalSessionEffectsSession).not.toHaveBeenCalled();
+
+    // Control: the same shape with an observed stop must still tear down, or
+    // the fix has simply disabled terminal cleanup for every timeout.
+    const observed = createRunEntry({ runId: "run-observed", expectsCompletionMessage: false });
+    const observedController = createLifecycleController({ entry: observed });
+
+    await completeRun(observedController, observed, {
+      outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => {
+      expect(
+        browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+      ).toHaveBeenCalledTimes(1);
+      expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalled();
+    });
+  });
+
   it("fails a required successful completion without producer reply evidence", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
