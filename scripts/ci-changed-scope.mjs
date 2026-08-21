@@ -46,7 +46,7 @@ const APPLE_SHARED_CONTRACT_FIXTURE_RE =
 const MACOS_NATIVE_RE =
   /^(apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-cli|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh|scripts\/verify-macos-prewarmed-runtime\.mts|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|install-cli-prewarmed|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|verify-macos-prewarmed-runtime)\.test\.ts)$/;
+  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-cli|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|stage-cua-driver-macos)\.sh|scripts\/(?:prewarmed-plugin-cache\.mjs|stage-macos-prewarmed-plugin-cache\.mts|verify-macos-prewarmed-runtime\.mts)|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh|test\/scripts\/(?:codesign-mac-app|create-dmg|install-cli-prewarmed|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prewarmed-plugin-cache|verify-macos-prewarmed-runtime)\.test\.ts)$/;
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =

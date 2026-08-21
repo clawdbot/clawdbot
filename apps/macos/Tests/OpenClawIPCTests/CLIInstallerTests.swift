@@ -90,19 +90,28 @@ struct CLIInstallerTests {
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         let archive = root.appendingPathComponent("prewarmed-runtime-arm64.tar.gz")
         let manifest = root.appendingPathComponent("prewarmed-runtime.json")
+        let cacheDirectory = root.appendingPathComponent("prewarmed-plugin-cache", isDirectory: true)
+        let cacheManifest = cacheDirectory.appendingPathComponent("manifest.json")
+        let cacheVerifier = root.appendingPathComponent("prewarmed-plugin-cache.mjs")
         fm.createFile(atPath: archive.path, contents: Data("archive".utf8))
+        try fm.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        fm.createFile(atPath: cacheManifest.path, contents: Data("{}".utf8))
+        fm.createFile(atPath: cacheVerifier.path, contents: Data("// verifier".utf8))
         let commit = String(repeating: "a", count: 40)
         let sha = String(repeating: "b", count: 64)
         try Data("""
         {
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "appVersion": "2026.8.1",
           "gitCommit": "\(commit)",
           "architecture": "arm64",
           "nodeVersion": "24.15.0",
           "runtimeDirectory": "node-v24.15.0",
           "archiveFile": "prewarmed-runtime-arm64.tar.gz",
-          "archiveSHA256": "\(sha)"
+          "archiveSHA256": "\(sha)",
+          "pluginCacheDirectory": "prewarmed-plugin-cache",
+          "pluginCacheManifestFile": "manifest.json",
+          "pluginCacheManifestSHA256": "\(sha)"
         }
         """.utf8).write(to: manifest)
 
