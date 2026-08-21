@@ -106,6 +106,11 @@ const frozenCoreGapScenarioIds = new Set<string>([
   "runtime-tool-fs-write",
   "runtime-tool-grep",
 ]);
+const frozenBeta3CoreScenarioIds = frozenCoreScenarioIds.filter(
+  (scenarioId) =>
+    scenarioId !== "codex-plugin-pinned-new" && scenarioId !== "codex-plugin-pinned-old",
+);
+const frozenBeta3TargetSha = "2d25f59b4a50b9f6579ae6d203f68616888f4fec";
 
 function frozenCoreSummary() {
   return summary(
@@ -125,14 +130,117 @@ function frozenCoreSummary() {
   );
 }
 
+function frozenBeta3StatuslessSummary() {
+  const fixture = summary(
+    frozenBeta3CoreScenarioIds.map((scenarioId) =>
+      scenario({
+        name: scenarioId,
+        status: "pass",
+      }),
+    ),
+  );
+  delete (fixture.run as { status?: string }).status;
+  return Object.assign(fixture, {
+    run: {
+      ...fixture.run,
+      startedAt: "2026-08-20T22:48:04.658Z",
+      finishedAt: "2026-08-20T23:03:13.497Z",
+    },
+  });
+}
+
 describe("frozen QA runtime-pair summary validation", () => {
   it("rejects a nonterminal runtime-pair summary", () => {
-    const fixture = summary([scenario({ name: "running", status: "pass" })]);
+    const fixture = frozenBeta3StatuslessSummary();
     fixture.run.status = "running";
 
-    expect(() => validateQaRuntimePairSummary(fixture)).toThrow(
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        targetSha: frozenBeta3TargetSha,
+        lane: "core",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
+  });
+
+  it("accepts completed summaries without frozen-candidate options", () => {
+    expect(
+      validateQaRuntimePairSummary(summary([scenario({ name: "passing", status: "pass" })])),
+    ).toMatchObject({ passed: 1 });
+  });
+
+  it("accepts the exact statusless beta.3 core summary", () => {
+    expect(
+      validateQaRuntimePairSummary(frozenBeta3StatuslessSummary(), {
+        targetSha: frozenBeta3TargetSha,
+        lane: "core",
+      }),
+    ).toEqual({
+      total: 25,
+      passed: 25,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it.each([
+    ["both options", {}],
+    ["target SHA", { lane: "core" }],
+    ["lane", { targetSha: frozenBeta3TargetSha }],
+  ])("rejects the statusless beta.3 summary without %s", (_label, options) => {
+    expect(() => validateQaRuntimePairSummary(frozenBeta3StatuslessSummary(), options)).toThrow(
       "runtime-pair summary is not completed",
     );
+  });
+
+  it.each([
+    ["wrong target", { targetSha: "0000000000000000000000000000000000000000", lane: "core" }],
+    ["wrong lane", { targetSha: frozenBeta3TargetSha, lane: "extended" }],
+  ])("rejects the statusless beta.3 summary for the %s", (_label, options) => {
+    expect(() => validateQaRuntimePairSummary(frozenBeta3StatuslessSummary(), options)).toThrow(
+      "runtime-pair summary is not completed",
+    );
+  });
+
+  it("rejects an internally consistent prefix of the frozen beta.3 manifest", () => {
+    const fixture = frozenBeta3StatuslessSummary();
+    fixture.run.scenarioIds.pop();
+    fixture.scenarios.pop();
+    fixture.counts.total -= 1;
+    fixture.counts.passed -= 1;
+
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        targetSha: frozenBeta3TargetSha,
+        lane: "core",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
+  });
+
+  it.each([
+    ["missing startedAt", undefined, "2026-08-20T23:03:13.497Z"],
+    ["missing finishedAt", "2026-08-20T22:48:04.658Z", undefined],
+    ["invalid startedAt", "not-a-date", "2026-08-20T23:03:13.497Z"],
+    ["invalid finishedAt", "2026-08-20T22:48:04.658Z", "not-a-date"],
+    ["reversed timestamps", "2026-08-20T23:03:13.497Z", "2026-08-20T22:48:04.658Z"],
+  ])("rejects statusless beta.3 evidence with %s", (_label, startedAt, finishedAt) => {
+    const fixture = frozenBeta3StatuslessSummary();
+    if (startedAt === undefined) {
+      delete (fixture.run as { startedAt?: string }).startedAt;
+    } else {
+      fixture.run.startedAt = startedAt;
+    }
+    if (finishedAt === undefined) {
+      delete (fixture.run as { finishedAt?: string }).finishedAt;
+    } else {
+      fixture.run.finishedAt = finishedAt;
+    }
+
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        targetSha: frozenBeta3TargetSha,
+        lane: "core",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
   });
 
   it("accepts only passing scenarios and explicit one-sided Codex-native gaps", () => {
