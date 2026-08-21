@@ -134,6 +134,23 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.getSnapshot().lines).toEqual(["🛠️ Patch command"]);
 
     await progress.pushPlanProgress([
+      { step: "Run tests", status: "in_progress" },
+      { step: "Run tests", status: "pending" },
+    ]);
+    await progress.pushToolProgress("🛠️ First test run", { startImmediately: true });
+    await progress.pushPlanProgress([
+      { step: "Run tests", status: "in_progress" },
+      { step: "Run tests", status: "pending" },
+    ]);
+    expect(progress.getSnapshot().lines).toEqual(["🛠️ First test run"]);
+
+    await progress.pushPlanProgress([
+      { step: "Run tests", status: "completed" },
+      { step: "Run tests", status: "in_progress" },
+    ]);
+    expect(progress.getSnapshot().lines).toEqual([]);
+
+    await progress.pushPlanProgress([
       { step: "Inspect", status: "completed" },
       { step: "Patch", status: "completed" },
     ]);

@@ -68,7 +68,11 @@ function resolveActivePlanStepKey(steps: readonly AgentPlanStep[] | undefined): 
   }
   const activeIndex = steps.findIndex((entry) => entry.status === "in_progress");
   if (activeIndex >= 0) {
-    return `active:${normalizePlanStepText(steps[activeIndex]?.step)}`;
+    const activeStep = normalizePlanStepText(steps[activeIndex]?.step);
+    const occurrence = steps
+      .slice(0, activeIndex + 1)
+      .filter((entry) => normalizePlanStepText(entry.step) === activeStep).length;
+    return `active:${activeStep}:${occurrence}`;
   }
   return steps.every((entry) => entry.status === "completed") ? "completed" : undefined;
 }
