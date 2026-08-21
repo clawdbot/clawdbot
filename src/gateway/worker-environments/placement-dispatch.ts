@@ -548,6 +548,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           await cancelUnstagedFailedReclaim(
             error instanceof WorkerWorkspaceFinalFenceError && error.reclaimDisposition === "retry",
           ).catch(() => undefined);
+          const pendingReclaimResult = placements
+            .listPendingWorkspaceResults()
+            .find(
+              (pending) =>
+                pending.sessionId === reclaimClaim.sessionId &&
+                pending.claimId === reclaimClaim.claimId &&
+                pending.runId === reclaimClaim.runId,
+            );
+          if (pendingReclaimResult && pendingReclaimResult.workspaceAcceptedAtMs !== null) {
+            placements.handoffWorkspaceResultRecovery(reclaimClaim);
+            await recovery.reconcileActive(current.environmentId).catch(() => undefined);
+          }
           throw error;
         }
       },

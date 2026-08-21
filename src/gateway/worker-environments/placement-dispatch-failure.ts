@@ -50,6 +50,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "list"
   | "listPendingWorkspaceResults"
   | "markWorkspaceResultPending"
+  | "handoffWorkspaceResultRecovery"
   | "workspaceResultInstanceId"
   | "validateWorkspaceResultClaim"
   | "recordStagedWorkspaceResult"
