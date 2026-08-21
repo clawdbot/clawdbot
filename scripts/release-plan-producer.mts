@@ -31,16 +31,29 @@ import {
 } from "./release-validation-intent.mjs";
 
 export type ReleasePlanIntent = "publish" | "postpublish-confidence" | "main-qualification";
+export type MainQualificationValidationIntent = Extract<
+  ReleaseValidationIntent,
+  "main-daily" | "main-weekly"
+>;
 
-type ReleasePlanSource = {
+type ReleasePlanSourceBase = {
   repoRoot?: string;
-  intent: ReleasePlanIntent;
   candidateSha: string;
   candidateRef: string;
   toolingSha: string;
   toolingFullRef: string;
   runGh?: (args: string[]) => string;
 };
+
+export type ReleasePlanSource =
+  | (ReleasePlanSourceBase & {
+      intent: "main-qualification";
+      validationIntent: MainQualificationValidationIntent;
+    })
+  | (ReleasePlanSourceBase & {
+      intent: Exclude<ReleasePlanIntent, "main-qualification">;
+      validationIntent?: never;
+    });
 
 type PackageManifest = PluginPackageJson;
 
@@ -238,6 +251,7 @@ function withCandidateSnapshot<T>(
 export function deriveReleasePlanPolicy(
   intent: ReleasePlanIntent,
   version: string,
+  validationIntent?: MainQualificationValidationIntent,
 ): {
   intent: ReleaseValidationIntent;
   profile: ReleaseValidationProfile;
@@ -253,10 +267,15 @@ export function deriveReleasePlanPolicy(
   if (intent === "main-qualification") {
     const purpose = "main-qualification";
     return {
-      ...resolveReleaseValidationIntent(releaseValidationIntentForPurpose(purpose)),
+      ...resolveReleaseValidationIntent(
+        releaseValidationIntentForPurpose(purpose, validationIntent),
+      ),
       purpose,
       tag: null,
     };
+  }
+  if (validationIntent !== undefined) {
+    throw new Error("validation intent is only valid for main-qualification");
   }
   if (intent === "postpublish-confidence") {
     const purpose = "postpublish-confidence";
@@ -524,7 +543,7 @@ export function produceReleasePlan(params: ReleasePlanSource): ReleasePlan {
     candidateSha,
     collectCorePackagePolicy(npmPublicationWorkflow),
   );
-  const policy = deriveReleasePlanPolicy(params.intent, candidate.version);
+  const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
   const expectedCandidateRef =
     params.intent === "main-qualification" ? candidateSha : `refs/tags/v${candidate.version}`;
   if (params.candidateRef !== expectedCandidateRef) {
@@ -590,13 +609,21 @@ function main() {
   if (!["publish", "postpublish-confidence", "main-qualification"].includes(intent)) {
     throw new Error("--intent must be publish, postpublish-confidence, or main-qualification");
   }
-  const plan = produceReleasePlan({
-    intent,
+  const validationIntent =
+    intent === "main-qualification"
+      ? (requiredOption(args, "--validation-intent") as MainQualificationValidationIntent)
+      : undefined;
+  const source = {
     candidateSha: requiredOption(args, "--candidate-sha"),
     candidateRef: requiredOption(args, "--candidate-ref"),
     toolingSha: requiredOption(args, "--tooling-sha"),
     toolingFullRef: requiredOption(args, "--tooling-full-ref"),
-  });
+  };
+  const plan = produceReleasePlan(
+    intent === "main-qualification"
+      ? { ...source, intent, validationIntent }
+      : { ...source, intent },
+  );
   process.stdout.write(canonicalReleasePlanLockJson(createReleasePlanLock(plan)));
 }
 

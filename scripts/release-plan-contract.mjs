@@ -213,7 +213,6 @@ export function validateReleasePlan(value) {
     fail(`release plan schema must be ${RELEASE_PLAN_SCHEMA}`);
   }
   const purpose = asciiString(value.purpose, "release plan purpose");
-  const expectedIntent = releaseValidationIntentForPurpose(purpose);
   const version = asciiString(value.version, "release plan version");
   const releaseId = asciiString(value.release_id, "release plan release_id");
   if (releaseId !== version) {
@@ -241,9 +240,7 @@ export function validateReleasePlan(value) {
     "release plan validation",
   );
   const intent = asciiString(value.validation.intent, "release plan validation intent");
-  if (intent !== expectedIntent) {
-    fail(`release plan ${purpose} validation intent must be ${expectedIntent}`);
-  }
+  releaseValidationIntentForPurpose(purpose, intent);
   const profile = asciiString(value.validation.profile, "release plan validation profile");
   if (typeof value.validation.soak !== "boolean") {
     fail("release plan validation soak must be boolean");

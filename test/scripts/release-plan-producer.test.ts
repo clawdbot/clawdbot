@@ -12,7 +12,9 @@ import {
   deriveReleasePlanPolicy,
   produceReleasePlan,
   verifyReleasePlanLock,
+  type MainQualificationValidationIntent,
   type ReleasePlanIntent,
+  type ReleasePlanSource,
 } from "../../scripts/release-plan-producer.mts";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -226,16 +228,21 @@ function createFixtureRepo(
 function sourceParams(
   fixture: ReturnType<typeof createFixtureRepo>,
   intent: ReleasePlanIntent = "publish",
-) {
-  return {
+  validationIntent?: MainQualificationValidationIntent,
+): ReleasePlanSource {
+  const source = {
     repoRoot: fixture.root,
-    intent,
     candidateSha: fixture.candidateSha,
     candidateRef: intent === "main-qualification" ? fixture.candidateSha : fixture.candidateRef,
     toolingSha: fixture.toolingSha,
     toolingFullRef: fixture.toolingFullRef,
     runGh: trustedToolingGh(fixture.toolingFullRef, fixture.toolingSha),
-  } as const;
+  };
+  return (
+    intent === "main-qualification"
+      ? { ...source, intent, validationIntent }
+      : { ...source, intent }
+  ) as ReleasePlanSource;
 }
 
 function trustedToolingGh(toolingFullRef: string, toolingSha: string) {
@@ -280,14 +287,27 @@ describe("release plan producer", () => {
       soak: true,
       tag: "v2026.8.1-beta.2",
     });
-    expect(deriveReleasePlanPolicy("main-qualification", "2026.8.1-beta.2")).toEqual({
-      intent: "main-weekly",
-      profile: "full",
+    expect(() => deriveReleasePlanPolicy("main-qualification", "2026.8.1-beta.2")).toThrow(
+      "requires an explicit validation intent",
+    );
+    expect(deriveReleasePlanPolicy("main-qualification", "2026.8.1-beta.2", "main-daily")).toEqual({
+      intent: "main-daily",
+      profile: "beta",
       publishable: false,
       purpose: "main-qualification",
-      soak: true,
+      soak: false,
       tag: null,
     });
+    expect(deriveReleasePlanPolicy("main-qualification", "2026.8.1-beta.2", "main-weekly")).toEqual(
+      {
+        intent: "main-weekly",
+        profile: "full",
+        publishable: false,
+        purpose: "main-qualification",
+        soak: true,
+        tag: null,
+      },
+    );
     expect(() => deriveReleasePlanPolicy("publish", "2026.08.1")).toThrow(
       "unsupported release version",
     );
@@ -384,6 +404,27 @@ describe("release plan producer", () => {
         profile: "full",
         soak: true,
       },
+    });
+  });
+
+  it("requires main qualification producers to choose daily or weekly", () => {
+    const fixture = createFixtureRepo();
+    expect(() => produceReleasePlan(sourceParams(fixture, "main-qualification"))).toThrow(
+      "requires an explicit validation intent",
+    );
+    expect(
+      produceReleasePlan(sourceParams(fixture, "main-qualification", "main-daily")).validation,
+    ).toMatchObject({
+      intent: "main-daily",
+      profile: "beta",
+      soak: false,
+    });
+    expect(
+      produceReleasePlan(sourceParams(fixture, "main-qualification", "main-weekly")).validation,
+    ).toMatchObject({
+      intent: "main-weekly",
+      profile: "full",
+      soak: true,
     });
   });
 
@@ -499,6 +540,7 @@ describe("release plan producer", () => {
     const plan = produceReleasePlan({
       repoRoot: root,
       intent: "main-qualification",
+      validationIntent: "main-weekly",
       candidateSha,
       candidateRef: candidateSha,
       toolingSha,

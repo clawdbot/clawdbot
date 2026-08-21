@@ -7,10 +7,10 @@ export const RELEASE_VALIDATION_INTENTS = Object.freeze({
 });
 
 const PURPOSE_INTENTS = Object.freeze({
-  "beta-publish": "release-beta",
-  "stable-publish": "release-stable",
-  "postpublish-confidence": "diagnostic-full",
-  "main-qualification": "main-weekly",
+  "beta-publish": Object.freeze(["release-beta"]),
+  "stable-publish": Object.freeze(["release-stable"]),
+  "postpublish-confidence": Object.freeze(["diagnostic-full"]),
+  "main-qualification": Object.freeze(["main-daily", "main-weekly"]),
 });
 
 function displayValue(value) {
@@ -35,9 +35,21 @@ export function resolveReleaseValidationIntent(intent, assertions = {}) {
   return { intent, ...policy };
 }
 
-export function releaseValidationIntentForPurpose(purpose) {
+export function releaseValidationIntentForPurpose(purpose, requestedIntent) {
   if (typeof purpose !== "string" || !Object.hasOwn(PURPOSE_INTENTS, purpose)) {
     throw new Error(`unsupported release plan purpose: ${displayValue(purpose)}`);
   }
-  return PURPOSE_INTENTS[purpose];
+  const allowedIntents = PURPOSE_INTENTS[purpose];
+  if (requestedIntent === undefined) {
+    if (allowedIntents.length !== 1) {
+      throw new Error(`release plan purpose ${purpose} requires an explicit validation intent`);
+    }
+    return allowedIntents[0];
+  }
+  if (typeof requestedIntent !== "string" || !allowedIntents.includes(requestedIntent)) {
+    throw new Error(
+      `release plan purpose ${purpose} does not allow validation intent: ${displayValue(requestedIntent)}`,
+    );
+  }
+  return requestedIntent;
 }

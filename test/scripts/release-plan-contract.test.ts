@@ -100,7 +100,7 @@ describe("release plan contract", () => {
           intent: "release-stable",
         },
       }),
-    ).toThrow("beta-publish validation intent must be release-beta");
+    ).toThrow("beta-publish does not allow validation intent");
     expect(() =>
       validateReleasePlan({
         ...sourceFixture,
@@ -119,6 +119,37 @@ describe("release plan contract", () => {
         },
       }),
     ).toThrow("soak assertion conflicts");
+  });
+
+  it("accepts daily and weekly main qualification intents", () => {
+    const mainPlan = {
+      ...sourceFixture,
+      purpose: "main-qualification",
+      tag: null,
+      target_context_ref: sourceFixture.candidate_sha,
+    };
+    expect(
+      validateReleasePlan({
+        ...mainPlan,
+        validation: {
+          allowed_groups: ["all", "ci", "package"],
+          intent: "main-daily",
+          profile: "beta",
+          soak: false,
+        },
+      }).validation.intent,
+    ).toBe("main-daily");
+    expect(
+      validateReleasePlan({
+        ...mainPlan,
+        validation: {
+          allowed_groups: ["all", "ci", "package"],
+          intent: "main-weekly",
+          profile: "full",
+          soak: true,
+        },
+      }).validation.intent,
+    ).toBe("main-weekly");
   });
 
   it("rejects unknown authority, invalid ordering, and unsupported versions", () => {

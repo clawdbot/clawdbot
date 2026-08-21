@@ -27,9 +27,23 @@ describe("release validation intent", () => {
     ["beta-publish", "release-beta"],
     ["stable-publish", "release-stable"],
     ["postpublish-confidence", "diagnostic-full"],
-    ["main-qualification", "main-weekly"],
   ] as const)("maps %s to %s", (purpose, intent) => {
     expect(releaseValidationIntentForPurpose(purpose)).toBe(intent);
+  });
+
+  it("requires main qualification callers to choose daily or weekly", () => {
+    expect(() => releaseValidationIntentForPurpose("main-qualification")).toThrow(
+      "requires an explicit validation intent",
+    );
+    expect(releaseValidationIntentForPurpose("main-qualification", "main-daily")).toBe(
+      "main-daily",
+    );
+    expect(releaseValidationIntentForPurpose("main-qualification", "main-weekly")).toBe(
+      "main-weekly",
+    );
+    expect(() =>
+      releaseValidationIntentForPurpose("main-qualification", "diagnostic-full"),
+    ).toThrow("does not allow validation intent");
   });
 
   it("treats legacy profile and soak inputs as assertions", () => {

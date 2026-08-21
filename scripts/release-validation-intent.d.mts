@@ -34,4 +34,5 @@ export function resolveReleaseValidationIntent(
 
 export function releaseValidationIntentForPurpose(
   purpose: ReleaseValidationPurpose | string,
+  requestedIntent?: ReleaseValidationIntent | string,
 ): ReleaseValidationIntent;
