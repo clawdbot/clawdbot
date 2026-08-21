@@ -52,7 +52,7 @@ async function setupHarness(
   fs.writeFileSync(trimmedVideo, Buffer.alloc(10_001));
   fs.writeFileSync(
     recorderCommand,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}if [ "$1" = artifacts ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ artifacts: { previewGifCropped: previewGif, screenshot, trimmedVideoCropped: trimmedVideo } }))}\nelif [ "$1" = exec ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ stderr: "", stdout: "clicked\n" }))}\nfi\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}if [ "$1" = artifacts ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ artifacts: { previewGifCropped: previewGif, screenshot, trimmedVideoCropped: trimmedVideo } }))}\nelif [ "$1" = actions ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ results: [{ command: "click", stderr: "", stdout: "clicked\n" }] }))}\nfi\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(userDriverCommand, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -340,32 +340,56 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
-  it("runs a scenario extension inside the ephemeral desktop", async () => {
+  it("runs scenario-authored actions inside the ephemeral desktop", async () => {
     const harness = await setupHarness();
-    const extension = path.join(harness.outputRoot, "click-picker.sh");
-    fs.writeFileSync(extension, "xdotool click 1\n");
+    const actions = path.join(harness.outputRoot, "click-picker.json");
+    fs.writeFileSync(actions, JSON.stringify([{ command: "click", x: 120, y: 240 }]));
     try {
       const result = await runLane(harness.env, [
         "desktop",
         "--lane",
         "candidate",
-        "--script-file",
-        extension,
+        "--actions-file",
+        actions,
         "--timeout-seconds",
         "90",
       ]);
       expect(JSON.parse(result.stdout)).toMatchObject({
-        stdout: "clicked\n",
-        scriptSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        actionsSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        results: [{ command: "click", stdout: "clicked\n" }],
       });
       expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
-        "exec --session attempt/recorder.json --script-file attempt/desktop-extension-2.sh --timeout-seconds 90",
+        "actions --session attempt/recorder.json --actions-file attempt/desktop-actions-2.json --timeout-seconds 90",
       );
       const state = JSON.parse(
         fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
       );
       expect(state.invocations.at(-1)).toMatchObject({
-        args: { scriptFile: "click-picker.sh", timeoutSeconds: 90 },
+        args: { actionsFile: "click-picker.json", timeoutSeconds: 90 },
+        command: "desktop",
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("records desktop actions before a timeout or failure", async () => {
+    const harness = await setupHarness({ failRecorder: true });
+    const actions = path.join(harness.outputRoot, "failed-actions.json");
+    fs.writeFileSync(actions, JSON.stringify([{ command: "click", x: 120, y: 240 }]));
+    try {
+      await expect(
+        runLane(harness.env, ["desktop", "--lane", "candidate", "--actions-file", actions]),
+      ).rejects.toThrow();
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.invocations.at(-1)).toMatchObject({
+        args: {
+          actionsFile: "failed-actions.json",
+          actionsSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          timeoutSeconds: 60,
+        },
         command: "desktop",
       });
     } finally {

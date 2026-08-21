@@ -9,12 +9,12 @@ import {
 } from "../../scripts/e2e/telegram-desktop-crabbox.ts";
 import {
   confirmQrLink,
-  execRecorder,
   parseRecorderArgs,
   parseWindowGeometry,
   readRecorderSession,
   recoverRecorderStartup,
   recorderArtifacts,
+  runRecorderActions,
   screenshotRecorder,
   type RecorderOperations,
   type RecorderSession,
@@ -136,28 +136,34 @@ describe("Telegram Desktop recorder CLI", () => {
     });
     expect(
       parseRecorderArgs([
-        "exec",
+        "actions",
         "--session",
         "recorder.json",
-        "--script-file",
-        "click.sh",
+        "--actions-file",
+        "click.json",
         "--timeout-seconds",
         "90",
       ]),
     ).toEqual({
-      command: "exec",
-      scriptFile: "click.sh",
+      actionsFile: "click.json",
+      command: "actions",
       sessionPath: "recorder.json",
       timeoutSeconds: 90,
     });
   });
 
-  it("runs an agent-authored extension inside the recorded desktop", async () => {
+  it("runs agent-authored actions inside the recorded desktop", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
-    const scriptPath = path.join(root, "click.sh");
+    const actionsPath = path.join(root, "click.json");
     writeRecorderSession(sessionPath, testSession());
-    fs.writeFileSync(scriptPath, "xdotool click 1\nprintf 'clicked\\n'\n");
+    fs.writeFileSync(
+      actionsPath,
+      JSON.stringify([
+        { command: "click", x: 120, y: 240 },
+        { command: "sleep", milliseconds: 5 },
+      ]),
+    );
     const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({
       stderr: "",
       stdout: "clicked\n",
@@ -177,21 +183,26 @@ describe("Telegram Desktop recorder CLI", () => {
     } satisfies RecorderOperations;
 
     await expect(
-      execRecorder(
+      runRecorderActions(
         root,
         {
-          command: "exec",
-          scriptFile: "click.sh",
+          actionsFile: "click.json",
+          command: "actions",
           sessionPath: "recorder.json",
           timeoutSeconds: 90,
         },
         operations,
       ),
-    ).resolves.toEqual({ stderr: "", stdout: "clicked\n" });
+    ).resolves.toEqual({
+      results: [
+        { command: "click", stderr: "", stdout: "clicked\n" },
+        { command: "sleep", stderr: "", stdout: "" },
+      ],
+    });
     expect(sshRun).toHaveBeenCalledWith(
       expect.objectContaining({
         command: expect.stringContaining(
-          "export DISPLAY=:99\nxdotool click 1\nprintf 'clicked\\n'",
+          'xdotool windowactivate --sync "$win" mousemove --window "$win" 120 240 click 1',
         ),
         stdio: "pipe",
         timeoutMs: 90_000,

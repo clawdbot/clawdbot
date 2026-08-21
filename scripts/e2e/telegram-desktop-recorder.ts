@@ -26,8 +26,8 @@ import {
 import {
   parseRecorderArgs,
   readRecorderSession,
+  type ActionsOptions,
   type ArtifactsOptions,
-  type ExecOptions,
   type RecoverOptions,
   recorderUsageText,
   TELEGRAM_DESKTOP_AWS_IMAGE,
@@ -816,32 +816,82 @@ export async function viewRecorder(
   });
 }
 
-export async function execRecorder(
+const desktopActionsSchema = z
+  .array(
+    z.discriminatedUnion("command", [
+      z.object({
+        button: z.number().int().min(1).max(5).default(1),
+        command: z.literal("click"),
+        x: z.number().int().nonnegative(),
+        y: z.number().int().nonnegative(),
+      }),
+      z.object({
+        command: z.literal("key"),
+        keys: z
+          .array(z.string().regex(/^[A-Za-z0-9_+:-]+$/u))
+          .min(1)
+          .max(20),
+      }),
+      z.object({ command: z.literal("sleep"), milliseconds: z.number().int().min(1).max(30_000) }),
+      z.object({
+        command: z.literal("type"),
+        delayMs: z.number().int().min(0).max(1_000).default(5),
+        text: z.string().min(1).max(10_000),
+      }),
+    ]),
+  )
+  .min(1)
+  .max(100);
+
+export async function runRecorderActions(
   cwd: string,
-  opts: ExecOptions,
+  opts: ActionsOptions,
   operations: RecorderOperations = defaultOperations,
-): Promise<{ stderr: string; stdout: string }> {
+): Promise<{ results: Array<{ command: string; stderr: string; stdout: string }> }> {
   const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
-  const scriptPath = resolveRecorderPath(cwd, opts.scriptFile, "--script-file");
-  const scriptStat = fs.lstatSync(scriptPath);
-  if (!scriptStat.isFile() || scriptStat.isSymbolicLink() || scriptStat.size > 64 * 1024) {
-    throw new Error("--script-file must be a regular file no larger than 64 KiB.");
+  const actionsPath = resolveRecorderPath(cwd, opts.actionsFile, "--actions-file");
+  const actionsStat = fs.lstatSync(actionsPath);
+  if (!actionsStat.isFile() || actionsStat.isSymbolicLink() || actionsStat.size > 64 * 1024) {
+    throw new Error("--actions-file must be a regular file no larger than 64 KiB.");
   }
-  const script = fs.readFileSync(scriptPath, "utf8");
-  if (!script.trim()) {
-    throw new Error("--script-file must not be empty.");
-  }
+  const actions = desktopActionsSchema.parse(JSON.parse(fs.readFileSync(actionsPath, "utf8")));
   const session = readRecorderSession(sessionPath);
+  for (const action of actions) {
+    if (
+      action.command === "click" &&
+      (action.x >= session.window.width || action.y >= session.window.height)
+    ) {
+      throw new Error("click coordinates must stay inside the Telegram window.");
+    }
+  }
   const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
   const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
-  return await operations.sshRun({
-    command: `set -euo pipefail\nexport DISPLAY=:99\n${script}`,
-    cwd,
-    inspect,
-    run: operations.runCommand,
-    stdio: "pipe",
-    timeoutMs: opts.timeoutSeconds * 1000,
-  });
+  const results: Array<{ command: string; stderr: string; stdout: string }> = [];
+  for (const action of actions) {
+    if (action.command === "sleep") {
+      await sleep(action.milliseconds);
+      results.push({ command: "sleep", stderr: "", stdout: "" });
+      continue;
+    }
+    const telegramWindow =
+      'win="$(wmctrl -lx | awk \'tolower($0) ~ /telegramdesktop/ {print $1; exit}\')"\ntest -n "$win"\n';
+    const actionCommand =
+      action.command === "click"
+        ? `xdotool windowactivate --sync "$win" mousemove --window "$win" ${action.x} ${action.y} click ${action.button}`
+        : action.command === "key"
+          ? `xdotool key --window "$win" ${action.keys.map(shellQuote).join(" ")}`
+          : `xdotool type --window "$win" --delay ${action.delayMs} -- ${shellQuote(action.text)}`;
+    const result = await operations.sshRun({
+      command: `export DISPLAY=:99\n${telegramWindow}${actionCommand}`,
+      cwd,
+      inspect,
+      run: operations.runCommand,
+      stdio: "pipe",
+      timeoutMs: opts.timeoutSeconds * 1000,
+    });
+    results.push({ command: action.command, ...result });
+  }
+  return { results };
 }
 
 async function captureScreenshot(params: {
@@ -1096,8 +1146,8 @@ async function main(): Promise<void> {
     console.log(`Telegram Desktop opened message ${opts.messageId}.`);
     return;
   }
-  if (opts.command === "exec") {
-    console.log(JSON.stringify(await execRecorder(cwd, opts), null, 2));
+  if (opts.command === "actions") {
+    console.log(JSON.stringify(await runRecorderActions(cwd, opts), null, 2));
     return;
   }
   if (opts.command === "screenshot") {
