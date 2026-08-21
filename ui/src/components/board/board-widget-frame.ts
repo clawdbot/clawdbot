@@ -20,7 +20,7 @@ const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 const BASE_WIDGET_SANDBOX = "allow-scripts allow-same-origin allow-forms";
 
 function boardWidgetSandboxPermissions(widget: Pick<BoardWidget, "grantState">): string {
-  return widget.grantState === "granted"
+  return widget.grantState === "none" || widget.grantState === "granted"
     ? `${BASE_WIDGET_SANDBOX} allow-popups allow-popups-to-escape-sandbox`
     : BASE_WIDGET_SANDBOX;
 }

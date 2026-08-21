@@ -17,6 +17,10 @@ type LifecycleInternals = {
   frameFailureKey: string;
   frameRefreshAttempts: number;
   refreshFailedFrame: (widget: BoardWidget) => void;
+  sandboxHostOptions: (
+    frame: HTMLIFrameElement,
+    widget: BoardWidget,
+  ) => { controlUiBaseUrl?: string } | undefined;
 };
 
 function createTicketRefreshLifecycle(
@@ -46,7 +50,7 @@ afterEach(() => {
 });
 
 describe("board widget sandbox permissions", () => {
-  it("allows new tabs only after the widget grant is active", () => {
+  it("allows rendered widgets to open new tabs while approval placeholders stay strict", () => {
     const renderSandbox = (grantState: BoardWidget["grantState"]) => {
       const widget = {
         name: "links",
@@ -76,11 +80,38 @@ describe("board widget sandbox permissions", () => {
     };
 
     const baseSandbox = "allow-scripts allow-same-origin allow-forms";
+    const linkSandbox = `${baseSandbox} allow-popups allow-popups-to-escape-sandbox`;
     expect(renderSandbox("pending")).toBe(baseSandbox);
     expect(renderSandbox("rejected")).toBe(baseSandbox);
-    expect(renderSandbox("granted")).toBe(
-      `${baseSandbox} allow-popups allow-popups-to-escape-sandbox`,
-    );
+    expect(renderSandbox("none")).toBe(linkSandbox);
+    expect(renderSandbox("granted")).toBe(linkSandbox);
+  });
+
+  it("passes the Control UI origin and base path to the widget host", () => {
+    const widget = { name: "links", revision: 1, grantState: "none" } as BoardWidget;
+    const lifecycle = new BoardWidgetFrameLifecycle({
+      active: () => true,
+      connected: () => true,
+      context: () =>
+        ({
+          basePath: "/control",
+          gateway: {
+            connection: { gatewayUrl: "https://gateway.example" },
+            snapshot: {},
+          },
+        }) as ApplicationContext,
+      refreshFrame: () => undefined,
+      reportContentHeight: () => {},
+      requestUpdate: () => {},
+      resolveFrameUrl: () => () => "/widget",
+      root: () => document,
+      widget: () => widget,
+    });
+    const frame = document.createElement("iframe");
+
+    const options = (lifecycle as unknown as LifecycleInternals).sandboxHostOptions(frame, widget);
+
+    expect(options?.controlUiBaseUrl).toBe(`${window.location.origin}/control`);
   });
 });
 

@@ -248,6 +248,9 @@ describe("show_widget", () => {
   it("keeps widget documents from duplicating host-owned metadata and controls", () => {
     const description = createShowWidgetTool().description;
 
+    expect(description).toContain("openclaw.host.controlUiBaseUrl");
+    expect(description).toContain("read it at click time");
+    expect(description).toContain('target="_blank" and rel="noopener noreferrer"');
     expect(description).toContain("`title` is host metadata");
     expect(description).toContain("Start directly with content");
     expect(description).toContain("do not repeat the title");
