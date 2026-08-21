@@ -594,6 +594,10 @@ openclaw channels status
 
     If `channels.whatsapp.groups` is present, WhatsApp can still observe messages from other groups, but OpenClaw drops them before session routing. Add the group JID to `channels.whatsapp.groups`, or add `groups["*"]` to admit all groups while keeping sender authorization under `groupPolicy`/`groupAllowFrom`.
 
+    A reply or quote to the bot's own message counts as an implicit mention and satisfies `requireMention` with no explicit `@`. Under `selfChatMode` (bot on your personal number) that includes replies to your own messages. Set `channels.whatsapp.implicitMentions.quotedBot: false` to require an explicit mention instead. Only `quotedBot` affects WhatsApp; `replyToBot` and `threadParticipation` have no effect here.
+
+    Precedence per flag: `channels.whatsapp.accounts.<id>.implicitMentions` overrides `channels.whatsapp.accounts.default.implicitMentions`, then channel-level `channels.whatsapp.implicitMentions`, then `channels.defaults.implicitMentions`, then the shipped default (`true`). Each flag resolves independently, so a named account that sets one flag still inherits the others from `accounts.default`.
+
   </Accordion>
 
   <Accordion title="Bun runtime warning">
