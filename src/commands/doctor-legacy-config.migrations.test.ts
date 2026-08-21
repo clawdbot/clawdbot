@@ -1525,6 +1525,40 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("preserves selected legacy keys outside the migrated allowlist runtime", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            model: { primary: "google-gemini-cli/gemini-3-pro-preview" },
+            models: {
+              "claude-cli/claude-sonnet-4-6": { alias: "Claude CLI" },
+              "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+            },
+            modelPolicy: {
+              allow: ["claude-cli/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        alias: "Claude CLI",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini CLI",
+        agentRuntime: { id: "google-gemini-cli" },
+      },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+    });
+  });
+
   it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({

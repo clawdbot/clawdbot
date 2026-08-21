@@ -442,7 +442,7 @@ function normalizeLegacyRuntimeAllowlistModels(
         policyRuntimes.has(migrated.runtime))
     ) {
       changed = true;
-      if (policyRuntimes.size === 0) {
+      if (!policyRuntimes.has(migrated.runtime)) {
         next[rawKey] = mergeModelEntry(entry, next[rawKey]);
       }
       legacyEntries.push({
