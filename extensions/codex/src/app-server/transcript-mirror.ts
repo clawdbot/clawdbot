@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { CodexAsyncAssistantMessage } from "./event-projector-assistant-message.js";
 import type { CodexAsyncDeliverySettlement } from "./event-projector-options.js";
 import type { CodexThread } from "./protocol.js";
 import {
@@ -41,7 +42,8 @@ import {
 export { buildCodexUserPromptMessage };
 export { projectBoundedCodexThreadHistory };
 
-type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
+type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }> &
+  Partial<Pick<CodexAsyncAssistantMessage, "openclawAsyncDelivery">>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 type MirroredUserMessageReceipt = {
   anchor: TranscriptEntryAnchor;
@@ -443,12 +445,11 @@ async function mirror(params: {
           // identity so retries cannot turn a stale idempotency hit into evidence.
           messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
         }
-        const asyncDelivery = Reflect.get(message, "openclawAsyncDelivery");
-        if (typeof asyncDelivery?.itemId === "string") {
+        if (message.role === "assistant" && message.openclawAsyncDelivery) {
           // Async delivery ownership is provider-authored. Whole-message hooks may
           // rewrite content, but must not turn the durable row into a terminal answer.
           messageToAppend = Object.assign(messageToAppend, {
-            openclawAsyncDelivery: { itemId: asyncDelivery.itemId },
+            openclawAsyncDelivery: { itemId: message.openclawAsyncDelivery.itemId },
           });
         }
         messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({

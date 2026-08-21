@@ -28,6 +28,10 @@ export type AssistantMessageOptions = {
   promptError: unknown;
 };
 
+export type CodexAsyncAssistantMessage = AssistantMessage & {
+  openclawAsyncDelivery: { itemId: string };
+};
+
 const ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -130,7 +134,7 @@ export function createAssistantAsyncMessage(
   text: string,
   itemId: string,
   timestamp: number,
-): AssistantMessage {
+): CodexAsyncAssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
     role: "assistant",
@@ -142,8 +146,7 @@ export function createAssistantAsyncMessage(
     stopReason: "stop",
     timestamp,
     openclawAsyncDelivery: { itemId },
-    // SAFETY: this is a complete AssistantMessage plus OpenClaw-owned async delivery metadata.
-  } as AssistantMessage;
+  };
 }
 
 export function createAssistantMirrorMessage(

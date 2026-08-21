@@ -88,12 +88,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
     : undefined;
-  const routedReplyDelivery = routeReplyChannel
-    ? createReplyDeliveryContext(
-        resolveReplyToMode(cfg, routeReplyChannel, replyContextAccountId, replyRoute.chatType),
-        replyRoute.chatType,
-      )
-    : undefined;
   let normalizeReplyMediaPaths:
     | ReturnType<
         (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
@@ -175,7 +169,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
       threadId: state.routeReplyThreadId,
-      replyDelivery: routedReplyDelivery,
+      replyDelivery: createReplyDeliveryContext(
+        resolveReplyToMode(cfg, routeReplyChannel, replyContextAccountId, replyRoute.chatType),
+        replyRoute.chatType,
+      ),
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,
