@@ -27,7 +27,10 @@ import {
   hasVisibleAgentPayload,
 } from "../../embedded-agent-runner/message-visibility.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
+import {
+  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  hasVisibleCompletionResult,
+} from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   formatActiveWakeFailure,
@@ -168,7 +171,8 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
-      (trustedCompletionEvent?.result.trim() === "(no output)" ||
+      ((trustedCompletionEvent !== undefined &&
+        !hasVisibleCompletionResult(trustedCompletionEvent)) ||
         hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);

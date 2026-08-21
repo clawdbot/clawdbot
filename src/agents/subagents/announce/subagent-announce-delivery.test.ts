@@ -1778,6 +1778,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         status: "error",
         statusLabel: "failed: all models failed",
         result: "(no output)",
+        noVisibleResult: true,
       }),
     });
 
@@ -3354,6 +3355,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           status: "ok",
           statusLabel: "completed successfully",
           result: "(no output)",
+          noVisibleResult: true,
         }),
       });
 
@@ -3431,6 +3433,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         status: "ok",
         statusLabel: "completed successfully",
         result: "(no output)",
+        noVisibleResult: true,
       });
       const result =
         route === "configured Slack channel"
@@ -3516,6 +3519,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           status,
           statusLabel,
           result: "(no output)",
+          noVisibleResult: true,
         }),
       });
 
@@ -3536,6 +3540,63 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
+  // The two tests below are a matched pair: identical inputs apart from the
+  // typed `noVisibleResult` fact and the placeholder wording. They fail if the
+  // gate goes back to matching a display string, in either direction.
+  it("gates a reworded no-visible-result placeholder for channel subagent completions", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const childSessionKey = "agent:worker:subagent:reworded-placeholder";
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-channel-subagent-reworded-placeholder",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "reworded placeholder completion smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no result yet; child still running)",
+        noVisibleResult: true,
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
+    });
+  });
+
+  it("does not gate a channel subagent completion whose result only reads like the placeholder", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const childSessionKey = "agent:worker:subagent:placeholder-shaped-output";
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-channel-subagent-placeholder-shaped-output",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: childSessionKey,
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionKey,
+        childSessionId: "child-session-id",
+        taskLabel: "placeholder-shaped output completion smoke",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "(no output)",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+  });
+
   it("preserves intentional silence for no-output channel harness completions", async () => {
     const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
@@ -3554,6 +3615,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         status: "error",
         statusLabel: "failed",
         result: "(no output)",
+        noVisibleResult: true,
       }),
     });
 
@@ -3669,6 +3731,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         status: "ok",
         statusLabel: "completed successfully",
         result: "(no output)",
+        noVisibleResult: true,
       }),
     });
 
@@ -3772,6 +3835,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       internalEvents: taskCompletionEvents({
         childSessionId: "child-session-id",
         result: "(no output)",
+        noVisibleResult: true,
       }),
     });
 

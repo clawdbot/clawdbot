@@ -467,7 +467,11 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionEffectsAllowed()
       ? childSessionId || "unknown"
       : "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    // `result` falls back to placeholder copy when the child produced nothing.
+    // Record that absence as a fact on the event so delivery gates never have to
+    // match the placeholder wording to recognize it.
+    const childResultText = childCompletionFindings || reply;
+    const findings = childResultText || "(no output)";
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
@@ -521,6 +525,7 @@ export async function runSubagentAnnounceFlow(params: {
         status: outcome.status,
         statusLabel,
         result: findings,
+        ...(childResultText ? {} : { noVisibleResult: true }),
         statsLine,
         replyInstruction,
       },
