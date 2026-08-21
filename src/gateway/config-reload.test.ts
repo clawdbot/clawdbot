@@ -160,6 +160,22 @@ describe("diffConfigPaths", () => {
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
 
+  it.each(["speech", "realtime"] as const)("reloads only changed Talk %s owners", (surface) => {
+    const configure = (provider: string, model?: string) => ({
+      talk:
+        surface === "speech"
+          ? { providers: { [provider]: { model } } }
+          : { realtime: { providers: { [provider]: { model } } } },
+    });
+    for (const [prev, next, reload] of [
+      [{}, configure("first"), true],
+      [configure("first"), configure("second"), true],
+      [configure("first", "before"), configure("first", "after"), false],
+    ] as const) {
+      expect(buildGatewayReloadPlan(diffGatewayReloadPaths(prev, next)).reloadPlugins).toBe(reload);
+    }
+  });
+
   it.each([
     {
       name: "adds agents",
@@ -406,6 +422,8 @@ describe("buildGatewayReloadPlan", () => {
       path: "plugins.entries.lossless-claw.config.mode",
       expected: { reloadPlugins: true, disposeMcpRuntimes: true },
     },
+    { path: "talk.provider", expected: { reloadPlugins: true } },
+    { path: "talk.realtime.provider", expected: { reloadPlugins: true } },
   ])("keeps hot-reload actions for $path", ({ path, expected }) => {
     const plan = buildGatewayReloadPlan([path]);
 
