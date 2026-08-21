@@ -186,6 +186,16 @@ async function agentCommandInternal(
       storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
     // Reset marks its mutation before interrupting work. An aborted run must not
     // queue behind that mutation or reset would wait on the run holding the queue.
+    // Serialize against the reply-run registry so this turn neither races a
+    // live channel-delivered run nor hides from later channel arrivals. Runs
+    // before session-work admission: assertAllowed then revalidates the session
+    // against rotation that happened during a potentially long wait. Internal
+    // model runs never touch the visible transcript, so they skip it.
+    if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
+      const laneOptions = { abortSignal: opts.abortSignal, routeThreadId: opts.threadId };
+      sessionReplyLane = await acquireSessionReplyLane(sessionKey, sessionId, laneOptions);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    }
     sessionWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath ?? `agent:${sessionAgentId}`,
       identities: [sessionKey, sessionId],
@@ -230,15 +240,6 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
-      // Serialize against the reply-run registry so this turn neither races a
-      // live channel-delivered run nor hides from later channel arrivals.
-      // Internal model runs never touch the visible transcript, so they skip it.
-      if (sessionKey && !isRawModelRun && !suppressVisibleSessionEffects) {
-        sessionReplyLane = await acquireSessionReplyLane(sessionKey, sessionId, {
-          abortSignal: opts.abortSignal,
-        });
-        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-      }
       preparedRunAdmission = prepareAgentCommandExecutionIdentity({
         opts,
         prepared,
@@ -409,6 +410,7 @@ async function agentCommandInternal(
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         return await runAcpAgentCommand({
+          replyOperation: sessionReplyLane,
           cfg,
           deps: resolvedDeps,
           runtime,

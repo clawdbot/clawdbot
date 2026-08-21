@@ -444,6 +444,7 @@ export async function runEmbeddedAgentAttempt(params: {
           effectiveTurnThinkLevel = candidateThinkLevel;
           return attemptExecutionRuntime.runAgentAttempt({
             preparedRunAdmission: params.preparedRunAdmission,
+            replyOperation: params.replyOperation,
             providerOverride,
             modelOverride,
             ...prepareModelRunCapabilities(

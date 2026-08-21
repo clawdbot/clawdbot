@@ -12,6 +12,7 @@ import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.tu
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   readChannelSourceTurnId,
   readChannelSourceTurnSameThreadRequired,
@@ -489,6 +490,7 @@ export async function persistCliTurnTranscript(params: {
 
 export function runAgentAttempt(params: {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  replyOperation?: ReplyOperation;
   providerOverride: string;
   modelOverride: string;
   modelHasVision?: boolean;
@@ -916,6 +918,7 @@ export function runAgentAttempt(params: {
         },
         async () => {
           return await runCliAgent({
+            replyOperation: params.replyOperation,
             preparedRunAdmission: params.preparedRunAdmission,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,

@@ -16,8 +16,10 @@ import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
   ReplyRunAlreadyActiveError,
+  ReplyRunSuccessorAdmissionBlockedError,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
+  waitForReplyRunSuccessorAdmission,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
@@ -56,11 +58,14 @@ function abortErrorFrom(signal: AbortSignal): Error {
 export async function acquireSessionReplyLane(
   sessionKey: string,
   sessionId: string,
-  options?: { abortSignal?: AbortSignal; timeoutMs?: number },
+  options?: { abortSignal?: AbortSignal; timeoutMs?: number; routeThreadId?: string | number },
 ): Promise<ReplyOperation> {
   const abortSignal = options?.abortSignal;
   const timeoutMs = options?.timeoutMs ?? REPLY_LANE_ACQUIRE_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
+  // Recovery handoffs may rotate the session while this turn waits; adopt the
+  // rotated identity so the operation registers against the live session.
+  let currentSessionId = sessionId;
   for (;;) {
     if (abortSignal?.aborted) {
       throw abortErrorFrom(abortSignal);
@@ -68,15 +73,31 @@ export async function acquireSessionReplyLane(
     try {
       const operation = createReplyOperation({
         sessionKey,
-        sessionId,
+        sessionId: currentSessionId,
         turnKind: "visible",
         resetTriggered: false,
+        routeThreadId: options?.routeThreadId,
         upstreamAbortSignal: abortSignal,
       });
       markReplyOperationExecutionStarted(operation);
       operation.setPhase("running");
       return operation;
     } catch (error) {
+      if (error instanceof ReplyRunSuccessorAdmissionBlockedError) {
+        const barrierRemainingMs = deadline - Date.now();
+        if (barrierRemainingMs <= 0) {
+          throw new SessionReplyLaneBusyError(sessionKey, timeoutMs);
+        }
+        const handoff = await waitForReplyRunSuccessorAdmission(
+          sessionKey,
+          barrierRemainingMs,
+          abortSignal ? { signal: abortSignal } : undefined,
+        );
+        if (handoff.sessionId) {
+          currentSessionId = handoff.sessionId;
+        }
+        continue;
+      }
       if (!(error instanceof ReplyRunAlreadyActiveError)) {
         throw error;
       }

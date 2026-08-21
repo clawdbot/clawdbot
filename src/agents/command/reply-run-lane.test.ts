@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createReplyOperation,
   isReplyRunActiveForSessionId,
+  registerReplyOperationSuccessorBarrier,
   resolveActiveReplyRunSessionId,
   type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -82,6 +83,46 @@ describe("acquireSessionReplyLane", () => {
     const abortReason = new Error("caller gave up");
     setTimeout(() => controller.abort(abortReason), 10);
     await expect(pending).rejects.toBe(abortReason);
+  });
+
+  it("carries the routed thread identity onto the operation", async () => {
+    const operation = track(
+      await acquireSessionReplyLane(SESSION_KEY, "lane-7", { routeThreadId: "thread-42" }),
+    );
+    expect(operation.routeThreadId).toBe("thread-42");
+  });
+
+  it("waits through a successor barrier and adopts the rotated session id", async () => {
+    const predecessor = track(
+      createReplyOperation({
+        sessionKey: SESSION_KEY,
+        sessionId: "channel-4",
+        resetTriggered: false,
+      }),
+    );
+    let releaseHandoff: (() => void) | undefined;
+    registerReplyOperationSuccessorBarrier({
+      operation: predecessor,
+      sessionId: "channel-4-rotated",
+      sessionKeys: [SESSION_KEY],
+      start: () =>
+        new Promise<void>((resolve) => {
+          releaseHandoff = resolve;
+        }),
+    });
+    predecessor.complete();
+    let acquired = false;
+    const pending = acquireSessionReplyLane(SESSION_KEY, "lane-8").then((operation) => {
+      acquired = true;
+      return track(operation);
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    expect(acquired).toBe(false);
+    releaseHandoff?.();
+    const operation = await pending;
+    expect(operation.sessionId).toBe("channel-4-rotated");
   });
 
   it("serializes two concurrent lane acquisitions", async () => {

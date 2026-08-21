@@ -1,5 +1,6 @@
 import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,6 +37,7 @@ type AcpReadyResolution = Extract<
 >;
 
 export async function runAcpAgentCommand(params: {
+  replyOperation?: ReplyOperation;
   preparedRunAdmission: PreparedAgentRunAdmission;
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -146,6 +148,14 @@ export async function runAcpAgentCommand(params: {
       },
       isActive: isElicitationActive,
     });
+    // The reply lane owns this session while the turn runs: its abort (stale
+    // reclaim, user stop) must cancel the ACP turn, and real ACP events must
+    // refresh its activity so healthy long turns are not reclaimed as stale.
+    const laneSignal = params.replyOperation
+      ? params.opts.abortSignal
+        ? AbortSignal.any([params.opts.abortSignal, params.replyOperation.abortSignal])
+        : params.replyOperation.abortSignal
+      : params.opts.abortSignal;
     await params.acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -155,7 +165,7 @@ export async function runAcpAgentCommand(params: {
       attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
       mode: "prompt",
       requestId: params.runId,
-      signal: params.opts.abortSignal,
+      signal: laneSignal,
       onElicitation,
       onBeforePrompt: params.opts.onExecutionStarted,
       onLifecycle: (event) => {
@@ -168,6 +178,7 @@ export async function runAcpAgentCommand(params: {
         }
       },
       onEvent: (event) => {
+        params.replyOperation?.recordActivity();
         if (event.type !== "text_delta") {
           attemptExecutionRuntime.emitAcpRuntimeEvent({
             runId: params.runId,
