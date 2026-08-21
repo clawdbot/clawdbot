@@ -18,6 +18,10 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DREAMING_DAILY_PROVENANCE_NAMESPACE,
+  writeMemoryCoreWorkspaceEntry,
+} from "../dreaming-state.js";
+import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./manager-index.test-support.js";
@@ -270,8 +274,20 @@ describe("memory index", () => {
       const activeProjectKeys = [projectKey];
       const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
       const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
-      expect(curated).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
-      expect(triggers).toMatchObject([{ projectKey, triggers: "kraken deploy ritual" }]);
+      expect(curated).toMatchObject([
+        {
+          projectKey,
+          triggers: "kraken deploy ritual",
+          provenance: { originClass: "agent" },
+        },
+      ]);
+      expect(triggers).toMatchObject([
+        {
+          projectKey,
+          triggers: "kraken deploy ritual",
+          provenance: { originClass: "agent" },
+        },
+      ]);
 
       const neutral = await manager.search("kraken deploy", {
         minScore: 0,
@@ -291,6 +307,50 @@ describe("memory index", () => {
         throw new Error("expected mixed-case project hit in neutral and active search");
       }
       expect(activeHit.score).toBeGreaterThan(neutralHit.score);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("keeps quarantined curated memory searchable but out of automatic candidates", async () => {
+    const projectKey = "github.com/openclaw/openclaw";
+    await fs.writeFile(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+      `- Quarantined release instruction. <!-- trigger: release instruction --> <!-- project: ${projectKey} -->\n`,
+    );
+    await writeMemoryCoreWorkspaceEntry({
+      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+      workspaceDir: fixture.paths.workspace,
+      key: "MEMORY.md",
+      value: { originClass: "untrusted" },
+    });
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      if (!manager.listCuratedProjectCandidates || !manager.listTriggerCandidates) {
+        throw new Error("expected curated project and trigger candidate listing");
+      }
+      await expect(
+        manager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+      ).resolves.toEqual([]);
+      await expect(
+        manager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+      ).resolves.toEqual([]);
+
+      const explicit = await manager.search("Quarantined release instruction", {
+        lexicalOnly: true,
+        minScore: 0,
+        maxResults: 10,
+        sources: ["memory"],
+      });
+      expect(explicit).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provenance: expect.objectContaining({ originClass: "untrusted" }),
+          }),
+        ]),
+      );
     } finally {
       await manager.close?.();
     }

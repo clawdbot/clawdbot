@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
@@ -34,9 +34,17 @@ import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 import {
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
   loadExtraBootstrapFilesWithDiagnostics,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+const memoryRuntimeMocks = vi.hoisted(() => ({ classifyWorkspacePaths: vi.fn() }));
+
+vi.mock("../plugins/memory-runtime.js", () => ({
+  classifyActiveMemoryWorkspacePaths: (...args: unknown[]) =>
+    memoryRuntimeMocks.classifyWorkspacePaths(...args),
+}));
 
 let testState: OpenClawTestState | undefined;
 
@@ -208,10 +216,49 @@ describe("resolveBootstrapFilesForRun", () => {
   beforeEach(async () => {
     clearInternalHooks();
     resetLegacyWorkspaceStateCheckForTest();
+    memoryRuntimeMocks.classifyWorkspacePaths.mockReset().mockResolvedValue(undefined);
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-bootstrap-state-",
     });
+  });
+
+  it("excludes lower-trust root memory before hooks while preserving trusted user context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-memory-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "tainted memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "trusted user", "utf8");
+    registerNamedBootstrapFileHook(DEFAULT_MEMORY_FILENAME);
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue([
+      { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "untrusted" },
+      { relativePath: DEFAULT_USER_FILENAME, originClass: "owner" },
+    ]);
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("fails closed when the memory runtime omits a requested root classification", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-missing-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue([
+      { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "agent" },
+    ]);
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    expect(files.map((file) => file.name)).toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
   });
   afterEach(async () => {
     clearInternalHooks();

@@ -126,6 +126,12 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       if (typeof row.project_key === "string" && row.project_key.trim()) {
         result.projectKey = row.project_key.trim();
       }
+      result.provenance = {
+        originClass: row.origin_class,
+        sessionKind: row.session_kind,
+        observedAt: row.observed_at,
+        ...(typeof row.supersedes_key === "string" ? { supersedesKey: row.supersedes_key } : {}),
+      };
       return result;
     });
   }

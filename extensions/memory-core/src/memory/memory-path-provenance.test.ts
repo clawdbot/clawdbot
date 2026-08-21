@@ -95,4 +95,24 @@ describe("memory path provenance", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("fails closed for malformed recorded provenance", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-path-invalid-origin-"));
+    try {
+      const absolutePath = path.join(workspaceDir, "USER.md");
+      await fs.writeFile(absolutePath, "profile", "utf8");
+      await writeMemoryCoreWorkspaceEntry({
+        namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
+        workspaceDir,
+        key: "USER.md",
+        value: { originClass: "invalid" },
+      });
+
+      await expect(
+        resolveMemoryPathClassification({ absolutePath, source: "memory", workspaceDir }),
+      ).resolves.toEqual({ curatedRoot: true, originClass: "untrusted" });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 });
