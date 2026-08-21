@@ -262,10 +262,7 @@ export function readSessionEntryStore(
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_nodes")
-      .select(["current_session_id", "entry_json", "session_key", "updated_at"])
-      .orderBy("session_key"),
+    db.selectFrom("session_nodes").selectAll().orderBy("session_key"),
   ).rows;
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
