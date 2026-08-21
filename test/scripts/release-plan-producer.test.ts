@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectClawHubPublishablePluginPackages } from "../../scripts/lib/plugin-clawhub-release.ts";
+import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
 import {
   canonicalReleasePlanLockJson,
   createReleasePlanLock,
@@ -21,7 +23,9 @@ const TOOLING_CLOSURE = [
   "packages/plugin-package-contract/src/index.ts",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-contract.mjs",
+  "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
@@ -61,7 +65,7 @@ function copyToolingClosure(root: string) {
 
 function createFixtureRepo(
   version = "2026.8.1-beta.2",
-  options: { malformedPlugin?: boolean } = {},
+  options: { malformedPlugin?: boolean; malformedPluginJson?: boolean } = {},
 ) {
   const root = tempDirs.make("openclaw-release-plan-");
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
@@ -90,7 +94,9 @@ function createFixtureRepo(
       }),
     );
   }
-  if (options.malformedPlugin) {
+  if (options.malformedPluginJson) {
+    writeFixture(root, "extensions/broken/package.json", "{ not-json\n");
+  } else if (options.malformedPlugin) {
     writeFixture(
       root,
       "extensions/broken/package.json",
@@ -200,7 +206,24 @@ function sourceParams(
     candidateRef: intent === "main-qualification" ? fixture.candidateSha : fixture.candidateRef,
     toolingSha: fixture.toolingSha,
     toolingFullRef: fixture.toolingFullRef,
+    runGh: trustedToolingGh(fixture.toolingFullRef, fixture.toolingSha),
   } as const;
+}
+
+function trustedToolingGh(toolingFullRef: string, toolingSha: string) {
+  return (args: string[]) => {
+    const endpoint = args[1];
+    if (
+      endpoint ===
+      `repos/openclaw/openclaw/git/ref/tags/${toolingFullRef.slice("refs/tags/".length)}`
+    ) {
+      return JSON.stringify({
+        ref: toolingFullRef,
+        object: { type: "commit", sha: toolingSha },
+      });
+    }
+    throw new Error(`unexpected GitHub API request: ${args.join(" ")}`);
+  };
 }
 
 describe("release plan producer", () => {
@@ -316,11 +339,30 @@ describe("release plan producer", () => {
         ...sourceParams(fixture),
         toolingSha: fixture.candidateSha,
         toolingFullRef: mismatchedToolingRef,
+        runGh: trustedToolingGh(mismatchedToolingRef, fixture.candidateSha),
       }),
     ).toThrow("tooling full ref does not resolve");
     expect(() =>
       produceReleasePlan({ ...sourceParams(fixture), candidateRef: "refs/heads/tooling" }),
     ).toThrow("candidate ref must be");
+  });
+
+  it("rejects a locally forged protected tooling tag that GitHub does not own", () => {
+    const fixture = createFixtureRepo();
+    const forgedFullRef = `refs/tags/release-publish/${fixture.toolingSha.slice(0, 12)}-999`;
+    execFileSync("git", ["tag", forgedFullRef.slice("refs/tags/".length), fixture.toolingSha], {
+      cwd: fixture.root,
+    });
+
+    expect(() =>
+      produceReleasePlan({
+        ...sourceParams(fixture),
+        toolingFullRef: forgedFullRef,
+        runGh: () => {
+          throw new Error("HTTP 404");
+        },
+      }),
+    ).toThrow("protected release tooling tag is missing or unreadable");
   });
 
   it("rejects a caller producer that differs from the exact tooling commit", () => {
@@ -337,6 +379,7 @@ describe("release plan producer", () => {
         ...sourceParams(fixture),
         toolingSha,
         toolingFullRef,
+        runGh: trustedToolingGh(toolingFullRef, toolingSha),
       }),
     ).toThrow("tooling import closure differs from tooling SHA");
   });
@@ -348,7 +391,15 @@ describe("release plan producer", () => {
     );
   });
 
-  it("matches the current publisher inventory: 93 npm and 89 ClawHub packages", () => {
+  it("fails closed on malformed candidate manifests across both publishers and ReleasePlan", () => {
+    const fixture = createFixtureRepo("2026.8.1-beta.2", { malformedPluginJson: true });
+    const error = "plugin candidate manifest is malformed JSON: extensions/broken/package.json";
+    expect(() => collectPublishablePluginPackages(fixture.root)).toThrow(error);
+    expect(() => collectClawHubPublishablePluginPackages(fixture.root)).toThrow(error);
+    expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(error);
+  });
+
+  it("matches the exact current publisher inventory: 93 npm and 89 ClawHub packages", () => {
     const root = tempDirs.make("openclaw-release-plan-current-");
     const candidateSha = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: resolve("."),
@@ -367,6 +418,7 @@ describe("release plan producer", () => {
       candidateRef: candidateSha,
       toolingSha,
       toolingFullRef: "refs/heads/main",
+      runGh: () => JSON.stringify({ status: "identical" }),
     });
     const npmPackages = plan.inventory.packages.filter((entry) => entry.targets.includes("npm"));
     const clawHubPackages = plan.inventory.packages.filter((entry) =>
@@ -374,6 +426,27 @@ describe("release plan producer", () => {
     );
     expect(npmPackages).toHaveLength(93);
     expect(clawHubPackages).toHaveLength(89);
+    const coreNpmPackages = new Set([
+      "@openclaw/ai",
+      "@openclaw/gateway-client",
+      "@openclaw/gateway-protocol",
+      "openclaw",
+    ]);
+    expect(
+      npmPackages
+        .map((entry) => entry.name)
+        .filter((name) => !coreNpmPackages.has(name))
+        .toSorted(),
+    ).toEqual(
+      collectPublishablePluginPackages(root)
+        .map((plugin) => plugin.packageName)
+        .toSorted(),
+    );
+    expect(clawHubPackages.map((entry) => entry.name).toSorted()).toEqual(
+      collectClawHubPublishablePluginPackages(root)
+        .map((plugin) => plugin.packageName)
+        .toSorted(),
+    );
     expect(npmPackages.map((entry) => entry.name)).toEqual(
       expect.arrayContaining([
         "@openclaw/ai",

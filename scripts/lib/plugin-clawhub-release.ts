@@ -7,7 +7,6 @@ import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import {
   assertPluginReleaseDependencyFreshness,
-  collectExtensionPackageJsonCandidates,
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   assertPluginReleaseVersionFloors,
@@ -19,6 +18,7 @@ import {
   type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
+import { collectExtensionPackageJsonCandidates } from "./plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,

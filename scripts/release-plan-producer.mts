@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,
-  type PublishablePluginPackageCandidate,
 } from "./lib/plugin-publication-collector.ts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
@@ -22,6 +22,7 @@ import {
   type ReleasePlanLock,
   type ReleasePlanPurpose,
 } from "./release-plan-contract.mjs";
+import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
 export type ReleasePlanIntent = "publish" | "postpublish-confidence" | "main-qualification";
 
@@ -32,6 +33,7 @@ type ReleasePlanSource = {
   candidateRef: string;
   toolingSha: string;
   toolingFullRef: string;
+  runGh?: (args: string[]) => string;
 };
 
 type PackageManifest = PluginPackageJson;
@@ -279,29 +281,6 @@ function readPackageManifest(path: string): PackageManifest {
   return JSON.parse(readFileSync(path, "utf8")) as PackageManifest;
 }
 
-function collectPluginCandidates(snapshotRoot: string): PublishablePluginPackageCandidate[] {
-  return readdirSync(join(snapshotRoot, "extensions"), { withFileTypes: true }).flatMap((entry) => {
-    if (!entry.isDirectory()) {
-      return [];
-    }
-    const packageDir = `extensions/${entry.name}`;
-    const absolutePackageDir = join(snapshotRoot, packageDir);
-    const packageJsonPath = join(absolutePackageDir, "package.json");
-    if (!existsSync(packageJsonPath)) {
-      return [];
-    }
-    const readmePath = join(absolutePackageDir, "README.md");
-    return [
-      {
-        extensionId: entry.name,
-        packageDir,
-        packageJson: readPackageManifest(packageJsonPath),
-        ...(existsSync(readmePath) ? { readmeText: readFileSync(readmePath, "utf8") } : {}),
-      },
-    ];
-  });
-}
-
 function collectCorePackagePolicy(workflowText: string): CorePackagePolicy[] {
   const workflow = parseYaml(workflowText) as {
     jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
@@ -373,7 +352,7 @@ function collectPackageInventory(
     packages.set(manifest.name, entry);
   };
   addPackage({ name: "openclaw", version }, ["npm"], "package.json");
-  const pluginCandidates = collectPluginCandidates(snapshotRoot);
+  const pluginCandidates = collectExtensionPackageJsonCandidates(snapshotRoot);
   for (const [target, plugins] of [
     ["clawhub", collectPublishablePluginPackagesFromCandidates(pluginCandidates, "clawhub")],
     ["npm", collectPublishablePluginPackagesFromCandidates(pluginCandidates, "npm")],
@@ -478,20 +457,6 @@ function readCandidateInventory(
   });
 }
 
-function requireToolingRoute(intent: ReleasePlanIntent, ref: string, toolingSha: string) {
-  const protectedMatch = /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(ref);
-  const protectedRoute = protectedMatch?.[1] === toolingSha.slice(0, 12);
-  if (intent === "main-qualification") {
-    if (ref !== "refs/heads/main" && !protectedRoute) {
-      throw new Error("main qualification tooling must use trusted main or release-publish tag");
-    }
-    return;
-  }
-  if (!protectedRoute) {
-    throw new Error(`${intent} tooling must use a release-publish tag bound to its SHA`);
-  }
-}
-
 function resolveSource(params: ReleasePlanSource) {
   const repoRoot = resolve(params.repoRoot ?? ".");
   const candidateSha = requireExactSha(params.candidateSha, "candidate SHA");
@@ -500,7 +465,17 @@ function resolveSource(params: ReleasePlanSource) {
   if (resolveCommit(repoRoot, candidateSha, "candidate SHA") !== candidateSha) {
     throw new Error("candidate SHA does not resolve to itself");
   }
-  requireToolingRoute(params.intent, toolingFullRef, toolingSha);
+  const toolingRef = toolingFullRef.replace(/^refs\/(?:heads|tags)\//u, "");
+  const verifiedTooling = verifyReleaseToolingIdentity({
+    repository: REPOSITORY,
+    workflowFullRef: toolingFullRef,
+    workflowRef: toolingRef,
+    workflowSha: toolingSha,
+    ...(params.runGh ? { runGh: params.runGh } : {}),
+  });
+  if (params.intent !== "main-qualification" && verifiedTooling.route !== "protected-tag") {
+    throw new Error(`${params.intent} tooling must use a release-publish tag bound to its SHA`);
+  }
   if (resolveCommit(repoRoot, toolingFullRef, "tooling full ref") !== toolingSha) {
     throw new Error("tooling full ref does not resolve to the requested tooling SHA");
   }

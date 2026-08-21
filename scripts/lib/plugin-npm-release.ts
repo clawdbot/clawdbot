@@ -1,14 +1,14 @@
 // Plugin Npm Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
+import { collectExtensionPackageJsonCandidates } from "./plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,
   type PublishablePluginPackage,
-  type PublishablePluginPackageCandidate,
   type PublishablePluginPackageFilters,
 } from "./plugin-publication-collector.ts";
 import { collectReleaseVersionFloorErrors } from "./release-version.mjs";
@@ -20,6 +20,7 @@ export {
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
   resolvePublishablePluginVersion,
 } from "./plugin-publication-collector.ts";
+export { collectExtensionPackageJsonCandidates } from "./plugin-publication-candidates.ts";
 export type {
   PublishablePluginPackage,
   RequiredLatestDependency,
@@ -68,42 +69,6 @@ const PLUGIN_NPM_VIEW_TIMEOUT_MS = 60_000;
 
 function readPluginPackageJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function readOptionalTextFile(path: string): string | undefined {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-export function collectExtensionPackageJsonCandidates<
-  TPackageJson extends PluginPackageJson = PluginPackageJson,
->(rootDir = resolve(".")): PublishablePluginPackageCandidate<TPackageJson>[] {
-  const extensionsDir = join(rootDir, "extensions");
-  const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
-    entry.isDirectory(),
-  );
-
-  const candidates: PublishablePluginPackageCandidate<TPackageJson>[] = [];
-  for (const dir of dirs) {
-    const packageDir = `extensions/${dir.name}`;
-    const absolutePackageDir = join(extensionsDir, dir.name);
-    const packageJsonPath = join(absolutePackageDir, "package.json");
-    try {
-      candidates.push({
-        extensionId: dir.name,
-        packageDir,
-        packageJson: readPluginPackageJson(packageJsonPath) as TPackageJson,
-        readmeText: readOptionalTextFile(join(absolutePackageDir, "README.md")),
-      });
-    } catch {
-      continue;
-    }
-  }
-
-  return candidates;
 }
 
 function normalizeGitDiffPath(path: string): string {
