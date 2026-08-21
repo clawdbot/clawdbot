@@ -669,11 +669,13 @@ describe("setupWizardCommand", () => {
   });
 
   it.each(
-    [
-      ["gatewayPassword", "OPENCLAW_GATEWAY_PASSWORD"],
-      ["remoteToken", "OPENCLAW_GATEWAY_TOKEN"],
-      ["remotePassword", "OPENCLAW_GATEWAY_PASSWORD"],
-    ].flatMap(([optionName, envName]) =>
+    (
+      [
+        ["gatewayPassword", "OPENCLAW_GATEWAY_PASSWORD"],
+        ["remoteToken", "OPENCLAW_GATEWAY_TOKEN"],
+        ["remotePassword", "OPENCLAW_GATEWAY_PASSWORD"],
+      ] as const
+    ).flatMap(([optionName, envName]) =>
       ["", "different-credential"].map((envValue) => ({ optionName, envName, envValue })),
     ),
   )(
