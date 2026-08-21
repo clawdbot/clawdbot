@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveConfigForRead } from "../../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../../config/resolution-facts.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 let mockStore: AuthProfileStore;
@@ -445,6 +447,49 @@ describe("buildProbeTargets reason codes", () => {
       }),
     );
   });
+
+  it.each([
+    ["missing bare with authored provider spelling", "$MISSING", undefined, null, "AnThRoPiC"],
+    ["missing braced", "${MISSING}", undefined, null, "anthropic"],
+    ["ordinary substitution", "${SOURCE}", "resolved-secret", "resolved-secret", "anthropic"],
+    ["bare-looking literal", "${SOURCE}", "$OTHER", "$OTHER", "anthropic"],
+    ["braced-looking literal", "${SOURCE}", "${OTHER}", "${OTHER}", "anthropic"],
+    ["escaped template literal", "$${OTHER}", undefined, "${OTHER}", "anthropic"],
+  ] as const)(
+    "preserves authored credential provenance: %s",
+    async (_name, authored, sourceValue, expected, providerKey) => {
+      mockStore = { version: 1, profiles: {}, order: {} };
+      resolveSecretRefStringMock.mockRejectedValue(new Error("missing secret"));
+      const providerConfig = {
+        baseUrl: "https://api.anthropic.com/v1",
+        apiKey: authored,
+        models: [],
+      };
+      const read = resolveConfigForRead(
+        { models: { providers: { [providerKey]: providerConfig } } },
+        sourceValue === undefined ? {} : { SOURCE: sourceValue },
+      );
+      const cfg = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(cfg, read.resolutionFacts);
+
+      const plan = await withClearedAnthropicEnv(async () =>
+        buildProbeTargets({
+          cfg,
+          providers: ["anthropic"],
+          modelCandidates: ["anthropic/claude-sonnet-4-6"],
+          options: { includeDirectKeys: true, timeoutMs: 5_000, concurrency: 1, maxTokens: 16 },
+        }),
+      );
+
+      if (expected === null) {
+        expect(plan.targets).toEqual([]);
+        expect(plan.results[0]).toMatchObject({ label: "config", reasonCode: "unresolved_ref" });
+        return;
+      }
+      expect(plan.results).toEqual([]);
+      expect(plan.targets[0]).toMatchObject({ label: "config", boundValue: expected });
+    },
+  );
 
   it("deduplicates matching config and environment credentials", async () => {
     mockStore = { version: 1, profiles: {}, order: {} };

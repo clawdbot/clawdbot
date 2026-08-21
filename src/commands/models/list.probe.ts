@@ -49,6 +49,12 @@ import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
+import {
+  copyConfigResolutionFacts,
+  copyConfigResolutionFactsExcept,
+  resolveConfigSecretRef,
+} from "../../config/resolution-facts.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -258,14 +264,14 @@ function withDirectCredential(
   mode: string | undefined,
 ): OpenClawConfig {
   const providers = cfg.models?.providers ?? {};
-  const configKey =
-    Object.keys(providers).find((key) => normalizeProviderId(key) === provider) ?? provider;
-  const configured = providers[configKey];
+  const configuredEntry = resolveMergedModelProviderEntry(cfg, provider);
+  const configKey = configuredEntry?.providerKey ?? provider;
+  const configured = configuredEntry?.providerConfig;
   if (!configured) {
     return withoutProfileFallback(cfg, provider);
   }
   const auth = mode === "oauth" || mode === "token" ? mode : "api-key";
-  return {
+  const next: OpenClawConfig = {
     ...cfg,
     models: {
       ...cfg.models,
@@ -286,10 +292,12 @@ function withDirectCredential(
       },
     },
   };
+  copyConfigResolutionFactsExcept(cfg, next, [`models.providers.${configKey}.apiKey`]);
+  return next;
 }
 
 function withoutProfileFallback(cfg: OpenClawConfig, provider: string): OpenClawConfig {
-  return {
+  const next: OpenClawConfig = {
     ...cfg,
     auth: {
       ...cfg.auth,
@@ -299,20 +307,24 @@ function withoutProfileFallback(cfg: OpenClawConfig, provider: string): OpenClaw
       },
     },
   };
+  copyConfigResolutionFacts(cfg, next);
+  return next;
 }
 
 async function resolveConfiguredProbeCredential(params: {
   cfg: OpenClawConfig;
   input: unknown;
+  path: string;
   cache: SecretRefResolveCache;
 }): Promise<string | null> {
-  const literal = normalizeSecretInputString(params.input);
-  if (literal !== undefined) {
-    return literal;
-  }
-  const ref = coerceSecretRef(params.input, params.cfg.secrets?.defaults);
+  const ref = resolveConfigSecretRef({
+    config: params.cfg,
+    path: params.path,
+    value: params.input,
+    defaults: params.cfg.secrets?.defaults,
+  });
   if (!ref) {
-    return null;
+    return normalizeSecretInputString(params.input) ?? null;
   }
   try {
     return await resolveSecretRefString(ref, {
@@ -404,7 +416,8 @@ export async function buildProbeTargets(params: {
       candidates,
       catalog,
     });
-    const configuredProvider = findNormalizedProviderValue(cfg.models?.providers, providerKey);
+    const configuredProviderEntry = resolveMergedModelProviderEntry(cfg, providerKey);
+    const configuredProvider = configuredProviderEntry?.providerConfig;
     const includeDirectKeys = options.includeDirectKeys === true && profileFilter.size === 0;
     const includeConfigKey =
       includeDirectKeys &&
@@ -435,6 +448,7 @@ export async function buildProbeTargets(params: {
           })
         : null;
     const configuredValue =
+      configuredProviderEntry &&
       includeConfigKey &&
       configuredReference.kind !== "profile" &&
       configuredReference.kind !== "profile-incompatible"
@@ -447,6 +461,7 @@ export async function buildProbeTargets(params: {
           : await resolveConfiguredProbeCredential({
               cfg,
               input: configuredProvider?.apiKey,
+              path: `models.providers.${configuredProviderEntry.providerKey}.apiKey`,
               cache: refResolveCache,
             })
         : null;
