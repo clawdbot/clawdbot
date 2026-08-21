@@ -119,7 +119,12 @@ describe("UsagePage provider usage outcome", () => {
         result: null,
         costSummary: null,
         providerUsage:
-          loadSource === "preload" ? { ok: false, error: { kind: "request-failed" } } : null,
+          loadSource === "preload"
+            ? {
+                state: "settled",
+                result: { ok: false, error: { kind: "request-failed" } },
+              }
+            : { state: "pending" },
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
         error: null,
       };
@@ -181,7 +186,7 @@ describe("UsagePage provider usage outcome", () => {
       },
       result: null,
       costSummary: null,
-      providerUsage: null,
+      providerUsage: { state: "pending" },
       loadedAtMs: null,
       error: null,
     };
@@ -237,7 +242,7 @@ describe("UsagePage provider usage outcome", () => {
       },
       result: null,
       costSummary: null,
-      providerUsage: null,
+      providerUsage: { state: "pending" },
       loadedAtMs: null,
       error: null,
     };
@@ -281,8 +286,13 @@ describe("UsagePage detail requests", () => {
       },
       result: null,
       costSummary: null,
-      providerUsageSummary: { updatedAt: 1, providers: [], refreshing: true },
-      providerUsageFailed: false,
+      providerUsage: {
+        state: "settled" as const,
+        result: {
+          ok: true as const,
+          value: { updatedAt: 1, providers: [], refreshing: true },
+        },
+      },
       loadedAtMs,
       error: null,
     });
@@ -298,7 +308,13 @@ describe("UsagePage detail requests", () => {
     await page.updateComplete;
     expect(page.providerUsageStalled).toBe(true);
 
-    page.routeData = { ...routeDataAt(4), providerUsageSummary: { updatedAt: 2, providers: [] } };
+    page.routeData = {
+      ...routeDataAt(4),
+      providerUsage: {
+        state: "settled",
+        result: { ok: true, value: { updatedAt: 2, providers: [] } },
+      },
+    };
     await page.updateComplete;
     expect(page.providerUsageStalled).toBe(false);
   });
@@ -329,8 +345,13 @@ describe("UsagePage detail requests", () => {
       },
       result: null,
       costSummary: null,
-      providerUsageSummary: { updatedAt: 1, providers: [], refreshing: true },
-      providerUsageFailed: false,
+      providerUsage: {
+        state: "settled",
+        result: {
+          ok: true,
+          value: { updatedAt: 1, providers: [], refreshing: true },
+        },
+      },
       loadedAtMs: 1,
       error: null,
     } satisfies UsageRouteData;

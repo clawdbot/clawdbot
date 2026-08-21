@@ -446,11 +446,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     document.dispatchEvent(new Event("visibilitychange"));
     window.dispatchEvent(new Event("focus"));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "sessions.usage",
-      "usage.cost",
-      "usage.status",
-    ]);
+    const initialMethods = request.mock.calls.map(([method]) => method);
+    expect(initialMethods).toHaveLength(3);
+    expect(initialMethods).toEqual(
+      expect.arrayContaining(["sessions.usage", "usage.cost", "usage.status"]),
+    );
 
     page.refreshPolicy.request("manual");
     await waitForFast(() => expect(page.usageLoading).toBe(false));

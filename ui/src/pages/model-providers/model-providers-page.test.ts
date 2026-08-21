@@ -100,6 +100,7 @@ function createHarness(initialScopeId: string) {
     lastError: null,
     lastErrorCode: null,
   };
+  const gatewaySource = publishableGateway(snapshot);
   let selectionListener: (() => void) | undefined;
   const agentSelection = {
     state: {
@@ -143,7 +144,7 @@ function createHarness(initialScopeId: string) {
     subscribe,
   };
   const context = {
-    gateway: { snapshot, subscribe },
+    gateway: gatewaySource.gateway,
     agents: {
       state: {
         agentsList: {
@@ -178,6 +179,10 @@ function createHarness(initialScopeId: string) {
     request,
     runtimeConfig,
     snapshot,
+    publishPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
+      snapshot.phase = phase;
+      gatewaySource.publish({ ...snapshot });
+    },
     setUsageStatus: (value: unknown) => {
       usageStatus = value;
     },
@@ -242,11 +247,9 @@ describe("ModelProvidersPage usage convergence", () => {
     ).length;
     expect(usageCallsBeforeReconnect).toBe(4);
 
-    harness.snapshot.phase = "offline";
-    page.requestUpdate();
+    harness.publishPhase("offline");
     await page.updateComplete;
-    harness.snapshot.phase = "connected";
-    page.requestUpdate();
+    harness.publishPhase("connected");
     await page.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
@@ -334,12 +337,10 @@ describe("ModelProvidersPage usage convergence", () => {
     const page = appendPage(harness.context);
     await page.updateComplete;
 
-    harness.snapshot.phase = "offline";
-    page.requestUpdate();
+    harness.publishPhase("offline");
     await page.updateComplete;
     harness.setUsageStatus({ updatedAt: 2, providers: [] });
-    harness.snapshot.phase = "connected";
-    page.requestUpdate();
+    harness.publishPhase("connected");
     await page.updateComplete;
 
     await vi.waitFor(() =>
