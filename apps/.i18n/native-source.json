@@ -49616,6 +49616,10 @@
       "sites": [
         {
           "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/ControlChannel.swift"
+        },
+        {
+          "kind": "conditional-branch",
           "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift"
         }
       ]
