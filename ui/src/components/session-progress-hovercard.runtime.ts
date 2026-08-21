@@ -34,10 +34,10 @@ const EXIT_DURATION_MS = 100;
 const HOVER_SUPPRESSED_SCOPE = "[data-hover-suppressed]";
 let nextHovercardId = 0;
 
-function sessionHovercardSuppressed(target: HTMLElement): boolean {
+function sessionHovercardSuppressed(target: HTMLElement, owner: ParentNode = target): boolean {
   return (
     target.closest(HOVER_SUPPRESSED_SCOPE) !== null ||
-    target.querySelector(
+    owner.querySelector(
       '[data-session-menu][aria-expanded="true"], [data-catalog-session-menu][aria-expanded="true"]',
     ) !== null
   );
@@ -70,7 +70,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private readonly activeTargetObserver = new MutationObserver(() => {
     if (
       this.activeTarget &&
-      (!this.contains(this.activeTarget) || sessionHovercardSuppressed(this.activeTarget))
+      (!this.contains(this.activeTarget) || sessionHovercardSuppressed(this.activeTarget, this))
     ) {
       this.close();
       return;
@@ -189,7 +189,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     const target = sessionProgressHoverTargetFromEvent(event);
-    if (!target || sessionHovercardSuppressed(target)) {
+    if (!target || sessionHovercardSuppressed(target, this)) {
       return;
     }
     const delayed = this.delayed;
@@ -227,7 +227,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     const trigger = target?.matches(".sidebar-recent-session")
       ? focused?.closest<HTMLElement>("a.sidebar-recent-session__link")
       : focused;
-    if (!target || !trigger || sessionHovercardSuppressed(target)) {
+    if (!target || !trigger || sessionHovercardSuppressed(target, this)) {
       return;
     }
     this.activate(target, trigger, 0, false);
@@ -266,10 +266,8 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
   };
 
-  private readonly handleSessionMenuOpen = (event: Event) => {
-    if (sessionProgressHoverTargetFromEvent(event) === this.activeTarget) {
-      this.close();
-    }
+  private readonly handleSessionMenuOpen = () => {
+    this.close();
   };
 
   private activate(
@@ -325,7 +323,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       generation !== this.loadGeneration ||
       this.activeSessionKey !== sessionKey ||
       !target ||
-      sessionHovercardSuppressed(target) ||
+      sessionHovercardSuppressed(target, this) ||
       !this.hovercard.held
     ) {
       return;

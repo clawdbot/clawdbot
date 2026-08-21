@@ -616,6 +616,9 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("openclaw-session-menu").getByRole("menuitem").count())
           .toBeGreaterThan(0);
+        await second.dispatchEvent("pointerover", { pointerType: "mouse" });
+        await page.waitForTimeout(500);
+        expect(await card.count()).toBe(0);
       },
     );
   });
@@ -700,6 +703,11 @@ suite.define(() => {
         await expect
           .poll(() => page.locator("openclaw-catalog-session-menu").getByRole("menuitem").count())
           .toBeGreaterThan(0);
+        await page
+          .locator(`[data-session-key="${selectedSessionKey}"]`)
+          .dispatchEvent("pointerover", { pointerType: "mouse" });
+        await page.waitForTimeout(500);
+        expect(await card.count()).toBe(0);
       },
     );
   });
