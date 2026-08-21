@@ -253,14 +253,18 @@ describe("Codex paired-device exec-server relay", () => {
           env: {
             OPENAI_API_KEY: "secret-canary", // pragma: allowlist secret
             GH_TOKEN: "token-canary", // pragma: allowlist secret
+            HTTPS_PROXY: ["https://user", "proxy-canary@proxy.example"].join(":"),
             SAFE_CANARY: "ordinary-env",
+            URL: "https://x/e",
           },
           envPolicy: {
             inherit: "none",
             set: {
               OPENAI_API_KEY: "policy-secret-canary", // pragma: allowlist secret
               GITHUB_TOKEN: "policy-token-canary", // pragma: allowlist secret
+              DATABASE_URL: ["postgres://user", "database-canary@db.example/app"].join(":"),
               SAFE_POLICY: "ordinary-policy",
+              U: "https://x/p",
             },
           },
           unknownFutureField: { preserved: true },
@@ -271,9 +275,10 @@ describe("Codex paired-device exec-server relay", () => {
     const forwarded = JSON.parse(
       Buffer.from(transport.channel.send.mock.calls[1]![0]).toString(),
     ) as { params: { env: unknown; envPolicy: { set: unknown }; unknownFutureField: unknown } };
-    expect(forwarded.params.env).toEqual({ SAFE_CANARY: "ordinary-env" });
-    expect(forwarded.params.envPolicy.set).toEqual({ SAFE_POLICY: "ordinary-policy" });
-    expect(forwarded.params.unknownFutureField).toEqual({ preserved: true });
+    const { params } = forwarded;
+    expect(params.env).toEqual({ SAFE_CANARY: "ordinary-env", URL: "https://x/e" });
+    expect(params.envPolicy.set).toEqual({ SAFE_POLICY: "ordinary-policy", U: "https://x/p" });
+    expect(params.unknownFutureField).toEqual({ preserved: true });
 
     const reverseRequest = JSON.stringify({
       id: 7,
@@ -454,12 +459,9 @@ describe("Codex paired-device exec-server relay", () => {
       JSON.stringify({ greeting: "hello", token_count: 2, status_code: 200 }),
       "https://x/stream;region=west#/callback?view=summary",
     ],
-    [
-      "ordinary plain text",
-      "text/plain",
-      "ordinary unstructured body",
-      "https://x/callback%3Fview%3Dsummary",
-    ],
+    ["ordinary plain text", "text/plain", "ordinary body", "https://x/c%3Fv%3Ds"],
+    ["bracketed plain text", "text/plain", "[INFO] deployment completed", "https://x/"],
+    ["large plain text", "text/plain", "x".repeat(1024 * 1024 + 1), "https://x/"],
   ])("forwards credential-free %s byte-for-byte", async (_label, contentType, body, url) => {
     const transport = createNodeChannel();
     const sandbox = createNodeSandbox();

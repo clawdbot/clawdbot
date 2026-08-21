@@ -287,7 +287,11 @@ function hasCredentialedCodexNodeHttpBody(
   if (typeof value !== "string") {
     throw new Error("Codex http/request bodyBase64 must be a string.");
   }
-  if (value.length > Math.ceil(CODEX_NODE_HTTP_CREDENTIAL_BODY_MAX_BYTES / 3) * 4) {
+  const declaredText = contentType === "text/plain";
+  if (
+    !declaredText &&
+    value.length > Math.ceil(CODEX_NODE_HTTP_CREDENTIAL_BODY_MAX_BYTES / 3) * 4
+  ) {
     // Missing content-type or binary disguise must not bypass bounded credential inspection.
     return true;
   }
@@ -295,7 +299,7 @@ function hasCredentialedCodexNodeHttpBody(
   try {
     const decoded = Buffer.from(value, "base64");
     if (
-      decoded.length > CODEX_NODE_HTTP_CREDENTIAL_BODY_MAX_BYTES ||
+      (!declaredText && decoded.length > CODEX_NODE_HTTP_CREDENTIAL_BODY_MAX_BYTES) ||
       decoded.toString("base64") !== value
     ) {
       return true;
@@ -313,7 +317,6 @@ function hasCredentialedCodexNodeHttpBody(
   const declaredJson =
     contentType === "application/json" || contentType?.endsWith("+json") === true;
   const declaredForm = contentType === "application/x-www-form-urlencoded";
-  const declaredText = contentType === "text/plain";
   if (contentType && !declaredJson && !declaredForm && !declaredText) {
     return true;
   }
@@ -329,7 +332,9 @@ function hasCredentialedCodexNodeHttpBody(
       const json: unknown = JSON.parse(body);
       return hasCredentialedCodexNodeJsonFields(json);
     } catch {
-      return true;
+      if (!declaredText) {
+        return true;
+      }
     }
   }
   if (!declaredForm && !body.includes("=")) {
@@ -489,6 +494,14 @@ function sanitizeCodexExecServerEnvironment(
   for (const [name, value] of Object.entries(environment)) {
     if (typeof value !== "string") {
       throw new Error(`Codex process/start ${key} values must be strings.`);
+    }
+    try {
+      const url = new URL(value);
+      if (url.username || url.password) {
+        continue;
+      }
+    } catch {
+      // Ordinary environment values need not be URLs.
     }
     values[name] = value;
   }
