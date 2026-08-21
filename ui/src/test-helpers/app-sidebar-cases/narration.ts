@@ -40,6 +40,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionsShowPreview = true;
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -91,6 +92,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionsShowPreview = true;
     sidebar.connected = true;
     await sidebar.updateComplete;
 

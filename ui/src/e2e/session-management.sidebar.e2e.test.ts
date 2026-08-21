@@ -842,6 +842,9 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
+    await context.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {

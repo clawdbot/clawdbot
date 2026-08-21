@@ -552,7 +552,9 @@ describe("AppSidebar session indicators", () => {
     for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
       expectEmptyLead(row);
-      expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
+      expect(
+        row?.querySelector(".sidebar-recent-session__details-endcap > [data-session-pr-state]"),
+      ).not.toBeNull();
       expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
       expect(row?.querySelector("[data-session-pr-state]")?.hasAttribute("title")).toBe(false);
     }

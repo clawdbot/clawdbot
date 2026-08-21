@@ -89,14 +89,14 @@ describe("collapsed sidebar sections preference", () => {
 });
 
 describe("sidebar session preview preference", () => {
-  it("defaults to showing previews and round-trips the stored choice", () => {
-    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
-
-    storeSidebarSessionsShowPreview(false);
+  it("defaults to compact rows and round-trips the stored choice", () => {
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
 
     storeSidebarSessionsShowPreview(true);
     expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+
+    storeSidebarSessionsShowPreview(false);
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
   });
 });
 

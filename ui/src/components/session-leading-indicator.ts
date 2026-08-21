@@ -58,7 +58,7 @@ function pullRequestStateLabel(
     : t("chat.pullRequests.merged");
 }
 
-function renderPullRequestIndicator(
+export function renderSessionPullRequestIndicator(
   pullRequestState: SessionPullRequestIndicatorState,
   showTitle = true,
 ) {
@@ -76,21 +76,13 @@ function renderPullRequestIndicator(
   >`;
 }
 
-function renderSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
+function renderSessionTrailingState(session: SidebarRecentSession) {
   const sessionState = renderSessionState(session, false);
   const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
-  if (
-    pullRequestState === "none" &&
-    sessionState === nothing &&
-    concurrentUnreadState === nothing
-  ) {
+  if (sessionState === nothing && concurrentUnreadState === nothing) {
     return nothing;
   }
-  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
-  ${concurrentUnreadState}`;
+  return html`${sessionState} ${concurrentUnreadState}`;
 }
 
 function renderPersistentSessionIcon(icon: string) {
@@ -100,13 +92,9 @@ function renderPersistentSessionIcon(icon: string) {
     : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`;
 }
 
-export function describeSessionTrailingState(
-  session: SidebarRecentSession,
-  pullRequestState: SessionPullRequestIndicatorState,
-) {
+export function describeSessionTrailingState(session: SidebarRecentSession) {
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
-    pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
     session.hasActiveRun
       ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
       : "",
@@ -132,9 +120,7 @@ export function renderSessionLeadingState(
   renderedOwnerId?: string;
 } {
   const running = session.hasActiveRun;
-  const trailingIndicator = session.isChild
-    ? nothing
-    : renderSessionTrailingState(session, pullRequestState);
+  const trailingIndicator = session.isChild ? nothing : renderSessionTrailingState(session);
   // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
     if (session.attention.kind !== "none") {
@@ -186,7 +172,7 @@ export function renderSessionLeadingState(
     if (pullRequestState !== "none") {
       return {
         running,
-        leadingIndicator: renderPullRequestIndicator(pullRequestState),
+        leadingIndicator: renderSessionPullRequestIndicator(pullRequestState),
         trailingIndicator,
       };
     }

@@ -202,6 +202,8 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       sessionsHarness.sessions,
     );
+    sidebar.sessionsShowPreview = true;
+    await sidebar.updateComplete;
 
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();

@@ -2173,8 +2173,12 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-board-glyph {
   display: inline-flex;
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--accent) 76%, var(--muted));
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: var(--muted);
 }
 
 .sidebar-board-glyph svg {
@@ -4213,17 +4217,19 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   font-size: 6px;
 }
 
-.sidebar-session-pr-indicator--open {
-  color: var(--ok);
-}
-
-.sidebar-session-pr-indicator--merged {
-  color: var(--pr-merged);
+.sidebar-session-pr-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: var(--muted);
 }
 
 .sidebar-session-pr-indicator svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7px;

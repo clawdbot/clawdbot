@@ -1,6 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -24,6 +26,12 @@ const sessionSecondRowProofDir = path.join(
   "control-ui-e2e",
   "session-status-second-row-implementation",
 );
+const sessionIconRailProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "session-icon-rail",
+);
 const subtitleStabilityProofDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -43,6 +51,9 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? { recordVideo: { dir: subtitleStabilityProofDir, size: { height: 900, width: 1280 } } }
         : {}),
+    });
+    await context.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
     });
     const page = await context.newPage();
     const proofVideo = page.video();
@@ -135,6 +146,9 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? { recordVideo: { dir: terminalMetadataProofDir, size: { height: 900, width: 1280 } } }
         : {}),
+    });
+    await context.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
     });
     const page = await context.newPage();
     const key = "agent:main:session-a";
@@ -331,6 +345,9 @@ suite.define(() => {
         ? { recordVideo: { dir: sessionSecondRowProofDir, size: { height: 900, width: 1280 } } }
         : {}),
     });
+    await context.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const page = await context.newPage();
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
@@ -512,6 +529,233 @@ suite.define(() => {
         });
       }
       await plainRow.waitFor();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("defaults to compact rows with an aligned dashboard-last icon rail", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionIconRailProofDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: sessionIconRailProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const dashboardKey = "agent:main:dashboard-icon";
+    const pullRequestKey = "agent:main:pull-request-icon";
+    const cloudKey = "agent:main:cloud-icon";
+    const combinedKey = "agent:main:combined-icons";
+    const emptyBoard = (sessionKey: string) => ({ sessionKey, revision: 1, tabs: [], widgets: [] });
+    const dashboardBoard = (sessionKey: string) => ({
+      sessionKey,
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+      widgets: [],
+    });
+    const activePlacement = {
+      state: "active",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "environment-1",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "0".repeat(64),
+      workspaceBaseManifestRef: "base-ref",
+      remoteWorkspaceDir: "/workspace",
+    };
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "board.get",
+        "chat.metadata",
+        "chat.startup",
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      ],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "board.get": {
+          cases: [
+            { match: { sessionKey: dashboardKey }, response: dashboardBoard(dashboardKey) },
+            { match: { sessionKey: pullRequestKey }, response: emptyBoard(pullRequestKey) },
+            { match: { sessionKey: cloudKey }, response: emptyBoard(cloudKey) },
+            { match: { sessionKey: combinedKey }, response: dashboardBoard(combinedKey) },
+          ],
+        },
+        "sessions.list": chatSessionListResponse([
+          {
+            key: dashboardKey,
+            kind: "direct",
+            label: "Dashboard session",
+            lastMessagePreview: "Dashboard preview should be opt-in",
+            updatedAt: 4,
+          },
+          {
+            key: pullRequestKey,
+            kind: "direct",
+            label: "Pull request session",
+            lastMessagePreview: "Pull request preview should be opt-in",
+            worktree: {
+              id: "pull-request-worktree",
+              branch: "fix/pull-request-icon",
+              repoRoot: "/tmp/openclaw",
+            },
+            updatedAt: 3,
+          },
+          {
+            key: cloudKey,
+            kind: "direct",
+            label: "Cloud worker session",
+            lastMessagePreview: "Cloud preview should be opt-in",
+            placement: activePlacement,
+            updatedAt: 2,
+          },
+          {
+            key: combinedKey,
+            kind: "direct",
+            label: "Combined metadata session",
+            lastMessagePreview: "Combined preview should be opt-in",
+            placement: activePlacement,
+            worktree: {
+              id: "combined-worktree",
+              branch: "fix/combined-icons",
+              repoRoot: "/tmp/openclaw",
+            },
+            updatedAt: 1,
+          },
+        ]),
+      },
+      sessionKey: dashboardKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const codingToggle = page.locator(
+        '[data-session-section="work"] .sidebar-session-group-toggle',
+      );
+      await codingToggle.waitFor({ state: "visible" });
+      await codingToggle.click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+          return requests.some((request) => {
+            const params = request.params;
+            if (!params || typeof params !== "object" || !("sessionKeys" in params)) {
+              return false;
+            }
+            const sessionKeys = params.sessionKeys;
+            return (
+              Array.isArray(sessionKeys) &&
+              sessionKeys.includes(pullRequestKey) &&
+              sessionKeys.includes(combinedKey)
+            );
+          });
+        })
+        .toBe(true);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: Object.fromEntries(
+          [pullRequestKey, combinedKey].map((sessionKey, index) => [
+            sessionKey,
+            {
+              pullRequests: [
+                {
+                  branch: index === 0 ? "fix/pull-request-icon" : "fix/combined-icons",
+                  number: 126_567 + index,
+                  owner: "openclaw",
+                  repo: "openclaw",
+                  state: "open",
+                  title: "Align sidebar metadata icons",
+                  url: `https://example.test/openclaw/openclaw/pull/${126_567 + index}`,
+                },
+              ],
+              rateLimited: false,
+              status: "ready",
+            },
+          ]),
+        ),
+      });
+      const dashboardRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${dashboardKey}"]`,
+      );
+      const pullRequestRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${pullRequestKey}"]`,
+      );
+      const cloudRow = page.locator(`.sidebar-recent-session[data-session-key="${cloudKey}"]`);
+      const combinedRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${combinedKey}"]`,
+      );
+      await dashboardRow.locator(".sidebar-board-glyph").waitFor();
+      await pullRequestRow.locator(".sidebar-session-pr-indicator").waitFor();
+      await cloudRow.locator(".session-row-badge--cloud").waitFor();
+      await combinedRow.locator(".sidebar-board-glyph").waitFor();
+      if (captureUiProofEnabled) {
+        await page.locator(".sidebar").screenshot({
+          path: path.join(sessionIconRailProofDir, "session-icon-rail.png"),
+        });
+      }
+
+      expect(
+        await page.evaluate(() => localStorage.getItem("openclaw:sidebar:sessions:show-preview")),
+      ).toBeNull();
+      for (const row of [dashboardRow, pullRequestRow, cloudRow, combinedRow]) {
+        await expect.poll(() => row.getAttribute("class")).toContain("--single-line");
+        expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      }
+
+      const aligned = await Promise.all(
+        [
+          [dashboardRow, ".sidebar-board-glyph"],
+          [pullRequestRow, ".sidebar-session-pr-indicator"],
+          [cloudRow, ".session-row-badge--cloud"],
+        ].map(async ([row, selector]) =>
+          (row as typeof dashboardRow).evaluate((element, iconSelector) => {
+            const icon = element.querySelector<HTMLElement>(iconSelector);
+            if (!icon) {
+              throw new Error(`Missing icon rail fixture ${iconSelector}`);
+            }
+            const rowBox = element.getBoundingClientRect();
+            const iconBox = icon.getBoundingClientRect();
+            return {
+              color: getComputedStyle(icon).color,
+              height: iconBox.height,
+              right: iconBox.right,
+              rowCenter: (rowBox.top + rowBox.bottom) / 2,
+              iconCenter: (iconBox.top + iconBox.bottom) / 2,
+              width: iconBox.width,
+            };
+          }, selector as string),
+        ),
+      );
+      for (const icon of aligned) {
+        expect(icon.height).toBe(16);
+        expect(icon.width).toBe(16);
+        expect(icon.iconCenter).toBeCloseTo(icon.rowCenter, 1);
+        expect(icon.right).toBeCloseTo(aligned[0]!.right, 1);
+        expect(icon.color).toBe(aligned[0]!.color);
+      }
+
+      const combinedOrder = await combinedRow.evaluate((row) => {
+        const center = (selector: string) => {
+          const element = row.querySelector<HTMLElement>(selector);
+          if (!element) {
+            throw new Error(`Missing combined icon rail fixture ${selector}`);
+          }
+          const box = element.getBoundingClientRect();
+          return (box.left + box.right) / 2;
+        };
+        return {
+          dashboard: center(".sidebar-board-glyph"),
+          placement: center(".session-row-badge--cloud"),
+          pullRequest: center(".sidebar-session-pr-indicator"),
+        };
+      });
+      expect(combinedOrder.pullRequest).toBeLessThan(combinedOrder.placement);
+      expect(combinedOrder.placement).toBeLessThan(combinedOrder.dashboard);
     } finally {
       await suite.closeBrowserContext(context);
     }

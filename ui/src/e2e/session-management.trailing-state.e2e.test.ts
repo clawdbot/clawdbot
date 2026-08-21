@@ -21,6 +21,9 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
+    await context.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -281,6 +284,9 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
+    await context.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: [
@@ -359,14 +365,13 @@ suite.define(() => {
         )
         .toBe(true);
       await expect.poll(() => state.locator('[aria-label="Forked session"]').count()).toBe(0);
-      await expect
-        .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
-        .toBe(true);
+      const pullRequest = row.locator("[data-session-pr-state='open']");
+      await expect.poll(() => pullRequest.isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
       const [endcapBounds, openPullRequestBounds, spinnerBounds, unreadBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__details-endcap").boundingBox(),
-        state.locator("[data-session-pr-state='open'] svg").boundingBox(),
+        pullRequest.locator("svg").boundingBox(),
         state.locator(".session-run-spinner").boundingBox(),
         state.locator(".session-unread-dot").boundingBox(),
       ]);

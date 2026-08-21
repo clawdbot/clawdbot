@@ -63,6 +63,7 @@ export type SidebarLifecycleState = HTMLElement & {
   workboardBoardsReady: boolean;
   workboardRenderers?: SidebarWorkboardRenderers;
   sidebarLiveActivity: boolean;
+  sessionsShowPreview: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;

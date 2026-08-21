@@ -5776,23 +5776,20 @@ td.data-table-key-col {
 .session-row-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
   color: var(--muted);
 }
 
 .session-row-badge--attention {
+  width: auto;
+  min-width: 16px;
   gap: 2px;
   color: var(--warn);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
-}
-
-.session-row-badge--pull-request[data-pull-request-state="open"],
-.session-row-badge--cloud[data-placement-state="active"] {
-  color: var(--ok);
-}
-
-.session-row-badge--pull-request[data-pull-request-state="merged"] {
-  color: var(--accent);
 }
 
 .session-row-badge--approval {
@@ -5803,17 +5800,6 @@ td.data-table-key-col {
 
 .session-row-badge--cloud[data-placement-state="failed"] {
   color: var(--danger);
-}
-
-.session-row-badge--cloud:is(
-  [data-placement-state="requested"],
-  [data-placement-state="provisioning"],
-  [data-placement-state="syncing"],
-  [data-placement-state="starting"],
-  [data-placement-state="draining"],
-  [data-placement-state="reconciling"]
-) {
-  color: var(--accent);
 }
 
 .session-row-badge--cloud[data-workspace-conflicts] {
@@ -5829,8 +5815,8 @@ td.data-table-key-col {
 }
 
 .session-row-badge svg {
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.6px;

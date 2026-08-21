@@ -273,7 +273,7 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
 }
 
 export function loadStoredSidebarSessionsShowPreview(): boolean {
-  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) !== "false";
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) === "true";
 }
 
 export function loadStoredSidebarSessionsShowSystem(): boolean {

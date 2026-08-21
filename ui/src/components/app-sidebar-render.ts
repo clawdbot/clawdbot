@@ -216,16 +216,6 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         ? html`<openclaw-tooltip .content=${attentionLabel}>${homeGlyph}</openclaw-tooltip>`
         : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
-      ${sessionHasBoard(mainKey)
-        ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
-            <span
-              class="sidebar-board-glyph"
-              role="img"
-              aria-label=${t("sessionsView.dashboardAvailable")}
-              >${icons.layoutDashboard}</span
-            >
-          </openclaw-tooltip>`
-        : nothing}
       ${running || outboxAttentionCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
             ${running ? renderSessionRunSpinner() : nothing}
@@ -235,6 +225,16 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
               hasComposerDraft,
             })}
           </span>`
+        : nothing}
+      ${sessionHasBoard(mainKey)
+        ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
+            <span
+              class="sidebar-board-glyph"
+              role="img"
+              aria-label=${t("sessionsView.dashboardAvailable")}
+              >${icons.layoutDashboard}</span
+            >
+          </openclaw-tooltip>`
         : nothing}
     </a>
   `;

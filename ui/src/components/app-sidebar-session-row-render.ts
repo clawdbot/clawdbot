@@ -31,6 +31,7 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import {
   describeSessionTrailingState,
   renderSessionLeadingState,
+  renderSessionPullRequestIndicator,
 } from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
@@ -219,9 +220,10 @@ export function renderRecentSession(params: {
       session.participantCount,
       channelAvatarAuth,
     );
-  const trailingDescription = session.isChild
-    ? ""
-    : describeSessionTrailingState(session, pullRequestState);
+  const trailingDescription = session.isChild ? "" : describeSessionTrailingState(session);
+  const pullRequestIndicator = session.isChild
+    ? nothing
+    : renderSessionPullRequestIndicator(pullRequestState, false);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
@@ -330,15 +332,6 @@ export function renderRecentSession(params: {
           <span class="sidebar-recent-session__details">
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
             <span class="sidebar-recent-session__details-endcap">
-              ${!session.isChild && sessionHasBoard(session.key)
-                ? html`<span
-                    class="sidebar-board-glyph"
-                    role="img"
-                    aria-label=${t("sessionsView.dashboardAvailable")}
-                    title=${t("sessionsView.dashboardAvailable")}
-                    >${icons.layoutDashboard}</span
-                  >`
-                : nothing}
               <openclaw-viewer-facepile
                 .presencePayload=${host.sessionData.presencePayload}
                 .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
@@ -348,6 +341,7 @@ export function renderRecentSession(params: {
                 .maxVisible=${3}
                 variant="session"
               ></openclaw-viewer-facepile>
+              ${pullRequestIndicator}
               ${renderSessionRowBadges({
                 ...session,
                 hasComposerDraft: session.hasComposerDraft === true,
@@ -380,6 +374,15 @@ export function renderRecentSession(params: {
                           .startMs=${session.startedAt!}
                           .endMs=${session.endedAt ?? null}
                         ></openclaw-elapsed-time>`}</span
+                  >`
+                : nothing}
+              ${!session.isChild && sessionHasBoard(session.key)
+                ? html`<span
+                    class="sidebar-board-glyph"
+                    role="img"
+                    aria-label=${t("sessionsView.dashboardAvailable")}
+                    title=${t("sessionsView.dashboardAvailable")}
+                    >${icons.layoutDashboard}</span
                   >`
                 : nothing}
             </span>
