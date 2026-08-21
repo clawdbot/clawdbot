@@ -860,6 +860,9 @@ export async function loadCompactHooksHarness(): Promise<{
   });
 
   vi.doMock("./lanes.js", () => ({
+    resolveEmbeddedRunGlobalLane: vi.fn(({ isHeartbeat }: { isHeartbeat: boolean }) =>
+      isHeartbeat ? "cron-nested" : "test-global-lane",
+    ),
     resolveSessionLane: vi.fn(() => "test-session-lane"),
     resolveEmbeddedSessionLane: vi.fn(() => "test-session-lane"),
     resolveGlobalLane: vi.fn(() => "test-global-lane"),

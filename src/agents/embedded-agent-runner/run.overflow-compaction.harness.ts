@@ -1073,6 +1073,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./lanes.js", () => ({
+    resolveEmbeddedRunGlobalLane: vi.fn(({ isHeartbeat }: { isHeartbeat: boolean }) =>
+      isHeartbeat ? "cron-nested" : "global-lane",
+    ),
     resolveSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveGlobalLane: vi.fn(() => "global-lane"),
