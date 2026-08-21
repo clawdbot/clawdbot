@@ -1,6 +1,8 @@
 // Subagent registry helper tests cover orphan reconciliation and compact logging
 // for announce delivery give-up paths.
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../../runtime.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
@@ -262,21 +264,28 @@ describe("reconcileOrphanedRestoredRuns", () => {
 });
 
 describe("safeRemoveAttachmentsDir", () => {
-  it("reports non-ENOENT realpath failures instead of treating cleanup as complete", async () => {
-    const realpathSpy = vi
-      .spyOn(fs, "realpath")
-      .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+  it("fails closed after staged attachments are replaced with an external symlink", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-root-"));
+    const externalDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-external-"));
+    const relDir = ".openclaw/attachments/run-1";
+    const externalSentinel = path.join(externalDir, "sentinel.txt");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw", "attachments"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, relDir));
+    await fs.writeFile(path.join(workspaceDir, relDir, "staged.txt"), "staged");
+    await fs.writeFile(externalSentinel, "must-survive");
+    await fs.rm(path.join(workspaceDir, ".openclaw", "attachments"), { recursive: true });
+    await fs.symlink(externalDir, path.join(workspaceDir, ".openclaw", "attachments"));
 
     await expect(
       safeRemoveAttachmentsDir(
-        createRunEntry({
-          attachmentsDir: "/tmp/openclaw-child-attachments",
-          attachmentsRootDir: "/tmp/openclaw-attachments",
-        }),
+        createRunEntry({ attachmentWorkspaceDir: workspaceDir, attachmentRelDir: relDir }),
       ),
     ).resolves.toBe(false);
+    await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("must-survive");
+    await expect(fs.readdir(externalDir)).resolves.toEqual(["sentinel.txt"]);
 
-    realpathSpy.mockRestore();
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+    await fs.rm(externalDir, { recursive: true, force: true });
   });
 });
 

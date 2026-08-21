@@ -75,6 +75,9 @@ export type RegisterSubagentRunParams = {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  attachmentWorkspaceDir?: string;
+  attachmentRelDir?: string;
+  /** Legacy inputs are ignored; cleanup requires the canonical relative facts. */
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
@@ -180,8 +183,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
       requesterSettleWake: undefined,
-      attachmentsDir: registerParams.attachmentsDir,
-      attachmentsRootDir: registerParams.attachmentsRootDir,
+      attachmentWorkspaceDir: registerParams.attachmentWorkspaceDir,
+      attachmentRelDir: registerParams.attachmentRelDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     this.options.runs.set(runId, entry);
