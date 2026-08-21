@@ -146,8 +146,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow.permissions?.actions).toBe("read");
     expect(leaseRun).toContain("lease-restore");
     expect(leaseRun).toContain("until node --import tsx");
-    expect(leaseRun).not.toContain("deadline=");
-    expect(leaseRun).not.toContain("still leased by another run after");
+    expect(leaseRun).toContain("lease_deadline=$(( SECONDS + 4 * 60 * 60 ))");
+    expect(leaseRun).toContain("remained busy for four hours");
+    expect(leaseRun).not.toContain("15 * 60");
     expect(leaseRun).toContain("sleep 15");
     expect(leaseRun.indexOf('echo "lease_file=$credential_dir/lease.json"')).toBeLessThan(
       leaseRun.indexOf("until node --import tsx"),
@@ -160,6 +161,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const fail = workflowStep("Fail when Mantis Telegram desktop proof failed");
 
     expect(trusted).toContain('lane_status="blocked"');
+    expect(trusted).toContain('|| "$baseline_status" == "blocked"');
+    expect(trusted).toContain('[[ "$lane_status" == "pass" || "$lane_status" == "fail" ]]');
     expect(trusted).toContain('.comparison.outcome == "blocked"');
     expect(trusted).not.toContain("comparisonPass");
     expect(inspect).toContain(".comparison.outcome");

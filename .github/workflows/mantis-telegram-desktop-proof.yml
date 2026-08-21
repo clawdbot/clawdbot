@@ -740,15 +740,21 @@ jobs:
           sudo install -m 0755 "$tdlib_dir/tdlib-v1.8.0-linux-x64/lib/libtdjson.so" /usr/local/lib/libtdjson.so
           # The Convex credential is the real mutex for the shared Telegram account:
           # a concurrent holder fails this acquire, so no separate run-level lock is
-          # needed. The job timeout bounds the wait while the credential owner
-          # remains the only source of truth.
+          # needed. Observed 2026-08: a complete proof held the account for 34m;
+          # four hours covers burst backfills while reserving roughly two hours
+          # of the job limit for proof, publication, and cleanup.
           echo "lease_file=$credential_dir/lease.json" >> "$GITHUB_OUTPUT"
+          lease_deadline=$(( SECONDS + 4 * 60 * 60 ))
           until node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
             --user-driver-dir "$credential_dir/user-driver" \
             --desktop-workdir "$credential_dir/desktop" \
             --lease-file "$credential_dir/lease.json" \
             --payload-output "$credential_dir/payload.json" \
             --credential-role ci; do
+            if (( SECONDS >= lease_deadline )); then
+              echo "::error::The shared QA Telegram account remained busy for four hours." >&2
+              exit 1
+            fi
             echo "Shared QA Telegram account is busy; retrying in 15s." >&2
             sleep 15
           done
@@ -979,8 +985,8 @@ jobs:
           ' "$agent_manifest" > "$judgment"
           baseline_status="$(sudo jq -r '.comparison.baseline.status' "$agent_manifest")"
           candidate_status="$(sudo jq -r '.comparison.candidate.status' "$agent_manifest")"
-          [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" ]]
-          [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" ]]
+          [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" || "$baseline_status" == "blocked" ]]
+          [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" || "$candidate_status" == "blocked" ]]
           copy_verified_artifacts() {
             local lane="$1"
             local facts_file="$2"
@@ -1045,7 +1051,9 @@ jobs:
                 (.blocked.reason | type) == "string" and (.blocked.reason | length) > 0 and (.blocked.reason | length) <= 2000
               ' "$verdict" >/dev/null
               lane_status="blocked"
-            elif [[ "$fact_status" != "complete" ]]; then
+            elif [[ "$fact_status" == "complete" ]]; then
+              [[ "$lane_status" == "pass" || "$lane_status" == "fail" ]]
+            else
               lane_status="fail"
             fi
             printf -v "${lane}_status" '%s' "$lane_status"
