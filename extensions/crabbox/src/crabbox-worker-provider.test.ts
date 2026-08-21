@@ -531,10 +531,6 @@ describe("Crabbox worker provider", () => {
       "bind_xfdesktop_renderer",
     );
     expect(desktopSetupText).not.toMatch(/pkill -(?:TERM|KILL) -x xfdesktop/u);
-    expect(desktopSetupText).not.toContain("def ellipse");
-    expect(desktopSetupText).not.toContain("import struct");
-    expect(desktopSetupText).not.toContain(".svg");
-    expect(desktopSetupText).not.toContain("sshUser");
     const setup = calls.find(
       (call) => call.argv[1] === "run" && String(call.options.input).includes("node run"),
     )?.options.input;

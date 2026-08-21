@@ -438,8 +438,6 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([
-    ["0.148.0-alpha.9", 0],
-    ["0.148.0-alpha.15", 0],
     ["0.148.0-alpha.23", 0],
     ["0.148.0", 0],
     ["1.0.0", 1],

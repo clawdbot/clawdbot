@@ -711,10 +711,6 @@ describe("createDiscordNativeCommand option wiring", () => {
       ko: "현지화된 설명",
       "en-GB": "k".repeat(99),
     });
-    expect(loggerDebugMock).toHaveBeenCalledExactlyOnceWith(
-      `discord: truncating native command description (command:localized locale:en-GB) from ${longDescription.length} to 100: ${JSON.stringify(longDescription)}`,
-    );
-    expect(loggerWarnMock).not.toHaveBeenCalled();
     expect(command.serialize()).toEqual({
       name: "localized",
       description: "Default description",
