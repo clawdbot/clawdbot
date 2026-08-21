@@ -239,9 +239,9 @@ describe("isPluginExplicitlySelectedByAlias", () => {
       plugins: { slots: { memory: "someone-else" } },
     } as unknown as OpenClawConfig;
 
-    expect(isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry)).toBe(
-      false,
-    );
+    expect(
+      isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry),
+    ).toBe(false);
   });
 
   it("reports no selection when the operator wrote neither", () => {

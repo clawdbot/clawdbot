@@ -1,7 +1,7 @@
 /** Covers reading a record's channel replacement preference by canonical channel id. */
 import { describe, expect, it } from "vitest";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolveManifestChannelPreferOverIds } from "./manifest-channel-preference.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 
 describe("resolveManifestChannelPreferOverIds", () => {
   it("reads a channel-config declaration written under the canonical id", () => {

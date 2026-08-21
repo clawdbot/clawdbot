@@ -7,8 +7,8 @@ import {
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { isBundledChannelEnabledByChannelConfig } from "../plugins/config-normalization-shared.js";
 import { normalizePluginId } from "../plugins/config-state.js";
-import { normalizeSlotValue, resolveSlotSelection } from "../plugins/slots.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { normalizeSlotValue, resolveSlotSelection } from "../plugins/slots.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /**

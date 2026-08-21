@@ -1,8 +1,8 @@
 /** A candidate that is not channel-configured must not carry a channel's replacement authority. */
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
+import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 
 // Codex review P2 on #123209: `resolvePreferredOverIds` fell back to the plugin id when a candidate
 // had no channel, which `candidateChannelId` documents must never be read as a channel claim. A

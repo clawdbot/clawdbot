@@ -41,9 +41,9 @@ export async function readConfigGetResponse(params: {
   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   // Takes the snapshot's own config: redaction hints depend on which plugin owns each channel,
   // which the config decides, so a hint set built without it can describe the previous owner.
-  loadUiHints: (config: ConfigFileSnapshot["sourceConfig"]) => Parameters<
-    typeof redactConfigSnapshot
-  >[1];
+  loadUiHints: (
+    config: ConfigFileSnapshot["sourceConfig"],
+  ) => Parameters<typeof redactConfigSnapshot>[1];
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
   const getHotReloadStatus = params.getHotReloadStatus;
