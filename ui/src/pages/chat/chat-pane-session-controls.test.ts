@@ -152,6 +152,9 @@ describe("chat pane composer controls", () => {
       '[data-chat-permission-option="default"]',
     );
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
+    expect(container.querySelector(".chat-controls__permission-scope")?.textContent.trim()).toBe(
+      "New runs use this setting. Existing work keeps its current permissions.",
+    );
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();

@@ -5712,7 +5712,8 @@ export const en: TranslationMap = {
     },
     permissionControls: {
       label: "Permissions",
-      help: "Choose how this session handles files, commands, and escalation reviews.",
+      help: "Choose permissions for new runs.",
+      nextRun: "New runs use this setting. Existing work keeps its current permissions.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       rootLabel: "Root",
