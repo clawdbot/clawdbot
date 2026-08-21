@@ -378,7 +378,7 @@ suite.define(() => {
           },
         ]),
       },
-      sessionKey: busyKey,
+      sessionKey: plainKey,
     });
 
     try {

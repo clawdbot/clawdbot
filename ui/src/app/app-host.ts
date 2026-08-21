@@ -3,7 +3,11 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import "../components/app-topbar.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/modal-dialog.ts";
-import { formatDocumentTitle, titleForRoute } from "../app-navigation.ts";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/update-banner.ts";
@@ -263,6 +267,12 @@ class OpenClawShell
   get onboardingMode(): boolean {
     const routeSearch = this.routeState.location?.search;
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
+  }
+
+  private get workspaceChromeVisible(): boolean {
+    const routeId = this.routeState.routeId;
+    // Hidden workspace chrome must not preload its sidebar and panel graphs.
+    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
   }
 
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
@@ -633,7 +643,7 @@ class OpenClawShell
       return;
     }
     const gatewaySnapshot = context.gateway?.snapshot;
-    if (gatewaySnapshot) {
+    if (gatewaySnapshot && this.workspaceChromeVisible) {
       const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
       // Scope-aware: openclaw.chat is operator.admin; advertisement alone would
       // show read-scoped clients a control the store then refuses to use.
@@ -727,6 +737,9 @@ class OpenClawShell
   }
 
   override render() {
+    if (this.workspaceChromeVisible) {
+      void import("../components/app-sidebar.ts");
+    }
     return renderApplicationShell(this);
   }
 }
