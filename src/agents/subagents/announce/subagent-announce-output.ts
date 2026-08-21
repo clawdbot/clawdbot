@@ -660,12 +660,7 @@ function formatTokenCount(value?: number) {
   return String(Math.round(value));
 }
 
-/**
- * Whether the session entry carries any token usage signal at all. Distinguishes
- * "usage unknown" from "usage is genuinely zero" — a child that never made a
- * model call has real zeros worth reporting, while a child whose usage has not
- * been flushed yet has nothing to report.
- */
+// Any token usage signal at all: absent usage is not the same fact as zero usage.
 function hasTokenUsageData(entry: ReturnType<typeof readSubagentSessionEntry>) {
   return (
     typeof entry?.inputTokens === "number" ||
@@ -698,8 +693,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
-  // After the wait loop the data really is absent, so report it as unknown rather
-  // than as zero: `tokens 0 (in 0 / out 0)` reads as "this child did no work".
+  // Still absent after the wait budget: unknown, not a zero that reads as "did no work".
   const tokenUsageKnown = hasTokenUsageData(entry);
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
   const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
