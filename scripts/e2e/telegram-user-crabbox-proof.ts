@@ -1300,6 +1300,7 @@ async function createCroppedMotionPreview(params: {
   videoPath: string;
 }) {
   return await createSharedCroppedMotionPreview({
+    crabboxBin: params.opts.crabboxBin,
     crop: params.crop,
     croppedGifPath: params.croppedGifPath,
     croppedVideoPath: params.croppedVideoPath,
