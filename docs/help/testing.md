@@ -168,10 +168,12 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/full,
-soak-enabled, and explicit `qa`/`qa-live` release checks include the QA-live
-Matrix and Telegram lanes. Bounded beta-publish `all` without soak runs parity
-but defers those live lanes to postpublish-confidence. `QA-Lab - All Lanes` runs
+`rerun_group=qa-parity` for parity or `rerun_group=qa-live` for live QA.
+The direct `OpenClaw Release Checks` child alone may use `rerun_group=qa` as a
+manual aggregate of both groups. Stable/full, soak-enabled, and explicit
+`qa-live` release checks include the QA-live Matrix and Telegram lanes. Bounded
+beta-publish `all` without soak runs parity but defers those live lanes to
+postpublish-confidence. `QA-Lab - All Lanes` runs
 nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
