@@ -1037,6 +1037,13 @@ describe("cron edit command", () => {
     await expectCronEditRejection(["--command-cwd", value], "--command-cwd must not be blank");
   });
 
+  it("rejects blank --command-cwd before loading an existing job", async () => {
+    await expectCronEditRejection(
+      ["--pacing-min", "30m", "--command-cwd", "   "],
+      "--command-cwd must not be blank",
+    );
+  });
+
   it.each(["", "   "])("preserves --command-input %j as command stdin", async (value) => {
     await createCronProgram().parseAsync(["edit", "job-1", "--command-input", value], {
       from: "user",

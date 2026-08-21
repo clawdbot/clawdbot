@@ -171,6 +171,10 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTools && opts.tools !== undefined) {
             throw new Error("Use --tools or --clear-tools, not both");
           }
+          const commandCwd = normalizeOptionalString(opts.commandCwd);
+          if (typeof opts.commandCwd === "string" && !commandCwd) {
+            throw new Error("--command-cwd must not be blank");
+          }
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
           const readExistingCronJob = async (): Promise<CronJobForEdit> => {
@@ -421,7 +425,12 @@ export function registerCronEditCommand(cron: Command) {
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob, webhookUrl),
+            await resolveCronEditPayloadDeliveryPatch(
+              opts,
+              readExistingCronJob,
+              webhookUrl,
+              commandCwd,
+            ),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

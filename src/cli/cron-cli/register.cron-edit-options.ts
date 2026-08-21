@@ -25,6 +25,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
   webhookUrl: string | undefined,
+  commandCwd: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -120,10 +121,6 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Use --account or --clear-account, not both");
   }
 
-  const commandCwd = normalizeOptionalString(opts.commandCwd);
-  if (typeof opts.commandCwd === "string" && !commandCwd) {
-    throw new Error("--command-cwd must not be blank");
-  }
   // Unlike cwd, command stdin intentionally accepts empty and whitespace strings.
   const hasCommandInput = typeof opts.commandInput === "string";
   const hasCommandSpecificPayloadField =
