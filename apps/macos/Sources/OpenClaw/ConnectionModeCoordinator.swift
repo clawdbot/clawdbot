@@ -22,10 +22,12 @@ final class ConnectionModeCoordinator {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "connection")
     private var transition = Transition()
+    private var portSweepTask: Task<Void, Never>?
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
+        self.portSweepTask?.cancel()
         let previousMode = self.transition.mode
         let applyGeneration = self.transition.begin(mode)
         if let previousMode, previousMode != mode {
@@ -76,7 +78,7 @@ final class ConnectionModeCoordinator {
             }
         }
 
-        Task.detached { await PortGuardian.shared.sweep(mode: mode) }
+        self.portSweepTask = Task { await PortGuardian.shared.sweep(mode: mode) }
     }
 
     private func applyLocalMode(paused: Bool, generation: UInt64) async {
