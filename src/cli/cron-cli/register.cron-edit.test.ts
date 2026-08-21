@@ -1052,6 +1052,10 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
+  it.each(["", "not-a-url"])("rejects invalid --webhook %j before gateway RPC", async (value) => {
+    await expectCronEditRejection(["--webhook", value], "--webhook must be a valid http(s) URL");
+  });
+
   it("documents the delivery clear flags alongside the sibling --clear-model", () => {
     const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
     const help = editCommand?.helpInformation() ?? "";

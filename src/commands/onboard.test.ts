@@ -624,29 +624,26 @@ describe("setupWizardCommand", () => {
     },
   );
 
+  const tokenError =
+    "--gateway-token configures local gateway auth. Use --remote-token in remote mode.";
+  const refError =
+    "--gateway-token-ref-env configures local gateway auth. Use --remote-token with --secret-input-mode ref in remote mode.";
   it.each([
-    {
-      name: "simultaneous remote token and password credentials",
-      options: { remoteToken: "fixture-token", remotePassword: "fixture-password" },
-      message: "Use either --remote-token or --remote-password, not both.",
-    },
-    {
-      name: "an empty remote token",
-      options: { remoteToken: " " },
-      message: "Invalid --remote-token: value cannot be empty.",
-    },
-    {
-      name: "an empty remote password",
-      options: { remotePassword: " " },
-      message: "Invalid --remote-password: value cannot be empty.",
-    },
-    {
-      name: "a local gateway password in remote mode",
-      options: { gatewayPassword: "fixture-password" },
-      message:
-        "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
-    },
-  ])("rejects $name before resetting existing state", async ({ options, message }) => {
+    [
+      { remoteToken: "fixture-token", remotePassword: "fixture-password" },
+      "Use either --remote-token or --remote-password, not both.",
+    ],
+    [{ remoteToken: " " }, "Invalid --remote-token: value cannot be empty."],
+    [{ remotePassword: " " }, "Invalid --remote-password: value cannot be empty."],
+    [
+      { gatewayPassword: "fixture-password" },
+      "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
+    ],
+    [{ gatewayToken: "fixture-token" }, tokenError],
+    [{ gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" }, refError],
+    [{ nonInteractive: false, gatewayToken: "fixture-token" }, tokenError],
+    [{ nonInteractive: false, gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" }, refError],
+  ] as const)("rejects invalid remote credentials %j before reset", async (options, message) => {
     const runtime = makeRuntime();
 
     await setupWizardCommand(
@@ -666,6 +663,7 @@ describe("setupWizardCommand", () => {
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it.each(

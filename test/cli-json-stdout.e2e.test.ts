@@ -358,6 +358,109 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each([
+    {
+      name: "search with a leaf JSON flag",
+      args: ["skills", "search", "fixture", "--json"],
+      message: "ClawHub /api/v1/search failed (400): offline fixture",
+    },
+    {
+      name: "search with a parent JSON flag",
+      args: ["skills", "--json", "search", "fixture"],
+      message: "ClawHub /api/v1/search failed (400): offline fixture",
+    },
+    {
+      name: "list with a leaf JSON flag",
+      args: ["skills", "list", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "list with a parent JSON flag",
+      args: ["skills", "--json", "list", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "info with a leaf JSON flag",
+      args: ["skills", "info", "fixture", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "info with a parent JSON flag",
+      args: ["skills", "--json", "info", "fixture", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "check with a leaf JSON flag",
+      args: ["skills", "check", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "check with a parent JSON flag",
+      args: ["skills", "--json", "check", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "the default report after its agent flag",
+      args: ["skills", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "the default report before its agent flag",
+      args: ["skills", "--json", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+  ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => new Response("offline fixture", { status: 400 });',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=${preload}`,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: testCase.message,
+          },
+        });
+        expect(result.stderr).toContain(testCase.message);
+        expect(result.stderr.length).toBeLessThan(2_048);
+      },
+      { prefix: "openclaw-skills-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "off", debug: "0", includesCause: false },
+    { name: "on", debug: "1", includesCause: true },
+  ])("keeps skills search nested causes behind debug mode ($name)", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => new Response("not-json", { status: 200 });',
+        )}`;
+        const result = runBuiltCli(tempHome, ["skills", "search", "fixture"], {
+          NODE_OPTIONS: `--import=${preload}`,
+          OPENCLAW_DEBUG: testCase.debug,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("ClawHub /api/v1/search returned malformed JSON");
+        expect(result.stderr.includes("Unexpected token")).toBe(testCase.includesCause);
+      },
+      { prefix: "openclaw-skills-human-failure-e2e-" },
+    );
+  });
+
   it("returns one canonical document when docs search fails", async () => {
     await withTempHome(
       async (tempHome) => {

@@ -93,11 +93,24 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
   if (opts.remoteToken !== undefined && opts.remotePassword !== undefined) {
     return rejectOption(runtime, "Use either --remote-token or --remote-password, not both.");
   }
-  if (opts.mode === "remote" && opts.gatewayPassword !== undefined) {
-    return rejectOption(
-      runtime,
-      "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
-    );
+  if (opts.mode === "remote") {
+    const localGatewayCredentials = [
+      ["--gateway-password", opts.gatewayPassword, "--remote-password"],
+      ["--gateway-token", opts.gatewayToken, "--remote-token"],
+      [
+        "--gateway-token-ref-env",
+        opts.gatewayTokenRefEnv,
+        "--remote-token with --secret-input-mode ref",
+      ],
+    ] as const;
+    for (const [flag, value, remoteFlag] of localGatewayCredentials) {
+      if (value !== undefined) {
+        return rejectOption(
+          runtime,
+          `${flag} configures local gateway auth. Use ${remoteFlag} in remote mode.`,
+        );
+      }
+    }
   }
   if (opts.nonInteractive && opts.secretInputMode === "ref") {
     const gatewayCredentials = [

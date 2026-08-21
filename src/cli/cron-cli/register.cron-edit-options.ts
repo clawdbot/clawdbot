@@ -24,6 +24,7 @@ const assignIf = (
 export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
+  webhookUrl: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -89,7 +90,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Invalid --script-tool-budget (must be a positive integer).");
   }
 
-  const hasWebhookDelivery = typeof opts.webhook === "string";
+  const hasWebhookDelivery = Boolean(webhookUrl);
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
   const threadId = parseCronThreadIdOption(opts.threadId);
@@ -275,8 +276,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
       delivery.channel = channel ? channel : undefined;
     }
     if (hasWebhookDelivery) {
-      const webhook = normalizeOptionalString(opts.webhook) ?? "";
-      delivery.to = webhook ? webhook : undefined;
+      delivery.to = webhookUrl;
     } else if (opts.clearTo) {
       delivery.to = null;
     } else if (typeof opts.to === "string") {

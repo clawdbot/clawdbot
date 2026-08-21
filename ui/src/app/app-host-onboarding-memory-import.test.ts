@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   createLazyElementSpec,
   resetAppHostTestGlobals,
@@ -29,10 +30,10 @@ describe("OpenClaw shell onboarding memory import", () => {
 
     shell.lazyCustomElements.requestWhileActive(element, true);
 
-    await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
+    await waitForFast(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
     expect(shell.lazyCustomElements.visibleState?.element).toBe(element);
     shell.lazyCustomElements.retry();
-    await vi.waitFor(() => expect(customElements.get(element.tagName)).toBeDefined());
+    await waitForFast(() => expect(customElements.get(element.tagName)).toBeDefined());
     expect(shell.lazyCustomElements.visibleState).toBeUndefined();
   });
 
@@ -53,7 +54,7 @@ describe("OpenClaw shell onboarding memory import", () => {
     shell.onboardingMemoryImportElement = element;
 
     shell.lazyCustomElements.requestWhileActive(element, true);
-    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
     expect(shell.lazyCustomElements.visibleState?.status).toBe("loading");
     shell.lazyCustomElements.requestWhileActive(element, false);
     const error = new Error("late memory import chunk failure");

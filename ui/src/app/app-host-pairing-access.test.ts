@@ -102,6 +102,10 @@ function createPairingShell(params: {
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
   shell.runtime = { context, router: {} } as ApplicationRuntime;
+  shell.routeState = {
+    routeId: "chat",
+    location: { pathname: "/chat", search: "", hash: "" },
+  };
   const container = document.createElement("div");
 
   const renderSidebar = () => {

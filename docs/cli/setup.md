@@ -92,8 +92,10 @@ In interactive onboarding, `--remote-url`, `--remote-token`, and
 stored remote values for that run. Pass either a token or a password, not both.
 Changing the URL does not reuse stored credentials unless you also provide a new
 token or password. The credential remains masked and uses the wizard's selected
-plaintext or SecretRef storage mode. `--gateway-password` configures a local
-Gateway and is not valid in remote mode.
+plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env`,
+and `--gateway-password` configure a local Gateway and are not valid in remote
+mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
+`--remote-token` with `--secret-input-mode ref`.
 
 ### Baseline mode
 
