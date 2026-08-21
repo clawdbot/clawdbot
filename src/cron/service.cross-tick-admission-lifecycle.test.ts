@@ -7,7 +7,9 @@ import {
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
+  GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -153,6 +155,117 @@ describe("cron service cross-tick admission lifecycle", () => {
         directRunA ?? Promise.resolve(),
         directRunB ?? Promise.resolve(),
       ]);
+      stop(state);
+    }
+  });
+
+  it("restores the timer root when an open partial-batch listener wakes from a direct run", async () => {
+    const store = fixtures.makeStorePath();
+    const t0 = Date.parse("2026-02-06T10:09:30.000Z");
+    const scheduledA = createDueIsolatedJob({
+      id: "open-listener-scheduled-a",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    const scheduledB = createDueIsolatedJob({
+      id: "open-listener-scheduled-b",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    const pending = createDueIsolatedJob({
+      id: "open-listener-pending",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    const direct = createDueIsolatedJob({
+      id: "open-listener-direct",
+      nowMs: t0,
+      nextRunAtMs: t0 + 3_600_000,
+    });
+    await cronStoreModule.saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [scheduledA, scheduledB, pending, direct],
+    });
+
+    let scheduledStartCount = 0;
+    const scheduledStarted = createDeferred();
+    const releaseScheduledA = createDeferred<{ status: "ok"; summary: string }>();
+    const releaseScheduledB = createDeferred<{ status: "ok"; summary: string }>();
+    const directStarted = createDeferred();
+    const releaseDirect = createDeferred<{ status: "ok"; summary: string }>();
+    const pendingStarted = createDeferred();
+    const directRootRetired = createDeferred();
+    const subordinateResult = createDeferred<unknown>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => t0,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async ({ job }: { job: CronJob }) => {
+        switch (job.id) {
+          case scheduledA.id:
+            scheduledStartCount += 1;
+            if (scheduledStartCount === 2) {
+              scheduledStarted.resolve();
+            }
+            return await releaseScheduledA.promise;
+          case scheduledB.id:
+            scheduledStartCount += 1;
+            if (scheduledStartCount === 2) {
+              scheduledStarted.resolve();
+            }
+            return await releaseScheduledB.promise;
+          case direct.id:
+            directStarted.resolve();
+            return await releaseDirect.promise;
+          case pending.id:
+            pendingStarted.resolve();
+            await directRootRetired.promise;
+            try {
+              await enqueueCommandInLane("cron-open-listener-subordinate", async () => {});
+              subordinateResult.resolve("accepted");
+              return { status: "ok" as const, summary: "pending" };
+            } catch (error) {
+              subordinateResult.resolve(error);
+              throw error;
+            }
+          default:
+            throw new Error(`unexpected cron job ${job.id}`);
+        }
+      }),
+    });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
+
+    const timerRun = onTimer(state);
+    let directRun: Promise<unknown> | undefined;
+    try {
+      await scheduledStarted.promise;
+      directRun = runWithGatewayIndependentRootWorkAdmission(() => run(state, direct.id, "force"));
+      await vi.waitFor(() => expect(state.runAdmission.waiters).toHaveLength(1));
+
+      releaseScheduledA.resolve({ status: "ok", summary: "scheduled a" });
+      await directStarted.promise;
+      expect(state.runAdmission.capacityListener).toBeTypeOf("function");
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+
+      releaseDirect.resolve({ status: "ok", summary: "direct" });
+      await pendingStarted.promise;
+      await directRun;
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      directRootRetired.resolve();
+
+      const result = await subordinateResult.promise;
+      expect(result).not.toBeInstanceOf(GatewayDrainingError);
+      expect(result).toBe("accepted");
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      directRootRetired.resolve();
+      releaseScheduledA.resolve({ status: "ok", summary: "scheduled a cleanup" });
+      releaseScheduledB.resolve({ status: "ok", summary: "scheduled b cleanup" });
+      releaseDirect.resolve({ status: "ok", summary: "direct cleanup" });
+      await Promise.allSettled([timerRun, directRun ?? Promise.resolve()]);
       stop(state);
     }
   });
