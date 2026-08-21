@@ -620,6 +620,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ${renderScopeUpgradeBanner(host, gatewaySnapshot, mergedChatChrome)}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
+          mobileNavLayout,
           onboarding,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,

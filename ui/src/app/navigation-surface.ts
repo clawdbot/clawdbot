@@ -16,6 +16,7 @@ export function navigationSurfaceIsHidden(params: {
 
 export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
+  mobileNavLayout: boolean;
   onboarding: boolean;
   compact?: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
@@ -36,7 +37,10 @@ export function renderFloatingUpdateCard(params: {
 }) {
   // A stale client must always have a visible refresh action, including during
   // onboarding, even though update-available actions stay hidden there.
-  const showAttention = params.navigationSurfaceHidden && !params.onboarding && !params.compact;
+  // Mobile keeps attention in its drawer; desktop collapse has no drawer, so
+  // it still needs the floating copy while navigation is hidden.
+  const desktopNavigationHidden = params.navigationSurfaceHidden && !params.mobileNavLayout;
+  const showAttention = desktopNavigationHidden && !params.onboarding && !params.compact;
   const showUpdateCard =
     !params.compact &&
     (params.onboarding ? params.refreshRequired : params.navigationSurfaceHidden);
