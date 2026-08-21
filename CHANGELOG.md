@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Subagent announce stats:** report `tokens unknown` on the announce `Stats:` line when a child's token usage never landed on its session entry, instead of rendering absent usage as `tokens 0 (in 0 / out 0)` and making a still-running child look like it did no work. A child whose usage is genuinely zero still reports `tokens 0 (in 0 / out 0)`.
 - **Secret egress host binding:** bind each shared-store secret to exact HTTPS destination hosts across CLI, Gateway RPC, and Control UI so unbound sentinel substitution fails closed before plaintext egress.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **macOS app profiles:** isolate named app instances across state, preferences, Keychain, Gateway services, and duplicate-instance ownership while keeping host-global login and node services untouched.

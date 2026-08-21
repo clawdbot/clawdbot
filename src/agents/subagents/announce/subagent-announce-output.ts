@@ -660,6 +660,20 @@ function formatTokenCount(value?: number) {
   return String(Math.round(value));
 }
 
+/**
+ * Whether the session entry carries any token usage signal at all. Distinguishes
+ * "usage unknown" from "usage is genuinely zero" — a child that never made a
+ * model call has real zeros worth reporting, while a child whose usage has not
+ * been flushed yet has nothing to report.
+ */
+function hasTokenUsageData(entry: ReturnType<typeof readSubagentSessionEntry>) {
+  return (
+    typeof entry?.inputTokens === "number" ||
+    typeof entry?.outputTokens === "number" ||
+    resolveFreshSessionTotalTokens(entry) !== undefined
+  );
+}
+
 export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
@@ -673,11 +687,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    const hasTokenData =
-      typeof entry?.inputTokens === "number" ||
-      typeof entry?.outputTokens === "number" ||
-      resolveFreshSessionTotalTokens(entry) !== undefined;
-    if (hasTokenData) {
+    if (hasTokenUsageData(entry)) {
       break;
     }
     if (!isFastTestMode()) {
@@ -688,6 +698,9 @@ export async function buildCompactAnnounceStatsLine(params: {
     entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
+  // After the wait loop the data really is absent, so report it as unknown rather
+  // than as zero: `tokens 0 (in 0 / out 0)` reads as "this child did no work".
+  const tokenUsageKnown = hasTokenUsageData(entry);
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
   const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
   const ioTotal = input + output;
@@ -699,7 +712,9 @@ export async function buildCompactAnnounceStatsLine(params: {
 
   const parts = [
     `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
+    tokenUsageKnown
+      ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+      : "tokens unknown",
   ];
   if (typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
