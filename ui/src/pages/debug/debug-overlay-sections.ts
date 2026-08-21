@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -23,7 +23,7 @@ type TypedDebugOverlaySectionDescriptor<T> = {
   id: string;
   titleKey: string;
   load: (context: DebugOverlaySectionContext, signal: AbortSignal) => Promise<T>;
-  render: (value: T) => TemplateResult;
+  render: (value: T, statusHistory: readonly DebugOverlayStatusSnapshot[]) => TemplateResult;
 };
 
 export type DebugOverlaySectionDescriptor = TypedDebugOverlaySectionDescriptor<unknown>;
@@ -33,21 +33,27 @@ function defineDebugOverlaySection<T>(
 ): DebugOverlaySectionDescriptor {
   return {
     ...descriptor,
-    render: (value) => {
+    render: (value, statusHistory) => {
       // SAFETY: This closure keeps each descriptor's load result paired with its own renderer.
-      return descriptor.render(value as T);
+      return descriptor.render(value as T, statusHistory);
     },
   };
 }
 
 type EventLoopSnapshot = {
   utilization?: number;
+  cpuCoreRatio?: number;
   delayP99Ms?: number;
   delayMaxMs?: number;
 };
 
-type StatusSectionValue = {
+export type DebugOverlayStatusSnapshot = {
   eventLoop?: EventLoopSnapshot;
+  processMemory?: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    heapTotalBytes: number;
+  };
   uptimeMs?: number;
 };
 
@@ -76,7 +82,44 @@ function renderLanes(diagnostics: CommandLaneDiagnostics): TemplateResult {
   `;
 }
 
-function renderStatus(status: StatusSectionValue): TemplateResult {
+function renderSparkline(
+  history: readonly DebugOverlayStatusSnapshot[],
+  kind: "cpu" | "memory" | "delay",
+  label: string,
+  readValue: (sample: DebugOverlayStatusSnapshot) => number | undefined,
+  formatValue: (value: number) => string | undefined,
+) {
+  const values = history.map(readValue).filter((value): value is number => Number.isFinite(value));
+  const current = values.at(-1);
+  if (values.length < 2 || current === undefined) {
+    return nothing;
+  }
+  const maximum = Math.max(...values, 1);
+  const points = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * 100;
+      const y = 30 - (value / maximum) * 26;
+      return `${x},${y}`;
+    })
+    .join(" ");
+  return html`
+    <figure class="debug-overlay__graph debug-overlay__graph--${kind}">
+      <figcaption>
+        <span>${label}</span>
+        <span class="mono">${formatValue(current)}</span>
+      </figcaption>
+      <svg viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+        <polygon points="0,32 ${points} 100,32"></polygon>
+        <polyline points=${points}></polyline>
+      </svg>
+    </figure>
+  `;
+}
+
+function renderStatus(
+  status: DebugOverlayStatusSnapshot,
+  history: readonly DebugOverlayStatusSnapshot[],
+): TemplateResult {
   const eventLoop = status.eventLoop;
   const utilization =
     typeof eventLoop?.utilization === "number"
@@ -91,6 +134,32 @@ function renderStatus(status: StatusSectionValue): TemplateResult {
       ? formatDurationCompact(eventLoop.delayMaxMs)
       : t("common.na");
   return html`
+    ${history.length >= 2
+      ? html`<div class="debug-overlay__graphs">
+          ${renderSparkline(
+            history,
+            "cpu",
+            t("debug.overlay.cpu"),
+            (sample) => sample.eventLoop?.cpuCoreRatio,
+            (value) => `${Math.round(value * 100)}%`,
+          )}
+          ${renderSparkline(
+            history,
+            "memory",
+            t("debug.overlay.memory"),
+            (sample) => sample.processMemory?.rssBytes,
+            (value) =>
+              t("debug.overlay.memoryMb", { value: String(Math.round(value / 1_048_576)) }),
+          )}
+          ${renderSparkline(
+            history,
+            "delay",
+            t("debug.overlay.delayP99"),
+            (sample) => sample.eventLoop?.delayP99Ms,
+            formatDurationCompact,
+          )}
+        </div>`
+      : nothing}
     <dl class="debug-overlay__metrics">
       <div>
         <dt>${t("debug.overlay.utilization")}</dt>
@@ -156,11 +225,16 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
     id: "status",
     titleKey: "debug.overlay.status",
     load: async (context, signal) => {
-      const value = await context.client.request<StatusSectionValue>("status", {}, { signal });
+      const value = await context.client.request<DebugOverlayStatusSnapshot>(
+        "status",
+        {},
+        { signal },
+      );
       return {
         eventLoop: value.eventLoop,
+        processMemory: value.processMemory,
         ...(typeof value.uptimeMs === "number" ? { uptimeMs: value.uptimeMs } : {}),
-      } satisfies StatusSectionValue;
+      } satisfies DebugOverlayStatusSnapshot;
     },
     render: renderStatus,
   }),

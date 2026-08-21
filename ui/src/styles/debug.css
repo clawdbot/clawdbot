@@ -128,6 +128,59 @@ openclaw-debug-overlay {
   padding: 6px 8px;
 }
 
+.debug-overlay__graphs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.debug-overlay__graph {
+  min-width: 0;
+  margin: 0;
+  color: var(--accent);
+}
+
+.debug-overlay__graph--memory {
+  color: var(--accent-2);
+}
+
+.debug-overlay__graph--delay {
+  color: var(--info);
+}
+
+.debug-overlay__graph figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.debug-overlay__graph figcaption .mono {
+  color: var(--text);
+}
+
+.debug-overlay__graph svg {
+  display: block;
+  width: 100%;
+  height: 38px;
+}
+
+.debug-overlay__graph polygon {
+  fill: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.debug-overlay__graph polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
 .debug-overlay__metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -4375,7 +4375,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4398,7 +4398,7 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 

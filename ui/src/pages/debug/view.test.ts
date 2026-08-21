@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import "./debug-overlay.ts";
 import "./debug-page.ts";
 import { renderDebug } from "./view.ts";
 
@@ -34,6 +35,12 @@ type TestDebugPage = HTMLElement & {
   loadDiagnostics: () => Promise<void>;
 };
 
+type TestDebugOverlay = HTMLElement & {
+  readonly updateComplete: Promise<boolean>;
+  context: ApplicationContext;
+  toggle: () => void;
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -44,9 +51,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function mountDebugPage(
+function createDebugApplicationContext(
   request: (method: string) => Promise<unknown>,
-): Promise<TestDebugPage> {
+): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = {
     snapshot: { phase: "connected", client } as ApplicationGatewaySnapshot,
@@ -58,8 +65,14 @@ async function mountDebugPage(
     state: { selectedId: "main" },
     subscribe: () => () => undefined,
   } as unknown as ApplicationContext["agentSelection"];
+  return { agentSelection, basePath: "", gateway } as ApplicationContext;
+}
+
+async function mountDebugPage(
+  request: (method: string) => Promise<unknown>,
+): Promise<TestDebugPage> {
   const page = document.createElement("openclaw-debug-page") as TestDebugPage;
-  page.context = { agentSelection, basePath: "", gateway } as ApplicationContext;
+  page.context = createDebugApplicationContext(request);
   document.body.append(page);
   await vi.waitFor(() => expect(page.debugStatus).not.toBeNull());
   return page;
@@ -334,5 +347,78 @@ describe("DebugPage", () => {
 
     expect(page.debugDiagnosticsError).toContain("background snapshots unavailable");
     expect(page.debugCallError).toContain("manual request failed");
+  });
+});
+
+describe("DebugOverlay", () => {
+  it("graphs bounded status samples without clamping CPU and resets history on reopen", async () => {
+    vi.useFakeTimers();
+    let sampleCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "status") {
+        sampleCount += 1;
+        return {
+          eventLoop: {
+            utilization: 0.42,
+            cpuCoreRatio: 1 + sampleCount / 10,
+            delayP99Ms: 10 + sampleCount,
+            delayMaxMs: 87,
+          },
+          processMemory: {
+            rssBytes: (400 + sampleCount) * 1_048_576,
+            heapUsedBytes: 100 * 1_048_576,
+            heapTotalBytes: 200 * 1_048_576,
+          },
+        };
+      }
+      if (method === "sessions.list") {
+        return { sessions: [] };
+      }
+      return diagnosticResponse(method);
+    });
+    const overlay = document.createElement("openclaw-debug-overlay") as TestDebugOverlay;
+    overlay.context = createDebugApplicationContext(request);
+    document.body.append(overlay);
+
+    try {
+      overlay.toggle();
+      await vi.advanceTimersByTimeAsync(0);
+      await overlay.updateComplete;
+
+      expect(overlay.querySelector(".debug-overlay__metrics")?.textContent).toContain("42%");
+      expect(overlay.querySelector(".debug-overlay__graphs")).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await overlay.updateComplete;
+
+      expect(overlay.querySelectorAll(".debug-overlay__graph")).toHaveLength(3);
+      expect(normalizedText(overlay.querySelector(".debug-overlay__graph--cpu"))).toContain("120%");
+      expect(normalizedText(overlay.querySelector(".debug-overlay__graph--memory"))).toContain(
+        "402 MB",
+      );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__graph--delay"))).toContain(
+        "12ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(180_000);
+      await overlay.updateComplete;
+
+      const points = overlay
+        .querySelector(".debug-overlay__graph--cpu polyline")
+        ?.getAttribute("points")
+        ?.split(" ");
+      expect(points).toHaveLength(90);
+
+      overlay.toggle();
+      overlay.toggle();
+      await vi.advanceTimersByTimeAsync(0);
+      await overlay.updateComplete;
+
+      expect(overlay.querySelector(".debug-overlay__metrics")).not.toBeNull();
+      expect(overlay.querySelector(".debug-overlay__graphs")).toBeNull();
+    } finally {
+      overlay.remove();
+      vi.useRealTimers();
+    }
   });
 });
