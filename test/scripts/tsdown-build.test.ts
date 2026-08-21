@@ -869,6 +869,36 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
   });
 
+  it("uses a co-mounted cgroup-v1 soft limit when the hard limit is unbounded", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    const cgroupFiles = new Map([
+      [`/proc/self/cgroup`, `2:memory,cpu:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory,cpu\n",
+      ],
+      [`/sys/fs/cgroup${slicePath}/memory.soft_limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
+      [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("caps the tsdown heap when the cgroup mount exposes only a subtree", () => {
     // A container mount roots cgroupfs at the container's own cgroup, so /proc/self/cgroup
     // records stay host-absolute and only translate to a visible path via the mount root.

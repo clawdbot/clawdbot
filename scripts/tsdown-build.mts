@@ -57,10 +57,10 @@ const SERIALIZED_MAIN_CONFIG_GROUPS = [
   TSDOWN_UNIFIED_CONFIG_GROUP,
   ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 ];
-// memory.high throttles reclaim rather than failing allocation, so a heap sized
-// above it stalls the build instead of OOM-ing; both bounds cap the build heap.
+// The v2 high and v1 soft limits throttle reclaim rather than failing allocation, so a heap
+// sized above either stalls the build instead of OOM-ing; both kinds still cap the build heap.
 const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
-const CGROUP_V1_MEMORY_LIMIT_FILES = ["memory.limit_in_bytes"];
+const CGROUP_V1_MEMORY_LIMIT_FILES = ["memory.limit_in_bytes", "memory.soft_limit_in_bytes"];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const tsdownStdio = () => ["ignore", "pipe", "pipe"] satisfies ["ignore", "pipe", "pipe"];
 // Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
