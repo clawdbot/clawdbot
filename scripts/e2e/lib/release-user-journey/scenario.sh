@@ -244,6 +244,7 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-reply "
 echo "Restarting Gateway and checking state survival..."
 stop_gateway
 start_gateway "$GATEWAY_2_LOG"
+node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-socket "http://127.0.0.1:$CLICKCLACK_PORT" 45 2
 openclaw plugins inspect journey-plugin-b --runtime --json >"$PLUGIN_B_AFTER_RESTART_JSON" 2>&1
 openclaw channels status --json >"$STATUS_AFTER_RESTART_JSON" 2>"$STATUS_AFTER_RESTART_ERR"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-running clickclack "$STATUS_AFTER_RESTART_JSON"

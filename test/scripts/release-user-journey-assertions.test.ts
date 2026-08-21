@@ -326,8 +326,10 @@ describe("release user journey assertions", () => {
   it("accepts ready ClickClack fixture state", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
     const home = path.join(root, "home");
+    let requestCount = 0;
     const server = await startTcpFixtureServer((socket) => {
-      const body = JSON.stringify({ socketCount: 1 });
+      requestCount += 1;
+      const body = JSON.stringify({ socketCount: requestCount });
       socket.end(
         `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
       );
@@ -339,9 +341,11 @@ describe("release user journey assertions", () => {
           runReleaseUserJourneyAssertion("wait-clickclack-socket", [
             `http://127.0.0.1:${server.port}`,
             "1",
+            "2",
           ]),
         ),
       ).resolves.toBeUndefined();
+      expect(requestCount).toBe(2);
     } finally {
       await server.stop();
       rmSync(root, { force: true, recursive: true });
@@ -392,7 +396,7 @@ describe("release user journey assertions", () => {
             timeoutMs: 150,
           }),
         ),
-      ).rejects.toThrow("Timed out waiting for ClickClack websocket connection");
+      ).rejects.toThrow("Timed out waiting for 1 ClickClack websocket connection");
       expect(Date.now() - startedAt).toBeLessThan(750);
     } finally {
       await server.stop();
