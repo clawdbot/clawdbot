@@ -3190,8 +3190,10 @@ NODE
         label,
       ).toEqual(expectedWindowsMatrix);
     }
-    expect(runStep.run).toContain("test-1)\n    pnpm test:windows:ci:1");
-    expect(runStep.run).toContain("test-2)\n    pnpm test:windows:ci:2");
+    expect(runStep.run).toContain('scripts?.["test:windows:ci:1"]');
+    expect(runStep.run).toContain('scripts?.["test:windows:ci:2"]');
+    expect(runStep.run).toContain("pnpm test:windows:ci");
+    expect(runStep.run).toContain("target's combined Windows suite ran in test-1");
     expect(runStep.run).not.toContain("pnpm test:windows:ci:3");
   });
 
@@ -5310,7 +5312,10 @@ server.listen(0, "127.0.0.1", () => {
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     expect(hostedLintCache.if).toBe(
-      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
+    );
+    expect(boundaryCache.if).toBe(
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
     );
     expect(hostedLintCache.uses).toBe(CACHE_V5);
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
@@ -5331,6 +5336,7 @@ server.listen(0, "127.0.0.1", () => {
       expect(step.run).toContain(
         "scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint",
       );
+      expect(step.run).toContain('echo "enabled=false" >> "$GITHUB_OUTPUT"');
     }
     expect(fingerprintSteps[0]?.run).toBe(fingerprintSteps[1]?.run);
     // Single semantic writer: protected pushes commit explicitly (not
@@ -8960,6 +8966,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(buildChecks.run).toContain("pnpm test:gateway:watch-regression -- --skip-build");
     expect(buildChecks.run).not.toContain("scripts/check-gateway-watch-regression.mts");
+    expect(buildChecks.run).toContain(
+      "startup_builder=(node --import tsx scripts/ensure-cli-startup-build.mts)",
+    );
+    expect(buildChecks.run).toContain(
+      "startup_builder=(node scripts/ensure-cli-startup-build.mjs)",
+    );
     expect(qaBuild.run.match(/pnpm build qaRuntime/gu)).toHaveLength(1);
     expect(qaBuild.run).not.toContain("package-openclaw-for-docker");
     expect(additionalChecks.run).toContain(
@@ -8974,6 +8986,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(additionalChecks.run).not.toContain(
       "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
     );
+    const checkLint = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run check shard",
+    );
+    const hostedCoreLint = workflow.jobs["check-lint-hosted-core-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run hosted core lint stripe",
+    );
+    const lintBoundaryFingerprint = workflow.jobs["check-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Compute extension boundary input fingerprint",
+    );
+    const additionalBoundaryFingerprint = workflow.jobs["check-additional-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Compute extension boundary input fingerprint",
+    );
+
+    // The frozen candidate owns the older full lint and boundary builders;
+    // current-only stripe and cache mechanics must not replace that coverage.
+    expect(checkLint.run).toContain("if [[ ! -f scripts/run-oxlint-shards.mts ]]; then");
+    expect(checkLint.run).toContain("pnpm lint");
+    expect(hostedCoreLint.run).toContain("target does not support core lint stripes");
+    expect(lintBoundaryFingerprint.run).toContain("enabled=false");
+    expect(additionalBoundaryFingerprint.run).toContain("enabled=false");
   });
 
   it("emits one final CI gate after every selected lane", () => {
