@@ -30,13 +30,21 @@ parsers. The helper's JSON is factual evidence, not a semantic verdict. Run
 TypeScript scenarios with `$MANTIS_NODE_BIN --import tsx <scenario.ts>`.
 Install a failure trap that invokes `abort`; clear it only after `finish` or `block`.
 
-Each lane starts from a small harness config:
+Each lane starts from a public harness config:
 
 ```json
-{ "mockResponse": "the mock model response" }
+{
+  "mockResponse": "the mock model response",
+  "configPatch": { "session": { "sendPolicy": { "default": "deny" } } }
+}
 ```
 
-Optional fields: `mockResponseChunkDelayMs`, `humanDelayFixedMs`, `linkPreview`.
+`configPatch` accepts any OpenClaw root config merge patch, matching the local
+Telegram userbot. It is applied after the harness defaults, so it can replace any
+setting. Defaults already connect the leased QA user, SUT bot, Telegram proxy, and
+mock OpenAI endpoint; the QA user is the gateway owner, so owner commands such as
+`/send off` work without a patch.
+Optional field: `mockResponseChunkDelayMs`.
 
 ## Primitive CLI
 
