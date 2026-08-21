@@ -956,7 +956,7 @@ jobs:
               sudo jq -e '
                 .sendCount >= 1 and (.focusMessageId | test("^[0-9]+$")) and
                 .observation.truncated == false and
-                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and .actor == "bot")) and
+                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and (.actor == "user" or .actor == "bot"))) and
                 any(.invocations[]; .command == "send") and
                 any(.invocations[]; .command == "finish") and
                 (.artifacts.screenshot.bytes > 10000) and
@@ -966,7 +966,7 @@ jobs:
             fi
             if [[ "$fact_status" == "blocked" ]]; then
               sudo jq -e '
-                (.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200 and
+                (.blocked.name == null or ((.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200)) and
                 (.blocked.reason | type) == "string" and (.blocked.reason | length) > 0 and (.blocked.reason | length) <= 2000
               ' "$verdict" >/dev/null
               lane_status="blocked"

@@ -101,6 +101,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     ).toBe("baseline gif");
     const manifest = loadEvidenceManifest(result.manifestPath);
     expect(manifest.comparison.pass).toBe(true);
+    expect(manifest.comparison.candidate).not.toHaveProperty("fixed");
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toContain(
       "candidate/telegram-desktop-proof.gif",
     );

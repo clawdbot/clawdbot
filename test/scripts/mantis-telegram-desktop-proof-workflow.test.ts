@@ -266,10 +266,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('[[ "$fact_status" == "complete" ]]');
     expect(gate).toContain(".sendCount >= 1");
     expect(gate).toContain(".observation.truncated == false");
-    expect(gate).toContain('any(.observation.events[]; .messageId == $focus and .actor == "bot")');
+    expect(gate).toContain(
+      'any(.observation.events[]; .messageId == $focus and (.actor == "user" or .actor == "bot"))',
+    );
     expect(gate).toContain('any(.invocations[]; .command == "send")');
     expect(gate).toContain('any(.invocations[]; .command == "finish")');
     expect(gate).toContain(".observation.events");
+    expect(gate).toContain(".blocked.name == null or");
     expect(gate).toContain(".providerRequests");
     expect(gate).toContain('copy_verified_artifacts "$lane" "$attempt_facts"');
     expect(gate).toContain('copy_verified_artifacts "$lane" "$verdict"');
@@ -661,8 +664,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("Write a short Bash scenario");
     expect(prompt).toContain("`observe --seconds N [--since cursor]`");
     expect(prompt).toContain("`requests`");
-    expect(prompt).toContain("`finish --focus-message-id ID`");
-    expect(prompt).toContain("`block --missing-primitive NAME --reason TEXT`");
+    expect(prompt).toContain("`finish [--focus-message-id ID]`");
+    expect(prompt).toContain("Identical relevant observations are unproven");
+    expect(prompt).toContain("`block --reason TEXT [--missing-primitive NAME]`");
     expect(prompt).toContain("`@{sut}`");
     expect(prompt).toContain("raw full-window footage remains");
     expect(prompt).toContain("never stale chat history");
