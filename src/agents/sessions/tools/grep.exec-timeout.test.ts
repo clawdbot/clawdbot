@@ -60,6 +60,19 @@ function writeChattyStub(dir: string): string {
   return stubPath;
 }
 
+// One large ripgrep JSON record streamed in newline-less chunks: readline
+// emits no `line` event until the final chunk, so the stall deadline must
+// re-arm on raw stdout data or an active search is killed as silent.
+function writeChunkedRecordStub(dir: string): string {
+  const stubPath = path.join(dir, "stub-rg-chunked");
+  fs.writeFileSync(
+    stubPath,
+    `#!${process.execPath}\nconst payload = JSON.stringify({type:"match",data:{path:{text:"big.txt"},line_number:1,lines:{text:"x".repeat(8192)}}});\nlet offset = 0;\nconst timer = setInterval(() => {\n  if (offset >= payload.length) {\n    clearInterval(timer);\n    process.stdout.write("\\n");\n    return;\n  }\n  process.stdout.write(payload.slice(offset, offset + 64));\n  offset += 64;\n}, 100);\n`,
+    { mode: 0o755 },
+  );
+  return stubPath;
+}
+
 // execa 10 exposes the underlying ChildProcess (and its `killed` flag) through
 // `nodeChildProcess`; the subprocess facade itself only carries pid/stdio/kill.
 type SpawnedChild = {
@@ -174,6 +187,45 @@ describePosix("grep tool stall-timeout escalation", () => {
 
     // 70s of fake time in 5s chunks, with real wall-clock pauses so the
     // chatty stub's lines arrive and re-arm the stall timer each chunk.
+    for (let i = 0; i < 14; i++) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await realDelay(150);
+    }
+    expect(outcome).toBeUndefined();
+
+    controller.abort();
+    await expect(result).rejects.toThrow(/aborted/);
+  });
+
+  it("does not kill ripgrep while one large record streams in chunks without a newline", async () => {
+    const dir = tempDirs.make("openclaw-grep-chunked-");
+    const stubPath = writeChunkedRecordStub(dir);
+    vi.mocked(ensureTool).mockResolvedValue(stubPath);
+
+    vi.useFakeTimers();
+    const tool = createGrepToolDefinition(dir);
+    const controller = new AbortController();
+    const result = tool.execute(
+      "call-1",
+      { pattern: "foo" },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+    let outcome: "resolved" | "rejected" | undefined;
+    void result.then(
+      () => {
+        outcome = "resolved";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+    await pumpUntilSpawned();
+
+    // 70s of fake time in 5s chunks, with real wall-clock pauses so the
+    // stub's newline-less chunks keep arriving. readline emits no completed
+    // line here, so only raw stdout activity can re-arm the stall timer.
     for (let i = 0; i < 14; i++) {
       await vi.advanceTimersByTimeAsync(5_000);
       await realDelay(150);

@@ -310,6 +310,13 @@ export function createGrepToolDefinition(
             let linesTruncated = false;
             const outputLines: string[] = [];
 
+            // Raw stdout activity — not just completed readline records —
+            // proves the child is alive: one large ripgrep JSON match can
+            // stream in chunks without a newline for longer than the stall
+            // window. Re-arm on every chunk so only a silent ripgrep dies.
+            spawnedChild.stdout?.on("data", () => {
+              execTimeout?.refresh();
+            });
             // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
             // cannot split multibyte characters into U+FFFD replacement noise.
             spawnedChild.stderr?.setEncoding("utf8");
@@ -364,9 +371,6 @@ export function createGrepToolDefinition(
             // Collect matches during streaming, then format them after rg exits.
             const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
             rl.on("line", (line) => {
-              // Stream activity proves the child is alive; re-arm the stall
-              // timer so only a silent ripgrep is killed.
-              execTimeout?.refresh();
               if (!line.trim() || matchLimitReached) {
                 return;
               }
