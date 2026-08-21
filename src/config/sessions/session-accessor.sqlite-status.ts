@@ -19,6 +19,11 @@ import type { SessionEntry } from "./types.js";
 type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 export function normalizeStatus(value: unknown): SessionEntryStatus | null {
+  // `interrupted` remains distinct in canonical entry_json while sharing the
+  // existing failed projection bucket in the derived SQLite status index.
+  if (value === "interrupted") {
+    return "failed";
+  }
   return value === "running" ||
     value === "done" ||
     value === "failed" ||
@@ -42,27 +47,34 @@ export function parseSessionEntryJson(
 }
 
 export function readSessionEntriesByStatus(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   statuses: readonly SessionEntryStatus[],
   sessionKeys?: readonly string[],
 ): SessionEntrySummary[] {
   const selectedStatuses = [...new Set(statuses)];
+  const selectedStatusSet = new Set(selectedStatuses);
+  const projectedStatuses = [...new Set(selectedStatuses.map(normalizeStatus))].filter(
+    (status): status is SessionEntryStatus => status !== null,
+  );
   const selectedSessionKeys = sessionKeys ? [...new Set(sessionKeys)] : undefined;
-  if (selectedStatuses.length === 0 || selectedSessionKeys?.length === 0) {
+  if (projectedStatuses.length === 0 || selectedSessionKeys?.length === 0) {
     return [];
   }
   const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
   let query = db
     .selectFrom("session_nodes")
     .select(["session_key", "entry_json", "current_session_id", "updated_at"])
-    .where("status", "in", selectedStatuses);
+    .where("status", "in", projectedStatuses);
   if (selectedSessionKeys) {
     query = query.where("session_key", "in", selectedSessionKeys);
   }
   return executeSqliteQuerySync(database.db, query)
     .rows.flatMap((row) => {
       const entry = parseSessionEntryJson(row);
-      return entry ? [{ entry, sessionKey: row.session_key }] : [];
+      if (!entry?.status || !selectedStatusSet.has(entry.status)) {
+        return [];
+      }
+      return [{ entry, sessionKey: row.session_key }];
     })
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
 }

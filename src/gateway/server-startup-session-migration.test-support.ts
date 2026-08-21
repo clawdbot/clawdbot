@@ -3,6 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveCompletionFromSessionEntry } from "../agents/subagents/registry/subagent-session-reconciliation.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
@@ -44,8 +50,15 @@ function makeDeps(
     .mockResolvedValue({ reconciledSessions: 0 }),
 ) {
   return {
+    hasProjectedAgentRunForSession: vi.fn(() => false),
     migrateOrphanedSessionKeys: migrate,
+    processStartedAtMs: 100,
     prepareLegacySessionSurfaces: vi.fn(() => EMPTY_LEGACY_SESSION_SURFACES),
+    readActiveGatewayLockIdentity: vi.fn().mockResolvedValue({
+      createdAt: "1970-01-01T00:00:00.100Z",
+      pid: process.pid,
+      port: 18_789,
+    }),
     resolveAllAgentSessionStoreTargetsSync: vi.fn<ResolveStoreTargets>().mockReturnValue([
       { agentId: "main", storePath: "/tmp/main/sessions.json" },
       { agentId: "ops", storePath: "/tmp/ops/sessions.json" },
@@ -97,7 +110,68 @@ function makeSessionSqliteImport(
   });
 }
 
+async function runSubagentStartupScenario(entry: SessionEntry) {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-startup-"));
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const agentId = "ops";
+  const sessionKey = "agent:ops:subagent:startup-boundary";
+  const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  await upsertSessionEntryCore({ agentId, env, sessionKey, storePath }, entry);
+  const before = loadSessionEntryReadOnly({ agentId, env, sessionKey, storePath });
+  const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+  const deps = {
+    ...makeDeps(migrate),
+  };
+  deps.resolveAllAgentSessionStoreTargetsSync.mockReturnValue([{ agentId, storePath }]);
+  await runStartupSessionMigration({ cfg: makeCfg(), env, log: makeLog(), deps });
+  const after = loadSessionEntryReadOnly({ agentId, env, sessionKey, storePath });
+  fs.rmSync(stateDir, { force: true, recursive: true });
+  return { after, before };
+}
+
 describe("runStartupSessionMigration", () => {
+  it("marks a prior-process running subagent as interrupted at startup", async () => {
+    const { after, before } = await runSubagentStartupScenario({
+      abortedLastRun: false,
+      sessionId: "stale-run",
+      startedAt: 40,
+      status: "running",
+      updatedAt: 50,
+    });
+
+    expect(after).toMatchObject({
+      abortedLastRun: true,
+      lastRunError: "subagent run was interrupted before a terminal lifecycle event was persisted",
+      sessionId: "stale-run",
+      startedAt: 40,
+      status: "interrupted",
+      updatedAt: before?.updatedAt,
+    });
+    expect(after?.endedAt).toBeUndefined();
+    expect(after?.runtimeMs).toBeUndefined();
+    expect(resolveCompletionFromSessionEntry(after, 100)).toMatchObject({
+      outcome: {
+        error: "subagent run was interrupted before a terminal lifecycle event was persisted",
+        status: "error",
+      },
+      reason: "subagent-error",
+    });
+  });
+
+  it("preserves a completed subagent across startup reconciliation", async () => {
+    const { after, before } = await runSubagentStartupScenario({
+      abortedLastRun: false,
+      endedAt: 80,
+      runtimeMs: 40,
+      sessionId: "completed-run",
+      startedAt: 40,
+      status: "done",
+      updatedAt: 80,
+    });
+
+    expect(after).toEqual(before);
+  });
+
   it("skips legacy migration imports when no session stores exist", async () => {
     const log = makeLog();
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
