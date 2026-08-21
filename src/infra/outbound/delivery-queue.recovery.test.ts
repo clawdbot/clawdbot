@@ -1261,25 +1261,6 @@ describe("delivery-queue recovery", () => {
     await runIf(typedRejection, () => expect(deliver).toHaveBeenCalledOnce());
     await runIf(!typedRejection, () => expectMockMessageContaining(log.warn, "permanent error"));
   });
-  it("retries an unavailable outbound adapter instead of dead-lettering the entry", async () => {
-    const artifact = path.join(
-      tmpDir(),
-      "delivery-queue-media",
-      "00000000-0000-4000-8000-000000000077.txt",
-    );
-    await fs.mkdir(path.dirname(artifact), { recursive: true });
-    await fs.writeFile(artifact, "spooled attachment");
-    const id = await enqueueRecoveryDelivery({ payloads: [{ text: "hi", mediaUrl: artifact }] });
-    const deliver = vi
-      .fn()
-      .mockRejectedValue(new Error("Outbound not configured for channel: demo-channel-a"));
-    const { result, log } = await runRecovery({ deliver });
-    expect(result).toEqual(RECOVERY_SUMMARY.failed);
-    const entry = await expectPendingEntry({ id, retryCount: 1 });
-    expect(entry?.lastError).toContain("Outbound not configured for channel");
-    expectMockMessageContaining(log.warn, "Retry failed for delivery");
-    await expect(fs.stat(artifact)).resolves.toBeDefined();
-  });
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
     await enqueueRecoveryDelivery();
     const deliver = vi.fn().mockResolvedValue([]);

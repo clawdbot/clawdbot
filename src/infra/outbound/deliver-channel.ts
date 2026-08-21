@@ -27,7 +27,7 @@ import type {
   DurableFinalDeliveryRequirements,
   OutboundDurableDeliverySupport,
 } from "./deliver-contracts.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { PlatformMessageNotDispatchedError, type OutboundDeliveryResult } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
   type OutboundDeliveryCommitHook,
@@ -57,7 +57,8 @@ export async function createChannelHandler(params: ChannelHandlerParams): Promis
     return createPluginHandler({ ...params, outbound, message });
   });
   if (!handler) {
-    throw new Error(`Outbound not configured for channel: ${params.channel}`);
+    const message = `Outbound not configured for channel: ${params.channel}`;
+    throw new PlatformMessageNotDispatchedError(message, { cause: new Error(message) });
   }
   return scopeChannelHandler(handler, pluginRegistry);
 }
