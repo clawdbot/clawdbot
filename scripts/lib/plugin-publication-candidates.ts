@@ -10,20 +10,52 @@ import type {
 export const PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS = [
   "package.json",
   "pnpm-lock.yaml",
-  "packages/normalization-core/src/string-coerce.ts",
-  "packages/plugin-package-contract/src/index.ts",
+  "packages/normalization-core/src",
+  "packages/plugin-package-contract/src",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
   "scripts/lib/release-version.mjs",
 ] as const;
 
-export function hasPluginPublicationSharedAuthorityChanges(paths: readonly string[]): boolean {
+export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
+  ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+  ".github/actions/setup-node-env",
+  ".github/workflows/plugin-npm-release.yml",
+  "scripts/generate-npm-package-lock.mjs",
+  "scripts/generate-npm-package-lock.mts",
+  "scripts/lib/actions-artifact-archive.mjs",
+  "scripts/lib/npm-json-output.mts",
+  "scripts/lib/plugin-npm-package-manifest.mjs",
+  "scripts/lib/plugin-npm-package-manifest.mts",
+  "scripts/lib/plugin-npm-release.ts",
+  "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/plugin-npm-publish.sh",
+  "scripts/plugin-npm-release-check.ts",
+  "scripts/plugin-npm-release-plan.ts",
+  "scripts/plugin-publication-artifact.mjs",
+  "scripts/release-tooling-identity.d.mts",
+  "scripts/release-tooling-identity.mjs",
+  "scripts/verify-plugin-npm-published-runtime.mts",
+] as const;
+
+function hasAuthorityPathChanges(
+  paths: readonly string[],
+  authorityPaths: readonly string[],
+): boolean {
   return paths.some((path) =>
-    PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS.some(
+    authorityPaths.some(
       (authorityPath) => path === authorityPath || path.startsWith(`${authorityPath}/`),
     ),
   );
+}
+
+export function hasPluginPublicationSharedAuthorityChanges(paths: readonly string[]): boolean {
+  return hasAuthorityPathChanges(paths, PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS);
+}
+
+export function hasPluginNpmReleaseAuthorityChanges(paths: readonly string[]): boolean {
+  return hasAuthorityPathChanges(paths, PLUGIN_NPM_RELEASE_AUTHORITY_PATHS);
 }
 
 function readPluginPackageJson(absolutePath: string, repoPath: string): PluginPackageJson {

@@ -6,8 +6,8 @@ import { join, resolve } from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import {
   collectExtensionPackageJsonCandidates,
-  hasPluginPublicationSharedAuthorityChanges,
-  PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+  hasPluginNpmReleaseAuthorityChanges,
+  PLUGIN_NPM_RELEASE_AUTHORITY_PATHS,
 } from "./plugin-publication-candidates.ts";
 import {
   assertUniquePublishablePluginPackageSources,
@@ -49,8 +49,8 @@ export type GitRangeSelection = {
 };
 
 export type PluginNpmGitRangeSelection = {
+  authorityChanged: boolean;
   changedExtensionIds: string[];
-  sharedAuthorityChanged: boolean;
 };
 
 type ParsedPluginReleaseArgs = {
@@ -338,11 +338,11 @@ export function collectPluginNpmGitRangeSelection(params: {
   const changedPaths = collectChangedPathsFromGitRange({
     rootDir: params.rootDir,
     gitRange: params.gitRange,
-    pathspecs: ["extensions", ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS],
+    pathspecs: ["extensions", ...PLUGIN_NPM_RELEASE_AUTHORITY_PATHS],
   });
   return {
+    authorityChanged: hasPluginNpmReleaseAuthorityChanges(changedPaths),
     changedExtensionIds: collectChangedExtensionIdsFromPaths(changedPaths),
-    sharedAuthorityChanged: hasPluginPublicationSharedAuthorityChanges(changedPaths),
   };
 }
 
@@ -506,7 +506,7 @@ export function collectPluginReleasePlan(params?: {
     extensionIds:
       params?.selectionMode === "all-publishable" ||
       !gitRangeSelection ||
-      gitRangeSelection.sharedAuthorityChanged
+      gitRangeSelection.authorityChanged
         ? undefined
         : gitRangeSelection.changedExtensionIds,
     packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
@@ -521,7 +521,7 @@ export function collectPluginReleasePlan(params?: {
             selection: params.selection,
           })
         : gitRangeSelection
-          ? gitRangeSelection.sharedAuthorityChanged
+          ? gitRangeSelection.authorityChanged
             ? allPublishable
             : resolveChangedPublishablePluginPackages({
                 plugins: allPublishable,

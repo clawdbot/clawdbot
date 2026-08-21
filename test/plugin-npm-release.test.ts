@@ -824,10 +824,13 @@ describe("collectChangedExtensionIdsFromPaths", () => {
 
 describe("collectPluginNpmGitRangeSelection", () => {
   it.each([
-    "packages/normalization-core/src/string-coerce.ts",
+    ".github/actions/setup-node-env/action.yml",
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/plugin-package-contract/src/schema.ts",
     "scripts/lib/plugin-publication-candidates.ts",
     "scripts/lib/plugin-publication-collector.ts",
-  ])("selects all publishable plugins for a shared-only %s change", (changedPath) => {
+    "scripts/plugin-npm-release-plan.ts",
+  ])("selects all publishable plugins for an authority-only %s change", (changedPath) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-range-");
     const absolutePath = join(repoDir, changedPath);
     mkdirSync(dirname(absolutePath), { recursive: true });
@@ -878,8 +881,8 @@ describe("collectPluginNpmGitRangeSelection", () => {
         gitRange: { baseRef, headRef },
       }),
     ).toEqual({
+      authorityChanged: true,
       changedExtensionIds: [],
-      sharedAuthorityChanged: true,
     });
   });
 });

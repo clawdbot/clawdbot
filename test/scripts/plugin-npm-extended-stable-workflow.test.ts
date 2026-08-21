@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
+import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -64,14 +64,18 @@ function workflowPathPatternCovers(pattern: string, path: string): boolean {
 }
 
 describe("plugin npm extended-stable workflow", () => {
-  it("triggers for every shared plugin publication authority", () => {
-    const triggerPaths = workflow().on?.push?.paths ?? [];
-    for (const authorityPath of PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS) {
-      expect(
+  it("keeps push triggers aligned with npm publication authorities", () => {
+    const triggerPaths = (workflow().on?.push?.paths ?? []).filter(
+      (path) => path !== "extensions/**",
+    );
+    expect(
+      triggerPaths.map((path) => (path.endsWith("/**") ? path.slice(0, -3) : path)).toSorted(),
+    ).toEqual([...PLUGIN_NPM_RELEASE_AUTHORITY_PATHS].toSorted());
+    expect(
+      PLUGIN_NPM_RELEASE_AUTHORITY_PATHS.every((authorityPath) =>
         triggerPaths.some((pattern) => workflowPathPatternCovers(pattern, authorityPath)),
-        authorityPath,
-      ).toBe(true);
-    }
+      ),
+    ).toBe(true);
   });
 
   it("exposes only the default behavior and closed extended-stable override", () => {

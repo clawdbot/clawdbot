@@ -7,11 +7,12 @@ on:
       - main
     paths:
       - ".github/workflows/plugin-npm-release.yml"
+      - ".github/actions/setup-node-env/**"
       - "extensions/**"
       - "package.json"
       - "pnpm-lock.yaml"
-      - "packages/normalization-core/**"
-      - "packages/plugin-package-contract/src/index.ts"
+      - "packages/normalization-core/src/**"
+      - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"

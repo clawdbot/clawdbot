@@ -424,7 +424,8 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
   });
 
   it.each([
-    "packages/normalization-core/src/string-coerce.ts",
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/plugin-package-contract/src/schema.ts",
     "scripts/lib/plugin-publication-candidates.ts",
     "scripts/lib/plugin-publication-collector.ts",
   ])("selects all publishable plugins when %s changes", (changedPath) => {

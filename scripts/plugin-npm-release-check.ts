@@ -25,7 +25,7 @@ function runPluginNpmReleaseCheck(argv: string[]) {
     extensionIds:
       selectionMode === "all-publishable" ||
       !gitRangeSelection ||
-      gitRangeSelection.sharedAuthorityChanged
+      gitRangeSelection.authorityChanged
         ? undefined
         : gitRangeSelection.changedExtensionIds,
     packageNames: selection.length > 0 ? selection : undefined,
@@ -40,7 +40,7 @@ function runPluginNpmReleaseCheck(argv: string[]) {
             selection,
           })
         : gitRangeSelection
-          ? gitRangeSelection.sharedAuthorityChanged
+          ? gitRangeSelection.authorityChanged
             ? publishable
             : resolveChangedPublishablePluginPackages({
                 plugins: publishable,
