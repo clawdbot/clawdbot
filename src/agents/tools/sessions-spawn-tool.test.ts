@@ -387,8 +387,13 @@ describe("sessions_spawn tool", () => {
       requesterRunId: "parent-run",
       config: { tools: { swarm: true } },
     });
-    const schema = tool.parameters as { properties?: Record<string, unknown> };
+    const schema = tool.parameters as {
+      properties?: Record<string, { description?: string } | undefined>;
+    };
     expect(schema.properties?.collect).toBeDefined();
+    expect(requireSchemaProperty(schema.properties, "collect").description).not.toContain(
+      "agents_wait",
+    );
     expect(schema.properties?.outputSchema).toBeDefined();
     expect(schema.properties?.fastMode).toBeDefined();
     expect(schema.properties?.groupId).toBeDefined();

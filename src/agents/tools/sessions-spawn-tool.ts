@@ -204,7 +204,7 @@ function createSessionsSpawnToolSchema(params: {
       ? {
           collect: Type.Optional(
             Type.Boolean({
-              description: "Swarm collector child for parallel fan-out; await via agents_wait.",
+              description: "Swarm collector child for parallel fan-out.",
             }),
           ),
           outputSchema: Type.Optional(
