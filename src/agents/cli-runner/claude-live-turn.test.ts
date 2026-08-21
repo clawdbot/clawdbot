@@ -51,6 +51,7 @@ function startLiveTurn(
     context?: PreparedCliRunContextOverrides;
     abortSignal?: AbortSignal;
     noOutputTimeoutMs?: number;
+    toolActiveNoOutputTimeoutMs?: number;
     requireCapability?: boolean;
     onPhase?: (phase: "send" | "resolve") => void;
     parseJsonlEvent?: CliBackendParseJsonlEvent;
@@ -76,6 +77,7 @@ function startLiveTurn(
     prompt: "hi",
     useResume,
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 5_000,
+    toolActiveNoOutputTimeoutMs: options.toolActiveNoOutputTimeoutMs,
     getProcessSupervisor: getProcessSupervisorForTest,
     onAssistantDelta: () => {},
     onToolResult: options.onToolResult,
@@ -533,6 +535,52 @@ describe("Claude live turn input ownership and replay safety", () => {
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await rejection;
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
+  });
+
+  it("extends the no-output watchdog to the tool-active allowance and attributes the kill", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn("run-tool-active-watchdog", false, {
+      context: { timeoutMs: 60_000 },
+      noOutputTimeoutMs: 1_000,
+      toolActiveNoOutputTimeoutMs: 5_000,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-tool-active" },
+        {
+          type: "assistant",
+          session_id: "live-tool-active",
+          message: {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "tool-active-1", name: "Bash", input: {} }],
+          },
+        },
+      ]),
+    );
+
+    const errorPromise = resultPromise.catch((error: unknown) => error);
+    // Past the idle no-output window but inside the tool-active allowance.
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(driver.cancel).not.toHaveBeenCalled();
+
+    // Exceed the tool-active allowance; the kill names the in-flight tool.
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = (await errorPromise) as { message?: string; cliTimeout?: unknown };
+    expect(error).toMatchObject({
+      name: "FailoverError",
+      message:
+        "CLI produced no output for 5s while tool call(s) [Bash] were still reported in flight and was terminated.",
+      cliTimeout: {
+        mode: "no-output",
+        activeToolCount: 1,
+        backgroundTaskCount: 0,
+      },
+    });
     expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 

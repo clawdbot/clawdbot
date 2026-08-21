@@ -2290,7 +2290,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("extends the live no-output watchdog to the blocked-tool floor while a tool is outstanding", async () => {
+  it("extends the live no-output watchdog to the tool-active allowance while a tool is outstanding", async () => {
     const toolErrorEvents: Array<Record<string, unknown>> = [];
     const stopDiagnostics = onTrustedToolExecutionEvent((event) => {
       if (event.type === "tool.execution.error") {
@@ -2356,13 +2356,19 @@ describe("runCliAgent spawn path", () => {
     vi.advanceTimersByTime(650_000);
     expect(cancel).not.toHaveBeenCalled();
 
-    // The blocked-tool floor (15min of quiet) still terminates a wedged tool.
+    // Still inside the tool-active allowance (30min of quiet by default).
+    vi.advanceTimersByTime(1_100_000);
+    expect(cancel).not.toHaveBeenCalled();
+
+    // The tool-active allowance still terminates a wedged tool and names it.
     try {
-      vi.advanceTimersByTime(300_000);
+      vi.advanceTimersByTime(50_000);
       expect(cancel).toHaveBeenCalledWith("manual-cancel");
       const error = await rejection;
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toMatch(/produced no output for 900s/);
+      expect((error as Error).message).toMatch(
+        /produced no output for 1800s while tool call\(s\) \[Bash\] were still reported in flight/,
+      );
       // Watchdog-killed turns must keep timeout provenance for active tools.
       expect(toolErrorEvents).toContainEqual(
         expect.objectContaining({
