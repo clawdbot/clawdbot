@@ -69,7 +69,7 @@ describe("formatErrorMessage", () => {
           cause: { status: 503, code: "UNAVAILABLE", requestId: "abc" },
         }),
       ),
-    ).toContain("503");
+    ).toBe('request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}');
   });
 
   it("stringifies primitives and circular records without throwing", () => {
