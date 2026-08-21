@@ -2173,7 +2173,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain('install-bun: "true"');
     expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install image-provider smoke");
-    expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(workflow).toContain("bash .release-harness/scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
     );
@@ -2259,18 +2259,20 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     for (const testCase of cases) {
       const producer = workflow.jobs[testCase.producerName];
       const consumer = workflow.jobs[testCase.consumerName];
-      expect(workflowStep(producer, "Checkout trusted installer harness").with).toMatchObject({
-        repository: "${{ fromJSON(toJSON(job)).workflow_repository }}",
-        ref: "${{ fromJSON(toJSON(job)).workflow_sha }}",
+      expect(workflowStep(producer, "Checkout trusted release harness").with).toMatchObject({
+        repository: "openclaw/openclaw",
+        ref: "main",
+        "fetch-depth": 1,
         "persist-credentials": false,
       });
       const buildStep = workflowStep(producer, testCase.buildName);
-      expect(buildStep.run).toContain(`-f ${testCase.dockerfile}`);
+      expect(buildStep.run).toContain(`-f ./.release-harness/${testCase.dockerfile.slice(2)}`);
       expect(buildStep.run).not.toContain("candidate/scripts/docker");
 
-      expect(workflowStep(consumer, "Checkout trusted installer harness").with).toMatchObject({
-        repository: "${{ fromJSON(toJSON(job)).workflow_repository }}",
-        ref: "${{ fromJSON(toJSON(job)).workflow_sha }}",
+      expect(workflowStep(consumer, "Checkout trusted release harness").with).toMatchObject({
+        repository: "openclaw/openclaw",
+        ref: "main",
+        "fetch-depth": 1,
         "persist-credentials": false,
       });
       expect(
@@ -2293,7 +2295,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
           "${{ runner.temp }}/install-smoke-candidate-payload",
         OPENCLAW_INSTALL_SMOKE_GROUP: testCase.group,
       });
-      expect(run.run).toBe("bash scripts/test-install-sh-docker.sh");
+      expect(run.run).toBe("bash .release-harness/scripts/test-install-sh-docker.sh");
     }
 
     const payload = workflow.jobs.installer_smoke_candidate_payload;
