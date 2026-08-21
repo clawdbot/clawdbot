@@ -112,6 +112,7 @@ const commandOptions: Record<string, readonly string[]> = {
   abort: ["--lane"],
   block: ["--lane", "--missing-primitive", "--reason"],
   delete: ["--lane", "--message-id"],
+  desktop: ["--lane", "--script-file", "--timeout-seconds"],
   finish: ["--lane", "--focus-message-id"],
   mock: ["--lane", "--response-file", "--response-events-file", "--chunk-delay-ms"],
   observe: ["--lane", "--seconds", "--since"],
@@ -1033,6 +1034,53 @@ async function observerAction(
   return response;
 }
 
+async function runDesktopExtension(
+  state: ActiveSession,
+  values: Map<string, string>,
+  outputRoot: string,
+): Promise<Record<string, unknown>> {
+  const extension = readPublicFile(
+    outputRoot,
+    required(values, "--script-file"),
+    "--script-file",
+    64 * 1024,
+  );
+  if (!extension.text.trim()) {
+    throw new Error("--script-file must not be empty.");
+  }
+  const timeoutSeconds = values.has("--timeout-seconds")
+    ? numberOption(values, "--timeout-seconds", 300, 1)
+    : 60;
+  const privateScript = path.join(
+    state.privateDir,
+    `desktop-extension-${state.invocations.length + 1}.sh`,
+  );
+  fs.mkdirSync(state.privateDir, { recursive: true });
+  fs.writeFileSync(privateScript, extension.text, { mode: 0o640 });
+  const result = z
+    .object({ stderr: z.string(), stdout: z.string() })
+    .parse(
+      JSON.parse(
+        await runCommandOutput(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
+          "exec",
+          "--session",
+          recorderRelativePath(state.recorderSession),
+          "--script-file",
+          recorderRelativePath(privateScript),
+          "--timeout-seconds",
+          String(timeoutSeconds),
+        ]),
+      ),
+    );
+  const scriptSha256 = createHash("sha256").update(extension.text).digest("hex");
+  appendInvocation(state, "desktop", {
+    scriptFile: extension.relative,
+    scriptSha256,
+    timeoutSeconds,
+  });
+  return { ...result, scriptSha256 };
+}
+
 async function focusMessage(state: ActiveSession, messageId: string): Promise<void> {
   if (!/^\d+$/u.test(messageId) || BigInt(messageId) < 1n) {
     throw new Error("--message-id must be a positive Telegram server message id.");
@@ -1445,6 +1493,8 @@ async function main(): Promise<void> {
     const credential = credentialSchema.parse(readJson(roots.credentialFile));
     if (cli.command === "mock") {
       outputJson(updateMockResponse(state, cli.values, roots.outputRoot));
+    } else if (cli.command === "desktop") {
+      outputJson(await runDesktopExtension(state, cli.values, roots.outputRoot));
     } else if (cli.command === "send") {
       const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
       outputJson({ ...sent.response, revealedMessageId: sent.revealedMessageId });

@@ -52,7 +52,7 @@ async function setupHarness(
   fs.writeFileSync(trimmedVideo, Buffer.alloc(10_001));
   fs.writeFileSync(
     recorderCommand,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}if [ "$1" = artifacts ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ artifacts: { previewGifCropped: previewGif, screenshot, trimmedVideoCropped: trimmedVideo } }))}\nfi\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}\ncp ${JSON.stringify(path.join(root, "mock-response.json"))} ${JSON.stringify(recorderControlLog)}\n${options.failRecorder ? "exit 1\n" : ""}if [ "$1" = artifacts ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ artifacts: { previewGifCropped: previewGif, screenshot, trimmedVideoCropped: trimmedVideo } }))}\nelif [ "$1" = exec ]; then\n  printf '%s\\n' ${JSON.stringify(JSON.stringify({ stderr: "", stdout: "clicked\n" }))}\nfi\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(userDriverCommand, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -335,6 +335,39 @@ describe("Telegram Mantis free-form lane", () => {
         runLane(harness.env, ["send", "--lane", "candidate", "--text-file", outside]),
       ).rejects.toThrow("--text-file must be inside the Mantis output directory");
       expect(harness.requests).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("runs a scenario extension inside the ephemeral desktop", async () => {
+    const harness = await setupHarness();
+    const extension = path.join(harness.outputRoot, "click-picker.sh");
+    fs.writeFileSync(extension, "xdotool click 1\n");
+    try {
+      const result = await runLane(harness.env, [
+        "desktop",
+        "--lane",
+        "candidate",
+        "--script-file",
+        extension,
+        "--timeout-seconds",
+        "90",
+      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        stdout: "clicked\n",
+        scriptSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      });
+      expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
+        "exec --session attempt/recorder.json --script-file attempt/desktop-extension-2.sh --timeout-seconds 90",
+      );
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.invocations.at(-1)).toMatchObject({
+        args: { scriptFile: "click-picker.sh", timeoutSeconds: 90 },
+        command: "desktop",
+      });
     } finally {
       await harness.close();
     }

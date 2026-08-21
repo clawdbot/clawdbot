@@ -27,6 +27,7 @@ import {
   parseRecorderArgs,
   readRecorderSession,
   type ArtifactsOptions,
+  type ExecOptions,
   type RecoverOptions,
   recorderUsageText,
   TELEGRAM_DESKTOP_AWS_IMAGE,
@@ -815,6 +816,34 @@ export async function viewRecorder(
   });
 }
 
+export async function execRecorder(
+  cwd: string,
+  opts: ExecOptions,
+  operations: RecorderOperations = defaultOperations,
+): Promise<{ stderr: string; stdout: string }> {
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const scriptPath = resolveRecorderPath(cwd, opts.scriptFile, "--script-file");
+  const scriptStat = fs.lstatSync(scriptPath);
+  if (!scriptStat.isFile() || scriptStat.isSymbolicLink() || scriptStat.size > 64 * 1024) {
+    throw new Error("--script-file must be a regular file no larger than 64 KiB.");
+  }
+  const script = fs.readFileSync(scriptPath, "utf8");
+  if (!script.trim()) {
+    throw new Error("--script-file must not be empty.");
+  }
+  const session = readRecorderSession(sessionPath);
+  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
+  const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
+  return await operations.sshRun({
+    command: `set -euo pipefail\nexport DISPLAY=:99\n${script}`,
+    cwd,
+    inspect,
+    run: operations.runCommand,
+    stdio: "pipe",
+    timeoutMs: opts.timeoutSeconds * 1000,
+  });
+}
+
 async function captureScreenshot(params: {
   crop: ReturnType<typeof proofViewport>;
   cwd: string;
@@ -1065,6 +1094,10 @@ async function main(): Promise<void> {
   if (opts.command === "view") {
     await viewRecorder(cwd, opts);
     console.log(`Telegram Desktop opened message ${opts.messageId}.`);
+    return;
+  }
+  if (opts.command === "exec") {
+    console.log(JSON.stringify(await execRecorder(cwd, opts), null, 2));
     return;
   }
   if (opts.command === "screenshot") {

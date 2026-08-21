@@ -70,6 +70,13 @@ export type ViewOptions = {
   sessionPath: string;
 };
 
+export type ExecOptions = {
+  command: "exec";
+  scriptFile: string;
+  sessionPath: string;
+  timeoutSeconds: number;
+};
+
 export type ScreenshotOptions = {
   command: "screenshot";
   output?: string;
@@ -100,6 +107,7 @@ export type ArtifactsOptions = {
 
 type RecorderOptions =
   | ArtifactsOptions
+  | ExecOptions
   | RecoverOptions
   | ScreenshotOptions
   | StartOptions
@@ -113,6 +121,7 @@ export function recorderUsageText(): string {
     "  pnpm qa:telegram-desktop-recorder artifacts --session <recorder.json>",
     '  pnpm qa:telegram-desktop-recorder start --output-dir <dir> --chat <-100groupId> --user-driver "<space-separated cmd prefix>" [options]',
     "  pnpm qa:telegram-desktop-recorder view --session <recorder.json> --message-id <id>",
+    "  pnpm qa:telegram-desktop-recorder exec --session <recorder.json> --script-file <script> [--timeout-seconds <seconds>]",
     "  pnpm qa:telegram-desktop-recorder screenshot --session <recorder.json> [--output <png>]",
     "  pnpm qa:telegram-desktop-recorder recover --session <recorder.json>",
     "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--keep-box]",
@@ -163,7 +172,7 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     throw new Error(recorderUsageText());
   }
   const parsedCommand = z
-    .enum(["artifacts", "recover", "screenshot", "start", "status", "stop", "view"])
+    .enum(["artifacts", "exec", "recover", "screenshot", "start", "status", "stop", "view"])
     .safeParse(rawCommand);
   if (!parsedCommand.success) {
     throw new Error(`Unknown command: ${rawCommand}\n\n${recorderUsageText()}`);
@@ -205,11 +214,13 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
         ])
       : command === "view"
         ? new Set(["--message-id", "--session"])
-        : command === "screenshot"
-          ? new Set(["--output", "--session"])
-          : command === "stop"
-            ? new Set(["--crop", "--session"])
-            : new Set(["--session"]);
+        : command === "exec"
+          ? new Set(["--script-file", "--session", "--timeout-seconds"])
+          : command === "screenshot"
+            ? new Set(["--output", "--session"])
+            : command === "stop"
+              ? new Set(["--crop", "--session"])
+              : new Set(["--session"]);
   for (const flag of values.keys()) {
     if (!allowed.has(flag)) {
       throw new Error(`${flag} is not available for ${command}.`);
@@ -265,6 +276,14 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     const messageId = requiredString(values, "--message-id");
     positiveInteger(messageId, "--message-id");
     return { command, messageId, sessionPath };
+  }
+  if (command === "exec") {
+    return {
+      command,
+      scriptFile: requiredString(values, "--script-file"),
+      sessionPath,
+      timeoutSeconds: positiveInteger(values.get("--timeout-seconds") ?? "60", "--timeout-seconds"),
+    };
   }
   if (command === "screenshot") {
     return { command, output: values.get("--output"), sessionPath };

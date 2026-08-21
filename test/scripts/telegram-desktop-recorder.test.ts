@@ -9,6 +9,7 @@ import {
 } from "../../scripts/e2e/telegram-desktop-crabbox.ts";
 import {
   confirmQrLink,
+  execRecorder,
   parseRecorderArgs,
   parseWindowGeometry,
   readRecorderSession,
@@ -133,6 +134,69 @@ describe("Telegram Desktop recorder CLI", () => {
       command: "artifacts",
       sessionPath: "recorder.json",
     });
+    expect(
+      parseRecorderArgs([
+        "exec",
+        "--session",
+        "recorder.json",
+        "--script-file",
+        "click.sh",
+        "--timeout-seconds",
+        "90",
+      ]),
+    ).toEqual({
+      command: "exec",
+      scriptFile: "click.sh",
+      sessionPath: "recorder.json",
+      timeoutSeconds: 90,
+    });
+  });
+
+  it("runs an agent-authored extension inside the recorded desktop", async () => {
+    const root = makeTempDir();
+    const sessionPath = path.join(root, "recorder.json");
+    const scriptPath = path.join(root, "click.sh");
+    writeRecorderSession(sessionPath, testSession());
+    fs.writeFileSync(scriptPath, "xdotool click 1\nprintf 'clicked\\n'\n");
+    const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({
+      stderr: "",
+      stdout: "clicked\n",
+    }));
+    const operations = {
+      createCroppedMotionPreview: vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 650 })),
+      createMotionPreview: vi.fn(async () => ({})),
+      inspectCrabbox: vi.fn(async () => ({
+        sshHost: "host",
+        sshKey: "/tmp/key",
+        sshPort: "22",
+        sshUser: "user",
+      })),
+      runCommand: vi.fn(async () => ({ stderr: "", stdout: "" })),
+      scpFromRemote: vi.fn(async () => undefined),
+      sshRun,
+    } satisfies RecorderOperations;
+
+    await expect(
+      execRecorder(
+        root,
+        {
+          command: "exec",
+          scriptFile: "click.sh",
+          sessionPath: "recorder.json",
+          timeoutSeconds: 90,
+        },
+        operations,
+      ),
+    ).resolves.toEqual({ stderr: "", stdout: "clicked\n" });
+    expect(sshRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "export DISPLAY=:99\nxdotool click 1\nprintf 'clicked\\n'",
+        ),
+        stdio: "pipe",
+        timeoutMs: 90_000,
+      }),
+    );
   });
 
   it("requires start inputs and a -100 private-group chat id", () => {
