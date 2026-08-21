@@ -50,27 +50,6 @@ openclaw-chat-pane {
   filter: saturate(0.45);
 }
 
-.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
-  > .chat-split-view__column
-  > .chat-split-view__cell:not(.chat-split-view__cell--active)
-  .chat-pane__header
-  :is(
-    .chat-pane__nav-toggle,
-    .chat-pane__incognito,
-    openclaw-session-owner-chip,
-    .chat-pane__participants,
-    .chat-pane__placement-control,
-    .chat-pane__presence,
-    .chat-pane__face-switch,
-    .chat-pane__sharing-menu,
-    .chat-pane__draft-indicator,
-    .chat-pane__branches-menu,
-    .chat-pane__gateway-menu,
-    .chat-pane__actions
-  ) {
-  display: none;
-}
-
 .chat-pane-cache {
   display: grid;
   flex: 1 1 0;
