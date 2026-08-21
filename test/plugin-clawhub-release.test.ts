@@ -9,7 +9,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -399,6 +399,24 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
       extraExtensionIds: ["demo-two"],
     });
     const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
+
+    const selected = resolveSelectedClawHubPublishablePluginPackages({
+      rootDir: repoDir,
+      plugins: collectClawHubPublishablePluginPackages(repoDir),
+      gitRange: { baseRef, headRef },
+    });
+
+    expect(selected.map((plugin) => plugin.extensionId)).toEqual(["demo-plugin", "demo-two"]);
+  });
+
+  it.each([
+    "scripts/lib/plugin-publication-candidates.ts",
+    "scripts/lib/plugin-publication-collector.ts",
+  ])("selects all publishable plugins when %s changes", (changedPath) => {
+    const repoDir = createTempPluginRepo({
+      extraExtensionIds: ["demo-two"],
+    });
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir, changedPath);
 
     const selected = resolveSelectedClawHubPublishablePluginPackages({
       rootDir: repoDir,
@@ -2153,11 +2171,18 @@ function createTempPluginRepo(
   return repoDir;
 }
 
-function commitSharedReleaseToolingChange(repoDir: string) {
+function commitSharedReleaseToolingChange(
+  repoDir: string,
+  changedPath = "scripts/plugin-clawhub-publish.sh",
+) {
   const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
 
-  mkdirSync(join(repoDir, "scripts"), { recursive: true });
-  writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+  const absolutePath = join(repoDir, changedPath);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(
+    absolutePath,
+    changedPath.endsWith(".sh") ? "#!/usr/bin/env bash\n" : "// shared release authority\n",
+  );
   git(repoDir, ["add", "."]);
   git(repoDir, [
     "-c",
