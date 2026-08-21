@@ -18,6 +18,7 @@ import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-s
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN, normalizeCodexServiceTier } from "./config.js";
+import { pendingGuardianDeniedActionSchema } from "./guardian-denial-approval.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -258,6 +259,7 @@ const threadBindingSchema = z
     /** Durable fact preventing a later unrestricted turn from widening this thread. */
     nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
+    pendingGuardianDeniedAction: pendingGuardianDeniedActionSchema.optional().catch(undefined),
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,
     pluginAppsInputFingerprint: optionalStringSchema,

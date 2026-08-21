@@ -20,6 +20,55 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool audit projection", () => {
+  it("binds one exact completed Guardian denial for the next user turn", async () => {
+    const onGuardianDeniedAction = vi.fn(async () => undefined);
+    const projector = await createProjector(undefined, { onGuardianDeniedAction });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/autoApprovalReview/completed", {
+        reviewId: "review-1",
+        startedAtMs: 1_000,
+        completedAtMs: 1_042,
+        targetItemId: "item-1",
+        decisionSource: "agent",
+        review: {
+          status: "denied",
+          riskLevel: "medium",
+          userAuthorization: "low",
+          rationale: "The exact action needs approval.",
+        },
+        action: {
+          type: "command",
+          source: "unifiedExec",
+          command: "git push origin subject:portable-v15-export",
+          cwd: "/workspace",
+        },
+      }),
+    );
+
+    expect(onGuardianDeniedAction).toHaveBeenCalledWith({
+      recordedAtMs: expect.any(Number),
+      event: {
+        id: "review-1",
+        target_item_id: "item-1",
+        turn_id: "turn-1",
+        started_at_ms: 1_000,
+        completed_at_ms: 1_042,
+        status: "denied",
+        risk_level: "medium",
+        user_authorization: "low",
+        rationale: "The exact action needs approval.",
+        decision_source: "agent",
+        action: {
+          type: "command",
+          source: "unified_exec",
+          command: "git push origin subject:portable-v15-export",
+          cwd: "/workspace",
+        },
+      },
+    });
+  });
+
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });

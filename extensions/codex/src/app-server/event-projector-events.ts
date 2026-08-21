@@ -27,6 +27,10 @@ import {
 } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { readHookOutputEntries, readNullableString } from "./event-projector-values.js";
+import {
+  buildPendingGuardianDeniedAction,
+  type CodexPendingGuardianDeniedAction,
+} from "./guardian-denial-approval.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
@@ -112,13 +116,16 @@ export class CodexEventProjection {
     private readonly toolProgress: CodexToolProgressProjection,
     private readonly toolTranscript: CodexToolTranscriptProjection,
     private readonly onNativeToolResultRecorded?: () => void | Promise<void>,
+    private readonly onGuardianDeniedAction?: (
+      pending: CodexPendingGuardianDeniedAction,
+    ) => void | Promise<void>,
   ) {}
 
   get guardianReviewCount(): number {
     return this.reviewCount;
   }
 
-  handleGuardianReview(method: string, params: JsonObject): void {
+  async handleGuardianReview(method: string, params: JsonObject): Promise<void> {
     this.reviewCount += 1;
     const review = isJsonObject(params.review) ? params.review : undefined;
     const action = isJsonObject(params.action) ? params.action : undefined;
@@ -129,6 +136,12 @@ export class CodexEventProjection {
     const riskLevel = review ? readString(review, "riskLevel") : undefined;
     const userAuthorization = review ? readString(review, "userAuthorization") : undefined;
     const rationale = review ? readNullableString(review, "rationale") : undefined;
+    if (method === "item/autoApprovalReview/completed") {
+      const pending = buildPendingGuardianDeniedAction(params);
+      if (pending) {
+        await this.onGuardianDeniedAction?.(pending);
+      }
+    }
     // Codex emits the routine warning immediately before its structured terminal fact.
     // Exact byte equality consumes only that duplicate; every other warning is flushed.
     const expectedWarning =

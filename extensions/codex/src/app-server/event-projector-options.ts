@@ -1,4 +1,5 @@
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
+import type { CodexPendingGuardianDeniedAction } from "./guardian-denial-approval.js";
 import type { CodexThreadItem, JsonValue } from "./protocol.js";
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
@@ -7,6 +8,7 @@ export type CodexAppServerEventProjectorOptions = {
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  onGuardianDeniedAction?: (pending: CodexPendingGuardianDeniedAction) => void | Promise<void>;
   onNativePlanUpdate?: (update: {
     markdown?: string;
     steps: AgentPlanStep[];
