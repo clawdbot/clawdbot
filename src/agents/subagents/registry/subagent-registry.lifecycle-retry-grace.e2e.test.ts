@@ -19,6 +19,7 @@ type LifecycleData = {
   endedAt?: number;
   aborted?: boolean;
   error?: string;
+  stopReason?: string;
   terminalReply?: AgentRunTerminalReplySnapshot;
   status?: string;
   timeoutPhase?: string;
@@ -883,6 +884,8 @@ describe("subagent registry lifecycle error grace", () => {
 
     emitLifecycleEvent("run-provider-timeout", {
       phase: "end",
+      aborted: true,
+      stopReason: "restart",
       status: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,

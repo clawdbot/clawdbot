@@ -4,8 +4,10 @@ import {
 } from "../agent-run-terminal-outcome.js";
 import { isAbortedAgentStopReason } from "../run-termination.js";
 
-/** Subagents apply explicit cancellation ownership before incomplete liveness projections. */
-export const classifySubagentTerminalOutcome = (outcome: AgentRunTerminalOutcome) =>
-  isAbortedAgentStopReason(outcome.stopReason)
-    ? "cancellation"
-    : classifyAgentRunTerminalOutcome(outcome);
+/** Subagents apply explicit cancellation ownership after canonical timeout attribution. */
+export function classifySubagentTerminalOutcome(outcome: AgentRunTerminalOutcome) {
+  const classification = classifyAgentRunTerminalOutcome(outcome);
+  return classification === "timeout" || !isAbortedAgentStopReason(outcome.stopReason)
+    ? classification
+    : "cancellation";
+}
