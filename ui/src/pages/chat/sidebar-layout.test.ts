@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SIDEBAR_MIN_WIDTH_PX,
   activatePanel,
+  applySidebarDockDefault,
   closeSlot,
   fitSidebarLayout,
   normalizeSidebarLayout,
@@ -44,6 +45,22 @@ describe("sidebar layout", () => {
     ]);
     expect(reopened.columns[0]?.activePanelId).toBe(chat.id);
     expect(activatePanel(layout, chat.id).columns[0]?.activePanelId).toBe(chat.id);
+  });
+
+  it("defaults a newly opened implicit panel to the bottom only in split view", () => {
+    const previous = { columns: [] } satisfies SidebarLayout;
+    const next = openSlot(previous, "browser");
+
+    expect(applySidebarDockDefault(previous, next, true).dock).toBe("bottom");
+    expect(applySidebarDockDefault(previous, next, false)).toEqual(next);
+  });
+
+  it("preserves an explicit dock choice when another panel opens", () => {
+    const right = setSidebarDock(openSlot({ columns: [] }, "browser"), "right");
+    const bottom = setSidebarDock(openSlot({ columns: [] }, "browser"), "bottom");
+
+    expect(applySidebarDockDefault(right, openSlot(right, "tasks"), true).dock).toBe("right");
+    expect(applySidebarDockDefault(bottom, openSlot(bottom, "tasks"), true).dock).toBe("bottom");
   });
 
   it("closes one tab and selects its nearest remaining neighbor", () => {
@@ -145,7 +162,6 @@ describe("sidebar layout", () => {
           width: 500,
         },
       ],
-      dock: "right",
       open: true,
       expanded: false,
     });
@@ -210,7 +226,6 @@ describe("sidebar layout", () => {
           width: 1_200,
         },
       ],
-      dock: "right",
       open: false,
       expanded: true,
     });

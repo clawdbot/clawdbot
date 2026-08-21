@@ -115,6 +115,27 @@ export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLay
   return next;
 }
 
+export function applySidebarDockDefault(
+  previous: SidebarLayout,
+  next: SidebarLayout,
+  splitMode: boolean,
+): SidebarLayout {
+  // An omitted dock is the only state that may inherit the split default;
+  // explicit right/bottom choices must survive every later layout update.
+  if (!splitMode || previous.dock !== undefined || next.dock !== undefined) {
+    return next;
+  }
+  const previousPanelCount = previous.columns.reduce(
+    (count, column) => count + column.panels.length,
+    0,
+  );
+  const nextPanelCount = next.columns.reduce(
+    (count, column) => count + column.panels.length,
+    0,
+  );
+  return nextPanelCount > previousPanelCount ? { ...next, dock: "bottom" } : next;
+}
+
 export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
   const next = cloneLayout(layout);
   const panel = next.columns

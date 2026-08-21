@@ -55,6 +55,7 @@ import {
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
+  applySidebarDockDefault,
   closeSlot,
   fitSidebarLayout,
   normalizeSidebarLayout,
@@ -65,6 +66,7 @@ import { resetToolStream } from "./tool-stream.ts";
 type ChatPageElement = {
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
+  splitMode?: boolean;
 };
 
 function clearImageLightbox(state: ChatPageHost) {
@@ -376,12 +378,17 @@ export function createPageState(
   };
   state.updateSidebarLayout = (layout) => {
     const normalized = normalizeSidebarLayout(layout);
-    state.sidebarLayout = normalized;
+    const nextLayout = applySidebarDockDefault(
+      state.sidebarLayout,
+      normalized,
+      page.splitMode === true,
+    );
+    state.sidebarLayout = nextLayout;
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(
         loadSettings().sidebarSessionLayouts,
         canonicalUiSessionKeyForPersistence(state, state.sessionKey),
-        normalized,
+        nextLayout,
       ),
     });
     renderLifecycle.invalidate();

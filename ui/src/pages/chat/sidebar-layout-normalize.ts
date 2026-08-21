@@ -106,9 +106,10 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
         },
       ]
     : [];
+  const dock = value.dock === "bottom" || value.dock === "right" ? value.dock : undefined;
   return {
     columns,
-    dock: value.dock === "bottom" ? "bottom" : "right",
+    ...(dock ? { dock } : {}),
     open: typeof value.open === "boolean" ? value.open : columns.length > 0,
     expanded: value.expanded === true,
   };

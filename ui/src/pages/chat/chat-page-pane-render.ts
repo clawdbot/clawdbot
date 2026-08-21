@@ -89,6 +89,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               aria-hidden=${presented ? "false" : "true"}
               ?inert=${!presented}
               .paneId=${options.pane.id}
+              .splitMode=${options.splitMode}
               .presentationId=${JSON.stringify([options.pane.id, sessionKey])}
               .chatMessagesBySession=${options.chatMessagesBySession}
               .sessionSnapshotStore=${options.sessionSnapshotStore}
