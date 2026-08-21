@@ -1808,6 +1808,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("ticket *** should hide");
   });
 
+  it("keeps custom redaction patterns active for structured sensitive fields", () => {
+    expect(
+      redactSensitiveFieldValue("TOKEN", "${TOKEN}", {
+        mode: "tools",
+        patterns: [/TOKEN/g],
+      }),
+    ).toBe("${***}");
+  });
+
   it("keeps configured redaction patterns active for text outside default markers", () => {
     const configPath = writeConfig(`{
       logging: {

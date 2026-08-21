@@ -25,6 +25,7 @@ import {
   PAYMENT_CREDENTIAL_JSON_KEYS,
   PAYMENT_CREDENTIAL_QUERY_KEYS,
   SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
+  TOOL_PAYLOAD_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
@@ -41,7 +42,9 @@ const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
 const formAwareEqualsAssignmentPatterns = new WeakSet<RegExp>();
+const toolPayloadRedactPatternSet = new Set<RedactPattern>(TOOL_PAYLOAD_REDACT_PATTERNS);
 let defaultResolvedPatterns: RegExp[] | undefined;
+let toolPayloadResolvedPatterns: RegExp[] | undefined;
 
 const FORM_BODY_KEY_OBFUSCATION_RE = new RegExp(
   String.raw`[${FORM_BODY_KEY_INVISIBLE_CHARS}+]`,
@@ -132,7 +135,7 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
 
 type RedactOptions = {
   mode?: RedactSensitiveMode;
-  patterns?: RedactPattern[];
+  patterns?: readonly RedactPattern[];
 };
 
 type ResolvedRedactOptions = {
@@ -184,7 +187,13 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   return pattern;
 }
 
-function resolvePatterns(value?: RedactPattern[]): RegExp[] {
+function resolvePatterns(value?: readonly RedactPattern[]): RegExp[] {
+  if (value === TOOL_PAYLOAD_REDACT_PATTERNS) {
+    toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map(parsePattern).filter(
+      (re): re is RegExp => Boolean(re),
+    );
+    return toolPayloadResolvedPatterns;
+  }
   if (!value?.length) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is RegExp => Boolean(re),
@@ -194,12 +203,24 @@ function resolvePatterns(value?: RedactPattern[]): RegExp[] {
   return value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
-function includesDefaultRedactPatterns(value?: RedactPattern[]): boolean {
+function includesDefaultRedactPatterns(value?: readonly RedactPattern[]): boolean {
+  if (value === TOOL_PAYLOAD_REDACT_PATTERNS) {
+    return true;
+  }
   if (!value?.length) {
     return true;
   }
   const source = new Set(value.filter((pattern): pattern is string => typeof pattern === "string"));
-  return DEFAULT_REDACT_PATTERNS.every((pattern) => source.has(pattern));
+  return (
+    DEFAULT_REDACT_PATTERNS.every((pattern) => source.has(pattern)) ||
+    TOOL_PAYLOAD_REDACT_PATTERNS.every((pattern) => source.has(pattern))
+  );
+}
+
+function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
+  return (
+    !value?.length || value === DEFAULT_REDACT_PATTERNS || value === TOOL_PAYLOAD_REDACT_PATTERNS
+  );
 }
 
 function maskToken(token: string): string {
@@ -875,7 +896,10 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (normalizeMode(resolvedOptions.mode) === "off") {
     return exactRedacted;
   }
-  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(exactRedacted)) {
+  if (
+    usesBuiltInRedactPatterns(resolvedOptions.patterns) &&
+    !couldMatchDefaultRedactPatterns(exactRedacted)
+  ) {
     return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
@@ -896,11 +920,13 @@ function resolveToolPayloadRedaction(
   loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
 ): RedactOptions {
   const userPatterns = loggingConfig?.redactPatterns;
-  const patterns =
-    userPatterns && userPatterns.length > 0
-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
-      : undefined;
-  return { mode: "tools", patterns };
+  return {
+    mode: "tools",
+    patterns:
+      userPatterns && userPatterns.length > 0
+        ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
+        : TOOL_PAYLOAD_REDACT_PATTERNS,
+  };
 }
 
 // Forces tools-mode so UI/tool payloads never inherit a caller-supplied "off"
@@ -940,7 +966,22 @@ function redactSensitiveFieldValueWithOptions(
   path: readonly string[] = [key],
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
-  const resolved = resolveRedactOptions(options);
+  const sensitiveKey = isSensitiveFieldKey(key);
+  const hasToolPayloadPatterns = TOOL_PAYLOAD_REDACT_PATTERNS.every((pattern) =>
+    options.patterns?.includes(pattern),
+  );
+  const fieldOptions =
+    sensitiveKey && hasToolPayloadPatterns
+      ? {
+          ...options,
+          patterns: [
+            ...(options.patterns?.filter((pattern) => !toolPayloadRedactPatternSet.has(pattern)) ??
+              []),
+            ...DEFAULT_REDACT_PATTERNS,
+          ],
+        }
+      : options;
+  const resolved = resolveRedactOptions(fieldOptions);
   if (resolved.mode === "off") {
     return exactRedacted;
   }
@@ -949,7 +990,8 @@ function redactSensitiveFieldValueWithOptions(
   // in sync with every built-in pattern and sensitive form/URL key. Explicit
   // user patterns still require the full scan because they have no prefilter.
   const redacted =
-    options.patterns?.length || couldMatchDefaultRedactPatterns(exactRedacted)
+    !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
+    couldMatchDefaultRedactPatterns(exactRedacted)
       ? redactText(exactRedacted, resolved.patterns, {
           redactFormBodies: resolved.redactFormBodies,
           redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
@@ -975,7 +1017,7 @@ function redactSensitiveFieldValueWithOptions(
   ) {
     return exactRedacted;
   }
-  if (isSensitiveFieldKey(key)) {
+  if (sensitiveKey) {
     if (isShellReferenceToKey(key, exactRedacted)) {
       return exactRedacted;
     }

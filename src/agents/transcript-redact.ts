@@ -8,9 +8,9 @@ import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provid
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
-  getDefaultRedactPatterns,
-  redactSensitiveFieldValue,
+  redactSensitiveFieldValueWithConfig,
   redactSensitiveText,
+  redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -23,22 +23,10 @@ import {
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
-function resolveTranscriptRedactPatterns(patterns?: string[]) {
-  return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
-}
-
-function redactTranscriptOptions(cfg?: OpenClawConfig) {
+function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
-  const patterns = resolveTranscriptRedactPatterns(
-    cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
-  );
-  if (patterns === undefined) {
-    return undefined;
-  }
-  return {
-    mode: "tools" as const,
-    ...(patterns !== undefined ? { patterns } : {}),
-  };
+  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
+  return redactPatterns ? { redactPatterns } : undefined;
 }
 
 function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
@@ -47,7 +35,7 @@ function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
 }
 
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  return redactSensitiveText(value, redactTranscriptOptions(cfg));
+  return redactToolPayloadTextWithConfig(value, resolveTranscriptLoggingConfig(cfg));
 }
 
 function redactTranscriptStructuredFieldValue(
@@ -58,7 +46,7 @@ function redactTranscriptStructuredFieldValue(
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
     ? redactTranscriptText(value, cfg)
-    : redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+    : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {

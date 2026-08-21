@@ -391,9 +391,11 @@ describe("sanitizeToolResult", () => {
 
   it("redacts primitive string results", () => {
     const sanitized = sanitizeToolResult("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789") as string;
+    const source = "if let token = timeObserverToken {";
 
     expect(sanitized).not.toContain("sk-or-v1-abcdef0123456789");
     expect(sanitized).toContain("OPENROUTER_API_KEY=");
+    expect(sanitizeToolResult(source)).toBe(source);
   });
 
   it("preserves top-level arrays while redacting nested strings", () => {
