@@ -1533,6 +1533,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           talk: {
+            provider: "gateway",
             providers: {
               gateway: {
                 apiKey: {
@@ -1541,21 +1542,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                   id: "GATEWAY_ONLY_TALK_KEY",
                 },
               },
-              local: {
-                apiKey: { source: "env", provider: "default", id: localEnvKey },
+            },
+            realtime: {
+              provider: "local",
+              providers: {
+                local: {
+                  apiKey: { source: "env", provider: "default", id: localEnvKey },
+                },
               },
             },
           },
         } as OpenClawConfig,
         commandName: "reply",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
+        targetIds: new Set(["talk.providers.*.apiKey", "talk.realtime.providers.*.apiKey"]),
       });
 
       expect(result.resolvedConfig.talk?.providers?.gateway?.apiKey).toBe("gateway-owned-key");
-      expect(result.resolvedConfig.talk?.providers?.local?.apiKey).toBe("local-fallback-key");
+      expect(result.resolvedConfig.talk?.realtime?.providers?.local?.apiKey).toBe(
+        "local-fallback-key",
+      );
       expect(result.targetStatesByPath).toMatchObject({
         "talk.providers.gateway.apiKey": "resolved_gateway",
-        "talk.providers.local.apiKey": "resolved_local",
+        "talk.realtime.providers.local.apiKey": "resolved_local",
       });
       expect(
         result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
