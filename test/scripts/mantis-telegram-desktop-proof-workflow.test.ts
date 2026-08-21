@@ -146,12 +146,24 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow.permissions?.actions).toBe("read");
     expect(leaseRun).toContain("lease-restore");
     expect(leaseRun).toContain("until node --import tsx");
-    expect(leaseRun).toContain("deadline=$(( SECONDS + 15 * 60 ))");
-    expect(leaseRun).toContain("still leased by another run after 15 minutes");
-    expect(leaseRun).toContain("sleep 60");
+    expect(leaseRun).not.toContain("deadline=");
+    expect(leaseRun).not.toContain("still leased by another run after");
+    expect(leaseRun).toContain("sleep 15");
     expect(leaseRun.indexOf('echo "lease_file=$credential_dir/lease.json"')).toBeLessThan(
       leaseRun.indexOf("until node --import tsx"),
     );
+  });
+
+  it("reports an honest blocked proof without failing the workflow", () => {
+    const trusted = workflowStep("Restore and validate trusted lane evidence").run ?? "";
+    const inspect = workflowStep("Inspect Mantis evidence manifest").run ?? "";
+    const fail = workflowStep("Fail when Mantis Telegram desktop proof failed");
+
+    expect(trusted).toContain('lane_status="blocked"');
+    expect(trusted).toContain('.comparison.outcome == "blocked"');
+    expect(trusted).not.toContain("comparisonPass");
+    expect(inspect).toContain(".comparison.outcome");
+    expect(fail.if).toContain("steps.inspect.outputs.comparison_status != 'blocked'");
   });
 
   it("releases the runner Telegram QA lease after the agent", () => {
@@ -1021,7 +1033,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(laneScript).toContain("/proc/self/fd/${descriptor}");
     expect(laneScript).not.toContain("readRecorderSession");
     expect(laneScript).toContain('"artifacts"');
-    expect(laneScript).toContain('status: status === "complete" ? "pass" : "fail"');
+    expect(laneScript).toContain(
+      'status: status === "complete" ? "pass" : status === "blocked" ? "blocked" : "fail"',
+    );
     expect(workflow).toContain("if .sutAttestation == null then");
     expect(workflow).toContain('.status == "infra-error" and .artifacts == {} and .sendCount == 0');
     expect(workflow).toContain(
