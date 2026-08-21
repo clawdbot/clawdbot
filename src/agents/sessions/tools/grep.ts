@@ -343,6 +343,10 @@ export function createGrepToolDefinition(
                 // pre-refactor 64 KiB instead of the 16 MiB runner default.
                 outputCapture: { stdout: "discard" },
                 maxOutputBytes: { stderr: SESSION_TOOL_STDERR_TAIL_BYTES },
+                // A failed output stream must kill ripgrep immediately,
+                // matching the pre-refactor stopChild-on-error behavior;
+                // otherwise a wedged child could outlive the tool call.
+                terminateOnOutputError: true,
                 onOutputChunk: (chunk, stream): boolean | undefined => {
                   if (stream !== "stdout") {
                     return undefined;

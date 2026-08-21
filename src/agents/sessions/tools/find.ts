@@ -292,6 +292,10 @@ export function createFindToolDefinition(
               result = await runUtf8CommandWithTimeout([fdPath, ...args], {
                 noOutputTimeoutMs: FD_STALL_TIMEOUT_MS,
                 signal,
+                // A failed output stream must kill fd immediately, matching
+                // the pre-refactor stopChild-on-error behavior; otherwise a
+                // wedged child could outlive the tool call.
+                terminateOnOutputError: true,
                 // Keep the pre-refactor stderr bound; the runner default tail
                 // is 16 MiB.
                 maxOutputBytes: { stderr: SESSION_TOOL_STDERR_TAIL_BYTES },

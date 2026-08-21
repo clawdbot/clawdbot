@@ -23,6 +23,7 @@ type RunnerOptions = {
   signal?: AbortSignal;
   noOutputTimeoutMs?: number;
   maxOutputBytes?: { stdout?: number; stderr?: number };
+  terminateOnOutputError?: boolean;
   onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => boolean | void;
 };
 
@@ -142,6 +143,8 @@ it("rejects and kills fd when the search stalls without output past the deadline
   // The pre-refactor stderr tail was bounded to 64 KiB; the runner default is
   // 16 MiB, so the tool must pass the smaller bound explicitly.
   expect(runnerOptions().maxOutputBytes).toEqual({ stderr: 64 * 1024 });
+  // A failed output stream must terminate fd immediately.
+  expect(runnerOptions().terminateOnOutputError).toBe(true);
 
   const rejection = expect(result).rejects.toThrow("fd timed out after 60 seconds without output");
   await vi.advanceTimersByTimeAsync(60_000);
