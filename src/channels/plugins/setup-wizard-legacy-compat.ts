@@ -173,9 +173,16 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
     invalidWithoutTokenNote: params.invalidWithoutTokenNote,
     resolveEntries: params.resolveEntries,
   });
-  return patchLegacyChannelConfig({
-    cfg: params.cfg,
-    channel: params.channel,
-    patch: { allowFrom },
-  });
+  return accountId !== DEFAULT_ACCOUNT_ID
+    ? patchChannelConfigForAccount({
+        cfg: params.cfg,
+        channel: params.channel,
+        accountId,
+        patch: { allowFrom },
+      })
+    : patchLegacyChannelConfig({
+        cfg: params.cfg,
+        channel: params.channel,
+        patch: { allowFrom },
+      });
 }
