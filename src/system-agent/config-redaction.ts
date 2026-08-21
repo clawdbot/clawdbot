@@ -14,7 +14,10 @@ import {
 } from "../config/channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import { isKernelOwnedChannelConfigKey } from "../config/schema.hints.js";
 import {
   buildConfigSchemaCore,
@@ -111,6 +114,7 @@ function resolveMetadataConfigRedaction(
       return cached;
     }
   }
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
   const plugins = collectPluginSchemaMetadataCore(snapshot.manifestRegistry);
   // Redaction must follow the owner the operator's config activates. Without a config there is
   // nothing to consult, so manifest order stands.
@@ -119,6 +123,12 @@ function resolveMetadataConfigRedaction(
     config
       ? createConfiguredChannelOwnershipPolicy({
           config,
+          // Explicit selection has to be read from what the operator wrote, not from the effective
+          // config: startup auto-enable synthesizes enabled entries for a fallback that stays on
+          // for another channel, and reading those back as operator intent suppresses the
+          // replacement's preferOver on the contested one. `loadGatewayRuntimeConfigSchema` passes
+          // the source snapshot for the same reason.
+          ...(runtimeSourceConfig ? { sourceConfig: runtimeSourceConfig } : {}),
           registry: snapshot.manifestRegistry,
           env: process.env,
         })

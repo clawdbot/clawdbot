@@ -10,6 +10,7 @@ import {
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
 } from "./config-reload.js";
+import { invalidateConfigSchemaResponseCache } from "./config-schema-response-cache.js";
 import {
   GatewayConfigReloadSupersededError,
   GatewayHotReloadRecoveryError,
@@ -339,6 +340,11 @@ export function startManagedGatewayConfigReloader(
     // once the candidate is accepted. Hash-only; clients refresh via config.get.
     onConfigCandidateCommitted: (info) => {
       invalidateConfigGetResponseCache();
+      // Channel ownership is decided by the config, so the built schema is config-dependent while
+      // its cache is keyed on the plugin registry version. A hot-reloaded `channels.<id>` change
+      // leaves that version untouched, so without this `config.schema` and `config.schema.lookup`
+      // keep serving the previous claimant's schema until an RPC write or registry activation.
+      invalidateConfigSchemaResponseCache();
       params.broadcast(
         "config.changed",
         {

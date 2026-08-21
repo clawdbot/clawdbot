@@ -67,6 +67,11 @@ import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../conf
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import {
+  getCachedConfigSchemaResponse,
+  invalidateConfigSchemaResponseCache,
+  setCachedConfigSchemaResponse,
+} from "../config-schema-response-cache.js";
+import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
   summarizeChangedPaths,
@@ -94,11 +99,6 @@ const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
 // Leaf preferences are LWW so independent tabs/devices do not CAS-conflict on the whole config;
 // every other path keeps strict document CAS.
 const HASHLESS_PATCH_LWW_PATH_PREFIXES = ["ui.prefs"] as const;
-
-let configSchemaResponseCache: {
-  pluginRegistryVersion: number;
-  response: ConfigSchemaResponse;
-} | null = null;
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigWriteCommitResult = Awaited<ReturnType<typeof commitGatewayConfigWrite>>;
@@ -685,12 +685,12 @@ function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapsh
 }
 
 export function clearConfigSchemaResponseCacheForTests() {
-  configSchemaResponseCache = null;
+  invalidateConfigSchemaResponseCache();
   invalidateConfigGetResponseCache();
 }
 
 function clearConfigSchemaResponseCache() {
-  configSchemaResponseCache = null;
+  invalidateConfigSchemaResponseCache();
 }
 
 /**
@@ -832,16 +832,16 @@ function respondConfigPatchNoop(params: {
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const pluginRegistryVersion = getActivePluginRegistryVersion();
-  if (
-    configSchemaResponseCache &&
-    configSchemaResponseCache.pluginRegistryVersion === pluginRegistryVersion
-  ) {
-    return configSchemaResponseCache.response;
+  const cached = getCachedConfigSchemaResponse(pluginRegistryVersion);
+  if (cached) {
+    return cached;
   }
 
-  // Plugin schema metadata is process-stable until config write or registry activation.
+  // Plugin schema metadata is process-stable until config write or registry activation. Every
+  // accepted config candidate invalidates this from the reload path, which is what covers a
+  // hot-reloaded ownership change that leaves the registry version untouched.
   const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = { pluginRegistryVersion, response };
+  setCachedConfigSchemaResponse(pluginRegistryVersion, response);
   return response;
 }
 
