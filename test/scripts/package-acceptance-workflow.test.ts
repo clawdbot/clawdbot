@@ -4001,6 +4001,7 @@ describe("package artifact reuse", () => {
     ["release/2026.8.1", "2026.8.1"],
     ["release/2026.8.1", "2026.8.1-beta.3"],
     ["extended-stable/2026.7.33", "2026.7.33"],
+    ["extended-stable/2026.7.33", "2026.7.35"],
     ["v2026.8.1", "2026.8.1"],
     ["v2026.8.1-alpha.2", "2026.8.1-alpha.2"],
     ["v2026.8.1-beta.3", "2026.8.1-beta.3"],
@@ -4013,7 +4014,9 @@ describe("package artifact reuse", () => {
   it.each([
     ["release/2026.8.1", "2026.8.2", "does not belong to release branch"],
     ["release/2026.8.1", "2026.8.1-alpha.2", "expected 2026.8.1 or a beta prerelease"],
-    ["extended-stable/2026.7.33", "2026.7.33-beta.1", "does not match extended-stable branch"],
+    ["extended-stable/2026.7.33", "2026.7.32", "PATCH >= 33"],
+    ["extended-stable/2026.7.33", "2026.8.35", "does not belong to extended-stable branch"],
+    ["extended-stable/2026.7.33", "2026.7.35-beta.1", "does not belong to extended-stable branch"],
     ["v2026.8.1", "2026.8.1-beta.1", "does not match release tag"],
     ["v2026.8.1-alpha.2", "2026.8.1-alpha.3", "does not match release tag"],
   ])(
@@ -4041,6 +4044,16 @@ describe("package artifact reuse", () => {
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain("expected 2026.8.1 or a beta prerelease");
+  });
+
+  it("validates an exact-SHA extended-stable successor against its canonical branch", () => {
+    const result = runFullReleaseTargetIdentityValidation({
+      targetContextRef: "extended-stable/2026.6.33",
+      targetRef: "a".repeat(40),
+      version: "2026.6.35",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("rejects exact-SHA release contexts outside the named branch or tag", () => {
