@@ -475,7 +475,15 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
                 (element) => element instanceof HTMLAnchorElement && element.href === focusedHref,
               )
             : undefined) ?? focusables[focusedCardIndex];
-        nextFocused?.focus({ preventScroll: true });
+        if (nextFocused) {
+          nextFocused.focus({ preventScroll: true });
+        } else {
+          this.hovercard.cardFocusInside = false;
+          this.suppressFocusOpen = true;
+          this.activeTrigger?.focus({ preventScroll: true });
+          this.suppressFocusOpen = false;
+          this.hovercard.focusInside = document.activeElement === this.activeTrigger;
+        }
       }
       this.hovercard.position();
       return;

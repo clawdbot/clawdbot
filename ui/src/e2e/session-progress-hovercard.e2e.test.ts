@@ -825,6 +825,26 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(":focus").getAttribute("href"))
           .toBe("https://example.com/build");
+        await gateway.setMethodResponse("progressCard.get", {
+          cases: [
+            { match: { sessionKey: selectedSessionKey }, response: { card: null } },
+            {
+              match: { sessionKey },
+              response: {
+                card: {
+                  markdown: "Updated build complete",
+                  revision: 3,
+                  sessionKey,
+                  updatedAt: 3,
+                },
+              },
+            },
+          ],
+        });
+        await gateway.emitGatewayEvent("progressCard.changed", { revision: 3, sessionKey });
+        await expect.poll(() => card.textContent()).toContain("Updated build complete");
+        expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await card.count()).toBe(1);
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
