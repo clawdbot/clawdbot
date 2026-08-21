@@ -17,6 +17,10 @@ vi.mock("../../utils/tools-manager.js", () => ({
 type RunnerOptions = {
   signal?: AbortSignal;
   noOutputTimeoutMs?: number;
+  outputCapture?: {
+    stdout?: "head" | "tail" | "discard";
+    stderr?: "head" | "tail" | "discard";
+  };
   onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => boolean | void;
 };
 
@@ -340,6 +344,8 @@ describe("grep tool streaming", () => {
     const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
     await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
     expect(runnerOptions().noOutputTimeoutMs).toBe(60_000);
+    // stdout is parsed via onOutputChunk, so the runner must not also retain it.
+    expect(runnerOptions().outputCapture).toEqual({ stdout: "discard" });
 
     const rejection = expect(result).rejects.toThrow(
       "ripgrep timed out after 60 seconds without output",

@@ -337,6 +337,10 @@ export function createGrepToolDefinition(
               result = await runUtf8CommandWithTimeout([rgPath, ...args], {
                 noOutputTimeoutMs: RG_STALL_TIMEOUT_MS,
                 signal,
+                // stdout is parsed incrementally via onOutputChunk; retaining
+                // the runner's default 16 MiB tail would duplicate it. stderr
+                // keeps its tail for exit-error messages.
+                outputCapture: { stdout: "discard" },
                 onOutputChunk: (chunk, stream): boolean | undefined => {
                   if (stream !== "stdout") {
                     return undefined;
