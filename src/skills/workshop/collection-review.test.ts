@@ -537,7 +537,7 @@ describe("skill collection review", () => {
     });
 
     expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review identities");
-    expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledOnce();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -577,7 +577,7 @@ describe("skill collection review", () => {
     });
 
     expect(onError).toHaveBeenCalledWith(expect.any(Error), workspaceDir);
-    expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledOnce();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -646,7 +646,7 @@ describe("skill collection review", () => {
         expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" }),
         workspaceDir,
       );
-      expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledOnce();
+      expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(2);
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(database.prepare("SELECT * FROM skill_curator_state WHERE id = 1").get()).toEqual(
         reviewStateBeforeContention,
