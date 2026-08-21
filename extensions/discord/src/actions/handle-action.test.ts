@@ -443,14 +443,6 @@ describe("handleDiscordMessageAction", () => {
       params: { to: "channel:c1", filePath: "/tmp/image.png" },
     },
     {
-      action: "poll" as const,
-      params: {
-        to: "channel:c1",
-        pollQuestion: "Which option?",
-        pollOption: ["first", "second"],
-      },
-    },
-    {
       action: "sticker" as const,
       params: { to: "channel:c1", stickerId: ["sticker-1"] },
     },

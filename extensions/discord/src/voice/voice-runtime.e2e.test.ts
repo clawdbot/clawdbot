@@ -866,6 +866,7 @@ defineDiscordVoiceTests(
       );
       const player = createAudioPlayerMock();
       const session = new realtimeModule.DiscordRealtimeVoiceSession({
+        accountId: "default",
         cfg: {},
         discordConfig: { voice: { enabled: true, mode: "agent-proxy", realtime: {} } },
         entry: {

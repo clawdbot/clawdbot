@@ -9,6 +9,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  resolveConfiguredAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -67,7 +68,7 @@ import type {
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
-import { resolveOptionFromCommand } from "./cli-utils.js";
+import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
@@ -142,6 +143,14 @@ const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 // Apply can await evaluator, proposal-change, and skill-change hook phases.
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
+function normalizeExplicitAgentId(agentId?: string): string | undefined {
+  const normalizedAgentId = agentId?.trim();
+  if (agentId !== undefined && !normalizedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  return normalizedAgentId;
+}
+
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -151,14 +160,14 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const config = getRuntimeConfig(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
-  const explicitAgentId = normalizeOptionalString(options?.agentId);
+  const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
     : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
-  const agentId =
-    explicitAgentId ??
-    inferredAgentId ??
-    resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." });
+  const agentId = explicitAgentId
+    ? resolveConfiguredAgentId(config, explicitAgentId)
+    : (inferredAgentId ??
+      resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." }));
   return {
     config,
     agentId,
@@ -210,13 +219,10 @@ async function runSkillsAction(
   render: (report: SkillStatusReport) => string,
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<void> {
-  try {
+  await runCommandWithRuntime(defaultRuntime, async () => {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
-  } catch (err) {
-    defaultRuntime.error(formatErrorMessage(err));
-    defaultRuntime.exit(1);
-  }
+  });
 }
 
 function resolveSkillsWorkspaceForCommand(
@@ -231,8 +237,8 @@ function resolveClawHubTargetWorkspace(
   opts: { agent?: string; global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
-  const agentId = resolveAgentOption(command, opts);
-  if (opts.global && normalizeOptionalString(agentId)) {
+  const agentId = normalizeExplicitAgentId(resolveAgentOption(command, opts));
+  if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
     return undefined;
@@ -447,13 +453,14 @@ async function runSkillProposalApply(
 ): Promise<SkillProposalApplyResult> {
   const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
     await import("../gateway/call.js");
+  let proposal: SkillProposalReadResult;
   try {
     // Decide offline fallback before dispatching the non-idempotent mutation.
     // Once a Gateway answers, apply failures must never be replayed locally.
-    await callGateway({
+    proposal = await callGateway<SkillProposalReadResult>({
       config: resolved.config,
-      method: "health",
-      params: {},
+      method: "skills.proposals.inspect",
+      params: { agentId: resolved.agentId, proposalId },
       timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
@@ -486,12 +493,20 @@ async function runSkillProposalApply(
       throw err;
     }
     try {
+      const reviewedProposal = await inspectSkillProposal(proposalId, {
+        agentId: resolved.agentId,
+        workspaceDir: resolved.workspaceDir,
+      });
+      if (!reviewedProposal) {
+        throw new Error(`Skill proposal not found: ${proposalId}`, { cause: err });
+      }
       return await applySkillProposal({
         agentId: resolved.agentId,
         eventActor: { type: "system", id: "cli" },
         workspaceDir: resolved.workspaceDir,
         config: resolved.config,
         proposalId,
+        expectedRevisionHash: reviewedProposal.revisionHash,
       });
     } finally {
       await lock.release();
@@ -501,7 +516,11 @@ async function runSkillProposalApply(
   return await callGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
-    params: { agentId: resolved.agentId, proposalId },
+    params: {
+      agentId: resolved.agentId,
+      proposalId,
+      expectedRevisionHash: proposal.revisionHash,
+    },
     timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
@@ -580,7 +599,7 @@ export function registerSkillsCli(program: Command) {
     .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const results = await searchSkillsFromClawHub({
           query: normalizeOptionalString(queryParts.join(" ")),
           limit: opts.limit,
@@ -605,10 +624,7 @@ export function registerSkillsCli(program: Command) {
           const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
           defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
         }
-      } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   skills
@@ -1227,14 +1243,23 @@ export function registerSkillsCli(program: Command) {
           runWorkshopAction(
             opts,
             command,
-            ({ agentId, workspaceDir }) =>
-              action({
+            async ({ agentId, workspaceDir }) => {
+              const reviewed =
+                name === "reject"
+                  ? await inspectSkillProposal(proposalId, { agentId, workspaceDir })
+                  : undefined;
+              if (name === "reject" && !reviewed) {
+                throw new Error(`Skill proposal not found: ${proposalId}`);
+              }
+              return action({
                 agentId,
                 eventActor: { type: "system", id: "cli" },
                 workspaceDir,
                 proposalId,
+                ...(reviewed ? { expectedRevisionHash: reviewed.revisionHash } : {}),
                 reason: opts.reason,
-              }),
+              });
+            },
             (record) => `${verb} ${record.id}\n`,
           ),
       );

@@ -2,10 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import { resolveNodePairingState } from "../../infra/device-pairing.js";
-import {
-  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
-} from "../../infra/node-runner-inventory.js";
+import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { nodeReadHandlers } from "./nodes.read.js";
@@ -97,7 +94,7 @@ describe("node read projections", () => {
         registry: nodeRegistry,
         nodeId: remoteNodeId,
         connId: remoteClient?.connId,
-        declaration: { protocolFeatures: [NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE] },
+        declaration: { protocolFeatures: ["node-worker-supervisor-v1"] },
       }),
     ).toEqual({ changed: true });
     listDevicePairingMock.mockResolvedValue({ pending: [], paired: pairedNodes });

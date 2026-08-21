@@ -29,6 +29,7 @@ import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -62,6 +63,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
@@ -723,15 +725,8 @@ class SessionsPage extends OpenClawLightDomElement {
       if (!this.isRequestScopeCurrent(scope)) {
         return;
       }
-      // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
-      // instead of cascading one force-delete confirm per session.
       if (result.preservedWorktrees.length > 0) {
-        window.alert(
-          t("sessionsView.deletePreservedWorktrees", {
-            count: String(result.preservedWorktrees.length),
-            branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
-          }),
-        );
+        window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       }
       if (result.deleted.length > 0) {
         const deleted = new Set(result.deleted);
@@ -1424,11 +1419,13 @@ class SessionsPage extends OpenClawLightDomElement {
       <openclaw-session-menu
         .session=${{
           label: normalizeOptionalString(row.label) ?? row.key,
+          sessionId: normalizeOptionalString(row.sessionId) ?? null,
           pinned: row.pinned === true,
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
           icon: normalizeOptionalString(row.icon) ?? null,
+          categoryClearReturnsToGroups: false,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
@@ -1459,6 +1456,11 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "open-in":
               openEditor(action.editor, action.path);
+              break;
+            case "copy-session-id":
+              void copyToClipboard(row.sessionId ?? "").then((copied) => {
+                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+              });
               break;
             case "toggle-pin":
               void this.patchSession(row.key, { pinned: row.pinned !== true });

@@ -14,8 +14,7 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worker-provider-manifest.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
-import type { GatewayRequestHandler } from "./server-methods/types.js";
-import type { GatewayContextResolver } from "./server-plugin-in-process-dispatch.js";
+import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
 // Gateway plugin bootstrap applies activation/auto-enable config, loads plugins,

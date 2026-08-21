@@ -65,6 +65,7 @@
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
     "!dist/plugin-sdk/channel-mention-gating.d.ts",
     "!dist/plugin-sdk/channel-route.d.ts",
+    "!dist/plugin-sdk/channel-secret-owner-runtime.d.ts",
     "!dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
     "!dist/plugin-sdk/channel-target-testing.js",
     "!dist/plugin-sdk/channel-target-testing.d.ts",
@@ -108,6 +109,7 @@
     "!dist/plugin-sdk/llm.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
+    "!dist/plugin-sdk/meeting-page-script-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
@@ -129,6 +131,7 @@
     "!dist/plugin-sdk/music-generation.d.ts",
     "!dist/plugin-sdk/native-hook-relay-runtime.d.ts",
     "!dist/plugin-sdk/node-host.d.ts",
+    "!dist/plugin-sdk/node-selection-runtime.d.ts",
     "!dist/plugin-sdk/number-runtime.d.ts",
     "!dist/plugin-sdk/outbound-media.d.ts",
     "!dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
@@ -357,9 +360,14 @@
     "!dist/qa-runtime-*.js",
     "docs/",
     "!docs/.generated/**",
+    "!docs/.i18n/**",
+    "!docs/ci.md",
     "!docs/channels/qa-channel.md",
     "!docs/assets/**",
     "!docs/images/**",
+    "!docs/maturity/taxonomy.md",
+    "!docs/refactor/**",
+    "!docs/releases/**",
     "!docs/**/*.jpg",
     "!docs/**/*.png",
     "src/agents/templates/",
@@ -371,6 +379,7 @@
     "scripts/lib/tsx-cli-shim.mjs",
     "patches/",
     "skills/",
+    "custodian-skills/",
     "scripts/prepare-git-hooks.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/lib/official-external-channel-catalog.json",
@@ -618,6 +627,9 @@
     "./plugin-sdk/file-access-runtime": {
       "default": "./dist/plugin-sdk/file-access-runtime.js"
     },
+    "./plugin-sdk/node-selection-runtime": {
+      "default": "./dist/plugin-sdk/node-selection-runtime.js"
+    },
     "./plugin-sdk/heartbeat-runtime": {
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
     },
@@ -740,6 +752,9 @@
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
+    },
+    "./plugin-sdk/channel-secret-owner-runtime": {
+      "default": "./dist/plugin-sdk/channel-secret-owner-runtime.js"
     },
     "./plugin-sdk/channel-secret-tts-runtime": {
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
@@ -1162,6 +1177,9 @@
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
+    "./plugin-sdk/meeting-page-script-runtime": {
+      "default": "./dist/plugin-sdk/meeting-page-script-runtime.js"
+    },
     "./plugin-sdk/meeting-runtime": {
       "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
       "default": "./dist/plugin-sdk/meeting-runtime.js"
@@ -1502,12 +1520,12 @@
     "audit:seams": "node --import tsx scripts/audit-seams.mts",
     "build": "node --import tsx scripts/build-all.mts",
     "build:ci-artifacts": "node --import tsx scripts/build-all.mts ciArtifacts",
-    "build:docker": "node --import tsx scripts/tsdown-build.mts && node --import tsx scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/build-stamp.mts && node --import tsx scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts",
+    "build:docker": "node --import tsx scripts/tsdown-build.mts && node --import tsx scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/build-stamp.mts && node --import tsx scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts",
+    "build:package": "pnpm clean:dist && pnpm build",
     "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
     "build:plugin-sdk:strict-smoke": "node --import tsx scripts/tsdown-build.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
     "build:strict-smoke": "pnpm plugins:assets:build && node --import tsx scripts/tsdown-build.mts && node --import tsx scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import tsx scripts/build-stamp.mts && node --import tsx scripts/runtime-postbuild-stamp.mts && node --import tsx scripts/run-with-env.mts OPENCLAW_PLUGIN_SDK_CANONICAL_DTS=1 -- node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/check-plugin-sdk-exports.mts",
     "canvas:a2ui:bundle": "node --import tsx scripts/bundle-a2ui.mts",
-    "canvas:a2ui:native:check": "node --import tsx scripts/sync-native-a2ui.mts --check",
     "channels:catalog:check": "node scripts/write-official-channel-catalog.mjs --check",
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
@@ -1733,6 +1751,7 @@
     "proxy:run": "node scripts/run-node.mjs proxy run",
     "proxy:start": "node scripts/run-node.mjs proxy start",
     "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
+    "qa:telegram-desktop-recorder": "node --import tsx scripts/e2e/telegram-desktop-recorder.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
     "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",
@@ -1748,7 +1767,7 @@
     "release:beta": "node --import tsx scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:candidate": "node --import tsx scripts/release-candidate-checklist.mts",
-    "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
     "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     "release:generated:check": "node scripts/release-preflight.mjs --check",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",

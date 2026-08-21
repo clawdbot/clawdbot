@@ -969,6 +969,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       model: params.followupRun.run.model,
       authProfileId: params.followupRun.run.authProfileId,
       authProfileIdSource: params.followupRun.run.authProfileIdSource,
+      sessionEntry: entry,
       agentHarnessId:
         entry.sessionId === params.followupRun.run.sessionId
           ? entry.modelSelectionLocked === true
@@ -1197,7 +1198,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     entry && Number.isFinite(forceFlushTranscriptBytes) && forceFlushTranscriptBytes > 0,
   );
-  const shouldReadTurnTaint = Boolean(entry && memoryFlushPlan.recordWriteProvenance);
+  const shouldReadTurnTaint = Boolean(entry);
   const shouldReadSessionLog =
     shouldReadTranscript || shouldCheckTranscriptSizeForForcedFlush || shouldReadTurnTaint;
   const sessionLogSnapshot = shouldReadSessionLog
@@ -1338,17 +1339,6 @@ export async function runMemoryFlushIfNeeded(params: {
       workspaceDir: params.followupRun.run.workspaceDir,
       relativePath: writePath,
     });
-    const absolutePath = path.join(params.followupRun.run.workspaceDir, writePath);
-    const readContent = () =>
-      fs.promises.readFile(absolutePath, "utf8").catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
-    // Capture one baseline before any write can start. Per-write snapshots can
-    // pair a failed later write with an earlier success and miss mixed content.
-    const contentBefore = await readContent();
     const systemPrompt = [params.followupRun.run.extraSystemPrompt, plan.systemPrompt]
       .filter(Boolean)
       .join("\n\n");
@@ -1366,8 +1356,6 @@ export async function runMemoryFlushIfNeeded(params: {
     return {
       plan,
       writePath,
-      readContent,
-      contentBefore,
       systemPrompt,
       selection,
       preparedRunAdmission,
@@ -1385,14 +1373,11 @@ export async function runMemoryFlushIfNeeded(params: {
   const {
     plan: activeMemoryFlushPlan,
     writePath: memoryFlushWritePath,
-    readContent: readMemoryFlushContent,
-    contentBefore: memoryFlushContentBefore,
     systemPrompt: flushSystemPrompt,
     selection,
     preparedRunAdmission,
   } = preparedAttempt;
   let memoryCompactionCompleted = false;
-  let memoryFlushWroteTarget = false;
   let postCompactionSessionId: string | undefined;
   let visibleErrorPayloads: ReplyPayload[] = [];
   // Only runnable maintenance owns a run context. The matching finally is
@@ -1488,6 +1473,8 @@ export async function runMemoryFlushIfNeeded(params: {
           silentExpected: true,
           trigger: "memory",
           memoryFlushWritePath,
+          initialTurnTainted:
+            !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
           prompt: activeMemoryFlushPlan.prompt,
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
@@ -1500,11 +1487,6 @@ export async function runMemoryFlushIfNeeded(params: {
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
           onAgentEvent: (evt) => {
-            if (evt.stream === "tool" && evt.data.name === "write") {
-              if (evt.data.phase === "result" && evt.data.isError !== true) {
-                memoryFlushWroteTarget = true;
-              }
-            }
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
               if (phase === "end" && evt.data.completed === true) {
@@ -1523,19 +1505,6 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    if (activeMemoryFlushPlan.recordWriteProvenance && memoryFlushWroteTarget) {
-      await activeMemoryFlushPlan.recordWriteProvenance({
-        workspaceDir: params.followupRun.run.workspaceDir,
-        relativePath: memoryFlushWritePath,
-        contentBefore: memoryFlushContentBefore,
-        contentAfter: await readMemoryFlushContent(),
-        originClass:
-          params.followupRun.run.senderIsOwner && sessionLogSnapshot?.turnTainted !== true
-            ? "agent"
-            : "untrusted",
-        observedAt: memoryDeps.now(),
-      });
-    }
     const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??

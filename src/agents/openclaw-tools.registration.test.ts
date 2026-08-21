@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
+import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnv } from "../test-utils/env.js";
@@ -828,13 +829,130 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
-  it("keeps the core widget tool out of Discord sessions", () => {
+  it("keeps the core widget tool available to inline-capable Discord clients", () => {
     expect(
       hasTool(
         createOpenClawTools({ agentChannel: "discord", clientCaps: ["inline-widgets"] }),
         "show_widget",
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("exposes one core widget tool for a matching current-channel presenter", async () => {
+    const registry = createEmptyPluginRegistry();
+    const present = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        kind: "message" as const,
+        receipt: {
+          primaryPlatformMessageId: "discord-message-1",
+          platformMessageIds: ["discord-message-1"],
+          parts: [],
+          sentAt: 1,
+        },
+      },
+    }));
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "Post in the current Discord channel",
+      capabilities: { sourceKinds: ["html"] },
+      match: (context) =>
+        context.messageChannel === "discord" && context.accountId === "configured",
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present,
+    };
+    registry.widgetPresenters.push({
+      pluginId: "discord",
+      pluginName: "Discord",
+      presenter,
+      source: "discord-fixture",
+    });
+    setActivePluginRegistry(registry);
+
+    try {
+      const tools = createOpenClawTools({
+        agentChannel: "discord",
+        agentAccountId: "configured",
+        nativeChannelId: "channel-1",
+        agentSessionKey: "agent:main:discord",
+      });
+      const widgetTools = tools.filter((tool) => tool.name === "show_widget");
+
+      expect(widgetTools).toHaveLength(1);
+      expect(widgetTools[0]?.requiredClientCaps).toBeUndefined();
+      const result = await widgetTools[0]?.execute("discord-widget", {
+        title: "Status",
+        widget_code: "<p>ready</p>",
+      });
+      expect(result?.details).toMatchObject({
+        kind: "widget",
+        presentation: {
+          target: "current_channel",
+          receipt: { primaryPlatformMessageId: "discord-message-1" },
+        },
+      });
+      expect(present).toHaveBeenCalledOnce();
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
+  it("hides current-channel widgets when no presenter matches the trusted run facts", () => {
+    const registry = createEmptyPluginRegistry();
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "Post in the current configured Discord channel",
+      capabilities: { sourceKinds: ["html"] },
+      match: (context) =>
+        context.messageChannel === "discord" && context.accountId === "configured",
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => {
+        throw new Error("present must not run");
+      },
+    };
+    registry.widgetPresenters.push({
+      pluginId: "discord",
+      presenter,
+      source: "discord-fixture",
+    });
+    setActivePluginRegistry(registry);
+
+    try {
+      expect(
+        hasTool(
+          createOpenClawTools({ agentChannel: "discord", agentAccountId: "unconfigured" }),
+          "show_widget",
+        ),
+      ).toBe(false);
+      expect(hasTool(createOpenClawTools({ agentChannel: "slack" }), "show_widget")).toBe(false);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
+  it("fails closed when current-channel presenter matching is ambiguous", () => {
+    const registry = createEmptyPluginRegistry();
+    const presenter = (pluginId: string): WidgetPresenter => ({
+      target: "current_channel",
+      description: `Present through ${pluginId}`,
+      capabilities: { sourceKinds: ["html"] },
+      match: (context) => context.messageChannel === "discord",
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => {
+        throw new Error("present must not run");
+      },
+    });
+    registry.widgetPresenters.push(
+      { pluginId: "first", presenter: presenter("first"), source: "first-fixture" },
+      { pluginId: "second", presenter: presenter("second"), source: "second-fixture" },
+    );
+    setActivePluginRegistry(registry);
+
+    try {
+      expect(hasTool(createOpenClawTools({ agentChannel: "discord" }), "show_widget")).toBe(false);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
   it("keeps the core widget tool out when Canvas host config disables it", () => {
@@ -900,6 +1018,20 @@ describe("gateway client capability tool filtering", () => {
   it("only exposes screen to UI-command clients", () => {
     expect(hasTool(createOpenClawTools(), "screen")).toBe(false);
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
+  });
+
+  it("exposes GitHub publication only from a prepared session capability", () => {
+    expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
+    expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
+    ).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
+    ).toBe(true);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
+    ).toBe(true);
   });
 
   it("omits host UI runtime tools for sandboxed agents", () => {

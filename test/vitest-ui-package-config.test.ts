@@ -3,8 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
+import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 
 type ExpectedTestConfig = {
+  browser?: { enabled?: boolean };
   isolate?: boolean;
   name?: string;
   pool?: string;
@@ -52,8 +54,35 @@ describe("ui package vitest config", () => {
       const projectTestConfig = requireTestConfig(project);
       expect(projectTestConfig.pool).toBe("threads");
       expect(projectTestConfig.isolate).toBe(projectTestConfig.name === "unit-mock-registry");
-      expect(projectTestConfig.runner).toBeUndefined();
     }
+  });
+
+  // The invariant, not a snapshot: `unit` shares one module graph and jsdom
+  // window across files, so without the cleanup runner the first file to
+  // evaluate a component owns it for the whole worker and a later file's
+  // vi.mock never reaches production. Two projects are exempt for stated
+  // reasons: `browser` runs in browser mode, where the runner's node:fs and
+  // server-module imports cannot load, and `unit-node` carries the
+  // Playwright-driven layout tests whose browser lives in module scope, which
+  // per-file module resets churn.
+  it("runs the shared jsdom ui project on the cross-file cleanup runner", () => {
+    const projects = requireTestConfig(uiConfig).projects ?? [];
+    const wiring = projects.map((project) => {
+      const projectTestConfig = requireTestConfig(project);
+      return {
+        name: projectTestConfig.name,
+        runner: projectTestConfig.runner
+          ? normalizeConfigPath(projectTestConfig.runner)
+          : undefined,
+      };
+    });
+
+    expect(wiring).toEqual([
+      { name: "unit", runner: "test/non-isolated-runner.ts" },
+      { name: "unit-mock-registry", runner: undefined },
+      { name: "unit-node", runner: undefined },
+      { name: "browser", runner: undefined },
+    ]);
   });
 
   it("keeps the standalone ui node config on thread workers without isolation", () => {

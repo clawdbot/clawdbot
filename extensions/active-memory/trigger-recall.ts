@@ -137,9 +137,10 @@ type TriggerLookupParams = {
   activeProjectKeys?: string[];
   signal?: AbortSignal;
   runId?: string;
+  authorityFingerprint?: string;
 };
 
-type TriggerRecallPrewarmEntry = {
+type TriggerRecallRunEntry = {
   activeProjectKeys: string[];
   agentId: string;
   cfg: OpenClawConfig;
@@ -147,7 +148,7 @@ type TriggerRecallPrewarmEntry = {
   query: string;
 };
 
-const triggerRecallPrewarms = new Map<string, TriggerRecallPrewarmEntry>();
+const triggerRecallRuns = new Map<string, TriggerRecallRunEntry>();
 
 async function loadTriggerRecallCandidates(params: TriggerLookupParams) {
   params.signal?.throwIfAborted();
@@ -195,7 +196,8 @@ function resolveTriggerRecallCandidates(params: TriggerLookupParams) {
   if (!runId) {
     return loadTriggerRecallCandidates(params);
   }
-  const existing = triggerRecallPrewarms.get(runId);
+  const runKey = `${runId}:${params.authorityFingerprint ?? "none"}`;
+  const existing = triggerRecallRuns.get(runKey);
   const activeProjectKeys = params.activeProjectKeys ?? [];
   if (
     existing &&
@@ -207,25 +209,20 @@ function resolveTriggerRecallCandidates(params: TriggerLookupParams) {
   ) {
     return existing.promise;
   }
-  const entry: TriggerRecallPrewarmEntry = {
+  const entry: TriggerRecallRunEntry = {
     activeProjectKeys: [...activeProjectKeys],
     agentId: params.agentId,
     cfg: params.cfg,
     promise: loadTriggerRecallCandidates(params),
     query: params.query,
   };
-  triggerRecallPrewarms.set(runId, entry);
+  triggerRecallRuns.set(runKey, entry);
   void entry.promise.catch(() => {
-    if (triggerRecallPrewarms.get(runId) === entry) {
-      triggerRecallPrewarms.delete(runId);
+    if (triggerRecallRuns.get(runKey) === entry) {
+      triggerRecallRuns.delete(runKey);
     }
   });
   return entry.promise;
-}
-
-/** Open and exercise the exact local lookup path used by lane 1 before its deadline starts. */
-export async function prewarmTriggerRecall(params: TriggerLookupParams): Promise<void> {
-  await resolveTriggerRecallCandidates(params);
 }
 
 export async function resolveTriggerRecall(
@@ -246,14 +243,18 @@ export async function resolveTriggerRecall(
   };
 }
 
-export function forgetTriggerRecallPrewarm(runId: string | undefined): void {
+export function forgetTriggerRecallRun(runId: string | undefined): void {
   if (runId) {
-    triggerRecallPrewarms.delete(runId);
+    for (const key of triggerRecallRuns.keys()) {
+      if (key.startsWith(`${runId}:`)) {
+        triggerRecallRuns.delete(key);
+      }
+    }
   }
 }
 
-export function resetTriggerRecallPrewarmsForTests(): void {
-  triggerRecallPrewarms.clear();
+export function resetTriggerRecallRunsForTests(): void {
+  triggerRecallRuns.clear();
 }
 
 function waitForTriggerLookup<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {

@@ -210,6 +210,9 @@ describe("show_widget", () => {
       callGateway,
     });
 
+    expect(tool.description).toContain(
+      "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+    );
     await expect(
       tool.execute("unpinned", {
         title: "Diagram",
@@ -240,12 +243,6 @@ describe("show_widget", () => {
       }),
     );
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
-  });
-
-  it("tells the agent to use widgets proactively", () => {
-    expect(createShowWidgetTool().description).toMatch(
-      /^Visual helps\? Make widget\. Do not wait for ask\./,
-    );
   });
 
   it("keeps widget documents from duplicating host-owned metadata and controls", () => {
@@ -291,7 +288,7 @@ describe("show_widget", () => {
       availability: async () => ({ ok: true, value: { available: true } }),
       present: async () => ({
         ok: true,
-        value: { nodeId: "mac-panel", nodeName: "Studio" },
+        value: { kind: "node", nodeId: "mac-panel", nodeName: "Studio" },
       }),
     };
     const withPresenterTool = createShowWidgetTool({ presenters: [presenter] });
@@ -323,7 +320,7 @@ describe("show_widget", () => {
     }));
     const present = vi.fn(async () => ({
       ok: true as const,
-      value: { nodeId: "mac-panel", nodeName: "Studio" },
+      value: { kind: "node" as const, nodeId: "mac-panel", nodeName: "Studio" },
     }));
     const result = await executeWidget({
       stateDir,
@@ -345,9 +342,13 @@ describe("show_widget", () => {
     expect(result.resultText).toContain("presented on Studio (mac-panel)");
     expect(availability).toHaveBeenCalledWith({ sessionKey: "agent:main:status" });
     expect(present).toHaveBeenCalledWith({
-      documentUrlPath: result.url,
+      document: {
+        kind: "html",
+        html: expect.stringContaining("<p>ready</p>"),
+        hostedUrl: result.url,
+      },
       title: "Status",
-      sessionContext: { sessionKey: "agent:main:status" },
+      context: { sessionKey: "agent:main:status" },
     });
   });
 
@@ -407,12 +408,132 @@ describe("show_widget", () => {
       expect(result.target).toBe("assistant_message");
       expect(result.resultText).toContain(expected);
       expect(result.resultText).toContain("available inline here");
-      expect(result.resultText).toMatch(/Pair a canvas-capable device|Open the OpenClaw app/u);
+      expect(result.resultText).toMatch(
+        /Pair a canvas-capable device|Retry the requested presentation destination/u,
+      );
       await expect(
         access(resolveCanvasDocumentDir(stateDir, result.viewId)),
       ).resolves.toBeUndefined();
     },
   );
+
+  it("enforces current-presenter source kinds and byte limits in core", async () => {
+    registerDiagramContentKind();
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "HTML-only current channel",
+      capabilities: { sourceKinds: ["html"], maxSourceBytes: 8 },
+      match: () => true,
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => {
+        throw new Error("present must not run");
+      },
+    };
+    const tool = createShowWidgetTool({
+      inlineClientAvailable: false,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    const kindSchema = (tool.parameters as { properties?: { kind?: { enum?: string[] } } })
+      .properties?.kind;
+
+    expect(kindSchema?.enum).toEqual(["html"]);
+    expect(tool.description).not.toContain("registered kinds are diagram");
+    await expect(
+      tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
+    ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");
+    await expect(
+      tool.execute("unsupported-current", {
+        title: "Diagram",
+        widget_code: "diagram:ready",
+        kind: "diagram",
+      }),
+    ).rejects.toThrow("inline widget hosting is disabled");
+  });
+
+  it("fails visibly without inline fallback and uses a real inline route when available", async () => {
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "Failing current channel",
+      capabilities: { sourceKinds: ["html"] },
+      match: () => true,
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => ({
+        ok: false,
+        error: { code: "presentation_error", message: "delivery rejected" },
+      }),
+    };
+    const noInline = createShowWidgetTool({
+      inlineClientAvailable: false,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    await expect(
+      noInline.execute("no-inline", { title: "Status", widget_code: "<p>ready</p>" }),
+    ).rejects.toThrow("Widget presentation failed: delivery rejected");
+
+    const stateDir = await createStateDir();
+    const withInline = createShowWidgetTool({
+      stateDir,
+      sessionId: "inline-fallback",
+      inlineClientAvailable: true,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    const fallback = await withInline.execute("with-inline", {
+      title: "Status",
+      widget_code: "<p>ready</p>",
+    });
+    const parsed = JSON.parse(
+      fallback.content[0]?.type === "text" ? fallback.content[0].text : "null",
+    );
+    expect(parsed).toMatchObject({
+      kind: "canvas",
+      presentation: { target: "assistant_message" },
+      text: expect.stringContaining("delivery rejected. The widget is available inline here."),
+    });
+  });
+
+  it("reports pin success and presentation failure as an explicit partial outcome", async () => {
+    const { callGateway } = createBoardPutCaller();
+    const presenter: WidgetPresenter = {
+      target: "current_channel",
+      description: "Failing current channel",
+      capabilities: { sourceKinds: ["html"] },
+      match: () => true,
+      availability: async () => ({ ok: true, value: { available: true } }),
+      present: async () => ({
+        ok: false,
+        error: { code: "presentation_error", message: "delivery rejected" },
+      }),
+    };
+    const tool = createShowWidgetTool({
+      agentSessionKey: "agent:main:partial",
+      callGateway,
+      inlineClientAvailable: false,
+      presenters: [presenter],
+      presenterContext: {},
+    });
+    const result = await tool.execute("partial", {
+      title: "Status",
+      widget_code: "<p>ready</p>",
+      pin: true,
+    });
+    const parsed = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
+
+    expect(parsed).toMatchObject({
+      status: "partial",
+      boardWidgetName: "status",
+      presentation: {
+        target: "current_channel",
+        status: "failed",
+        error: { code: "presentation_error", message: "delivery rejected" },
+      },
+      text: expect.stringContaining(
+        "pinned to dashboard tab main as status, but presentation failed",
+      ),
+    });
+  });
 
   it("keeps the wrapped document bytes stable", () => {
     const html = buildWidgetDocument(
@@ -420,9 +541,9 @@ describe("show_widget", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(13075);
+    expect(Buffer.byteLength(html)).toBe(13493);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "3dd21b774b05d53d12088018babfc82604cc098fcacb1cca48dff5be7e7f8812",
+      "e50212b277bc75dc07a1c6c46cc313ff8f5cbfe261211b12d1714ad9d6b8c912",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
     expect(html).toContain("else push.call(waiting,{send,reject})");
@@ -430,6 +551,7 @@ describe("show_widget", () => {
     expect(html).toContain("openclaw:widget-prompt-host-ready");
     expect(html).toContain("widget host capabilities unavailable");
     expect(html).toContain("widget prompt host unavailable");
+    expect(html).toContain("openclaw:widget-chat-host");
     expect(html).not.toContain("widget is not hosted on a board");
   });
 

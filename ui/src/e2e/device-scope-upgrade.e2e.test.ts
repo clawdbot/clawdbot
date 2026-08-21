@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page, type Route } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -68,6 +68,12 @@ async function captureProof(page: Page, name: string): Promise<void> {
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
 }
 
+async function holdProof(page: Page, durationMs = 500): Promise<void> {
+  if (proofDir) {
+    await page.waitForTimeout(durationMs);
+  }
+}
+
 async function createContext(): Promise<BrowserContext> {
   const context = await browser.newContext({
     locale: "en-US",
@@ -76,6 +82,39 @@ async function createContext(): Promise<BrowserContext> {
   });
   openContexts.add(context);
   return context;
+}
+
+async function createProofContext(
+  viewport: { width: number; height: number },
+  label: string,
+): Promise<{ context: BrowserContext; page: Page; rawVideoDir: string | null }> {
+  const rawVideoDir = proofDir ? path.join(proofDir, "raw-video", label) : null;
+  if (rawVideoDir) {
+    await mkdir(rawVideoDir, { recursive: true });
+  }
+  const context = await browser.newContext({
+    locale: "en-US",
+    ...(rawVideoDir ? { recordVideo: { dir: rawVideoDir, size: viewport } } : {}),
+    serviceWorkers: "block",
+    viewport,
+  });
+  openContexts.add(context);
+  return { context, page: await context.newPage(), rawVideoDir };
+}
+
+async function closeProofContext(
+  proof: { context: BrowserContext; page: Page; rawVideoDir: string | null },
+  label: string,
+): Promise<void> {
+  const video = proof.page.video();
+  openContexts.delete(proof.context);
+  await proof.context.close();
+  if (proofDir && video) {
+    await copyFile(await video.path(), path.join(proofDir, `${label}.webm`));
+  }
+  if (proof.rawVideoDir) {
+    await rm(proof.rawVideoDir, { force: true, recursive: true });
+  }
 }
 
 async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
@@ -131,6 +170,68 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   afterEach(async () => {
     await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
     openContexts.clear();
+  });
+
+  it("keeps mobile status inside the overflow menu while leaving desktop chrome unchanged", async () => {
+    const mobile = await createProofContext({ width: 390, height: 844 }, "mobile");
+    try {
+      const gateway = await installMockGateway(mobile.page, { operatorScopes: LIMITED_SCOPES });
+      await mobile.page.goto(`${server.baseUrl}chat`);
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "stable",
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+        },
+      });
+      const header = mobile.page.locator(".chat-pane__header").first();
+      const menu = mobile.page.locator(".chat-header-session-menu__trigger");
+      await header.waitFor();
+      await menu.waitFor();
+      expect(await mobile.page.locator(".chat-pane__palette-open").count()).toBe(0);
+      expect(await mobile.page.locator(".chat-side-panel-toggle").count()).toBe(0);
+      expect(await mobile.page.locator(".scope-upgrade-chip").count()).toBe(0);
+      expect(await mobile.page.locator(".sidebar-attention--floating").count()).toBe(0);
+      expect(await mobile.page.locator(".sidebar-update-card--floating").count()).toBe(0);
+      expect(await mobile.page.locator(".chat-header-session-menu__status-dot").count()).toBe(1);
+      await captureProof(mobile.page, "mobile-compact-header.png");
+      await holdProof(mobile.page);
+      await menu.click();
+      const status = mobile.page.getByText("Limited access", { exact: true });
+      await status.waitFor();
+      await mobile.page.getByText("Update available v2.0.0", { exact: true }).waitFor();
+      await captureProof(mobile.page, "mobile-status-menu.png");
+      await holdProof(mobile.page);
+      await status.click();
+      await mobile.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await mobile.page
+        .locator(".chat-header-session-menu--compact wa-dropdown-item")
+        .first()
+        .waitFor({ state: "hidden" });
+      await captureProof(mobile.page, "mobile-access-details.png");
+      await holdProof(mobile.page, 700);
+      await mobile.page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await menu.waitFor();
+      await holdProof(mobile.page);
+    } finally {
+      await closeProofContext(mobile, "mobile-compact-header");
+    }
+
+    const desktop = await createProofContext({ width: 1280, height: 900 }, "desktop");
+    try {
+      await installMockGateway(desktop.page, { operatorScopes: LIMITED_SCOPES });
+      await desktop.page.goto(`${server.baseUrl}chat`);
+      await desktop.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await desktop.page.locator(".shell-chrome-controls__search").first().waitFor();
+      await desktop.page.locator(".chat-side-panel-toggle").first().waitFor();
+      await captureProof(desktop.page, "desktop-unchanged.png");
+      await holdProof(desktop.page);
+      await desktop.page.getByRole("button", { name: "Collapse limited access banner" }).click();
+      await desktop.page.getByRole("button", { name: "Show limited access details" }).waitFor();
+      await holdProof(desktop.page);
+    } finally {
+      await closeProofContext(desktop, "desktop-unchanged");
+    }
   });
 
   it("requests admin explicitly, shows pending repair guidance, and reconnects approved", async () => {

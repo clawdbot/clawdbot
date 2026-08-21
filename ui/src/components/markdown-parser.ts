@@ -539,9 +539,6 @@ export function createMarkdownParser(): MarkdownIt {
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
-        if (!githubLink) {
-          continue;
-        }
         let labelToken: Token | null = null;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
           const token = children[cursor];
@@ -552,14 +549,22 @@ export function createMarkdownParser(): MarkdownIt {
             (token.type === "text" || token.type === "code_inline") &&
             token.content.trim() !== ""
           ) {
-            open.attrJoin("class", GITHUB_LINK_CLASS);
             labelToken = token;
             break;
           }
         }
-        if (generatedUrlLabel && labelToken) {
+        if (githubLink && labelToken) {
+          open.attrJoin("class", GITHUB_LINK_CLASS);
+        }
+        if (githubLink && generatedUrlLabel && labelToken) {
           labelToken.content = formatGitHubLinkLabel(url);
           open.attrSet("title", href ?? url.href);
+        }
+        if (!githubLink && labelToken && state.env.linkFavicons) {
+          const favicon = new state.Token("link_favicon", "img", 0);
+          favicon.meta = { hostname: host };
+          children.splice(index + 1, 0, favicon);
+          index += 1;
         }
       }
     }
@@ -600,6 +605,12 @@ export function createMarkdownParser(): MarkdownIt {
     return token?.meta?.taskListPlugin === true
       ? token.content
       : renderRawMarkdownHtml(tokens, index, env, false);
+  };
+  markdownParser.renderer.rules.link_favicon = (tokens, index) => {
+    const hostname: unknown = tokens[index]?.meta?.hostname;
+    return typeof hostname === "string"
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeMarkdownHtml(hostname)}" alt="" role="presentation">`
+      : "";
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);

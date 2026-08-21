@@ -6,8 +6,7 @@ import type {
   PluginHookSkillBundleSnapshot,
 } from "../../plugins/hook-types.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import type { PreparedSkillProposalSupportFile } from "./store.js";
-import type { SkillProposalReadResult } from "./types.js";
+import type { PreparedSkillProposalSupportFile, SkillProposalReadResult } from "./types.js";
 
 const MAX_EVALUATION_FILES = 256;
 const MAX_EVALUATION_FILE_BYTES = 1024 * 1024;

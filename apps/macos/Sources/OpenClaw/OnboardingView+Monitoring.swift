@@ -31,7 +31,6 @@ extension OnboardingView {
         }
         guard Self.shouldAutoInstallCLI(
             onCLIPage: pageIndex == cliPageIndex,
-            isLocal: state.connectionMode == .local,
             visible: onboardingVisible,
             statusKnown: cliStatusKnown,
             executableReady: cliExecutableReady,
@@ -43,22 +42,26 @@ extension OnboardingView {
 
     static func shouldAutoInstallCLI(
         onCLIPage: Bool,
-        isLocal: Bool,
         visible: Bool,
         statusKnown: Bool,
         executableReady: Bool,
         installed: Bool,
         installing: Bool) -> Bool
     {
-        onCLIPage && isLocal && visible && statusKnown && !executableReady && !installed && !installing
+        onCLIPage && visible && statusKnown && !executableReady && !installed && !installing
     }
 
     func startExistingCLIActivationIfNeeded() {
-        guard Self.shouldStartExistingCLIActivation(
-            isLocal: state.connectionMode == .local,
+        guard let setupMode = Self.existingCLISetupMode(
+            connectionMode: state.connectionMode,
             executableReady: cliExecutableReady,
             installing: installingCLI)
         else { return }
+        if setupMode == .remote {
+            cliInstalled = true
+            cliStatus = nil
+            return
+        }
         // Keep the CLI setup gate in the page order until its Gateway is reachable.
         cliInstalled = false
         installingCLI = true
@@ -69,12 +72,13 @@ extension OnboardingView {
         Task { @MainActor in await self.finishExistingCLIActivation() }
     }
 
-    static func shouldStartExistingCLIActivation(
-        isLocal: Bool,
+    static func existingCLISetupMode(
+        connectionMode: AppState.ConnectionMode,
         executableReady: Bool,
-        installing: Bool) -> Bool
+        installing: Bool) -> AppState.ConnectionMode?
     {
-        isLocal && executableReady && !installing
+        guard connectionMode != .unconfigured, executableReady, !installing else { return nil }
+        return connectionMode
     }
 
     static func shouldReviseCLIActivationFailure(
@@ -102,6 +106,14 @@ extension OnboardingView {
         cliStatus = nil
     }
 
+    /// LocalGatewayActivation.failed carries the reason bound to that specific activation
+    /// attempt. Append it here so onboarding does not fall back to a generic retry message
+    /// with no diagnosable cause.
+    static func gatewayStartFailureMessage(prefix: String, reason: String?) -> String {
+        guard let reason, !reason.isEmpty else { return prefix }
+        return "\(prefix) (\(reason))"
+    }
+
     func finishExistingCLIActivation() async {
         defer {
             installingCLI = false
@@ -123,9 +135,11 @@ extension OnboardingView {
         case .deferred:
             cliInstalled = false
             cliStatus = "OpenClaw is paused. Resume it, then retry setup to start the Gateway."
-        case .failed:
+        case let .failed(reason):
             cliInstalled = false
-            cliStatus = "OpenClaw is installed, but the Gateway did not start. Retry setup."
+            cliStatus = Self.gatewayStartFailureMessage(
+                prefix: "OpenClaw is installed, but the Gateway did not start. Retry setup.",
+                reason: reason)
         }
     }
 
@@ -176,8 +190,10 @@ extension OnboardingView {
             cliStatus = "OpenClaw Gateway is ready."
         case .deferred:
             cliStatus = "OpenClaw is installed. The Gateway will start when This Mac is active and resumed."
-        case .failed:
-            cliStatus = "OpenClaw was installed, but the Gateway did not start. Retry setup."
+        case let .failed(reason):
+            cliStatus = Self.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: reason)
             return
         }
         cliInstalled = true

@@ -14,6 +14,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { createOpenClawCodingTools } from "../agent-tools.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import {
@@ -289,6 +290,27 @@ export function createAgentHarnessHostCapabilities(params: {
   });
 
   const trajectoryRecorder = attempt.trajectoryRecorder;
+  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) => {
+    assertActive();
+    const boundAbortSignal = attempt.abortSignal
+      ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+      : capabilityAbortController.signal;
+    const bindingCwd =
+      options?.cwd !== undefined
+        ? normalizeNativeOperationCwd(options.cwd, hookContext.cwd)
+        : undefined;
+    const bindingHookContext = bindingCwd
+      ? Object.freeze({ ...hookContext, cwd: bindingCwd })
+      : hookContext;
+    return tools
+      .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
+      .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
+      .map((tool) =>
+        callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
+      )
+      .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
+      .map((tool) => gateBoundTool(tool, assertActive));
+  };
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
@@ -316,31 +338,12 @@ export function createAgentHarnessHostCapabilities(params: {
         managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
       });
     },
-    bindToolSurface: (tools, options) => {
+    bindToolSurface,
+    createToolSurface: (options, bindingOptions) => {
       assertActive();
-      const boundAbortSignal = attempt.abortSignal
-        ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-        : capabilityAbortController.signal;
-      const bindingCwd =
-        options?.cwd !== undefined
-          ? normalizeNativeOperationCwd(options.cwd, hookContext.cwd)
-          : undefined;
-      // Native harnesses may execute a bound surface from a narrower cwd than
-      // the agent workspace. Hooks must authorize the same absolute path.
-      const bindingHookContext = bindingCwd
-        ? Object.freeze({ ...hookContext, cwd: bindingCwd })
-        : hookContext;
-      return (
-        tools
-          .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
-          .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
-          .map((tool) =>
-            callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
-          )
-          // Rewrapping intentionally restores the original source tool. Restore
-          // the run abort race around the rebound surface for plugin harnesses.
-          .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
-          .map((tool) => gateBoundTool(tool, assertActive))
+      return bindToolSurface(
+        createOpenClawCodingTools({ ...options, operationalRunInstance }),
+        bindingOptions,
       );
     },
     prepareMutableFileApproval: async (request) => {

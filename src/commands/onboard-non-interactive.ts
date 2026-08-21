@@ -85,6 +85,9 @@ async function runNonInteractiveMigrationImport(params: {
       return committed.nextConfig;
     },
   });
+  if (outcome.kind === "back") {
+    throw new Error("Non-interactive migration import cannot navigate back.");
+  }
   await outcome.acknowledgePromotion?.();
 }
 

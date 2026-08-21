@@ -15,6 +15,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -157,6 +158,7 @@ export type GatewaySessionRow = {
   /** Compact user-facing reason for the latest failed or timed-out run. */
   lastRunError?: string;
   hasActiveRun?: boolean;
+  /** Complete exact active set when present; omitted for active owners without exact identities. */
   activeRunIds?: string[];
   /** Active transcript-branch leaf for history rendered from this row. */
   activeLeafEntryId?: string | null;
@@ -221,6 +223,13 @@ export type SessionsPreviewResult = {
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+
+/**
+ * Per-agent completed model catalogs for a session listing. Scoped listings
+ * carry exactly one agent's catalog; unscoped listings carry one per configured
+ * agent so row projections stay owner-scoped.
+ */
+export type SessionListModelCatalog = ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;

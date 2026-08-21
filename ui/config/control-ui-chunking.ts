@@ -14,17 +14,6 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  // These entry-and-route helpers must stay together; separate shared chunks
-  // turn small route-graph changes into extra startup preload requests.
-  if (
-    normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
-    normalized.endsWith("/ui/src/lib/clipboard.ts") ||
-    normalized.endsWith("/ui/src/build-info-normalizers.ts") ||
-    normalized.endsWith("/ui/src/build-info.ts")
-  ) {
-    return "control-ui-shared";
-  }
-
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
     return "gateway-runtime";
   }

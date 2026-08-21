@@ -3,27 +3,12 @@ import { selectDefaultNodeFromList } from "openclaw/plugin-sdk/agent-harness-run
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./node-eligibility.js";
 
-const REQUIRED_WIDGET_COMMANDS = ["canvas.present", "canvas.navigate"] as const;
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 
 type CanvasRuntimeNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 type WidgetPresenter = Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0];
-
-function isEligibleCanvasNode(node: CanvasRuntimeNode): boolean {
-  const commands = node.invocableCommands ?? node.commands ?? [];
-  const hasCanvasCapability =
-    node.caps?.includes("canvas") === true ||
-    commands.some((command) => command.startsWith("canvas."));
-  return (
-    // macOS is the only panel whose resolver handles hosted document paths;
-    // other platforms' Canvas surfaces are being retired.
-    node.platform === "macos" &&
-    node.connected === true &&
-    hasCanvasCapability &&
-    REQUIRED_WIDGET_COMMANDS.every((command) => commands.includes(command))
-  );
-}
 
 async function selectCanvasNode(
   nodesRuntime: PluginRuntime["nodes"],
@@ -60,7 +45,16 @@ export function createCanvasWidgetPresenter(nodesRuntime: PluginRuntime["nodes"]
         };
       }
     },
-    async present({ documentUrlPath, sessionContext }) {
+    async present({ document, context }) {
+      if (!document.hostedUrl) {
+        return {
+          ok: false,
+          error: {
+            code: "node_error",
+            message: "The widget document is not hosted for device presentation.",
+          },
+        };
+      }
       let node: CanvasRuntimeNode | null;
       try {
         node = await selectCanvasNode(nodesRuntime);
@@ -80,20 +74,18 @@ export function createCanvasWidgetPresenter(nodesRuntime: PluginRuntime["nodes"]
         };
       }
       try {
-        const invoke = (command: string, params?: Record<string, unknown>) =>
-          nodesRuntime.invoke({
-            nodeId: node.nodeId,
-            command,
-            params,
-            timeoutMs: DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
-            idempotencyKey: randomUUID(),
-            ...(sessionContext.sessionKey ? { sessionKey: sessionContext.sessionKey } : {}),
-          });
-        await invoke("canvas.present", {});
-        await invoke("canvas.navigate", { url: documentUrlPath });
+        await nodesRuntime.invoke({
+          nodeId: node.nodeId,
+          command: CANVAS_PRESENT_COMMAND,
+          params: { url: document.hostedUrl },
+          timeoutMs: DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+          idempotencyKey: randomUUID(),
+          ...(context.sessionKey ? { sessionKey: context.sessionKey } : {}),
+        });
         return {
           ok: true,
           value: {
+            kind: "node",
             nodeId: node.nodeId,
             ...(node.displayName ? { nodeName: node.displayName } : {}),
           },

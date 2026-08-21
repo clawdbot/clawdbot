@@ -27,6 +27,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
+import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   findOpenClawStateDatabaseSchemaMigrationRequiredError,
   OpenClawStateDatabaseSchemaMigrationRequiredError,
@@ -47,6 +48,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   collectSqliteSchemaShape,
@@ -3117,6 +3119,63 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(() =>
       assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
     ).not.toThrow();
+  });
+
+  it("keeps GitHub publication lazy across current-schema open, first use, and reopen", async () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const previousV9 = new DatabaseSync(databasePath);
+    previousV9.exec(`
+      DROP INDEX idx_github_publication_requests_pending;
+      DROP TABLE github_publication_requests;
+    `);
+    expect(readSqliteNumberPragma(previousV9, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    previousV9.close();
+
+    const beforeFirstUse = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+    expect(
+      beforeFirstUse?.db
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'github_publication_requests'")
+        .get(),
+    ).toBeUndefined();
+    beforeFirstUse?.walMaintenance.close();
+
+    const currentSchema = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(currentSchema.db, "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+    ensureGitHubPublicationSchema(currentSchema.db);
+    expect(
+      currentSchema.db
+        .prepare(
+          "SELECT type, name FROM sqlite_schema WHERE name IN ('github_publication_requests', 'idx_github_publication_requests_pending') ORDER BY type DESC",
+        )
+        .all(),
+    ).toEqual([
+      { type: "table", name: "github_publication_requests" },
+      { type: "index", name: "idx_github_publication_requests_pending" },
+    ]);
+    expect(() =>
+      assertSqliteSchemaContains(
+        currentSchema.db,
+        "previous v9 reader",
+        getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
+      ),
+    ).not.toThrow();
+    closeOpenClawStateDatabaseForTest();
+
+    const reopened = openOpenClawStateDatabase(options);
+    expect(() =>
+      assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path }),
+    ).not.toThrow();
+    closeOpenClawStateDatabaseForTest();
+    const readOnly = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+    expect(readOnly?.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    readOnly?.walMaintenance.close();
   });
 
   it("does not add Claw bootstrap columns before rejecting unrelated index corruption", () => {

@@ -12,7 +12,7 @@ export function retainDraft(
 ) {
   submission.draftPersistence.persistNow();
   const owner = context?.gateway.snapshot.client;
-  if (!context || !owner || submission.submitting || submission.pendingCloud.sessionKey) {
+  if (!context || !owner || submission.submitting || submission.pendingPlacement.sessionKey) {
     return;
   }
   const routeKey = openedFor ?? catalog.routeKeyFromSearch(window.location.search);
@@ -56,7 +56,7 @@ export function restoreDraft(
 }
 
 export function activateDraft(submission: DraftSubmissionFlow, routeKey: string) {
-  if (!submission.pendingCloud.sessionKey) {
+  if (!submission.pendingPlacement.sessionKey) {
     submission.draftPersistence.activateRoute(routeKey);
   }
 }
@@ -66,10 +66,10 @@ export function restoreDraftOwner(
   gatewayUrl: string,
   recoveryScope: string,
 ) {
-  submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope);
+  submission.restorePendingPlacementRecovery(gatewayUrl, recoveryScope);
   submission.draftPersistence.setOwner(
     gatewayUrl,
     recoveryScope,
-    Boolean(submission.pendingCloud.sessionKey),
+    Boolean(submission.pendingPlacement.sessionKey),
   );
 }

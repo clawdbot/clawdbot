@@ -155,6 +155,27 @@ describe("appendPrioritizedDynamicLiveModels", () => {
     expect(resolveDynamicModel).not.toHaveBeenCalled();
   });
 
+  it("materializes a directly prepared model without retrying synchronous resolution", async () => {
+    const preparedModel = model(DYNAMIC_PROVIDER, "glm-5");
+    providerRuntimeMocks.prepareProviderDynamicModel.mockResolvedValue(preparedModel);
+
+    const result = await appendPrioritizedDynamicLiveModels({
+      models: [],
+      agentDir: "/tmp/openclaw-agent",
+      modelRegistry: REGISTRY,
+      refs: [{ provider: DYNAMIC_PROVIDER, id: "glm-5" }],
+    });
+
+    expect(result.added).toEqual([preparedModel]);
+    expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledOnce();
+    expect(providerRuntimeMocks.runProviderDynamicModel).not.toHaveBeenCalled();
+    expect(normalizeDiscoveredAgentModelMock).toHaveBeenCalledWith(
+      preparedModel,
+      "/tmp/openclaw-agent",
+      { config: undefined, workspaceDir: undefined },
+    );
+  });
+
   it("uses default provider runtime hooks when resolvers are not injected", async () => {
     providerRuntimeMocks.runProviderDynamicModel.mockImplementation((params) =>
       params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"

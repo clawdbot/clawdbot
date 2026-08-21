@@ -105,6 +105,7 @@ export {
   type QaGatewayChildStateMutationContext,
   startQaGatewayChild,
 } from "./src/gateway-child.js";
+export { startQaGatewayRpcClient } from "./src/gateway-rpc-client.js";
 export {
   buildQaSuiteSummaryJson,
   type QaSuiteResult,

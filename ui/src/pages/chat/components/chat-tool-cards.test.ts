@@ -184,8 +184,8 @@ describe("tool-cards", () => {
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
-  it("renders multi-file patch headers, changed rows, and raw output together", () => {
-    const container = document.createElement("div");
+  it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
     render(
       renderToolCard(
         {
@@ -234,12 +234,86 @@ describe("tool-cards", () => {
       ),
     ).toEqual(["new a", "new b"]);
 
-    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
-    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
-    rawToggle?.click();
-    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
-      "Applied patch",
+    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      "wa-tab-group",
     );
+    const tabs = Array.from(
+      container.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>("wa-tab"),
+    );
+    await tabGroup?.updateComplete;
+    await Promise.all(tabs.map((tab) => tab.updateComplete));
+    expect(
+      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Tool detail view");
+    expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual(
+      [
+        ["Diff", "true"],
+        ["Raw", "false"],
+      ],
+    );
+    const diffBody = container.querySelector<HTMLElement>('wa-tab-panel[name="diff"]');
+    const rawBody = container.querySelector<HTMLElement>('wa-tab-panel[name="raw"]');
+    expect(diffBody?.hasAttribute("active")).toBe(true);
+    expect(rawBody?.hasAttribute("active")).toBe(false);
+
+    tabs[1]?.click();
+    await tabGroup?.updateComplete;
+    await Promise.all(tabs.map((tab) => tab.updateComplete));
+    expect(diffBody?.hasAttribute("active")).toBe(false);
+    expect(rawBody?.hasAttribute("active")).toBe(true);
+    expect(rawBody?.querySelector("code")?.textContent).toBe("Applied patch");
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+
+    tabGroup?.setAttribute("aria-label", "Translated tool detail view");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:multi",
+          name: "apply_patch",
+          args: {
+            changes: [{ path: "src/a.ts", kind: { type: "update" }, diff: "-old\n+new\n" }],
+          },
+          outputText: "Applied patch",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Tool detail view");
+    container.remove();
+  });
+
+  it("shows failed edit output before the attempted diff", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderToolCard(
+        {
+          id: "msg:edit:failed",
+          name: "edit",
+          args: { path: "src/a.ts", oldText: "before", newText: "after" },
+          outputText: "Patch context did not match",
+          completed: true,
+          isError: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+
+    expect(container.querySelector('wa-tab[panel="raw"]')?.hasAttribute("active")).toBe(true);
+    expect(container.querySelector('wa-tab-panel[name="raw"]')?.hasAttribute("active")).toBe(true);
+    expect(container.querySelector('wa-tab-panel[name="raw"] code')?.textContent).toBe(
+      "Patch context did not match",
+    );
+    container.remove();
   });
 
   it("labels a completed Codex file creation from its recorded operation", () => {

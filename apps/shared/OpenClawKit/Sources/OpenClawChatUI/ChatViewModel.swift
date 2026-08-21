@@ -1177,7 +1177,7 @@ extension OpenClawChatViewModel {
 
     private func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
         do {
-            let modelChoices = try await transport.listModels()
+            let modelChoices = try await transport.listModels(agentID: sessionSnapshot?.deliveryAgentID)
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) {
                 return
             }

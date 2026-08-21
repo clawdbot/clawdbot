@@ -144,7 +144,7 @@ export function normalizeSessionProjectionRunId(value: unknown): string | null {
   return runId?.endsWith(":user") ? runId.slice(0, -":user".length) || null : runId;
 }
 
-/** Persisted transcript facts win over envelope projections and provider-local import IDs. */
+/** Persisted row facts win; assistant run ownership comes from its authoritative producer. */
 export function readSessionMessageIdentity(
   message: unknown,
   envelope?: SessionMessageEnvelope,
@@ -169,6 +169,7 @@ export function readSessionMessageIdentity(
     sequence: readSessionMessageSequence(message, envelope),
     idempotencyKey,
     runId:
+      (role === "assistant" ? normalizeSessionProjectionRunId(envelope?.runId) : null) ??
       normalizeSessionProjectionRunId(idempotencyKey) ??
       normalizeSessionProjectionRunId(envelope?.runId),
     isImported: Boolean(importedFrom || cliSessionId || externalId),
@@ -409,6 +410,11 @@ export function projectLiveSessionMessage(
   }
   const existing = state.entries[existingIndex];
   if (existing && existing.message === message && existing.live && !existing.pending) {
+    return state;
+  }
+  if (existing && !existing.pending && existing.identity?.id && !incoming.identity.id) {
+    // A terminal projection carries no transcript identity; adopting it over the
+    // durable row would lose the ID every later snapshot reconciles against.
     return state;
   }
   if (existing?.pending && incoming.identity.sequence !== null) {

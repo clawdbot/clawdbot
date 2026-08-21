@@ -153,6 +153,7 @@ type CodexComputerUseInspectionParams = {
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+  releaseNativeConfigFence?: () => void;
 };
 
 type MarketplaceRef =
@@ -331,6 +332,7 @@ async function inspectCodexComputerUse(
     try {
       return await inspectCodexComputerUseWithoutFence({
         ...params,
+        releaseNativeConfigFence: release,
         ...(client
           ? {
               client,
@@ -411,6 +413,7 @@ async function inspectCodexComputerUseWithoutFence(
     plugin: pluginInspection.plugin,
     installPlugin: params.installPlugin,
     repairComputerUseMcpChildren,
+    releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
 }
 
@@ -470,6 +473,7 @@ async function readComputerUseTools(params: {
   plugin: CodexPluginDetail;
   installPlugin: boolean;
   repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+  releaseNativeConfigFence?: () => void;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
   let tools = Object.keys(server?.tools ?? {}).toSorted();
@@ -504,6 +508,8 @@ async function readComputerUseTools(params: {
     reason: "ready",
     message: "Computer Use is ready.",
   });
+  // The readiness thread reacquires this fence before loading native config.
+  params.releaseNativeConfigFence?.();
   const { liveTest, repair } = await runCodexComputerUseLiveTest({
     request: params.request,
     config: params.config,

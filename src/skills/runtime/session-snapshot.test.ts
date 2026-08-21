@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
 
@@ -20,6 +21,7 @@ const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
   getSkillsSnapshotVersionMock,
+  loadMergedWorkspaceSkillsMock,
   shouldRefreshSnapshotForVersionMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
@@ -29,9 +31,20 @@ const {
   })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 1),
+  loadMergedWorkspaceSkillsMock: vi.fn(
+    (_params: { pluginMetadataSnapshot?: PluginMetadataSnapshot }) => [],
+  ),
   shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
     next === 0 ? cached > 0 : cached < next,
   ),
+}));
+
+vi.mock("../loading/workspace-skill-loader.js", () => ({
+  loadMergedWorkspaceSkills: loadMergedWorkspaceSkillsMock,
+  normalizeWorkspaceSkillRoots: (roots: {
+    agentWorkspaceDir: string;
+    executionSkillsDir?: string;
+  }) => roots,
 }));
 
 vi.mock("../loading/workspace-skill-prompt.js", () => ({
@@ -59,6 +72,25 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     getSkillsSnapshotVersionMock.mockReturnValue(1);
     shouldRefreshSnapshotForVersionMock.mockImplementation((cached = 0, next = 0) =>
       next === 0 ? cached > 0 : cached < next,
+    );
+  });
+
+  it("reuses prepared plugin metadata for watcher reconciliation and skill loading", () => {
+    const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
+
+    resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      executionSkillsDir: "/tmp/execution/skills",
+      config: {},
+      pluginMetadataSnapshot,
+    });
+
+    expect(loadMergedWorkspaceSkillsMock).toHaveBeenCalledOnce();
+    expect(loadMergedWorkspaceSkillsMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
+      pluginMetadataSnapshot,
+    );
+    expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot }),
     );
   });
 

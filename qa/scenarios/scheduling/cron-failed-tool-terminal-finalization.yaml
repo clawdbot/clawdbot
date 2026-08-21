@@ -34,7 +34,7 @@ scenario:
       channelId: qa-failed-cron
       promptSnippet: Failed tool terminal recovery QA check
       retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
-      failureHonestyNeedle: state that failure plainly and do not claim it succeeded
+      failureHonestyNeedle: If a tool failed, say so; never claim completion or success.
       expectedMarker: CRON-FAILED-TOOL-FINALIZED-OK
       expectedReply: "The requested file could not be read: ENOENT. CRON-FAILED-TOOL-FINALIZED-OK"
 

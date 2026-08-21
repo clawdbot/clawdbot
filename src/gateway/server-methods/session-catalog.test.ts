@@ -476,7 +476,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const catalogUsingNodes = (id: string) =>
@@ -503,7 +507,11 @@ describe("session catalog Gateway methods", () => {
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
-        nodes: { list: dispatchNodeList, invoke: vi.fn(async () => undefined) },
+        nodes: {
+          list: dispatchNodeList,
+          invoke: vi.fn(async () => undefined),
+          openDuplex: vi.fn(),
+        },
       }),
     );
     const selectedList = vi.fn(async () => []);

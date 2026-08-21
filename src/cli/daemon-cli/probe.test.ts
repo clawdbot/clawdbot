@@ -11,7 +11,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
-vi.mock("../../gateway/probe.js", () => ({
+vi.mock("../../gateway/probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/probe.js")>()),
   probeGateway: (...args: unknown[]) => probeGatewayMock(...args),
 }));
 
@@ -276,14 +277,12 @@ describe("probeGatewayStatus", () => {
   it("uses a real status RPC when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: true,
-      auth: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        capability: "admin_capable",
-      },
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk?.({
+        server: { version: "2026.8.1", buildId: "build-1", connId: "conn-1" },
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      });
+      return { runtimeVersion: "2026.8.1", status: "ok" };
     });
 
     const result = await probeGatewayStatus({
@@ -305,41 +304,33 @@ describe("probeGatewayStatus", () => {
         scopes: ["operator.admin"],
         capability: "admin_capable",
       },
-    });
-    expect(probeGatewayMock).toHaveBeenCalledWith({
-      url: "ws://127.0.0.1:19191",
-      auth: {
-        token: "temp-token",
-        password: undefined,
+      server: {
+        version: "2026.8.1",
+        buildId: "build-1",
+        connId: "conn-1",
       },
-      tlsFingerprint: "abc123",
-      timeoutMs: 5_000,
-      includeDetails: false,
+      version: "2026.8.1",
     });
+    expect(probeGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledOnce();
     expect(callGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
       token: "temp-token",
       password: undefined,
       tlsFingerprint: "abc123",
+      preauthHandshakeTimeoutMs: undefined,
       method: "status",
       timeoutMs: 5_000,
       sharedStateMode: "read-only",
       configPath: "/tmp/openclaw-daemon/openclaw.json",
+      onHelloOk: expect.any(Function),
     });
   });
 
-  it("forwards the resolved handshake timeout to the connect probe and status RPC", async () => {
+  it("keeps required status to one timeout-bound RPC", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
     callGatewayMock.mockResolvedValueOnce({ status: "ok" });
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: true,
-      auth: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        capability: "admin_capable",
-      },
-    });
     const config = {};
 
     await probeGatewayStatus({
@@ -351,27 +342,19 @@ describe("probeGatewayStatus", () => {
       requireRpc: true,
     });
 
-    expect(probeGatewayMock).toHaveBeenCalledWith({
-      url: "ws://127.0.0.1:19191",
-      config,
-      auth: {
-        token: "temp-token",
-        password: undefined,
-      },
-      tlsFingerprint: undefined,
-      preauthHandshakeTimeoutMs: 30_000,
-      timeoutMs: 30_000,
-      includeDetails: false,
-    });
+    expect(probeGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledOnce();
     expect(callGatewayMock).toHaveBeenCalledWith({
       url: "ws://127.0.0.1:19191",
       token: "temp-token",
       password: undefined,
       tlsFingerprint: undefined,
+      preauthHandshakeTimeoutMs: 30_000,
       config,
       method: "status",
       timeoutMs: 30_000,
       sharedStateMode: "read-only",
+      onHelloOk: expect.any(Function),
     });
   });
 
@@ -415,9 +398,11 @@ describe("probeGatewayStatus", () => {
       token: "temp-token",
       password: undefined,
       tlsFingerprint: undefined,
+      preauthHandshakeTimeoutMs: undefined,
       method: "status",
       timeoutMs: 5_000,
       sharedStateMode: "read-only",
+      onHelloOk: expect.any(Function),
     });
   });
 
@@ -456,17 +441,15 @@ describe("probeGatewayStatus", () => {
     expect(probeGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {
+  it("falls back to read-only when hello scopes are inconclusive", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: true,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk?.({
+        server: { version: "2026.8.1", connId: "conn-1" },
+        auth: { role: "operator", scopes: [] },
+      });
+      return { status: "ok" };
     });
 
     const result = await probeGatewayStatus({
@@ -480,51 +463,26 @@ describe("probeGatewayStatus", () => {
       ok: true,
       kind: "read",
       capability: "read_only",
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-    });
-  });
-
-  it("uses status.runtimeVersion when read-probe handshake metadata is unavailable", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.24", status: "ok" });
-    probeGatewayMock.mockRejectedValueOnce(new Error("probe timed out after status"));
-
-    const result = await probeGatewayStatus({
-      url: "ws://127.0.0.1:19191",
-      token: "temp-token",
-      timeoutMs: 5_000,
-      requireRpc: true,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      kind: "read",
-      capability: "read_only",
-      auth: undefined,
-      version: "2026.4.24",
-    });
-  });
-
-  it("prefers read-probe server metadata over status.runtimeVersion", async () => {
-    callGatewayMock.mockReset();
-    probeGatewayMock.mockReset();
-    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.23", status: "ok" });
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: true,
       auth: {
         role: "operator",
-        scopes: ["operator.read"],
-        capability: "read_only",
+        scopes: [],
+        capability: "unknown",
       },
-      server: {
-        version: "2026.4.24",
-        connId: "conn-1",
-      },
+      server: { version: "2026.8.1", connId: "conn-1" },
+      version: "2026.8.1",
+    });
+    expect(probeGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers same-connection server metadata over status.runtimeVersion", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockImplementationOnce(async (opts) => {
+      opts.onHelloOk?.({
+        server: { version: "2026.4.24", connId: "conn-1" },
+        auth: { role: "operator", scopes: ["operator.read"] },
+      });
+      return { runtimeVersion: "2026.4.23", status: "ok" };
     });
 
     const result = await probeGatewayStatus({
@@ -549,6 +507,7 @@ describe("probeGatewayStatus", () => {
       },
       version: "2026.4.24",
     });
+    expect(probeGatewayMock).not.toHaveBeenCalled();
   });
 
   it("surfaces probe close details when the handshake fails", async () => {

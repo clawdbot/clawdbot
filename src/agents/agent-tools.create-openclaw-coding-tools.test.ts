@@ -14,6 +14,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as windowsEncoding from "../infra/windows-encoding.js";
+import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
@@ -23,11 +24,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-  type MemoryFlushPlan,
-} from "../plugins/memory-state.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -189,44 +185,88 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().webSearchEnabled).toBe(false);
   });
 
-  it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
-    const locator = "node://node-1/skills/pond/SKILL.md";
-    const tools = createOpenClawCodingTools({
-      config: { tools: { fs: { workspaceOnly: true } } },
-      skillsSnapshot: {
-        prompt: "",
-        skills: [{ name: "pond" }],
-        resolvedSkills: [
-          {
-            name: "pond",
-            description: "Pond skill",
-            filePath: locator,
-            baseDir: "node://node-1/skills/pond",
-            readContent: "# Pond\nassembled-marker",
-            source: "openclaw-node",
-            sourceInfo: {
-              source: "openclaw-node",
-              path: locator,
-              scope: "temporary",
-              origin: "top-level",
+  it.each([
+    {
+      name: "fitting node",
+      backend: "node",
+      content: "# Pond\nassembled-marker",
+      oversized: false,
+    },
+    {
+      name: "multi-page node",
+      backend: "node",
+      content: `${"ok\n".repeat(2_100)}done`,
+      oversized: false,
+    },
+    {
+      name: "oversized node",
+      backend: "node",
+      content: `# Pond\n${"x".repeat(33 * 1024)}`,
+      oversized: true,
+    },
+    { name: "fitting local", backend: "local", content: "# Pond\nlocal-marker", oversized: false },
+    {
+      name: "oversized local",
+      backend: "local",
+      content: `# Pond\n${"x".repeat(33 * 1024)}`,
+      oversized: true,
+    },
+  ])(
+    "serves $name skill instructions whole or refuses them",
+    async ({ backend, content, oversized }) => {
+      const virtual = backend === "node";
+      const baseDir = virtual
+        ? "node://node-1/skills/pond"
+        : tempDirs.make("openclaw-assembled-local-skill-");
+      const locator = virtual ? `${baseDir}/SKILL.md` : path.join(baseDir, "SKILL.md");
+      if (!virtual) {
+        await fs.writeFile(locator, content, "utf8");
+      }
+      const tools = createOpenClawCodingTools({
+        config: { tools: { fs: { workspaceOnly: true } } },
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "pond" }],
+          resolvedSkills: [
+            {
+              name: "pond",
+              description: "Pond skill",
+              filePath: locator,
+              baseDir,
+              ...(virtual ? { readContent: content } : {}),
+              source: virtual ? "openclaw-node" : "test",
+              sourceInfo: {
+                source: virtual ? "openclaw-node" : "test",
+                path: locator,
+                scope: "temporary",
+                origin: "top-level",
+              },
+              disableModelInvocation: false,
             },
-            disableModelInvocation: false,
-          },
-        ],
-      },
-    });
+          ],
+        },
+      });
 
-    const result = await requireTool(tools, "read").execute("node-skill-read", {
-      path: locator,
-    });
+      const result = await requireTool(tools, "read").execute("whole-skill-read", {
+        path: locator,
+      });
 
-    expect(JSON.stringify(result)).toContain("assembled-marker");
-  });
+      if (oversized) {
+        expect(extractToolText(result)).toMatch(
+          /(?:cannot|omitted|exceeds).*whole|whole.*(?:cannot|exceeds)|partially served/i,
+        );
+        expect(extractToolText(result)).not.toContain("# Pond");
+        expect(Buffer.byteLength(extractToolText(result), "utf8")).toBeLessThanOrEqual(32 * 1024);
+        return;
+      }
+
+      expect(extractToolText(result)).toBe(content);
+    },
+  );
 
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {
-    clearMemoryPluginState();
     resetGlobalHookRunner();
   });
 
@@ -1102,6 +1142,40 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("process")).toBe(false);
     expect(names.has("apply_patch")).toBe(false);
     expect(names.has("message")).toBe(false);
+  });
+
+  it("continues oversized data through the assembled shell-disabled read tool", async () => {
+    const workspaceDir = tempDirs.make("openclaw-read-no-shell-");
+    const original = JSON.stringify({ generated: "x".repeat(52 * 1024) });
+    await fs.writeFile(path.join(workspaceDir, "generated.json"), original, "utf8");
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("process")).toBe(false);
+    const read = requireTool(tools, "read");
+    expect(read.description).not.toMatch(/\b(?:bash|sed|head)\b/);
+
+    const result = await read.execute("read-no-shell", { path: "generated.json" });
+    const text = extractToolText(result);
+    const continuation = (result.details as { continuation?: { cursor?: number } }).continuation;
+    expect(text).not.toMatch(/\b(?:bash|sed|head)\b/);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(continuation?.cursor).toBeGreaterThan(0);
+    expect(text).toContain(`cursor=${continuation?.cursor}`);
+    const next = await read.execute("read-no-shell-next", {
+      path: "generated.json",
+      cursor: continuation?.cursor,
+    });
+    expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
 
   it("passes plugin suppression into OpenClaw tool construction plans", () => {
@@ -2366,7 +2440,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("roots memory flush append-only writes in the workspace when cwd differs", async () => {
+  it("records restricted memory flush writes without an active memory provider", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-workspace-"));
     const taskCwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-cwd-"));
     const memoryRelativePath = "memory/2026-03-24.md";
@@ -2380,8 +2454,10 @@ describe("createOpenClawCodingTools", () => {
       const tools = createOpenClawCodingTools({
         workspaceDir,
         cwd: taskCwd,
+        config: { plugins: { slots: { memory: "none" } } },
         trigger: "memory",
         memoryFlushWritePath: memoryRelativePath,
+        senderIsOwner: false,
       });
       const writeExecute = requireToolExecute(requireTool(tools, "write"));
 
@@ -2394,6 +2470,9 @@ describe("createOpenClawCodingTools", () => {
         "seed\nnew durable note",
       );
       await expect(fs.stat(taskMemoryFile)).rejects.toThrow();
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir, relativePath: memoryRelativePath }),
+      ).resolves.toMatchObject({ originClass: "untrusted" });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(taskCwd, { recursive: true, force: true });
@@ -2402,21 +2481,6 @@ describe("createOpenClawCodingTools", () => {
 
   it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
-    const rollback = vi.fn(async () => {});
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => rollback,
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/2026-07-29.md",
-        recordWriteProvenance,
-      }),
-    });
     let tainted = false;
     try {
       const tools = createOpenClawCodingTools({
@@ -2447,18 +2511,16 @@ describe("createOpenClawCodingTools", () => {
         ].join("\n"),
       });
 
-      expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
-        "agent",
-        "untrusted",
-        "untrusted",
+      await expect(
+        Promise.all(
+          ["memory/2026-07-29.md", "memory/project.md"].map((relativePath) =>
+            readMemoryArtifactProvenance({ workspaceDir, relativePath }),
+          ),
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({ originClass: "untrusted" }),
       ]);
-      expect(recordWriteProvenance).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          relativePath: "memory/project.md",
-          contentBefore: "",
-          contentAfter: "network project note\n",
-        }),
-      );
       await expect(
         applyPatch("patch-existing-memory", {
           input: [
@@ -2469,7 +2531,9 @@ describe("createOpenClawCodingTools", () => {
           ].join("\n"),
         }),
       ).rejects.toThrow(/file already exists/i);
-      expect(rollback).toHaveBeenCalledOnce();
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/project.md" }),
+      ).resolves.toMatchObject({ originClass: "untrusted" });
       await expect(fs.readFile(path.join(workspaceDir, "memory/project.md"), "utf8")).resolves.toBe(
         "network project note\n",
       );
@@ -2480,23 +2544,6 @@ describe("createOpenClawCodingTools", () => {
 
   it("records agent provenance after an untainted same-turn delete and recreate", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-recreate-"));
-    let recordedOrigin: "agent" | "untrusted" | undefined;
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/recreated.md",
-        recordWriteProvenance: async (entry) => {
-          recordedOrigin = entry.originClass;
-        },
-        clearWriteProvenance: async () => {
-          recordedOrigin = undefined;
-        },
-      }),
-    });
     try {
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "memory/recreated.md"), "old\n", "utf8");
@@ -2516,93 +2563,19 @@ describe("createOpenClawCodingTools", () => {
       await applyPatch("recreate-memory", {
         input: "*** Begin Patch\n*** Add File: memory/recreated.md\n+recreated\n*** End Patch",
       });
-      expect(recordedOrigin).toBe("agent");
+      await expect(
+        readMemoryArtifactProvenance({
+          workspaceDir,
+          relativePath: "memory/recreated.md",
+        }),
+      ).resolves.toMatchObject({ originClass: "agent" });
     } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("orders parallel apply_patch delete cleanup before a tainted recreate", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-race-"));
-    let recordedOrigin: "agent" | "untrusted" | undefined;
-    let releaseCleanup!: () => void;
-    let signalCleanupStarted!: () => void;
-    const cleanupRelease = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    const cleanupStarted = new Promise<void>((resolve) => {
-      signalCleanupStarted = resolve;
-    });
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async (entry) => {
-        recordedOrigin = entry.originClass;
-      },
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/raced.md",
-        recordWriteProvenance,
-        clearWriteProvenance: async () => {
-          signalCleanupStarted();
-          await cleanupRelease;
-          recordedOrigin = undefined;
-        },
-      }),
-    });
-    try {
-      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "memory/raced.md"), "old\n", "utf8");
-      const applyPatch = requireToolExecute(
-        requireTool(
-          createOpenClawCodingTools({
-            workspaceDir,
-            senderIsOwner: true,
-            isTurnTainted: () => true,
-          }),
-          "apply_patch",
-        ),
-      );
-      const deleting = applyPatch("delete-raced-memory", {
-        input: "*** Begin Patch\n*** Delete File: memory/raced.md\n*** End Patch",
-      });
-      await cleanupStarted;
-      const recreating = applyPatch("recreate-raced-memory", {
-        input: "*** Begin Patch\n*** Add File: memory/raced.md\n+network note\n*** End Patch",
-      });
-      await Promise.resolve();
-      expect(recordWriteProvenance).not.toHaveBeenCalled();
-      releaseCleanup();
-      await Promise.all([deleting, recreating]);
-
-      expect(recordedOrigin).toBe("untrusted");
-      expect(recordWriteProvenance).toHaveBeenCalledOnce();
-    } finally {
-      releaseCleanup();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
   it("records sandbox-backed memory writes before mutation", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"));
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => {},
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/2026-07-29.md",
-        recordWriteProvenance,
-      }),
-    });
     try {
       const sandbox = createAgentToolsSandboxContext({
         workspaceDir,
@@ -2620,14 +2593,12 @@ describe("createOpenClawCodingTools", () => {
         content: "sandbox network note\n",
       });
 
-      expect(recordWriteProvenance).toHaveBeenCalledWith(
-        expect.objectContaining({
+      await expect(
+        readMemoryArtifactProvenance({
+          workspaceDir,
           relativePath: "memory/2026-07-29.md",
-          originClass: "untrusted",
-          contentBefore: "",
-          contentAfter: "sandbox network note\n",
         }),
-      );
+      ).resolves.toMatchObject({ originClass: "untrusted" });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -2733,6 +2704,37 @@ function extractToolText(result: unknown): string {
 }
 
 describe("createOpenClawCodingTools read behavior", () => {
+  it("protects materialized sandbox skill identities when no skill snapshot exists", async () => {
+    const root = tempDirs.make("openclaw-sandbox-skill-whole-");
+    const relativePath = "skills/demo/SKILL.md";
+    const filePath = path.join(root, relativePath);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, "# Demo\ncomplete instructions", "utf8");
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: root,
+      fsBridge: createHostSandboxFsBridge(root),
+    });
+    const tools = createOpenClawCodingTools({
+      sandbox,
+      skillUsagePaths: [
+        {
+          readPath: `/workspace/${relativePath}`,
+          skillFile: filePath,
+          skillName: "demo",
+          skillSource: "workspace",
+        },
+      ],
+    });
+    const read = requireTool(tools, "read");
+
+    expect(extractToolText(await read.execute("sandbox-skill", { path: relativePath }))).toBe(
+      "# Demo\ncomplete instructions",
+    );
+    await expect(
+      read.execute("sandbox-skill-window", { path: `/workspace/${relativePath}`, cursor: 0 }),
+    ).rejects.toThrow(/whole|partial|window/i);
+  });
+
   it("reads exact node skill locators without sending them to the filesystem backend", async () => {
     const locator = "node://node-1/skills/pond/SKILL.md";
     const execute = vi.fn(async () => {
@@ -2752,6 +2754,11 @@ describe("createOpenClawCodingTools read behavior", () => {
     const result = await tool.execute("node-skill-read", { path: locator });
 
     expect(extractToolText(result)).toContain("remote-marker");
+    for (const window of [{ offset: 1 }, { limit: 1 }, { cursor: 0 }]) {
+      await expect(
+        tool.execute("whole-skill-window", { path: locator, ...window }),
+      ).rejects.toThrow(/whole|partial|window/i);
+    }
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -2914,9 +2921,33 @@ describe("createOpenClawCodingTools read behavior", () => {
       expect(text).toContain("line-0001");
       expect(text).toContain("[Read output capped at 32KB for this call. Use offset=");
       expect(text).not.toContain("line-8000");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { name: "without an explicit limit", args: {} },
+    { name: "with an explicit line limit", args: { limit: 1 } },
+  ])("caps the first read page including its notice $name", async ({ args }) => {
+    const root = tempDirs.make("openclaw-read-first-page-cap-");
+    const original = "é🦞".repeat(9 * 1024);
+    await fs.writeFile(path.join(root, "unicode.txt"), original, "utf8");
+    const read = createSandboxedReadTool({ root, bridge: createHostSandboxFsBridge(root) });
+
+    const result = await read.execute("read-first-page-cap", { path: "unicode.txt", ...args });
+    const text = extractToolText(result);
+    const details = result.details as {
+      continuation?: { kind: string; offset: number; cursor: number };
+    };
+
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(details.continuation).toMatchObject({ kind: "cursor", offset: 1 });
+    expect(text).toContain(`cursor=${details.continuation?.cursor}`);
+    expect(text.replace(/\n\n\[Read output capped[^\]]*\]$/, "")).toBe(
+      original.slice(0, details.continuation?.cursor),
+    );
   });
 
   it("describes explicit offsets beyond EOF", async () => {
@@ -3032,6 +3063,7 @@ describe("createOpenClawCodingTools read behavior", () => {
           firstLineExceedsLimit: false,
           content: "hidden duplicate payload",
         },
+        continuation: { kind: "line", offset: 2 },
       },
     };
     const baseRead: AgentTool = {

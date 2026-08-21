@@ -1,6 +1,6 @@
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import type { SessionPatchProjectionSnapshot } from "./session-accessor.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionProjectionTarget = {
   candidateKeys?: readonly string[];
@@ -57,7 +57,7 @@ export class SessionLabelOwnerIndex {
 /** Carries only user/runtime selection into a new dashboard fork. */
 export function inheritSessionSelection(
   parentEntry: SessionEntry | undefined,
-): Partial<SessionEntry> {
+): Partial<InternalSessionEntry> {
   if (!parentEntry) {
     return {};
   }

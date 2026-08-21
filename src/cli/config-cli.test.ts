@@ -98,7 +98,43 @@ vi.mock("../secrets/resolve.js", () => ({
 }));
 
 vi.mock("../config/runtime-schema.js", () => ({
-  buildRuntimeConfigSchemaFromRegistry: () => ({ uiHints: {} }),
+  buildRuntimeConfigSchemaFromRegistry: () => ({
+    schema: {
+      type: "object",
+      properties: {
+        models: {
+          type: "object",
+          properties: {
+            providers: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  models: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: { id: { type: "string" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        gateway: {
+          type: "object",
+          properties: {
+            bind: { type: "string" },
+            port: { type: "number" },
+          },
+        },
+      },
+    },
+    uiHints: {},
+    version: "test",
+    generatedAt: "2026-03-25T00:00:00.000Z",
+  }),
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
 
@@ -1303,6 +1339,7 @@ describe("config cli", () => {
 
       expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
       expect(parseLastLogPayload()).toBe(18789);
+      expect(mockExit).not.toHaveBeenCalled();
     });
 
     it("redacts sensitive values", async () => {
@@ -1358,19 +1395,64 @@ describe("config cli", () => {
       expect(mockWriteStdout).toHaveBeenCalledWith("60\n");
     });
 
-    it("outputs JSON error to stdout when path is not found and --json is set", async () => {
+    it.each([
+      {
+        name: "valid but unset schema path",
+        path: "gateway.bind",
+        message:
+          "Config path is valid but unset: gateway.bind. The runtime default applies until you set an authored value with openclaw config set gateway.bind <value>.",
+      },
+      {
+        name: "valid but unset array path",
+        path: "models.providers.example.models[0].id",
+        message:
+          "Config path is valid but unset: models.providers.example.models[0].id. The runtime default applies until you set an authored value with openclaw config set 'models.providers.example.models[0].id' <value>.",
+      },
+      {
+        name: "unknown path",
+        path: "nonexistent.path",
+        message:
+          "Unknown config path: nonexistent.path. Run openclaw config schema to inspect valid paths.",
+      },
+    ])("reports a $name to the operator", async (testCase) => {
       setGatewaySnapshot();
 
-      await expect(
-        runConfigCommand(["config", "get", "nonexistent.path", "--json"]),
-      ).rejects.toThrow(ExitError);
+      await expect(runConfigCommand(["config", "get", testCase.path])).rejects.toThrow(ExitError);
+
+      expectErrorIncludes(testCase.message);
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        name: "valid but unset schema path",
+        path: "gateway.bind",
+        message:
+          "Config path is valid but unset: gateway.bind. The runtime default applies until you set an authored value with openclaw config set gateway.bind <value>.",
+      },
+      {
+        name: "unknown path",
+        path: "nonexistent.path",
+        message:
+          "Unknown config path: nonexistent.path. Run openclaw config schema to inspect valid paths.",
+      },
+    ])("outputs a JSON error for a $name", async (testCase) => {
+      setGatewaySnapshot();
+
+      await expect(runConfigCommand(["config", "get", testCase.path, "--json"])).rejects.toThrow(
+        ExitError,
+      );
 
       expect(mockError).not.toHaveBeenCalled();
-      const payload = parseLastLogPayload() as { error: { type: string; message: string } };
-      expect(payload.error).toEqual({
-        type: "cli_error",
-        message: "Config path not found: nonexistent.path",
+      expect(parseLastLogPayload()).toEqual({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: testCase.message,
+        },
       });
+      expect(mockExit).toHaveBeenCalledWith(1);
     });
 
     it.each([
@@ -4151,7 +4233,7 @@ describe("config cli", () => {
       ]);
     });
 
-    it("treats unsetting a runtime-only default shown by config get as an authored no-op", async () => {
+    it("fails when unsetting a runtime-only default shown by config get", async () => {
       const resolved = {
         agents: {
           defaults: {
@@ -4179,10 +4261,12 @@ describe("config cli", () => {
       mockLog.mockClear();
       setSnapshot(resolved, runtimeMerged);
 
-      await runConfigCommand(["config", "unset", aliasPath]);
+      await expect(runConfigCommand(["config", "unset", aliasPath])).rejects.toThrow(ExitError);
 
-      expectLogIncludes("No change");
-      expect(mockError).not.toHaveBeenCalled();
+      expectLogExcludes("No change");
+      expectErrorIncludes(
+        `Config path not found in authored config: ${aliasPath}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use openclaw config set <path> <value> to override the inherited value.`,
+      );
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
 
       setSnapshot(resolved, runtimeMerged);
@@ -4202,6 +4286,28 @@ describe("config cli", () => {
         ],
       });
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("reports No change when removing a normalized duplicate leaves config unchanged", async () => {
+      const retired = "google/gemini-3-pro-preview";
+      const canonical = "google/gemini-3.1-pro-preview";
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              [retired]: { alias: "gemini" },
+              [canonical]: { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", `agents.defaults.models["${retired}"]`]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expectLogIncludes("No change");
     });
 
     it("validates existing refs when unset dry-run removes all secret providers", async () => {

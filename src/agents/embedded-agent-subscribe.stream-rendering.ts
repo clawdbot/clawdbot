@@ -581,6 +581,8 @@ export function createStreamRendering({
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
     state.thinkingTagStream = createThinkingTagStreamState();
+    state.deltaBufferIsCommentary = false;
+    state.hasFlushedPartialText = false;
     state.blockBuffer = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();

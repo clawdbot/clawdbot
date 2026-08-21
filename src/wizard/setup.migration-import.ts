@@ -15,6 +15,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
+import { runWizardWithPromptNavigationScope } from "./navigation-prompter.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
 import {
@@ -180,7 +181,7 @@ export async function listSetupMigrationOptions(params: {
   for (const detection of params.detections) {
     addOption({
       providerId: detection.providerId,
-      label: detection.label,
+      label: t("wizard.migration.importFrom", { source: detection.label }),
       ...(detection.source || detection.message
         ? { hint: detection.source ?? detection.message }
         : {}),
@@ -189,14 +190,14 @@ export async function listSetupMigrationOptions(params: {
   for (const provider of providers) {
     addOption({
       providerId: provider.id,
-      label: provider.label,
+      label: t("wizard.migration.importFrom", { source: provider.label }),
       hint: provider.description ?? t("wizard.migration.sourcePathHint"),
     });
   }
   for (const provider of resolveManifestSetupMigrationProviders(params.baseConfig)) {
     addOption({
       providerId: provider.providerId,
-      label: provider.label,
+      label: t("wizard.migration.importFrom", { source: provider.label }),
       hint: provider.description ?? t("wizard.migration.sourcePathHint"),
     });
   }
@@ -209,7 +210,8 @@ async function selectSetupMigrationProvider(params: {
   baseConfig: OpenClawConfig;
   detections: readonly SetupMigrationDetection[];
   prompter: WizardPrompter;
-}): Promise<string> {
+  allowBack: boolean;
+}): Promise<string | undefined> {
   const options = await listSetupMigrationOptions({
     baseConfig: params.baseConfig,
     detections: params.detections,
@@ -223,9 +225,9 @@ async function selectSetupMigrationProvider(params: {
   if (options.length === 0) {
     throw new Error("No migration providers found.");
   }
-  const providerId =
-    requestedProviderId ||
-    (await params.prompter.select({
+  let providerId = requestedProviderId;
+  if (!providerId) {
+    const prompt = {
       message: t("wizard.migration.source"),
       options: options.map((option) => ({
         value: option.providerId,
@@ -233,7 +235,20 @@ async function selectSetupMigrationProvider(params: {
         ...(option.hint ? { hint: option.hint } : {}),
       })),
       initialValue: params.detections[0]?.providerId ?? options[0]?.providerId,
-    }));
+    };
+    if (!params.allowBack) {
+      params.prompter.disableBackNavigation?.();
+      return await params.prompter.select(prompt);
+    }
+    const selection = await runWizardWithPromptNavigationScope(
+      params.prompter,
+      async (prompter) => await prompter.select(prompt),
+    );
+    if (selection.status === "back") {
+      return undefined;
+    }
+    providerId = selection.value;
+  }
   if (!options.some((option) => option.providerId === providerId)) {
     throw new Error(
       `Migration provider "${providerId}" is not installed or bundled. Install it before starting the transactional import.`,
@@ -303,8 +318,9 @@ export async function runSetupMigrationImport(params: {
     config: OpenClawConfig,
     expectedConfig: OpenClawConfig,
   ) => Promise<OpenClawConfig>;
+  allowProviderBack?: boolean;
   continueOnboarding?: boolean;
-}): Promise<Awaited<ReturnType<typeof finalizeSetupMigrationPromotion>>> {
+}): Promise<{ kind: "back" } | Awaited<ReturnType<typeof finalizeSetupMigrationPromotion>>> {
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },
@@ -323,7 +339,12 @@ export async function runSetupMigrationImport(params: {
     baseConfig: params.baseConfig,
     detections: params.detections,
     prompter: params.prompter,
+    allowBack: params.allowProviderBack === true,
   });
+  if (!providerId) {
+    return { kind: "back" };
+  }
+  params.prompter.disableBackNavigation?.();
   const workspaceInput =
     params.opts.workspace ??
     (params.opts.nonInteractive

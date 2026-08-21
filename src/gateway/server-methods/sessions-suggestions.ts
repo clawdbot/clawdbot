@@ -37,6 +37,8 @@ import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
+  TYPING_PREVIEW_THROTTLE_MS,
+  TYPING_THROTTLE_MS,
   updateTypingConnections,
 } from "./session-typing-state.js";
 import {
@@ -530,7 +532,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     respond(true, { suggestion: projected });
   },
 
-  "session.typing": ({ params, respond, client, context }) => {
+  "session.typing": ({ params: requestParams, respond, client, context }) => {
+    const params =
+      typeof requestParams.preview === "string"
+        ? {
+            ...requestParams,
+            preview: Array.from(requestParams.preview.trim()).slice(0, 400).join(""),
+          }
+        : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
@@ -574,10 +583,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
-    const effectiveTyping = updateTypingConnections({
+    const { typing: effectiveTyping, preview } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
+      ...(params.typing && params.preview ? { preview: params.preview } : {}),
       now,
     });
     if (!params.typing && effectiveTyping) {
@@ -587,6 +597,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,
+      signature: `${effectiveTyping}\0${preview ?? ""}`,
+      intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
       now,
       emit: () => {
         const current = resolveSessionSharingTarget({
@@ -619,6 +631,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           agentId: target.agentId,
           actor,
           typing: effectiveTyping,
+          ...(preview ? { preview } : {}),
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {

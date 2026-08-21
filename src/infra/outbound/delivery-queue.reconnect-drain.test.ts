@@ -34,10 +34,16 @@ const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const migrateLegacyPendingOutboundDeliveriesMock = vi.hoisted(() =>
+  vi.fn(async () => ({ moved: 0, skipped: 0, remaining: 0 })),
+);
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
+}));
+vi.mock("./delivery-queue-migration.js", () => ({
+  migrateLegacyPendingOutboundDeliveries: migrateLegacyPendingOutboundDeliveriesMock,
 }));
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
@@ -152,6 +158,26 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
     resolveOutboundChannelMessageAdapterMock.mockReset();
+    migrateLegacyPendingOutboundDeliveriesMock.mockClear();
+  });
+
+  it("keeps one-time migration out of repeated canonical drains", async () => {
+    const drain = () =>
+      drainPendingDeliveriesCore({
+        drainKey: "gateway:outbound",
+        logLabel: "Outbound delivery retry",
+        cfg: stubCfg,
+        log: createRecoveryLog(),
+        stateDir: tmpDir,
+        deliver: vi.fn<DeliverFn>(),
+        selectEntry: () => ({ match: true }),
+      });
+
+    await drain();
+    await drain();
+    await drain();
+
+    expect(migrateLegacyPendingOutboundDeliveriesMock).not.toHaveBeenCalled();
   });
 
   it("drains entries that failed with 'no listener' error", async () => {

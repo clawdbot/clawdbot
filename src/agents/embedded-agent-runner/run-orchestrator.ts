@@ -222,7 +222,9 @@ async function runEmbeddedAgentInternal(
         provider: params.provider,
         model: params.model,
       });
-      const requestedHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const requestedHarnessRuntime =
+        explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
       const runtimePluginFallbacksOverride =
         params.modelFallbacksOverride ??
         resolveRunModelFallbacksOverride({
@@ -239,13 +241,16 @@ async function runEmbeddedAgentInternal(
         });
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
+        agentId: requestedWorkspaceResolution.agentId,
         manifestPlugins: pluginMetadataSnapshot.plugins,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
         fallbacksOverride: runtimePluginFallbacksOverride,
-      }).map((candidate) =>
-        requestedHarnessRuntime
+      }).map((candidate, index) =>
+        requestedHarnessRuntime &&
+        // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+        (index === 0 || explicitHarnessRuntime)
           ? {
               provider: candidate.provider,
               modelId: candidate.model,

@@ -19,7 +19,7 @@ internal fun CoroutineScope.createChatController(
   cacheScope: () -> ChatCacheScope? = { null },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
-  gatewayAdvertisesProgressCard: () -> Boolean? = { null },
+  gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -48,7 +48,7 @@ internal fun CoroutineScope.createChatController(
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
-    gatewayAdvertisesProgressCard = gatewayAdvertisesProgressCard,
+    gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
@@ -61,6 +61,7 @@ internal class ChatControllerTestSetup(
 ) {
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { null }
+  var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -82,6 +83,7 @@ internal class ChatControllerTestSetup(
   val controller: ChatController by lazy {
     scope.createChatController(
       cacheScope = cacheScope,
+      gatewayAdvertisesMethod = gatewayAdvertisesMethod,
       recordModelRecent = recordModelRecent,
       requestGateway = { method, paramsJson ->
         requests += method to paramsJson

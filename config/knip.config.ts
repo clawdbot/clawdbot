@@ -144,6 +144,8 @@ const rootEntries = [
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/release-plan-producer-core.mts!",
+  "scripts/release-plan-producer.mts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
   // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
@@ -152,7 +154,6 @@ const rootEntries = [
   // Docker/manual E2E executables and their nested assertion/probe entrypoints.
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
-  "src/audit/audit-event-writer.worker.ts!",
   // Loaded by URL from the SQLite lifecycle archive owner.
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
@@ -266,7 +267,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
 
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
-  "@anthropic-ai/vertex-sdk",
   "@google/genai",
   "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
@@ -274,16 +274,11 @@ const rootBundledPluginRuntimeDependencies = [
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
-  "@slack/bolt",
-  "@slack/types",
-  "@slack/web-api",
   "grammy",
   "linkedom",
   "minimatch",
   "node-edge-tts",
-  "openshell",
   "clawpdf",
-  "tokenjuice",
 ] as const;
 
 // Root installation and build workflows deliberately mirror these dependencies from their
@@ -581,6 +576,7 @@ const config = {
         "src/index.ts!",
         "src/agent-id.ts!",
         "src/boolean-coercion.ts!",
+        "src/browser-error-runtime.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
         "src/json-coercion.ts!",
@@ -683,6 +679,8 @@ const config = {
       // Copied as executable runtime internals by the package artifact manifest.
       "src/runtime-internals/mcp-command-line.mjs!",
       "src/runtime-internals/mcp-proxy.mjs!",
+      // Spawned by the real-process elicitation regression through CODEX_PATH.
+      "test/fixtures/codex-app-server.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([

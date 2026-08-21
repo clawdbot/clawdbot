@@ -69,9 +69,9 @@ export type GatewayGmailRestartAbortController = {
 export type GatewayHotReloadPublication = {
   publish: (commit: () => Promise<void>, isCommitted: () => boolean) => Promise<void>;
   isCurrent: () => boolean;
+  sourceConfig: OpenClawConfig;
   prepareRestartRuntimeConfig?: () => Promise<OpenClawConfig>;
   runtimeEnv?: NodeJS.ProcessEnv;
-  sourceConfig?: OpenClawConfig;
 };
 
 export type GatewayRestartTransactionState = "pending" | "committed" | "rejected";
@@ -142,6 +142,10 @@ export type GatewayPluginReloadResult = {
 export type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  /** Kept across cron rebuilds so a hot reload does not drop scheduler gateway context. */
+  resolveGatewayContext?: () =>
+    | import("./server-methods/types.js").GatewayRequestContext
+    | undefined;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
@@ -151,12 +155,14 @@ export type GatewayReloadHandlerParams = {
   stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
     changedPaths: readonly string[];
     beforeReplace: (
       channels: ReadonlySet<ChannelKind>,
       accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
     ) => Promise<void>;
-    commitRuntime: () => Promise<void>;
+    commitRuntime: (onCommit?: () => void) => Promise<void>;
+    onReplacementTeardownFailure: (error: unknown) => void;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
@@ -183,6 +189,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
   "assertRestartReady" | "createHealthMonitor" | "logReload"
 > & {
+  configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;

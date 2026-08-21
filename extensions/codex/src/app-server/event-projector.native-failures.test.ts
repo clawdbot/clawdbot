@@ -462,11 +462,7 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       }),
     );
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "bash",
-      error: "first failed",
-      actionFingerprint: expect.stringContaining(firstCommand),
-    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
 
     await projector.handleNotification(
       forCurrentTurn("item/completed", {

@@ -9,7 +9,8 @@ import {
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatSlackError } from "./errors.js";
 import {
@@ -76,12 +77,6 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
       (current as { cause?: unknown }).cause;
   }
   return false;
-}
-
-function delaySlackDnsRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt));
-  });
 }
 
 function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
@@ -197,20 +192,18 @@ export async function withSlackDnsRequestRetry<T>(
   operation: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  for (const attempt of Array.from({ length: SLACK_DNS_RETRY_ATTEMPTS + 1 }, (_, index) => index)) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt >= SLACK_DNS_RETRY_ATTEMPTS || !hasSlackDnsRequestSignal(err)) {
-        throw err;
-      }
+  return await retryAsync(fn, {
+    attempts: SLACK_DNS_RETRY_ATTEMPTS + 1,
+    minDelayMs: 0,
+    shouldRetry: hasSlackDnsRequestSignal,
+    delayMs: ({ attempt }) => SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt),
+    onRetry: ({ attempt }) => {
       logVerbose(
-        `slack send: retrying ${operation} after transient DNS request error (${attempt + 1}/${SLACK_DNS_RETRY_ATTEMPTS})`,
+        `slack send: retrying ${operation} after transient DNS request error (${attempt}/${SLACK_DNS_RETRY_ATTEMPTS})`,
       );
-      await delaySlackDnsRetry(attempt + 1);
-    }
-  }
-  throw new Error("unreachable Slack DNS retry loop exit");
+    },
+    sleep: (delayMs) => sleepWithAbort(delayMs),
+  });
 }
 
 export function requireSlackPostMessageTimestamp(

@@ -1,5 +1,8 @@
 import { html, nothing } from "lit";
-import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  ProgressCard,
+  SessionObserverDigest,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
@@ -24,6 +27,7 @@ import {
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
+  isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -35,6 +39,7 @@ type ChatPaneLayoutRenderParams = {
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
   progressCardInRail: boolean;
+  onDismissProgressCard?: (card: ProgressCard) => void;
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
@@ -57,6 +62,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       board,
       sidebarLayout,
       progressCardInRail,
+      onDismissProgressCard,
       sessionWorkspace,
       backgroundTasks,
       chatProps,
@@ -76,6 +82,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       catalog,
       agentWorkspace,
       workspaceGit,
+      sidebarLayout,
     );
     const chat = renderChat({
       ...chatProps,
@@ -89,9 +96,18 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
+    const browserPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
+    const desktopPresented =
+      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
+    const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
+      themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
+      browserPresented,
+      desktopPresented,
+      desktopRefreshOnPresentation,
       desktopAvailable,
       hasBoard: board.hasBoard,
       chat,
@@ -114,6 +130,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
       progressCard: progressCardInRail ? this.progressCard.card : null,
+      onDismissProgressCard,
       companion: companionThread,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
@@ -140,7 +157,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
         resizePanel: (columnId, size) =>
           this.commitSidebarPanelResize(sidebarLayout, columnId, size),
-        setPanelOpen: (open) => this.setChatSidePanelOpen(open),
+        setPanelOpen: (open) => this.setChatSidePanelOpen(open, sidebarLayout),
       }),
       layout: sidebarLayout,
       panelDefinitions,

@@ -164,6 +164,7 @@ export type SessionEntryLifecycleMutationResult = {
   beforeCount: number;
   removedEntries: number;
   removedSessionKeys: string[];
+  archived: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;

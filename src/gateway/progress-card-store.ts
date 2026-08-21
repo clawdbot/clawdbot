@@ -14,7 +14,7 @@ export type ProgressCardStore = {
   get(sessionKey: string): ProgressCard | null;
   put(
     sessionKey: string,
-    input: { markdown?: string; steps?: ProgressCardStep[] },
+    input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
   ): { card: ProgressCard | null };
 };
 

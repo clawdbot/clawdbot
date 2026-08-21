@@ -11,7 +11,7 @@ import "./tooltip.ts";
  * Desktop hides it entirely (layout.css) — the sidebar owns navigation there. */
 class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
-  @property({ attribute: false }) basePath = "";
+  @property({ attribute: false }) resourceBasePath = "";
   @property({ attribute: false }) onToggleDrawer!: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette!: () => void;
 
@@ -38,7 +38,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"
-                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.resourceBasePath)}
                 alt=""
                 aria-hidden="true"
               />

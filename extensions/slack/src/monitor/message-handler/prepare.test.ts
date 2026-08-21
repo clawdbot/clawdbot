@@ -23,7 +23,6 @@ import {
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
-import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -101,7 +100,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   beforeEach(() => {
-    resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
     logVerboseMock.mockClear();
@@ -1313,11 +1311,16 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectFollowUpMentioned?: boolean;
   };
 
+  let threadRouteScenarioSequence = 0;
+
   async function runThreadRouteScenario(scenario: ThreadRouteScenario) {
     const implicit = scenario.mentionType === "implicit";
     const channelId = implicit ? "C0AGG76CP1S" : "C0AHZFCAS1K";
     const userId = implicit ? "U_TRAJCHE" : "U_BEK";
-    const rootTs = implicit ? "1778073105.769279" : "1777244692.409919";
+    threadRouteScenarioSequence += 1;
+    const rootTs = `${implicit ? "1778073105" : "1777244692"}.${String(
+      700_000 + threadRouteScenarioSequence,
+    ).padStart(6, "0")}`;
     const replyToMode = implicit ? "first" : "all";
     const rootText = implicit
       ? "What day is it?"
@@ -3082,6 +3085,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
     const prepared = await prepareThreadMessage(slackCtx, {
+      channel: "CFIRSTTHREADTURN1",
       text: "current message",
       ts: "101.000",
     });
@@ -3212,7 +3216,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
   it("uses room users allowlist for thread context filtering", async () => {
     const { prepared, replies } = await prepareThreadContextAllowlistCase({
-      channel: "C123",
+      channel: "CROOMALLOWLIST1",
       channelType: "channel",
       user: "U1",
       userName: "Alice",
@@ -3223,7 +3227,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       followUpTs: "100.800",
       currentTs: "101.000",
       channelsConfig: {
-        C123: {
+        CROOMALLOWLIST1: {
           users: ["U1"],
           requireMention: false,
         },
@@ -3915,6 +3919,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
       const prepared = await prepareThreadMessage(slackCtx, {
+        channel: "C123",
         text: "bound reply",
         ts: "101.000",
         thread_ts: "100.000",
@@ -3969,6 +3974,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx,
       createThreadAccount("foundation"),
       createThreadReplyMessage({
+        channel: "CFOUNDATIONTHREAD1",
         text: "bound thread reply",
         ts: "101.000",
         thread_ts: "100.000",

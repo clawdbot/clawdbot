@@ -1410,6 +1410,7 @@ describe("codex command", () => {
       entry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        model: "gpt-5.6-sol",
         permissionMode: "full",
       },
     });
@@ -1423,7 +1424,7 @@ describe("codex command", () => {
       {
         threadId: "thread-status",
         cwd: tempDir,
-        model: "gpt-5.5",
+        model: "codex-execution-model",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         serviceTier: "priority",
@@ -1432,7 +1433,7 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(createSandboxedContext("model", sessionFile), { deps: createDeps() }),
-    ).resolves.toEqual({ text: "Codex model: gpt-5.5" });
+    ).resolves.toEqual({ text: "Codex model: gpt-5.6-sol" });
     await expect(
       handleCodexCommand(createSandboxedContext("fast status", sessionFile), {
         deps: createDeps(),

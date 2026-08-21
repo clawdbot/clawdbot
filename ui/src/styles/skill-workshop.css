@@ -26,15 +26,6 @@
   flex-shrink: 0;
 }
 
-/* Hub tab strip stays fixed; the board scrolls inside the panel below it.
-   The board is full-width, so the strip skips the settings-column centering. */
-.content--skill-workshop .plugins-hub-tabs-row {
-  flex-shrink: 0;
-  max-width: none;
-  margin: 0;
-  padding-inline: 0;
-}
-
 .sw-hub-panel {
   display: flex;
   flex-direction: column;
@@ -62,6 +53,16 @@
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
+}
+
+.sw-hub-panel::part(base) {
+  gap: var(--space-3);
+}
+
+.sw-workshop-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .sw-hub-panel .skill-workshop {
@@ -139,7 +140,9 @@
 /* ── Triage two-pane card ───────────────────────────────────────────── */
 .sw-triage {
   display: grid;
-  grid-template-columns: minmax(260px, var(--sw-queue-width, 360px)) 8px minmax(0, 1fr);
+  grid-template-columns:
+    minmax(260px, var(--sw-queue-width, 360px)) var(--resize-handle-size)
+    minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -158,20 +161,6 @@
   min-width: 0;
   min-height: 0;
   align-self: stretch;
-}
-
-.sw-queue-resizer {
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  cursor: col-resize;
-  min-width: 8px;
-  touch-action: none;
-}
-
-.sw-queue-resizer:hover,
-.sw-queue-resizer:focus-visible {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  outline: none;
 }
 
 .sw-queue__search {

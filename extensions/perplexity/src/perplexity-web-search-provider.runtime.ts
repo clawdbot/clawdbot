@@ -140,10 +140,6 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
   };
 }
 
-async function readPerplexityJsonResponse<T>(response: Response, label: string): Promise<T> {
-  return await readProviderJsonResponse<T>(response, label);
-}
-
 function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
@@ -253,7 +249,7 @@ async function runPerplexitySearchApi(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity Search");
       }
-      const data = await readPerplexityJsonResponse<PerplexitySearchApiResponse>(
+      const data = await readProviderJsonResponse<PerplexitySearchApiResponse>(
         res,
         "Perplexity Search",
       );
@@ -301,9 +297,15 @@ async function runPerplexitySearch(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity");
       }
-      const data = await readPerplexityJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
+      const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        throw new Error(
+          "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+        );
+      }
       return {
-        content: data.choices?.[0]?.message?.content ?? "No response",
+        content,
         citations: extractPerplexityCitations(data),
       };
     },
@@ -465,7 +467,7 @@ export async function executePerplexitySearch(
     runtime.baseUrl,
     runtime.model,
     query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+    structured ? resolveSearchCount(count, DEFAULT_SEARCH_COUNT) : undefined,
     country,
     language,
     freshness,
@@ -558,5 +560,4 @@ export const testing = {
   resolvePerplexityTransport,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
-  readPerplexityJsonResponse,
 } as const;

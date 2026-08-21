@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { completeWithPreparedSimpleCompletionModel } from "openclaw/plugin-sdk/simple-completion-runtime";
+import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
@@ -17,7 +18,7 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
-// Audited against @openai/codex 0.147.0 (rust-v0.147.0). These exact denies
+// Audited against @openai/codex 0.148.0 (rust-v0.148.0). These exact denies
 // either have no Codex-native equivalent or are enforced by the harness. Keep
 // the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
@@ -203,6 +204,19 @@ export function createCodexAppServerAgentHarness(
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
+      // Codex owns discovery and auth for new first-party models. Only trust that
+      // native account when no authored transport or host credential is involved.
+      const nativeAccountOwnsUnobservedModel =
+        provider === "openai" &&
+        ctx.requestedRuntime === "codex" &&
+        Boolean(ctx.modelId?.trim()) &&
+        preparedAuth?.source === "harness" &&
+        preparedAuth.mode === undefined &&
+        preparedAuth.requirement === undefined &&
+        ctx.modelProvider?.api === undefined &&
+        ctx.modelProvider?.baseUrl === undefined &&
+        ctx.modelProvider?.azureApiVersion === undefined &&
+        ctx.modelProvider?.request === undefined;
       if (runtimePolicy) {
         const compatible = runtimePolicy.compatibleIds.some(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
@@ -213,7 +227,7 @@ export function createCodexAppServerAgentHarness(
             reason: "Codex cannot reproduce the prepared provider route",
           };
         }
-      } else if (ctx.modelProvider && provider !== "codex") {
+      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
         return {
           supported: false,
           reason: "provider route compatibility with Codex is not declared",
@@ -250,6 +264,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
         pluginConfig: resolveAttemptPluginConfig(params.config),
+        runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
         nativeHookRelay: { enabled: true },
       });
     },
@@ -288,6 +303,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });
     },

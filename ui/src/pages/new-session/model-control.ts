@@ -20,11 +20,13 @@ import {
   type ChatModelCatalogState,
 } from "../chat/components/chat-model-controls.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 type GatewayAgentRuntime = NonNullable<GatewayAgentRow["agentRuntime"]> & {
   cloudPlacementSupported?: boolean;
+  devicePlacementSupported?: boolean;
 };
 type NewSessionMetadataStatus = ChatModelCatalogState["status"];
 type NewSessionMetadataState = {
@@ -509,6 +511,31 @@ export class NewSessionModelControl {
       return undefined;
     }
     return runtimeId === runtime.id ? runtime : { ...runtime, id: runtimeId };
+  }
+
+  devicePlacementUnsupportedReason(): string | undefined {
+    return this.resolveAgentRuntime({
+      agent: this.pendingAgent,
+      context: this.pendingContext,
+    })?.devicePlacementSupported === false
+      ? t("newSession.deviceRuntimeUnsupported")
+      : undefined;
+  }
+
+  cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
+    const runtime = this.resolveAgentRuntime({
+      agent: this.pendingAgent,
+      context: this.pendingContext,
+    });
+    if (runtime?.cloudPlacementSupported === false) {
+      return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+    }
+    return runtime &&
+      profile?.executionMode &&
+      runtime.cloudPlacementExecutionMode &&
+      profile.executionMode !== runtime.cloudPlacementExecutionMode
+      ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+      : undefined;
   }
 
   render(options: {
