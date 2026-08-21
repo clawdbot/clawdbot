@@ -303,23 +303,6 @@ async function finalizeCronCompletionAnnouncement(params: {
   }
 }
 
-// Only an interval monitor tick may decline the session cron targeting resolved for it.
-// An untargeted tick resolves to `main`, which would otherwise shadow
-// `agents.*.heartbeat.session` on every tick. Event wakes keep the resolved key: a
-// main-session cron job enqueues its system event there, so the run has to read that
-// same transcript to consume it.
-function resolveHeartbeatWakeSessionKey(
-  source: string | undefined,
-  requestedSessionKey: string | null | undefined,
-  resolvedSessionKey: string | undefined,
-): string | undefined {
-  if (source !== "interval") {
-    return resolvedSessionKey;
-  }
-  const requested = typeof requestedSessionKey === "string" ? requestedSessionKey.trim() : "";
-  return requested ? resolvedSessionKey : undefined;
-}
-
 /** Map internal CronJob to the public plugin SDK shape. */
 function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
   return {
@@ -782,12 +765,15 @@ export function buildGatewayCronService(params: {
         ...opts,
         preserveUntargeted: opts?.source !== "manual",
       });
+      // Monitor ticks choose agents.*.heartbeat.session in the runner; caller-targeted
+      // interval wakes keep their explicit session just like manual and event wakes.
+      const useConfiguredSession = opts?.source === "interval" && !opts.sessionKey?.trim();
       requestHeartbeat({
         source: opts?.source ?? "cron",
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey: resolveHeartbeatWakeSessionKey(opts?.source, opts?.sessionKey, sessionKey),
+        sessionKey: useConfiguredSession ? undefined : sessionKey,
         heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
         ...(opts?.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: opts.scheduledEveryMs }
@@ -809,7 +795,7 @@ export function buildGatewayCronService(params: {
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey: resolveHeartbeatWakeSessionKey(opts?.source, opts?.sessionKey, sessionKey),
+        sessionKey,
         // Preserve ownership across this adapter so the wake does not self-block on
         // the cron run that is awaiting it.
         owningCronJobMarker: opts?.owningCronJobMarker,
