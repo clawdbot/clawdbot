@@ -216,7 +216,9 @@ describe("resolveBootstrapFilesForRun", () => {
   beforeEach(async () => {
     clearInternalHooks();
     resetLegacyWorkspaceStateCheckForTest();
-    memoryRuntimeMocks.classifyWorkspacePaths.mockReset().mockResolvedValue(undefined);
+    memoryRuntimeMocks.classifyWorkspacePaths
+      .mockReset()
+      .mockResolvedValue({ status: "unavailable" });
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-bootstrap-state-",
@@ -228,10 +230,13 @@ describe("resolveBootstrapFilesForRun", () => {
     await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "tainted memory", "utf8");
     await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "trusted user", "utf8");
     registerNamedBootstrapFileHook(DEFAULT_MEMORY_FILENAME);
-    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue([
-      { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "untrusted" },
-      { relativePath: DEFAULT_USER_FILENAME, originClass: "owner" },
-    ]);
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [
+        { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "untrusted" },
+        { relativePath: DEFAULT_USER_FILENAME, originClass: "owner" },
+      ],
+    });
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -247,9 +252,10 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-missing-provenance-");
     await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
     await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
-    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue([
-      { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "agent" },
-    ]);
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [{ relativePath: DEFAULT_MEMORY_FILENAME, originClass: "agent" }],
+    });
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -259,6 +265,27 @@ describe("resolveBootstrapFilesForRun", () => {
 
     expect(files.map((file) => file.name)).toContain(DEFAULT_MEMORY_FILENAME);
     expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("excludes root memory for a selected runtime without provenance support", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-unsupported-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({ status: "unsupported" });
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+    expect(warnings).toContain(
+      "excluding automatic memory context: selected memory runtime does not support provenance classification",
+    );
   });
   afterEach(async () => {
     clearInternalHooks();

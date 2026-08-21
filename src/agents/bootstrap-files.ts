@@ -259,9 +259,9 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   const relativePaths = candidates.map((file) =>
     path.relative(resolveUserPath(params.workspaceDir), file.path).replaceAll(path.sep, "/"),
   );
-  let classifications: Array<{ relativePath: string; originClass: string }> | undefined;
+  let classificationResult: Awaited<ReturnType<typeof classifyActiveMemoryWorkspacePaths>>;
   try {
-    classifications = await classifyActiveMemoryWorkspacePaths({
+    classificationResult = await classifyActiveMemoryWorkspacePaths({
       cfg: params.config,
       agentId,
       workspaceDir: params.workspaceDir,
@@ -271,10 +271,18 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
     params.warn?.(`excluding automatic memory context: ${String(error)}`);
     return candidates;
   }
-  if (!classifications) {
+  if (classificationResult.status === "unavailable") {
     return [];
   }
-  const origins = new Map(classifications.map((entry) => [entry.relativePath, entry.originClass]));
+  if (classificationResult.status === "unsupported") {
+    params.warn?.(
+      "excluding automatic memory context: selected memory runtime does not support provenance classification",
+    );
+    return candidates;
+  }
+  const origins = new Map(
+    classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
+  );
   return candidates.filter(
     (_file, index) =>
       !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),

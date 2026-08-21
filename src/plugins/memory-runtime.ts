@@ -215,15 +215,26 @@ export async function authorizeActiveMemorySearchHits(
 /** Classifies workspace memory paths through the selected memory plugin's provenance owner. */
 export async function classifyActiveMemoryWorkspacePaths(
   params: WorkspaceMemoryPathClassification,
-): Promise<Array<{ relativePath: string; originClass: string }> | undefined> {
+): Promise<
+  | { status: "unavailable" }
+  | { status: "unsupported" }
+  | {
+      status: "classified";
+      classifications: Array<{ relativePath: string; originClass: string }>;
+    }
+> {
   const owner = ensureMemoryRuntime(params);
-  if (!owner?.runtime.classifyWorkspaceMemoryPaths) {
-    return undefined;
+  if (!owner) {
+    return { status: "unavailable" };
   }
-  return await withMemoryRuntimeOwner(
+  if (!owner.runtime.classifyWorkspaceMemoryPaths) {
+    return { status: "unsupported" };
+  }
+  const classifications = await withMemoryRuntimeOwner(
     owner,
     async (runtime) => await runtime.classifyWorkspaceMemoryPaths!(params),
   );
+  return { status: "classified", classifications };
 }
 
 /** Resolves current memory backend config without constructing a manager. */
