@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolvePluginContributionOwners: vi.fn(),
   getPluginRecord: vi.fn(),
   isPluginEnabled: vi.fn(),
-  getRemoteModelCatalogOverlay: vi.fn(),
+  getRemoteModelCatalogProviderOverlay: vi.fn(),
 }));
 
 vi.mock("../../plugins/plugin-registry-contributions.js", () => ({
@@ -24,7 +24,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../../model-catalog/remote-overlay.js", () => ({
-  getRemoteModelCatalogOverlay: mocks.getRemoteModelCatalogOverlay,
+  getRemoteModelCatalogProviderOverlay: mocks.getRemoteModelCatalogProviderOverlay,
 }));
 
 const moonshotPlugin = {
@@ -95,7 +95,7 @@ const anthropicRuntimeAugmentPlugin = {
 describe("loadStaticManifestCatalogRowsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getRemoteModelCatalogOverlay.mockReturnValue(undefined);
+    mocks.getRemoteModelCatalogProviderOverlay.mockReturnValue(undefined);
   });
 
   it("loads only static manifest catalog rows without a provider filter", async () => {
@@ -175,10 +175,8 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       manifestRegistry,
       plugins: manifestRegistry.plugins,
     };
-    mocks.getRemoteModelCatalogOverlay.mockReturnValue({
-      openai: {
-        models: [{ id: "gpt-refreshed", name: "Refreshed GPT" }],
-      },
+    mocks.getRemoteModelCatalogProviderOverlay.mockReturnValue({
+      models: [{ id: "gpt-refreshed", name: "Refreshed GPT" }],
     });
     mocks.getPluginRecord.mockReturnValue({ pluginId: "openai" });
     mocks.isPluginEnabled.mockReturnValue(true);
