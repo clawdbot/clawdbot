@@ -2,6 +2,7 @@ import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabili
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { transcodeAudioBuffer } from "../media/media-services.js";
+import { redactPiiText } from "../privacy/payload-redact.js";
 import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
@@ -232,12 +233,14 @@ export async function synthesizeSpeech(params: {
 
   const { cfg, config, persona, providers } = setup;
   const target = resolveTtsSynthesisTarget(params.channel);
+  // Privacy: redact PII from text before sending to TTS provider.
+  const privacyRedactedText = redactPiiText(params.text, cfg?.privacy);
   return await executeTtsProviderAttempts({
     cfg,
     config,
     persona,
     providers,
-    synthesisText: normalizeSpeechText(params.text),
+    synthesisText: normalizeSpeechText(privacyRedactedText),
     providerOverrides: params.overrides?.providerOverrides,
     timeoutMs: params.timeoutMs,
     target,

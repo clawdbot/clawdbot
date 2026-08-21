@@ -1,3 +1,4 @@
+import type { PrivacyConfig } from "../privacy/types.js";
 // Defines the top-level OpenClaw configuration type.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { TranscriptsConfig } from "../transcripts/config.js";
@@ -236,6 +237,8 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
+  /** Privacy controls: PII redaction, media blocking, at-rest encryption, system prompt masking. */
+  privacy?: PrivacyConfig;
 };
 
 /** Config input shape accepted before model provider defaults are fully materialized. */
