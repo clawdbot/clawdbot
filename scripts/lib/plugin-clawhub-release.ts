@@ -18,7 +18,11 @@ import {
   type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
-import { collectExtensionPackageJsonCandidates } from "./plugin-publication-candidates.ts";
+import {
+  collectExtensionPackageJsonCandidates,
+  hasPluginPublicationSharedAuthorityChanges,
+  PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+} from "./plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,
@@ -75,17 +79,10 @@ const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 const CLAWHUB_RELEASE_PLAN_CONCURRENCY = 8;
 const OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY = "openclaw/openclaw";
 const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
-const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
+const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
   ".github/actions/setup-node-env",
-  "package.json",
-  "pnpm-lock.yaml",
-  "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.mjs",
-  "scripts/lib/npm-publish-plan.mjs",
-  "scripts/lib/plugin-publication-candidates.ts",
-  "scripts/lib/plugin-publication-collector.ts",
-  "scripts/lib/release-version.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",
@@ -254,7 +251,8 @@ function collectPluginClawHubRelevantPathsFromGitRange(params: {
 }): string[] {
   return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, [
     "extensions",
-    ...CLAWHUB_SHARED_RELEASE_INPUT_PATHS,
+    ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+    ...CLAWHUB_RELEASE_AUTHORITY_PATHS,
   ]);
 }
 
@@ -273,10 +271,13 @@ function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
 }
 
 function hasSharedClawHubReleaseInputChanges(changedPaths: readonly string[]) {
-  return changedPaths.some((path) =>
-    CLAWHUB_SHARED_RELEASE_INPUT_PATHS.some(
-      (sharedPath) => path === sharedPath || path.startsWith(`${sharedPath}/`),
-    ),
+  return (
+    hasPluginPublicationSharedAuthorityChanges(changedPaths) ||
+    changedPaths.some((path) =>
+      CLAWHUB_RELEASE_AUTHORITY_PATHS.some(
+        (authorityPath) => path === authorityPath || path.startsWith(`${authorityPath}/`),
+      ),
+    )
   );
 }
 

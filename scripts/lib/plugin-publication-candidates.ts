@@ -5,6 +5,27 @@ import type {
   PublishablePluginPackageCandidate,
 } from "./plugin-publication-collector.ts";
 
+// Any change here can alter the package inventory for both registries. Range
+// selectors and workflow triggers must keep this closure in sync.
+export const PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "packages/normalization-core/src/string-coerce.ts",
+  "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/plugin-publication-candidates.ts",
+  "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/release-version.mjs",
+] as const;
+
+export function hasPluginPublicationSharedAuthorityChanges(paths: readonly string[]): boolean {
+  return paths.some((path) =>
+    PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS.some(
+      (authorityPath) => path === authorityPath || path.startsWith(`${authorityPath}/`),
+    ),
+  );
+}
+
 function readPluginPackageJson(absolutePath: string, repoPath: string): PluginPackageJson {
   let raw: string;
   try {

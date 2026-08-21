@@ -4,8 +4,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
-import { collectExtensionPackageJsonCandidates } from "./plugin-publication-candidates.ts";
 import {
+  collectExtensionPackageJsonCandidates,
+  hasPluginPublicationSharedAuthorityChanges,
+  PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+} from "./plugin-publication-candidates.ts";
+import {
+  assertUniquePublishablePluginPackageSources,
   collectPublishablePluginPackagesFromCandidates,
   type PluginPackageJson,
   type PublishablePluginPackage,
@@ -41,6 +46,11 @@ export type PluginReleaseSelectionMode = "selected" | "all-publishable";
 export type GitRangeSelection = {
   baseRef: string;
   headRef: string;
+};
+
+export type PluginNpmGitRangeSelection = {
+  changedExtensionIds: string[];
+  sharedAuthorityChanged: boolean;
 };
 
 type ParsedPluginReleaseArgs = {
@@ -219,6 +229,7 @@ export function resolveSelectedPublishablePluginPackages(params: {
   plugins: PublishablePluginPackage[];
   selection: string[];
 }): PublishablePluginPackage[] {
+  assertUniquePublishablePluginPackageSources(params.plugins, "Plugin selection");
   if (params.selection.length === 0) {
     return params.plugins;
   }
@@ -320,17 +331,19 @@ export function collectChangedPathsFromGitRange(params: {
     .map((path) => normalizeGitDiffPath(path));
 }
 
-export function collectChangedExtensionIdsFromGitRange(params: {
+export function collectPluginNpmGitRangeSelection(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
-}): string[] {
-  return collectChangedExtensionIdsFromPaths(
-    collectChangedPathsFromGitRange({
-      rootDir: params.rootDir,
-      gitRange: params.gitRange,
-      pathspecs: ["extensions"],
-    }),
-  );
+}): PluginNpmGitRangeSelection {
+  const changedPaths = collectChangedPathsFromGitRange({
+    rootDir: params.rootDir,
+    gitRange: params.gitRange,
+    pathspecs: ["extensions", ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS],
+  });
+  return {
+    changedExtensionIds: collectChangedExtensionIdsFromPaths(changedPaths),
+    sharedAuthorityChanged: hasPluginPublicationSharedAuthorityChanges(changedPaths),
+  };
 }
 
 export function resolveChangedPublishablePluginPackages(params: {
@@ -483,17 +496,19 @@ export function collectPluginReleasePlan(params?: {
   gitRange?: GitRangeSelection;
   npmDistTag?: "extended-stable";
 }): PluginReleasePlan {
-  const changedExtensionIds = params?.gitRange
-    ? collectChangedExtensionIdsFromGitRange({
+  const gitRangeSelection = params?.gitRange
+    ? collectPluginNpmGitRangeSelection({
         rootDir: params.rootDir,
         gitRange: params.gitRange,
       })
-    : [];
+    : undefined;
   const allPublishable = collectPublishablePluginPackages(params?.rootDir, {
     extensionIds:
-      params?.selectionMode === "all-publishable" || !params?.gitRange
+      params?.selectionMode === "all-publishable" ||
+      !gitRangeSelection ||
+      gitRangeSelection.sharedAuthorityChanged
         ? undefined
-        : changedExtensionIds,
+        : gitRangeSelection.changedExtensionIds,
     packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
     npmDistTag: params?.npmDistTag,
   });
@@ -505,11 +520,13 @@ export function collectPluginReleasePlan(params?: {
             plugins: allPublishable,
             selection: params.selection,
           })
-        : params?.gitRange
-          ? resolveChangedPublishablePluginPackages({
-              plugins: allPublishable,
-              changedExtensionIds,
-            })
+        : gitRangeSelection
+          ? gitRangeSelection.sharedAuthorityChanged
+            ? allPublishable
+            : resolveChangedPublishablePluginPackages({
+                plugins: allPublishable,
+                changedExtensionIds: gitRangeSelection.changedExtensionIds,
+              })
           : allPublishable;
 
   const explicitPublishSelection =

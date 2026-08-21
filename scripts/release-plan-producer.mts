@@ -332,17 +332,26 @@ function collectPackageInventory(
   if (typeof version !== "string" || !version) {
     throw new Error("candidate package.json version is required");
   }
-  const packages = new Map<string, { name: string; version: string; targets: Set<string> }>();
+  const packages = new Map<
+    string,
+    { name: string; source: string; version: string; targets: Set<string> }
+  >();
   const addPackage = (manifest: PackageManifest, targets: string[], source: string) => {
     if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
       throw new Error(`${source} must declare package name and version`);
     }
     const existing = packages.get(manifest.name);
+    if (existing && existing.source !== source) {
+      throw new Error(
+        `package inventory source mismatch for ${manifest.name}: ${existing.source} and ${source}`,
+      );
+    }
     if (existing && existing.version !== manifest.version) {
       throw new Error(`package inventory version mismatch for ${manifest.name}`);
     }
     const entry = existing ?? {
       name: manifest.name,
+      source,
       version: manifest.version,
       targets: new Set<string>(),
     };
@@ -398,6 +407,15 @@ function collectPackageInventory(
 
 function collectPlatformSources(workflowText: string) {
   const platforms = new Map<string, string>();
+  const addPlatform = (id: string, source: string) => {
+    const existing = platforms.get(id);
+    if (existing && existing !== source) {
+      throw new Error(
+        `${PUBLICATION_WORKFLOW_PATH} declares conflicting platform ${id}: ${existing} and ${source}`,
+      );
+    }
+    platforms.set(id, source);
+  };
   const promotionPattern = /promote_([a-z0-9_]+)_release_assets?\(\)\s*\{([\s\S]*?)^\s*\}/gmu;
   const dispatchPattern =
     /dispatch_workflow(?:_at_ref)?\s+(?:(?:"[^"]+"|'[^']+')\s+){0,2}([a-z0-9][a-z0-9-]+\.yml)/u;
@@ -407,7 +425,7 @@ function collectPlatformSources(workflowText: string) {
     if (!id || !workflowName) {
       throw new Error(`${PUBLICATION_WORKFLOW_PATH} has an invalid platform promotion function`);
     }
-    platforms.set(id, `.github/workflows/${workflowName}`);
+    addPlatform(id, `.github/workflows/${workflowName}`);
   }
   const workflow = parseYaml(workflowText) as {
     jobs?: Record<string, { uses?: unknown }>;
@@ -420,7 +438,7 @@ function collectPlatformSources(workflowText: string) {
     if (!match?.[1]) {
       throw new Error(`${PUBLICATION_WORKFLOW_PATH} has an invalid reusable publication workflow`);
     }
-    platforms.set(
+    addPlatform(
       jobId.slice("publish_".length).replaceAll("_", "-"),
       `.github/workflows/${match[1]}`,
     );

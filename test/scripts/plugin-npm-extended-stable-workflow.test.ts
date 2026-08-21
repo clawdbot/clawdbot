@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -54,7 +55,25 @@ function step(job: Job | undefined, name: string): Step {
   return found;
 }
 
+function workflowPathPatternCovers(pattern: string, path: string): boolean {
+  if (pattern.endsWith("/**")) {
+    const directory = pattern.slice(0, -3);
+    return path === directory || path.startsWith(`${directory}/`);
+  }
+  return path === pattern;
+}
+
 describe("plugin npm extended-stable workflow", () => {
+  it("triggers for every shared plugin publication authority", () => {
+    const triggerPaths = workflow().on?.push?.paths ?? [];
+    for (const authorityPath of PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS) {
+      expect(
+        triggerPaths.some((pattern) => workflowPathPatternCovers(pattern, authorityPath)),
+        authorityPath,
+      ).toBe(true);
+    }
+  });
+
   it("exposes only the default behavior and closed extended-stable override", () => {
     expect(readFileSync(workflowPath, "utf8")).toContain(
       "Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref",

@@ -128,6 +128,20 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectClawHubPublishablePluginPackages", () => {
+  it("rejects duplicate ClawHub package names from different plugin directories", () => {
+    const repoDir = createTempPluginRepo();
+    writePublishablePluginFixture(repoDir, {
+      extensionId: "demo-shadow",
+      packageName: "@openclaw/demo-plugin",
+      version: "2026.4.1",
+      publishTo: "clawhub",
+    });
+
+    expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
+      "package @openclaw/demo-plugin is declared by multiple plugin sources: demo-plugin (extensions/demo-plugin), demo-shadow (extensions/demo-shadow).",
+    );
+  });
+
   it("requires the ClawHub external plugin contract", () => {
     const repoDir = createTempPluginRepo({
       includeClawHubContract: false,
@@ -410,6 +424,7 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
   });
 
   it.each([
+    "packages/normalization-core/src/string-coerce.ts",
     "scripts/lib/plugin-publication-candidates.ts",
     "scripts/lib/plugin-publication-collector.ts",
   ])("selects all publishable plugins when %s changes", (changedPath) => {

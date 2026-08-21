@@ -72,6 +72,11 @@ export type PublishablePluginPackageFilters = {
   rootVersion?: string;
 };
 
+export type PublishablePluginPackageSource = Pick<
+  PublishablePluginPackage,
+  "extensionId" | "packageDir" | "packageName"
+>;
+
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const SAFE_CLAWHUB_EXTENSION_ID = /^[a-z0-9][a-z0-9._-]*$/;
 
@@ -208,6 +213,46 @@ export function collectPublishablePluginPackageErrors(
   return errors;
 }
 
+export function collectConflictingPluginPackageSourceErrors(
+  sources: readonly PublishablePluginPackageSource[],
+): string[] {
+  const sourcesByPackageName = new Map<string, Map<string, PublishablePluginPackageSource>>();
+  for (const source of sources) {
+    const packageName = source.packageName.trim();
+    if (!packageName) {
+      continue;
+    }
+    const packageSources = sourcesByPackageName.get(packageName) ?? new Map();
+    packageSources.set(`${source.extensionId}\0${source.packageDir}`, source);
+    sourcesByPackageName.set(packageName, packageSources);
+  }
+
+  return [...sourcesByPackageName.entries()]
+    .flatMap(([packageName, packageSources]) => {
+      if (packageSources.size < 2) {
+        return [];
+      }
+      const descriptions = [...packageSources.values()]
+        .map((source) => `${source.extensionId} (${source.packageDir})`)
+        .toSorted();
+      return [
+        `package ${packageName} is declared by multiple plugin sources: ${descriptions.join(", ")}.`,
+      ];
+    })
+    .toSorted();
+}
+
+export function assertUniquePublishablePluginPackageSources(
+  sources: readonly PublishablePluginPackageSource[],
+  label: string,
+): void {
+  const errors = collectConflictingPluginPackageSourceErrors(sources);
+  if (errors.length === 0) {
+    return;
+  }
+  throw new Error(`${label} has conflicting plugin package provenance:\n${errors.join("\n")}`);
+}
+
 export function collectPublishablePluginPackagesFromCandidates(
   candidates: readonly PublishablePluginPackageCandidate[],
   target: "npm" | "clawhub",
@@ -219,6 +264,23 @@ export function collectPublishablePluginPackagesFromCandidates(
   const selectedPackageNames = new Set(filters.packageNames ?? []);
   const hasSelectedExtensionIds = Array.isArray(filters.extensionIds);
   const hasSelectedPackageNames = Array.isArray(filters.packageNames);
+
+  validationErrors.push(
+    ...collectConflictingPluginPackageSourceErrors(
+      candidates
+        .filter(
+          (candidate) =>
+            !isPluginExternalPublicationDeferred(candidate.packageJson) &&
+            (candidate.packageJson.openclaw?.release?.publishToNpm === true ||
+              candidate.packageJson.openclaw?.release?.publishToClawHub === true),
+        )
+        .map((candidate) => ({
+          extensionId: candidate.extensionId,
+          packageDir: candidate.packageDir,
+          packageName: candidate.packageJson.name?.trim() ?? "",
+        })),
+    ),
+  );
 
   for (const candidate of candidates) {
     const { extensionId, packageDir, packageJson } = candidate;

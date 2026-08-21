@@ -14,6 +14,7 @@ import {
   verifyReleasePlanLock,
   type ReleasePlanIntent,
 } from "../../scripts/release-plan-producer.mts";
+import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,7 +66,13 @@ function copyToolingClosure(root: string) {
 
 function createFixtureRepo(
   version = "2026.8.1-beta.2",
-  options: { malformedPlugin?: boolean; malformedPluginJson?: boolean } = {},
+  options: {
+    conflictingPlatformId?: boolean;
+    corePackageNameCollision?: boolean;
+    duplicateCrossTargetPackageName?: boolean;
+    malformedPlugin?: boolean;
+    malformedPluginJson?: boolean;
+  } = {},
 ) {
   const root = tempDirs.make("openclaw-release-plan-");
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
@@ -94,7 +101,27 @@ function createFixtureRepo(
       }),
     );
   }
-  if (options.malformedPluginJson) {
+  if (options.corePackageNameCollision) {
+    writePublishablePluginFixture(root, {
+      extensionId: "shadow-ai",
+      packageName: "@openclaw/ai",
+      version,
+      publishTo: "both",
+    });
+  } else if (options.duplicateCrossTargetPackageName) {
+    writePublishablePluginFixture(root, {
+      extensionId: "duplicate-npm",
+      packageName: "@openclaw/duplicate",
+      version,
+      publishTo: "npm",
+    });
+    writePublishablePluginFixture(root, {
+      extensionId: "duplicate-clawhub",
+      packageName: "@openclaw/duplicate",
+      version,
+      publishTo: "clawhub",
+    });
+  } else if (options.malformedPluginJson) {
     writeFixture(root, "extensions/broken/package.json", "{ not-json\n");
   } else if (options.malformedPlugin) {
     writeFixture(
@@ -155,6 +182,9 @@ function createFixtureRepo(
       "    uses: ./.github/workflows/docker-release.yml",
       "  publish_vcr:",
       "    uses: ./.github/workflows/vercel-container-registry-publish.yml",
+      ...(options.conflictingPlatformId
+        ? ["  publish_windows:", "    uses: ./.github/workflows/docker-release.yml"]
+        : []),
       "",
     ].join("\n"),
   );
@@ -391,6 +421,36 @@ describe("release plan producer", () => {
     expect(() => collectPublishablePluginPackages(fixture.root)).toThrow(error);
     expect(() => collectClawHubPublishablePluginPackages(fixture.root)).toThrow(error);
     expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(error);
+  });
+
+  it("rejects duplicate package names split across npm and ClawHub plugin sources", () => {
+    const fixture = createFixtureRepo("2026.8.1-beta.2", {
+      duplicateCrossTargetPackageName: true,
+    });
+
+    expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(
+      "package @openclaw/duplicate is declared by multiple plugin sources",
+    );
+  });
+
+  it("rejects a plugin package name that collides with a core package source", () => {
+    const fixture = createFixtureRepo("2026.8.1-beta.2", {
+      corePackageNameCollision: true,
+    });
+
+    expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(
+      "package inventory source mismatch for @openclaw/ai: extensions/shadow-ai/package.json and packages/ai/package.json",
+    );
+  });
+
+  it("rejects conflicting platform publication sources with the same id", () => {
+    const fixture = createFixtureRepo("2026.8.1-beta.2", {
+      conflictingPlatformId: true,
+    });
+
+    expect(() => produceReleasePlan(sourceParams(fixture))).toThrow(
+      "declares conflicting platform windows: .github/workflows/windows-node-release.yml and .github/workflows/docker-release.yml",
+    );
   });
 
   it("matches the exact current publisher inventory: 93 npm and 89 ClawHub packages", () => {
