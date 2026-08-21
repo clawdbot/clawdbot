@@ -11,6 +11,15 @@ import { assertSafeCronSessionTargetId } from "../session-target.js";
 import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
+function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
+  const parsed = parseCodeModeScriptSyntax(script);
+  if (!parsed.ok) {
+    throw new Error(
+      `cron ${subject} has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
+    );
+  }
+}
+
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
   job: Pick<CronJob, "schedule" | "sessionTarget" | "payload">,
@@ -65,12 +74,7 @@ export function assertScriptPayloadSupport(
     throw new Error("cron script payload must not be empty");
   }
   if (opts?.validateSyntax !== false) {
-    const parsed = parseCodeModeScriptSyntax(job.payload.script);
-    if (!parsed.ok) {
-      throw new Error(
-        `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
-      );
-    }
+    assertCronScriptSyntax(job.payload.script, "script payload");
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one
@@ -86,12 +90,12 @@ export function assertScriptPayloadSupport(
 
 export function assertTriggerSupport(
   job: Pick<CronJob, "schedule" | "trigger">,
-  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+  opts?: { cronConfig?: CronConfig; validateAuthoredTrigger?: boolean },
 ) {
   if (!job.trigger) {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+  if (opts?.validateAuthoredTrigger && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
       "cron triggers are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
     );
@@ -106,6 +110,9 @@ export function assertTriggerSupport(
   const minIntervalMs = resolveCronTriggerMinIntervalMs();
   if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {
     throw new Error(`cron trigger every interval must be at least ${minIntervalMs}ms`);
+  }
+  if (opts?.validateAuthoredTrigger) {
+    assertCronScriptSyntax(job.trigger.script, "trigger script");
   }
 }
 
