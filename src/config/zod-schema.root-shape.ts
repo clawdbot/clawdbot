@@ -500,4 +500,79 @@ export const OpenClawSchemaShape = {
     )
     .optional(),
   proxy: ProxyConfigSchema,
+  privacy: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+      pii: z
+        .strictObject({
+          enabled: z.boolean().optional(),
+          systemPrompt: z.boolean().optional(),
+          userMessages: z.boolean().optional(),
+          toolOutputs: z.boolean().optional(),
+          categories: z
+            .strictObject({
+              email: z
+                .strictObject({
+                  redact: z.boolean().optional(),
+                  placeholder: z.string().optional(),
+                })
+                .optional(),
+              phone: z
+                .strictObject({
+                  redact: z.boolean().optional(),
+                  placeholder: z.string().optional(),
+                })
+                .optional(),
+              ssn: z
+                .strictObject({
+                  redact: z.boolean().optional(),
+                  placeholder: z.string().optional(),
+                })
+                .optional(),
+              creditCard: z
+                .strictObject({
+                  redact: z.boolean().optional(),
+                  placeholder: z.string().optional(),
+                })
+                .optional(),
+              ipv4: z
+                .strictObject({
+                  redact: z.boolean().optional(),
+                  placeholder: z.string().optional(),
+                })
+                .optional(),
+              uuid: z
+                .strictObject({
+                  redact: z.boolean().optional(),
+                  placeholder: z.string().optional(),
+                })
+                .optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+      media: z
+        .strictObject({
+          blockAttachments: z.boolean().optional(),
+          warnOnBlock: z.boolean().optional(),
+        })
+        .optional(),
+      atRest: z
+        .strictObject({
+          enabled: z.boolean().optional(),
+          passphrase: z.string().optional(),
+          pbkdf2Iterations: z.number().int().min(1).optional(),
+        })
+        .optional(),
+      systemPrompt: z
+        .strictObject({
+          maskHostname: z.boolean().optional(),
+          maskRepoPath: z.boolean().optional(),
+          maskOs: z.boolean().optional(),
+          maskShell: z.boolean().optional(),
+          suppressContextFiles: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 };

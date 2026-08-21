@@ -208,6 +208,7 @@
     "!dist/plugin-sdk/session-visibility.d.ts",
     "!dist/plugin-sdk/simple-completion-runtime.d.ts",
     "!dist/plugin-sdk/speech.d.ts",
+    "!dist/plugin-sdk/privacy-runtime.d.ts",
     "!dist/plugin-sdk/speech-core.d.ts",
     "!dist/plugin-sdk/sqlite-runtime.d.ts",
     "!dist/plugin-sdk/sqlite-runtime-testing.js",
@@ -734,6 +735,9 @@
     },
     "./plugin-sdk/simple-completion-runtime": {
       "default": "./dist/plugin-sdk/simple-completion-runtime.js"
+    },
+    "./plugin-sdk/privacy-runtime": {
+      "default": "./dist/plugin-sdk/privacy-runtime.js"
     },
     "./plugin-sdk/speech-core": {
       "default": "./dist/plugin-sdk/speech-core.js"

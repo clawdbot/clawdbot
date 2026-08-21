@@ -354,9 +354,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections,
-    images: promptMedia.images,
-    imageOrder: promptMedia.imageOrder,
-    media: promptMedia.media,
+    images: params.config?.privacy?.media?.blockAttachments ? undefined : promptMedia.images,
+    imageOrder: params.config?.privacy?.media?.blockAttachments
+      ? undefined
+      : promptMedia.imageOrder,
+    media: params.config?.privacy?.media?.blockAttachments ? undefined : promptMedia.media,
     clientTools: params.clientTools,
     disableTools: params.disableTools,
     provider: runtime.provider,

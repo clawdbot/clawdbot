@@ -35,6 +35,8 @@ import {
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { applyRuntimeLineMasking, redactContextFileContent } from "../privacy/payload-redact.js";
+import type { PrivacyConfig } from "../privacy/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -201,6 +203,7 @@ function buildProjectContextSection(params: {
   files: EmbeddedContextFile[];
   heading: string;
   dynamic: boolean;
+  privacyConfig?: PrivacyConfig;
 }) {
   if (params.files.length === 0) {
     return [];
@@ -235,7 +238,11 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
+    const content = redactContextFileContent(file.path, file.content, params.privacyConfig);
+    if (!content) {
+      continue;
+    }
+    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(content), "");
   }
   return lines;
 }
@@ -882,6 +889,8 @@ export function buildAgentSystemPrompt(params: {
   /** Prepared repository identities used to filter curated raw context fail-closed. */
   activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
+  /** Privacy config for PII redaction, runtime line masking, and context file filtering. */
+  privacyConfig?: PrivacyConfig;
 }) {
   const acpEnabled = params.acpEnabled === true;
   const promptSurface = params.promptSurface ?? "openclaw_main";
@@ -1448,6 +1457,7 @@ export function buildAgentSystemPrompt(params: {
         files: contextFiles.stable,
         heading: "# Project Context",
         dynamic: false,
+        privacyConfig: params.privacyConfig,
       }),
     );
 
@@ -1481,6 +1491,7 @@ export function buildAgentSystemPrompt(params: {
       files: contextFiles.dynamic,
       heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
       dynamic: true,
+      privacyConfig: params.privacyConfig,
     }),
   );
 
@@ -1561,7 +1572,10 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    applyRuntimeLineMasking(
+      buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+      params.privacyConfig,
+    ),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     ...(hasProcess
       ? buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions)
