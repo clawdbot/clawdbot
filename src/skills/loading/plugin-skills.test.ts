@@ -302,6 +302,24 @@ describe("resolvePluginSkillDirs", () => {
     expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
+  it("preserves absent config when resolving current lifecycle metadata", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+    const metadataSnapshot = {
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      normalizePluginId: (pluginId: string) => pluginId,
+    };
+    hoisted.resolvePluginMetadataSnapshot.mockImplementationOnce((params: unknown) =>
+      (params as { config?: OpenClawConfig }).config === undefined
+        ? metadataSnapshot
+        : hoisted.loadPluginMetadataSnapshot(params),
+    );
+
+    expect(resolvePluginSkillDirs({ workspaceDir })).toEqual([]);
+    expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "unavailable to available",

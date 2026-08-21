@@ -2269,6 +2269,47 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("executes cached plugin tools from the published generation without rescanning manifests", async () => {
+    const context = createContext();
+    const runtimeConfig: OpenClawConfig = {
+      ...context.config,
+      channels: { telegram: { enabled: false } },
+    };
+    const getRuntimeConfig = vi.fn(() => runtimeConfig);
+    const toolContext = { ...context, getRuntimeConfig };
+    const factory = vi.fn(() => makeTool("cached_generation_tool"));
+    setRegistry(
+      [
+        createNamedToolEntry("cache-generation", "cached_generation_tool", {
+          factory,
+        }),
+      ],
+      context.config,
+    );
+
+    resolvePluginTools(createResolveToolsParams({ context: toolContext }));
+    const [cachedTool] = resolvePluginTools(createResolveToolsParams({ context: toolContext }));
+    expect(cachedTool?.name).toBe("cached_generation_tool");
+    expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+
+    const manifestRegistry = await import("./manifest-registry-installed.js");
+    const manifestScan = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex")
+      .mockImplementation(() => {
+        throw new Error("cached plugin execution rescanned manifests");
+      });
+    try {
+      await expect(cachedTool?.execute("call", {}, undefined)).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+      expect(manifestScan).not.toHaveBeenCalled();
+      expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledTimes(2);
+    } finally {
+      manifestScan.mockRestore();
+    }
+  });
+
   it("keeps cached ordinary plugin tools free of network provenance", async () => {
     const factory = vi.fn(() => makeTool("cached_ordinary_tool"));
     setRegistry([
