@@ -188,6 +188,23 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
+  it("rejects platforms with no native Codex app-server binary", () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "arch", { value: "riscv64" });
+    try {
+      expect(harness.supports({ provider: "codex", requestedRuntime: "codex" })).toEqual({
+        supported: false,
+        reason: "no native Codex app-server binary is published for this platform (linux-riscv64)",
+        fallbackRuntime: "openclaw",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      Object.defineProperty(process, "arch", { value: originalArch });
+    }
+  });
+
   it("uses the attempt-scoped Codex config before the live Gateway config", async () => {
     runCodexAppServerAttempt.mockResolvedValueOnce({ stopReason: "stop" });
     const attemptHarness = createCodexAppServerAgentHarness({
