@@ -8,7 +8,7 @@ vi.mock("./register.runtime.js", () => {
   throw new Error("node-host availability must not load the broad browser runtime");
 });
 
-vi.mock("./src/browser-proxy-upload.js", () => ({
+vi.mock("./src/browser-proxy-upload-cleanup.runtime.js", () => ({
   ensureBrowserProxyUploadCleanup: cleanupMocks.ensureBrowserProxyUploadCleanup,
 }));
 
