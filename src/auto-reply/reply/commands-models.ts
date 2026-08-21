@@ -19,6 +19,7 @@ import {
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-ref-shared.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
@@ -34,7 +35,7 @@ import {
 } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
+import { loadPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -168,17 +169,26 @@ export async function buildModelsProviderData(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
+  // Reuse the prepared owner's plugin manifest so createModelVisibilityPolicy does
+  // not force a per-plugin manifest rescan on the browse path (the opt-in
+  // normalization invariant at model-visibility-policy.ts), then pass the built
+  // policy to the catalog resolver so it is not rebuilt a second time. Mirrors
+  // the gateway models.list path at models-list-result.ts.
+  let manifestPlugins: ModelManifestNormalizationContext["manifestPlugins"];
   const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     agentId,
     view: options.view ?? "default",
-    loadCatalog: ({ readOnly }) =>
-      loadPreparedModelCatalogSnapshot({
+    loadCatalog: async ({ readOnly }) => {
+      const owner = await loadPreparedModelCatalogOwnerSnapshot({
         config: cfg,
         readOnly,
         ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
         ...(catalogWorkspaceDir ? { workspaceDir: catalogWorkspaceDir } : {}),
-      }),
+      });
+      manifestPlugins = owner.metadataSnapshot?.plugins;
+      return owner.modelCatalog;
+    },
   });
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
@@ -188,6 +198,7 @@ export async function buildModelsProviderData(
     defaultModel: resolvedDefault.model,
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins,
   });
   const authChecker = createProviderAuthChecker({
     cfg,
@@ -213,6 +224,7 @@ export async function buildModelsProviderData(
     view: options.view,
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
+    policy: visibilityPolicy,
     evaluateEntry: async (entry, routeVariants) => {
       const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
       const evaluation = await authChecker.evaluateModelAuth(entry.provider, {

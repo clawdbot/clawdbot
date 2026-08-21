@@ -79,6 +79,9 @@ const pluginMetadataMocks = vi.hoisted(() => ({
       }
     | undefined,
 }));
+const visibilityPolicyMocks = vi.hoisted(() => ({
+  createModelVisibilityPolicy: vi.fn(),
+}));
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
@@ -118,6 +121,13 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
     const entries = await modelCatalogMocks.loadModelCatalog(...args);
     return { entries, routeVariants: entries };
   },
+  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
+    const entries = await modelCatalogMocks.loadModelCatalog(...args);
+    return {
+      modelCatalog: { entries, routeVariants: entries },
+      metadataSnapshot: pluginMetadataMocks.snapshot,
+    };
+  },
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
@@ -140,6 +150,19 @@ vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => pluginMetadataMocks.snapshot,
 }));
+
+vi.mock("../../agents/model-visibility-policy.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createModelVisibilityPolicy: (
+      params: Parameters<(typeof actual)["createModelVisibilityPolicy"]>[0],
+    ) => {
+      visibilityPolicyMocks.createModelVisibilityPolicy(params);
+      return actual.createModelVisibilityPolicy(params);
+    },
+  };
+});
 
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -388,6 +411,25 @@ describe("handleModelsCommand", () => {
     const params = modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0];
     expect(params).toMatchObject({ readOnly: true, workspaceDir: "/tmp" });
     expect(params).not.toHaveProperty("metadataSnapshot");
+  });
+
+  it("reuses the visibility policy instead of rebuilding it on the /models browse path", async () => {
+    // The browse path must thread the prepared owner's plugin manifest into
+    // createModelVisibilityPolicy and pass policy: to resolveLogicalVisibleModelCatalog
+    // so the callee does not rebuild the same policy a second time (openclaw#127379).
+    pluginMetadataMocks.snapshot = {
+      plugins: [],
+      owners: { cliBackends: new Map<string, string>() },
+    };
+    visibilityPolicyMocks.createModelVisibilityPolicy.mockClear();
+
+    await buildModelsProviderData({
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    } as OpenClawConfig);
+
+    expect(visibilityPolicyMocks.createModelVisibilityPolicy).toHaveBeenCalledTimes(1);
+    const policyParams = visibilityPolicyMocks.createModelVisibilityPolicy.mock.calls[0]?.[0];
+    expect(policyParams).toHaveProperty("manifestPlugins");
   });
 
   it("loads the selected agent lifecycle catalog", async () => {
