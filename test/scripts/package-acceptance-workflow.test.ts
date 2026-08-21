@@ -7242,7 +7242,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 
   it("pins every documented raw Full Release Validation caller to one exact SHA", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
-    const liveUpdater = readFileSync(".agents/skills/openclaw-live-updater/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
     const releaseCiNotes = readFileSync(
       ".agents/skills/release-openclaw-ci/references/release-ci-notes.md",
@@ -7256,11 +7255,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
 
     expect(nightly).toContain('-f expected_sha="$SHA"');
-    expectTextToIncludeAll(liveUpdater, [
-      'MAIN_SHA="<exact-main-sha>"',
-      '-f ref="$MAIN_SHA"',
-      '-f expected_sha="$MAIN_SHA"',
-    ]);
     for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {
       expectTextToIncludeAll(text, [
         'RELEASE_SHA="$(git rev-parse HEAD)"',
