@@ -53,8 +53,9 @@ function readSchemaTypes(schema: Record<string, unknown>): string[] | null {
   if (typeof type === "string") {
     return [type];
   }
-  if (Array.isArray(type) && type.length > 0 && type.every((entry) => typeof entry === "string")) {
-    return type as string[];
+  if (Array.isArray(type) && type.length > 0) {
+    const names = type.filter((entry): entry is string => typeof entry === "string");
+    return names.length === type.length ? names : null;
   }
   return null;
 }
@@ -113,9 +114,10 @@ function normalizeMoonshotSchema(schema: unknown): unknown {
 
   const next: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    if (SCHEMA_MAP_KEYS.has(key) && readRecord(value)) {
+    const mapEntries = SCHEMA_MAP_KEYS.has(key) ? readRecord(value) : undefined;
+    if (mapEntries) {
       const mapped: Record<string, unknown> = {};
-      for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+      for (const [entryKey, entryValue] of Object.entries(mapEntries)) {
         setOwnKey(mapped, entryKey, normalizeMoonshotSchema(entryValue));
       }
       setOwnKey(next, key, mapped);
@@ -145,9 +147,11 @@ function normalizeMoonshotSchema(schema: unknown): unknown {
     result,
     "anyOf",
     branches.map((branch) => {
-      const branchRecord = branch as Record<string, unknown>;
-      if ("type" in branchRecord) {
-        return branchRecord;
+      // canPushTypeIntoBranches above already rejected any non-record branch; coerce
+      // again rather than assert so this stays correct if that guard ever loosens.
+      const branchRecord = readRecord(branch);
+      if (!branchRecord || "type" in branchRecord) {
+        return branch;
       }
       const typedBranch: Record<string, unknown> = {};
       setOwnKey(typedBranch, "type", parentType);
@@ -173,6 +177,9 @@ export function normalizeMoonshotToolSchemas(
     }
     return {
       ...tool,
+      // SAFETY: normalizeMoonshotSchema only rewrites `type`/`anyOf` placement inside the
+      // schema record it is given and never changes the node's shape, so the normalized
+      // value is the same JSON Schema the tool already declared.
       parameters: normalizeMoonshotSchema(tool.parameters) as AnyAgentTool["parameters"],
     };
   });
