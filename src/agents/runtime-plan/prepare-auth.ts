@@ -495,6 +495,9 @@ export function prepareAgentRuntimeAuth(
     sourcePlan,
     configuredAuthMode: automaticRouteAuthMode,
     ...(runtimeAuthOwner ? { runtimeAuthOwner } : {}),
+    ...(runtimeAuthOwner && configuredProvider === undefined
+      ? { allowNativeAuthOnSingleRoute: true }
+      : {}),
   });
   if (routeAuthDecision.kind === "deferred") {
     const plan = buildAgentRuntimeAuthPlan({

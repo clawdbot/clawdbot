@@ -269,6 +269,8 @@ export function selectProviderModelRouteAuth(params: {
   configuredAuthMode?: string;
   /** Explicit native auth owner allowed to defer an otherwise unowned route. */
   runtimeAuthOwner?: { id: string };
+  /** True only when no provider transport or credentials were authored. */
+  allowNativeAuthOnSingleRoute?: boolean;
 }): ProviderModelRouteAuthDecision {
   const requiredProfile =
     params.sourcePlan.kind === "required" && params.sourcePlan.source.kind === "profile"
@@ -393,6 +395,7 @@ export function selectProviderModelRouteAuth(params: {
       Boolean(normalizedRuntimeAuthOwner) &&
       routeSupport.runtimePolicy.compatibleIds.includes(normalizedRuntimeAuthOwner ?? "");
     const hostHasNoCredentialToHonor =
+      params.allowNativeAuthOnSingleRoute === true &&
       params.sourcePlan.kind === "automatic" &&
       params.sourcePlan.orderedProfiles.length === 0 &&
       params.sourcePlan.fallback === undefined;

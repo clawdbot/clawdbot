@@ -58,6 +58,7 @@ export function selectOpenAIModelRouteAuth(params: {
   sourcePlan: ProviderModelAuthSourcePlan;
   configuredAuthMode?: string;
   runtimeAuthOwner?: { id: string };
+  allowNativeAuthOnSingleRoute?: boolean;
 }) {
   return selectProviderModelRouteAuth({ provider: OPENAI_PROVIDER_ID, ...params });
 }
