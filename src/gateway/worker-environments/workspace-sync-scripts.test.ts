@@ -363,6 +363,45 @@ esac
     }
   });
 
+  it("removes an empty orphan lease without depending on ps", async () => {
+    const input = await fixture();
+    const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
+    const nonce = await quiesce(input, true, "30000");
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as { watchdog: { pid: number } };
+
+    await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
+    await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+    try {
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_QUIESCE_JS,
+          input.workspace,
+          "10000",
+          "shared-host",
+        ],
+        { timeoutMs: 15_000, baseEnv: input.env },
+      );
+
+      // Starting the replacement watchdog still needs ps and fails closed, but the stale
+      // empty lease must already be gone so it cannot block another reconciliation attempt.
+      expect(result.termination).toBe("exit");
+      expect(result.code).not.toBe(0);
+      await expect(fs.access(leaseFile)).rejects.toThrow();
+    } finally {
+      await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+      try {
+        process.kill(lease.watchdog.pid, "SIGTERM");
+      } catch {
+        // Expected once the missing lease has retired it.
+      }
+    }
+  });
+
   it("thaws a real stopped worker and clears the lease", async () => {
     const input = await fixture();
     const child = spawnIdleWorker();

@@ -160,7 +160,9 @@ for (const name of orphanNames) {
   const orphanPath = path.join(leaseDirectory, name);
   const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
   resumeProcesses(lease.processes);
-  if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
+  // Empty shared-host leases have nothing to strand; skip ps-dependent watchdog identity
+  // probing so a ps outage cannot block their removal and the next turn.
+  if ((!lease.sharedHost || lease.processes.length > 0) && lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
     try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
   }
   // The orphan's own watchdog can resume and unlink first; a lease that is already gone
