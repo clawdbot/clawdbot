@@ -603,6 +603,18 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.heapShortfall?.fatal).toBe(true);
   });
 
+  it("caps an oversized cgroup limit by physical memory", () => {
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      cgroupMemoryLimitBytes: 64 * 1024 * 1024 * 1024,
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(3328);
+    expect(result.heapShortfall?.fatal).toBe(true);
+  });
+
   it("caps the tsdown heap using the process's own cgroup slice budget", () => {
     const slicePath = "/user.slice/user-999.slice/user@999.service";
     // Only the ancestor slice carries a budget; the leaf unit and the v2 root

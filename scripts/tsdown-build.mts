@@ -716,10 +716,12 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
     return envOverride;
   }
 
+  const cgroupLimitBytes = readCgroupMemoryLimitBytes(params);
+  const physicalLimitBytes = readProcMemTotalBytes(params) ?? readPhysicalMemoryTotalBytes(params);
   const limitBytes =
-    readCgroupMemoryLimitBytes(params) ??
-    readProcMemTotalBytes(params) ??
-    readPhysicalMemoryTotalBytes(params);
+    cgroupLimitBytes === null || physicalLimitBytes === null
+      ? (cgroupLimitBytes ?? physicalLimitBytes)
+      : Math.min(cgroupLimitBytes, physicalLimitBytes);
   if (limitBytes === null) {
     return defaultMaxOldSpaceMb;
   }
