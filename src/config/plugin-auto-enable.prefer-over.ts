@@ -270,12 +270,18 @@ function resolvePreferredOverIds(
   env: NodeJS.ProcessEnv,
   registry: PluginManifestRegistry,
 ): string[] {
-  const channelId =
-    candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
+  // Only a channel-configured candidate speaks for a channel. Falling back to the plugin id read
+  // that pseudo-channel as a claim, which is what `candidateChannelId` below documents must never
+  // happen: a plugin whose id matches a channel id would carry that channel's replacement
+  // authority into an unrelated tool or provider candidate and disable the target even though the
+  // channel was never configured.
+  if (candidate.kind !== "channel-configured") {
+    return [];
+  }
   return [
     ...resolveChannelPreferOverIds({
       record: registry.plugins.find((record) => record.id === candidate.pluginId),
-      channelId,
+      channelId: candidate.channelId,
       env,
       registry,
     }),

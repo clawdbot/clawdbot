@@ -1,5 +1,11 @@
 // Reads a manifest record's channel replacement preference without pulling in the registry builder.
+import { normalizeChatChannelId } from "../channels/ids.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+
+/** The canonical spelling of a declared channel id, or the id itself when it names no known channel. */
+function canonicalChannelId(channelId: string): string {
+  return normalizeChatChannelId(channelId) ?? channelId;
+}
 
 /**
  * Manifest-declared `preferOver` ids for one channel on one record. A channel-specific
@@ -13,7 +19,15 @@ export function resolveManifestChannelPreferOverIds(
   record: PluginManifestRecord,
   channelId: string,
 ): readonly string[] {
-  const channelPreferOver = record.channelConfigs?.[channelId]?.preferOver;
+  // Callers canonicalize before asking, so match the record's own spelling the same way rather
+  // than by exact key: a descriptor written under any other spelling of this channel would
+  // otherwise be missed and its replacement edge dropped without a diagnostic.
+  const target = canonicalChannelId(channelId);
+  const channelPreferOver =
+    record.channelConfigs?.[channelId]?.preferOver ??
+    Object.entries(record.channelConfigs ?? {}).find(
+      ([declaredId]) => canonicalChannelId(declaredId) === target,
+    )?.[1]?.preferOver;
   if (channelPreferOver?.length) {
     return channelPreferOver;
   }
@@ -21,7 +35,10 @@ export function resolveManifestChannelPreferOverIds(
   // channels the same plugin ships — otherwise a preference declared for channel A lets the plugin
   // claim channel B. The runtime facade gates catalog metadata the same way (see
   // resolveManifestChannelPlugin in src/channels/plugins/read-only.ts).
-  if (record.channelCatalogMeta?.id !== channelId) {
+  if (
+    record.channelCatalogMeta === undefined ||
+    canonicalChannelId(record.channelCatalogMeta.id) !== target
+  ) {
     return [];
   }
   return record.channelCatalogMeta.preferOver ?? [];

@@ -175,6 +175,34 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     ).toBe(false);
   });
 
+  // Codex review P2 on #123209: `plugins.slots.memory` and `plugins.slots.contextEngine` are
+  // explicit-selection causes in the activation contract, and activation checks entry disablement
+  // before its slot branches. Missing them here let `disableImplicitPreferredOverPlugin` write
+  // `enabled: false` for the operator's chosen memory or context engine.
+  it.each([
+    { slot: "memory", config: { plugins: { slots: { memory: "clickclack-plus" } } } },
+    { slot: "contextEngine", config: { plugins: { slots: { contextEngine: "clickclack-plus" } } } },
+  ])("sees a plugin pinned to the $slot slot", ({ config }) => {
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config as unknown as OpenClawConfig,
+        "clickclack-plus",
+        canonicalId,
+        registry,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat an unrelated slot pin as selection", () => {
+    const config = {
+      plugins: { slots: { memory: "someone-else" } },
+    } as unknown as OpenClawConfig;
+
+    expect(isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry)).toBe(
+      false,
+    );
+  });
+
   it("reports no selection when the operator wrote neither", () => {
     expect(
       isPluginExplicitlySelectedByAlias({} as OpenClawConfig, "clickclack-plus", canonicalId),

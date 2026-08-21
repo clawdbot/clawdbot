@@ -7,6 +7,7 @@ import {
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { isBundledChannelEnabledByChannelConfig } from "../plugins/config-normalization-shared.js";
 import { normalizePluginId } from "../plugins/config-state.js";
+import { resolveSlotSelection } from "../plugins/slots.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -121,6 +122,17 @@ export function isPluginExplicitlySelectedByAlias(
     isBundledChannelEnabledByChannelConfig(cfg, pluginId)
   ) {
     return true;
+  }
+  // Both capability slots are explicit-selection causes in the activation contract, and activation
+  // reads entry disablement before it reaches those branches. Resolve them the way activation does
+  // rather than reading the written value, so an unset slot resolving to its default plugin is
+  // treated the same on both sides.
+  const slots = cfg.plugins?.slots;
+  for (const slotKey of ["memory", "contextEngine"] as const) {
+    const selection = resolveSlotSelection(slotKey, slots?.[slotKey]);
+    if (selection.kind !== "off" && canonicalId(selection.pluginId) === target) {
+      return true;
+    }
   }
   const allow = cfg.plugins?.allow;
   if (
