@@ -541,6 +541,7 @@ export function applyDeclarativeJobSpec(
   if (opts.enabledExplicit) {
     job.enabled = input.enabled;
   }
+  assertCronJobStateTimestamps(input.state ?? {});
   validateFullJob(
     job,
     {
