@@ -135,6 +135,46 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     expect(isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId)).toBe(true);
   });
 
+  // Codex review P1 on #123209: `config-activation-shared.ts` counts
+  // `channels.<id>.enabled: true` on a bundled plugin as explicit selection
+  // ("bundled-channel-enabled-in-config"). Reading only plugins.allow/entries here let
+  // `disableImplicitPreferredOverPlugin` write `enabled: false` over that operator choice.
+  it("sees a bundled fallback selected through its channel config", () => {
+    const bundledRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "telegram", origin: "bundled", channels: ["telegram"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = { channels: { telegram: { enabled: true } } } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        createManifestPluginAliasResolver(bundledRegistry),
+        bundledRegistry,
+      ),
+    ).toBe(true);
+  });
+
+  // The same channel flag on a non-bundled plugin is not explicit selection under that contract,
+  // so widening this predicate must not widen it further than activation does.
+  it("does not treat the channel flag as selection for a non-bundled plugin", () => {
+    const externalRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "telegram", origin: "workspace", channels: ["telegram"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = { channels: { telegram: { enabled: true } } } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        createManifestPluginAliasResolver(externalRegistry),
+        externalRegistry,
+      ),
+    ).toBe(false);
+  });
+
   it("reports no selection when the operator wrote neither", () => {
     expect(
       isPluginExplicitlySelectedByAlias({} as OpenClawConfig, "clickclack-plus", canonicalId),

@@ -708,7 +708,14 @@ function disableImplicitPreferredOverPlugin(params: {
   // runs the farther preferred replacement instead.
   const canonicalId = (id: string) =>
     createManifestPluginAliasResolver(params.manifestRegistry)(normalizePluginId(id));
-  if (isPluginExplicitlySelectedByAlias(params.originalConfig, params.pluginId, canonicalId)) {
+  if (
+    isPluginExplicitlySelectedByAlias(
+      params.originalConfig,
+      params.pluginId,
+      canonicalId,
+      params.manifestRegistry,
+    )
+  ) {
     return params.config;
   }
   // A built-in channel id can remain in the static channel catalog after its

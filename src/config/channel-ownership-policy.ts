@@ -108,7 +108,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       // `plugins.entries.<id>.enabled: true` is explicit activation at startup. Narrowing to the
       // auto-enable candidates alone would report such a claimant inactive while the runtime runs
       // it, which is the same disagreement in the other direction.
-      if (isPluginExplicitlySelectedByAlias(sourceConfig, alias, canonicalId)) {
+      if (isPluginExplicitlySelectedByAlias(sourceConfig, alias, canonicalId, params.registry)) {
         return true;
       }
       const candidates = channelCandidates(channelId);
@@ -120,7 +120,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
       return candidates.has(pluginId) || candidates.has(alias);
     },
     isPluginExplicitlySelected: (pluginId) =>
-      isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId),
+      isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId, params.registry),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({
         record,

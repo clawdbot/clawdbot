@@ -5,7 +5,9 @@ import {
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeChatChannelId } from "../channels/registry.js";
+import { isBundledChannelEnabledByChannelConfig } from "../plugins/config-normalization-shared.js";
 import { normalizePluginId } from "../plugins/config-state.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /**
@@ -105,8 +107,21 @@ export function isPluginExplicitlySelectedByAlias(
   cfg: OpenClawConfig,
   pluginId: string,
   canonicalId: (id: string) => string,
+  manifestRegistry?: PluginManifestRegistry,
 ): boolean {
   const target = canonicalId(pluginId);
+  // `config-activation-shared.ts` also counts `channels.<id>.enabled: true` on a bundled plugin as
+  // explicit selection. Omitting it here let the caller synthesize `plugins.entries.<id>.enabled:
+  // false` over that choice while ownership ceded the channel, switching away from the operator's
+  // pick. Gated on bundled origin so this stays exactly as wide as activation, no wider.
+  if (
+    manifestRegistry?.plugins.some(
+      (plugin) => plugin.origin === "bundled" && canonicalId(plugin.id) === target,
+    ) &&
+    isBundledChannelEnabledByChannelConfig(cfg, pluginId)
+  ) {
+    return true;
+  }
   const allow = cfg.plugins?.allow;
   if (
     Array.isArray(allow) &&
