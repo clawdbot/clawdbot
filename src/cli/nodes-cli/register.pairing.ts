@@ -230,15 +230,13 @@ export function registerNodesPairingCommands(nodes: Command) {
       .requiredOption("--name <displayName>", "New display name")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("rename", async () => {
-          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!name) {
-            defaultRuntime.error(
+            throw new Error(
               `--name must not be empty. Run ${formatCliCommand("openclaw nodes list")} to see paired nodes, then rerun with --name <displayName>.`,
             );
-            defaultRuntime.exit(1);
-            return;
           }
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
           const result = await callNodesGatewayCli("node.rename", opts, {
             nodeId,
             displayName: name,
