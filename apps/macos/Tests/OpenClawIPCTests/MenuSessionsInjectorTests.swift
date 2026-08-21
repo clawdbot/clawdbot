@@ -86,12 +86,14 @@ struct MenuSessionsInjectorTests {
                     provider: "anthropic",
                     displayName: "Claude",
                     windows: [GatewayUsageWindow(label: "5h", usedPercent: 12, resetAt: nil)],
-                    plan: "Pro"),
+                    plan: "Pro",
+                    error: nil),
                 GatewayUsageProvider(
                     provider: "openai",
                     displayName: "Codex",
                     windows: [GatewayUsageWindow(label: "day", usedPercent: 3, resetAt: nil)],
-                    plan: nil),
+                    plan: nil,
+                    error: nil),
             ])
         injector.setTestingUsageSummary(usage)
 
@@ -165,6 +167,29 @@ struct MenuSessionsInjectorTests {
         #expect(usageCostItem != nil)
         #expect(usageCostItem?.submenu != nil)
         #expect(usageCostItem?.submenu?.delegate == nil)
+    }
+
+    @Test func `completed provider error remains visible in usage section`() throws {
+        let payload = Data(
+            #"{"updatedAt":1,"providers":[{"provider":"openai","displayName":"OpenAI","windows":[],"plan":null,"error":"Request timed out"}]}"#
+                .utf8)
+        let summary = try JSONDecoder().decode(GatewayUsageSummary.self, from: payload)
+        let row = try #require(summary.primaryRows().first)
+        #expect(row.detailText() == "Request timed out")
+
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+        injector.setTestingUsageSummary(
+            GatewayUsageSummary(updatedAt: 0, providers: [], refreshing: false))
+        let quiet = Self.makeMenuShell()
+        injector.injectForTesting(into: quiet)
+        let quietItems = quiet.items.count(where: { $0.tag == 9_415_557 })
+
+        injector.setTestingUsageSummary(summary)
+        let menu = Self.makeMenuShell()
+        injector.injectForTesting(into: menu)
+
+        #expect(menu.items.count(where: { $0.tag == 9_415_557 }) == quietItems + 3)
     }
 
     @Test func `cold incomplete usage converges without starting the cache ttl`() async {
@@ -434,7 +459,9 @@ private final class UsageLoadEvents {
         let stream = self.stream
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
-                for await snapshot in stream where predicate(snapshot) { return true }
+                for await snapshot in stream where predicate(snapshot) {
+                    return true
+                }
                 return false
             }
             group.addTask {
