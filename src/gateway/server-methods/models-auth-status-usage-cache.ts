@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Stale-while-revalidate cache for models.authStatus provider usage enrichment.
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -208,38 +207,21 @@ type ProviderUsageCacheParams = {
   now: number;
 };
 
-// Selection bookkeeping changes refresh priority, not credential identity. Keep
-// the last-good snapshot visible while the exact-key mismatch refreshes it.
-function providerUsageCredentialIdentity(credentialKey: string): string {
-  try {
-    const parsed: unknown = JSON.parse(credentialKey);
-    if (!isRecord(parsed)) {
-      return credentialKey;
-    }
-    const { usageStats: _selectionBookkeeping, ...identity } = parsed;
-    return JSON.stringify(identity);
-  } catch {
-    return credentialKey;
-  }
-}
-
 function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const providerIds = params.providerIds.toSorted();
   const providerKey = providerUsageCacheKey(providerIds);
   const credentialKey = scopeProviderUsageCredentialKey(params.credentialKey, providerIds);
-  const credentialIdentity = providerUsageCredentialIdentity(credentialKey);
   const cached = usageCacheByAgentId.get(params.agentId);
   const matching =
     cached?.agentDir === params.agentDir &&
     cached.configRef === params.configRef &&
-    providerUsageCredentialIdentity(cached.credentialKey) === credentialIdentity &&
+    cached.credentialKey === credentialKey &&
     cached.providerKey === providerKey
       ? cached
       : undefined;
   const needsRefresh =
     params.forceRefresh === true ||
     !matching ||
-    matching.credentialKey !== credentialKey ||
     params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS;
   return { credentialKey, matching, needsRefresh, providerIds, providerKey };
 }

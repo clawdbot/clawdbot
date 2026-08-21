@@ -79,6 +79,11 @@ async function createPage(client: GatewayBrowserClient): Promise<TestUsagePage> 
   return page;
 }
 
+function focusDocument(): void {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
@@ -268,6 +273,7 @@ describe("UsagePage provider usage outcome", () => {
 describe("UsagePage detail requests", () => {
   it("marks provider usage stalled once the retry budget is spent", async () => {
     vi.useFakeTimers();
+    focusDocument();
     const client = {
       request: vi.fn(async (method: string) =>
         method === "usage.status"
@@ -323,6 +329,7 @@ describe("UsagePage detail requests", () => {
 
   it("keeps rejected provider usage retries unresolved until the page reports a stall", async () => {
     vi.useFakeTimers();
+    focusDocument();
     let rejectProviderUsage = true;
     const request = vi.fn(async (method: string) => {
       if (method === "usage.status") {

@@ -224,6 +224,11 @@ async function advanceUsageRetries(): Promise<void> {
   }
 }
 
+function focusDocument(): void {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+}
+
 function appendPage(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-model-providers-page",
@@ -242,6 +247,7 @@ afterEach(() => {
 describe("ModelProvidersPage usage convergence", () => {
   it("restarts an exhausted retry cycle on same-client reconnect", async () => {
     vi.useFakeTimers();
+    focusDocument();
     const harness = createHarness("main");
     harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
     const page = appendPage(harness.context);
@@ -266,6 +272,7 @@ describe("ModelProvidersPage usage convergence", () => {
 
   it("reports a stalled provider refresh once the retry budget is spent", async () => {
     vi.useFakeTimers();
+    focusDocument();
     const harness = createHarness("main");
     harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
     const page = appendPage(harness.context);
@@ -298,6 +305,7 @@ describe("ModelProvidersPage usage convergence", () => {
 
   it("keeps the stalled explanation when usage.status starts rejecting", async () => {
     vi.useFakeTimers();
+    focusDocument();
     const harness = createHarness("main");
     harness.setUsageStatus({ updatedAt: 1, providers: [], refreshing: true });
     const page = appendPage(harness.context);
