@@ -11,8 +11,9 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
-import { resolveSchemaProperty } from "../../web-search/provider-schema.js";
-import { resolveWebSearchProviderToolDefinition, runWebSearch } from "../../web-search/runtime.js";
+import { resolveWebSearchProviderModelSchema } from "../../web-search/provider-model-schema.js";
+import { projectProviderModelSchema } from "../../web-search/provider-schema.js";
+import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
@@ -89,30 +90,13 @@ function createModelFacingWebSearchSchema(options: {
     lateBindRuntimeConfig: options.lateBindRuntimeConfig,
     runtimeWebSearch: options.runtimeWebSearch,
   });
-  const selectedProviderDefinition = runtimeContext.providerSelectionId
-    ? resolveWebSearchProviderToolDefinition({
+  const selectedProviderSchema = runtimeContext.providerSelectionId
+    ? resolveWebSearchProviderModelSchema({
         config: runtimeContext.config,
-        agentDir: options.agentDir,
-        sandboxed: options.sandboxed,
-        runtimeWebSearch: runtimeContext.runtimeWebSearch,
         providerId: runtimeContext.providerSelectionId,
-        preferRuntimeProviders: runtimeContext.preferRuntimeProviders,
-        preferInputConfig: true,
       })
     : null;
-  const properties: Record<string, unknown> = { ...WebSearchSchema.properties };
-  if (selectedProviderDefinition) {
-    for (const parameter of selectedProviderDefinition.providerParameters ?? []) {
-      const propertySchema = resolveSchemaProperty(
-        selectedProviderDefinition.parameters,
-        parameter,
-      );
-      if (propertySchema !== undefined) {
-        properties[parameter] = propertySchema;
-      }
-    }
-  }
-  return { ...WebSearchSchema, properties };
+  return projectProviderModelSchema(WebSearchSchema, selectedProviderSchema);
 }
 
 function isWebSearchDisabled(config?: OpenClawConfig): boolean {

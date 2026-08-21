@@ -9,6 +9,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createPerplexityWebSearchProviderBase,
+  PERPLEXITY_SEARCH_CONTEXT_SIZE_SCHEMA,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
@@ -29,11 +30,7 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       type: "string",
       description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
     },
-    search_context_size: {
-      type: "string",
-      enum: ["low", "medium", "high"],
-      description: "Perplexity content extraction budget.",
-    },
+    search_context_size: PERPLEXITY_SEARCH_CONTEXT_SIZE_SCHEMA,
   };
 
   if (transport !== "chat_completions") {
@@ -104,7 +101,6 @@ function createPerplexityToolDefinition(
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
-    providerParameters: ["search_context_size"],
     execute: async (args, context) => {
       context?.signal?.throwIfAborted();
       const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();

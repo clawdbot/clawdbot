@@ -12,6 +12,11 @@ import {
 
 export const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 export const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
+export const PERPLEXITY_SEARCH_CONTEXT_SIZE_SCHEMA = {
+  type: "string",
+  enum: ["low", "medium", "high"],
+  description: "Perplexity content extraction budget.",
+} as const;
 
 const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
@@ -39,6 +44,15 @@ export function createPerplexityWebSearchProviderBase() {
     docsUrl: "https://docs.openclaw.ai/perplexity",
     autoDetectOrder: 50,
     credentialPath: PERPLEXITY_CREDENTIAL_PATH,
+    modelSchema: {
+      parameters: {
+        type: "object",
+        properties: {
+          search_context_size: PERPLEXITY_SEARCH_CONTEXT_SIZE_SCHEMA,
+        },
+      },
+      providerParameters: ["search_context_size"],
+    },
     ...createWebSearchProviderContractFields({
       credentialPath: PERPLEXITY_CREDENTIAL_PATH,
       searchCredential: { type: "scoped", scopeId: "perplexity" },

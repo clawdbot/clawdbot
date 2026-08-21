@@ -1075,6 +1075,16 @@ catalog, API-key auth, and dynamic model resolution.
             const acme = (searchConfigTarget.acme ??= {});
             acme.apiKey = value;
           },
+          modelSchema: {
+            parameters: {
+              type: "object",
+              properties: {
+                result_depth: { type: "string", enum: ["brief", "deep"] },
+              },
+              required: ["result_depth"],
+            },
+            providerParameters: ["result_depth"],
+          },
           createTool: () => ({
             description: "Search the web through Acme Search.",
             parameters: {
@@ -1083,8 +1093,8 @@ catalog, API-key auth, and dynamic model resolution.
                 query: { type: "string" },
                 result_depth: { type: "string", enum: ["brief", "deep"] },
               },
+              required: ["query", "result_depth"],
             },
-            providerParameters: ["result_depth"],
             execute: async (args) => ({ content: [] }),
           }),
         });
@@ -1094,8 +1104,10 @@ catalog, API-key auth, and dynamic model resolution.
         `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
         `getCredentialValue`, `setCredentialValue`, and `createTool` are all
         required. When search providers add top-level parameters beyond the
-        shared `web_search` surface, list them in `providerParameters`; core
-        projects their provider-owned schemas only for the selected provider.
+        shared `web_search` surface, declare them in the lightweight
+        `modelSchema` artifact. Core projects only the selected provider's
+        listed properties, including their declared required status, without
+        loading provider runtime code while preparing agent tools.
       </Tab>
     </Tabs>
 
