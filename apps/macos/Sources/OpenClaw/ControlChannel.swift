@@ -428,7 +428,7 @@ final class ControlChannel {
                     self.logger.info("control channel recovery ensured remote endpoint port=\(port, privacy: .public)")
                 } catch {
                     self.logger.error(
-                        "control channel remote endpoint recovery failed \(error.localizedDescription, privacy: .public)")
+                        "control channel remote endpoint failed \(error.localizedDescription, privacy: .public)")
                 }
             }
 
