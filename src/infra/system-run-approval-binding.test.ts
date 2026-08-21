@@ -334,7 +334,7 @@ describe("missingSystemRunApprovalBinding", () => {
 });
 
 describe("mutable file operand binding", () => {
-  it("binds every script in a compound command and detects drift", async () => {
+  it("binds every script and mutable executable in a compound command", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-binding-"));
     const first = path.join(cwd, "first.sh");
     const second = path.join(cwd, "second.py");
@@ -344,7 +344,33 @@ describe("mutable file operand binding", () => {
       const command = { kind: "shell" as const, text: "sh first.sh && python3 second.py" };
       const prepared = expectOk(await prepareSystemRunMutableFileBinding({ command, cwd }));
 
-      expect(prepared.binding.operands).toHaveLength(2);
+      const scriptOperands = prepared.binding.operands.filter((operand) => !operand.executable);
+      expect(
+        scriptOperands.map(({ argv, snapshot }) => ({
+          argv,
+          argvIndex: snapshot.argvIndex,
+          path: snapshot.path,
+        })),
+      ).toEqual([
+        { argv: ["sh", "first.sh"], argvIndex: 1, path: fs.realpathSync(first) },
+        { argv: ["python3", "second.py"], argvIndex: 1, path: fs.realpathSync(second) },
+      ]);
+
+      const executableOperands = prepared.binding.operands.filter((operand) => operand.executable);
+      expect(new Set(executableOperands.map(({ argv }) => JSON.stringify(argv))).size).toBe(
+        executableOperands.length,
+      );
+      for (const operand of executableOperands) {
+        expect(prepared.binding.commands).toContainEqual(operand.argv);
+        expect(operand.snapshot.argvIndex).toBe(0);
+        expect([fs.realpathSync(first), fs.realpathSync(second)]).not.toContain(
+          operand.snapshot.path,
+        );
+        expect(operand.pathSearch).toEqual({
+          path: process.env.PATH,
+          pathExt: process.env.PATHEXT,
+        });
+      }
       await expect(
         revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
       ).resolves.toEqual({ ok: true });

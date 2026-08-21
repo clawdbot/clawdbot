@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
@@ -29,7 +30,7 @@ import {
 const SCRIPT_PATH = "scripts/install.sh";
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
+  const home = mkdtempSync(join(realpathSync(tmpdir()), "openclaw-install-home-"));
   try {
     return spawnSync("bash", ["-c", script], {
       encoding: "utf8",
@@ -306,6 +307,7 @@ describe("install.sh", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       tmp="$(mktemp -d)"
+      tmp="$(cd "$tmp" && pwd -P)"
       repo="$tmp/repo"
       node_dir="node-bin"
       cd "$tmp"
