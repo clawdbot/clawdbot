@@ -84,24 +84,8 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
 
     See [Required configuration](#required-configuration) above for context and [Reserved tool names](#reserved-tool-names) for the full list.
   </Step>
-  <Step title="Discover the rest of the catalog">
-    Onboarding wires up one model. To make every Agent API model available through this provider, add a wildcard entry under `agents.defaults.models`:
-
-    ```json5
-    {
-      agents: {
-        defaults: {
-          models: { "perplexity/*": {} },
-        },
-      },
-    }
-    ```
-
-    OpenClaw will then call `GET https://api.perplexity.ai/v1/models` and register the full catalog. Confirm with:
-
-    ```bash
-    openclaw models list --provider perplexity
-    ```
+  <Step title="Add the models you need">
+    Onboarding wires up one model. To make additional Agent API models available, add explicit entries under `agents.defaults.models`. See [Config example](#config-example) below for a working set. The full model list, current pricing, and per-model context windows are published at [docs.perplexity.ai/docs/getting-started/models](https://docs.perplexity.ai/docs/getting-started/models).
   </Step>
 </Steps>
 
@@ -112,7 +96,6 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
   agents: {
     defaults: {
       model: { primary: "perplexity/anthropic/claude-sonnet-4-6" },
-      models: { "perplexity/*": {} },
     },
   },
   tools: {
@@ -143,7 +126,7 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
 }
 ```
 
-The single `models[]` entry pins Claude Sonnet 4.6 with explicit cost and window metadata. The `perplexity/*` wildcard covers every other model returned by `GET /v1/models`, so you do not need to hand-maintain a full catalog here. Add another `models[]` entry only when you want to pin custom metadata for a specific model.
+Each `models[]` entry pins one Agent API model with explicit cost and window metadata. Add another entry for every model you want to route through this provider.
 
 Model IDs under the provider block omit the provider prefix. The full model reference adds it: config ID `anthropic/claude-sonnet-4-6`, full ref `perplexity/anthropic/claude-sonnet-4-6`.
 
@@ -222,8 +205,9 @@ MCP tools follow OpenClaw's normal tool policy. To limit which Perplexity tools 
 
 Perplexity also publishes a [terminal CLI](https://docs.perplexity.ai/docs/cli/overview) (`pplx`) that returns JSON from the Search API. It is a third integration path: not an LLM provider and not an MCP server, but useful when an OpenClaw agent needs to shell out for a web search, or when a developer wants to pipe Perplexity results into other shell tools.
 
+Install the CLI by following the official instructions at [docs.perplexity.ai/docs/cli/overview](https://docs.perplexity.ai/docs/cli/overview), which cover versioned Homebrew, npm, and release-binary paths.
+
 ```bash
-curl -fsSL https://github.com/perplexityai/perplexity-cli/releases/latest/download/install.sh | sh
 export PERPLEXITY_API_KEY=pplx-...
 pplx search web "kubernetes pod OOMKilled causes" -n 5
 pplx content snippets "how does a bloom filter decide set membership" \
@@ -256,9 +240,6 @@ Because the CLI is invoked from a shell, agents running under OpenClaw's `exec` 
     - Full model reference: `perplexity/anthropic/claude-sonnet-4-6`
   </Accordion>
 
-  <Accordion title="Live model discovery with the perplexity/* wildcard">
-    Adding `"perplexity/*": {}` under `agents.defaults.models` tells OpenClaw to call `GET https://api.perplexity.ai/v1/models` and register every returned model. Pinned entries under `models.providers.perplexity.models` win; anything you do not pin falls through to live discovery. Verify with `openclaw models list --provider perplexity`.
-  </Accordion>
 </AccordionGroup>
 
 ## Related
