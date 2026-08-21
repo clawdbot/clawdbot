@@ -120,16 +120,12 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Use --account or --clear-account, not both");
   }
 
-  // Blank --command-cwd must not count as a command payload edit: presence-only
-  // checks forged `{ kind: "command" }` patches with no usable cwd. Empty
-  // --command-input stays allowed (Gateway stdin is an unrestricted string;
-  // "" / whitespace clears or sets stdin on command jobs).
   const commandCwd = normalizeOptionalString(opts.commandCwd);
   if (typeof opts.commandCwd === "string" && !commandCwd) {
     throw new Error("--command-cwd must not be blank");
   }
+  // Unlike cwd, command stdin intentionally accepts empty and whitespace strings.
   const hasCommandInput = typeof opts.commandInput === "string";
-  const commandInput = hasCommandInput ? String(opts.commandInput) : undefined;
   const hasCommandSpecificPayloadField =
     Boolean(commandShell) ||
     Boolean(commandArgv) ||
@@ -240,7 +236,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     assignIf(payload, "argv", ["sh", "-lc", commandShell], Boolean(commandShell));
     assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
-    assignIf(payload, "input", commandInput, hasCommandInput);
+    assignIf(payload, "input", opts.commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(
       payload,
