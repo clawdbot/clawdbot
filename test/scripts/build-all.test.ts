@@ -398,9 +398,30 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("requires declaration admission only when a full-profile tsdown cache will miss", () => {
-    expect(requiresFullBuildTsdownAdmission(true, [{ fresh: true }, { fresh: true }])).toBe(false);
-    expect(requiresFullBuildTsdownAdmission(true, [{ fresh: true }, { fresh: false }])).toBe(true);
-    expect(requiresFullBuildTsdownAdmission(false, [{ fresh: true }, { fresh: true }])).toBe(true);
+    expect(
+      requiresFullBuildTsdownAdmission(true, [
+        { label: "tsdown-ai", fresh: true },
+        { label: "tsdown-unified", fresh: true },
+      ]),
+    ).toBe(false);
+    expect(
+      requiresFullBuildTsdownAdmission(true, [
+        { label: "tsdown-ai", fresh: false },
+        { label: "tsdown-unified", fresh: true },
+      ]),
+    ).toBe(false);
+    expect(
+      requiresFullBuildTsdownAdmission(true, [
+        { label: "tsdown-ai", fresh: true },
+        { label: "tsdown-unified", fresh: false },
+      ]),
+    ).toBe(true);
+    expect(
+      requiresFullBuildTsdownAdmission(false, [
+        { label: "tsdown-ai", fresh: true },
+        { label: "tsdown-unified", fresh: true },
+      ]),
+    ).toBe(true);
   });
 
   it("rebuilds runtime JS while reusing fresh declaration groups", () => {

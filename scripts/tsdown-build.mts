@@ -10,6 +10,7 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
@@ -81,6 +82,7 @@ export type MemoryLimitParams = {
   constrainedMemoryBytes?: number;
   env?: NodeJS.ProcessEnv;
   fs?: { readFileSync(filePath: string, encoding: "utf8"): string };
+  physicalMemoryBytes?: number;
   platform?: string;
   procMeminfoPath?: string;
   procMemTotalBytes?: number;
@@ -693,6 +695,11 @@ function readProcMemTotalBytes(params: MemoryLimitParams = {}) {
   }
 }
 
+function readPhysicalMemoryTotalBytes(params: MemoryLimitParams = {}) {
+  const totalBytes = params.physicalMemoryBytes ?? os.totalmem();
+  return Number.isFinite(totalBytes) && totalBytes > 0 ? Math.trunc(totalBytes) : null;
+}
+
 function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
   if (params.resolvedMaxOldSpaceMb !== undefined) {
     return params.resolvedMaxOldSpaceMb;
@@ -709,7 +716,10 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
     return envOverride;
   }
 
-  const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
+  const limitBytes =
+    readCgroupMemoryLimitBytes(params) ??
+    readProcMemTotalBytes(params) ??
+    readPhysicalMemoryTotalBytes(params);
   if (limitBytes === null) {
     return defaultMaxOldSpaceMb;
   }

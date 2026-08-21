@@ -32,6 +32,7 @@ const { createTempDir } = createScriptTestHarness();
 const NO_MEMORY_LIMIT = {
   cgroupMemoryLimitPaths: [],
   constrainedMemoryBytes: 0,
+  physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
 
@@ -559,6 +560,20 @@ describe("resolveTsdownBuildInvocation", () => {
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
+  it("uses physical memory when cgroups and procfs are unavailable", () => {
+    const result = resolveTsdownBuildPlan({
+      platform: "darwin",
+      env: {},
+      constrainedMemoryBytes: 0,
+      cgroupMemoryLimitPaths: [],
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(3328);
+    expect(result.heapShortfall?.fatal).toBe(true);
   });
 
   it("caps the tsdown heap using the process's own cgroup slice budget", () => {

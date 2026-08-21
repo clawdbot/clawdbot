@@ -839,9 +839,11 @@ type BuildAllCacheState = ReturnType<typeof resolveBuildAllStepCacheState>;
 
 export function requiresFullBuildTsdownAdmission(
   cacheEnabled: boolean,
-  cacheStates: Array<{ fresh: boolean }>,
+  cacheStates: Array<{ fresh: boolean; label: string }>,
 ) {
-  return cacheStates.some((cacheState) => !cacheEnabled || !cacheState.fresh);
+  return cacheStates.some(
+    (cacheState) => cacheState.label === "tsdown-unified" && (!cacheEnabled || !cacheState.fresh),
+  );
 }
 
 export function writeBuildAllStepCacheStamp(
@@ -1029,7 +1031,7 @@ if (isMainModule()) {
         const buildPlan = resolveBuildAllTsdownPlan(
           requiresFullBuildTsdownAdmission(
             cacheEnabled,
-            [...plannedTsdownCaches.values()].map((entry) => entry.cacheState),
+            [...plannedTsdownCaches].map(([label, entry]) => ({ label, ...entry.cacheState })),
           ),
           buildEnv,
         );
