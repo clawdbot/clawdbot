@@ -15,19 +15,9 @@ import {
 } from "../../../config/types.secrets.js";
 import { provisionGatewayTokenStoreRef } from "../../../gateway/auth-token-store-ref.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import { createGatewayEnvSecretRef } from "../../../secrets/ref-contract.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
-
-function gatewayEnvTokenRef(config: OpenClawConfig, envVarName: string): SecretRef {
-  return {
-    source: "env",
-    provider: resolveDefaultSecretProviderAlias(config, "env", {
-      preferFirstProviderForSource: true,
-    }),
-    id: envVarName,
-  };
-}
 
 /** Resolves what `gateway.auth.token` should hold once setup owns the token value. */
 function resolveGeneratedTokenInput(params: {
@@ -40,7 +30,7 @@ function resolveGeneratedTokenInput(params: {
     return params.token ?? randomToken();
   }
   if (params.ambientEnvOnly) {
-    return gatewayEnvTokenRef(params.config, "OPENCLAW_GATEWAY_TOKEN");
+    return createGatewayEnvSecretRef(params.config, "OPENCLAW_GATEWAY_TOKEN");
   }
   return provisionGatewayTokenStoreRef({
     config: params.config,
@@ -168,7 +158,7 @@ export function applyNonInteractiveGatewayConfig(params: {
           auth: {
             ...nextConfig.gateway?.auth,
             mode: "token",
-            token: gatewayEnvTokenRef(nextConfig, gatewayTokenRefEnv),
+            token: createGatewayEnvSecretRef(nextConfig, gatewayTokenRefEnv),
           },
         },
       };
@@ -236,7 +226,14 @@ export function applyNonInteractiveGatewayConfig(params: {
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          ...(input !== undefined ? { password } : {}),
+          ...(input !== undefined
+            ? {
+                password:
+                  opts.secretInputMode === "ref"
+                    ? createGatewayEnvSecretRef(nextConfig, "OPENCLAW_GATEWAY_PASSWORD")
+                    : password,
+              }
+            : {}),
         },
       },
     };

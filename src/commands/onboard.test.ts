@@ -668,6 +668,62 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
+  it.each(
+    [
+      ["gatewayPassword", "OPENCLAW_GATEWAY_PASSWORD"],
+      ["remoteToken", "OPENCLAW_GATEWAY_TOKEN"],
+      ["remotePassword", "OPENCLAW_GATEWAY_PASSWORD"],
+    ].flatMap(([optionName, envName]) =>
+      ["", "different-credential"].map((envValue) => ({ optionName, envName, envValue })),
+    ),
+  )(
+    "rejects $optionName with env value $envValue before reading or resetting config",
+    async ({ optionName, envName, envValue }) => {
+      vi.stubEnv(envName, envValue);
+      const runtime = makeRuntime();
+
+      await setupWizardCommand(
+        {
+          reset: true,
+          nonInteractive: true,
+          acceptRisk: true,
+          secretInputMode: "ref",
+          [optionName]: "expected-credential",
+          ...(optionName.startsWith("remote")
+            ? { mode: "remote", remoteUrl: "wss://gateway.example.invalid" }
+            : {}),
+        },
+        runtime,
+      );
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(envName));
+      if (envValue) {
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("does not match"));
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps interactive gateway reference selection independent of the default env var", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        acceptRisk: true,
+        gatewayPassword: "interactive-password",
+        secretInputMode: "ref",
+      },
+      runtime,
+    );
+
+    expect(mocks.runInteractiveSetup).toHaveBeenCalledOnce();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("validates dependent gateway options before reset", async () => {
     const runtime = makeRuntime();
 

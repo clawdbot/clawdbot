@@ -99,6 +99,31 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       "--gateway-password configures local gateway auth. Use --remote-password in remote mode.",
     );
   }
+  if (opts.nonInteractive && opts.secretInputMode === "ref") {
+    const gatewayCredentials = [
+      ["--gateway-password", opts.gatewayPassword, "OPENCLAW_GATEWAY_PASSWORD"],
+      ["--remote-token", opts.remoteToken, "OPENCLAW_GATEWAY_TOKEN"],
+      ["--remote-password", opts.remotePassword, "OPENCLAW_GATEWAY_PASSWORD"],
+    ] as const;
+    for (const [flag, value, envName] of gatewayCredentials) {
+      if (value === undefined) {
+        continue;
+      }
+      const envValue = process.env[envName]?.trim();
+      if (!envValue) {
+        return rejectOption(
+          runtime,
+          `${flag} requires ${envName} to be set when --secret-input-mode ref is used.`,
+        );
+      }
+      if (value.trim() !== envValue) {
+        return rejectOption(
+          runtime,
+          `${flag} does not match ${envName}. Set the environment variable to the same value or omit the flag.`,
+        );
+      }
+    }
+  }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],

@@ -291,8 +291,15 @@ export async function configureGatewayForSetup(
       value: quickstartGateway.password,
       defaults: nextConfig.secrets?.defaults,
     }).ref;
+    const quickstartNeedsPasswordRef =
+      flow === "quickstart" &&
+      opts.secretInputMode === "ref" &&
+      !existingPasswordRef &&
+      quickstartGateway.password !== opts.baseConfig.gateway?.auth?.password;
     let password: SecretInput | undefined =
-      flow === "quickstart" ? quickstartGateway.password : (existingPasswordRef ?? undefined);
+      flow === "quickstart" && !quickstartNeedsPasswordRef
+        ? quickstartGateway.password
+        : (existingPasswordRef ?? undefined);
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
