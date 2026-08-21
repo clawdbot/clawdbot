@@ -274,10 +274,13 @@ describe("UsagePage detail requests", () => {
   it("marks provider usage stalled once the retry budget is spent", async () => {
     vi.useFakeTimers();
     focusDocument();
+    let providerUsageRefreshing = true;
     const client = {
       request: vi.fn(async (method: string) =>
         method === "usage.status"
-          ? { updatedAt: 1, providers: [], refreshing: true }
+          ? providerUsageRefreshing
+            ? { updatedAt: 1, providers: [], refreshing: true }
+            : { updatedAt: 2, providers: [] }
           : method === "usage.cost"
             ? { daily: [] }
             : { sessions: [], totals: null },
@@ -285,7 +288,7 @@ describe("UsagePage detail requests", () => {
     } as unknown as GatewayBrowserClient;
     const page = await createPage(client);
     const gateway = page.context.gateway;
-    const routeDataAt = (loadedAtMs: number) => ({
+    page.routeData = {
       gateway,
       gatewaySnapshot: gateway.snapshot,
       client,
@@ -305,25 +308,17 @@ describe("UsagePage detail requests", () => {
           value: { updatedAt: 1, providers: [], refreshing: true },
         },
       },
-      loadedAtMs,
+      loadedAtMs: 0,
       error: null,
-    });
-
-    page.routeData = routeDataAt(0);
+    };
     await page.updateComplete;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       await vi.advanceTimersByTimeAsync(5_000);
     }
     expect(page.providerUsageStalled).toBe(true);
 
-    page.routeData = {
-      ...routeDataAt(4),
-      providerUsage: {
-        state: "settled",
-        result: { ok: true, value: { updatedAt: 2, providers: [] } },
-      },
-    };
-    await page.updateComplete;
+    providerUsageRefreshing = false;
+    await page.loadUsage();
     expect(page.providerUsageStalled).toBe(false);
   });
 
