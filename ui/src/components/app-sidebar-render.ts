@@ -44,6 +44,7 @@ import {
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
+import { describeSessionTrailingState } from "./session-leading-indicator.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
@@ -179,19 +180,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
   const running = mainRow?.hasActiveRun === true;
-  const hasUnread = mainRow?.unread === true && !active;
-  const unread = hasUnread && !running;
-  const homeLabel =
-    attentionLabel || (running && hasUnread)
-      ? [
-          t("nav.home"),
-          attentionLabel,
-          running ? t("sessionsView.activeRun") : "",
-          hasUnread ? t("sessionsView.unread") : "",
-        ]
+  const unread = mainRow?.unread === true && !active;
+  const homeDescription =
+    attentionLabel || (running && unread)
+      ? [attentionLabel, mainRow ? describeSessionTrailingState(mainRow, "none") : ""]
           .filter(Boolean)
           .join(" · ")
-      : undefined;
+      : "";
   // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
@@ -199,7 +194,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
         : renderSessionAttentionIcon(attention),
     running: false,
-    badge: unread ? renderSessionUnreadBadge() : nothing,
+    badge: unread && !running ? renderSessionUnreadBadge() : nothing,
   });
   return html`
     <a
@@ -213,7 +208,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
-      aria-label=${homeLabel ?? nothing}
+      aria-label=${homeDescription ? `${t("nav.home")} · ${homeDescription}` : nothing}
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
