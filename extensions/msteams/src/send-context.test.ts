@@ -100,6 +100,34 @@ beforeEach(() => {
 });
 
 describe("resolveMSTeamsSendContext", () => {
+  it("rejects an unavailable selected certificate before reading conversation state", async () => {
+    const certificatePath = "/private/openclaw-msteams-unavailable-send.pem";
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          tenantId: "tenant-id",
+          authType: "federated",
+          certificatePath,
+        },
+      },
+    } as OpenClawConfig;
+
+    const error = await resolveMSTeamsSendContext({
+      cfg,
+      to: "conversation:19:channel@thread.tacv2",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    if (error instanceof Error) {
+      expect(error.message).toBe("msteams credential file is configured but unavailable");
+      expect(error.message).not.toContain(certificatePath);
+    }
+    expect(sendContextMockState.store.get).not.toHaveBeenCalled();
+    expect(sendContextMockState.loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
+  });
+
   it("ignores ambient SERVICE_URL for default public-cloud proactive sends", async () => {
     vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
     sendContextMockState.store.get.mockResolvedValue(

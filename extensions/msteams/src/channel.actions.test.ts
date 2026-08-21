@@ -599,6 +599,41 @@ describe("msteamsPlugin message actions", () => {
     ).toContain("upload-file");
   });
 
+  it("hides message actions when the selected certificate is unavailable", () => {
+    const discovery = msteamsPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: {
+          msteams: {
+            appId: "app-id",
+            tenantId: "tenant-id",
+            authType: "federated",
+            certificatePath: "/private/openclaw-msteams-unavailable-actions.pem",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(discovery).toEqual({ actions: [], capabilities: [], schema: null });
+  });
+
+  it("keeps message actions available when managed identity owns federated auth", () => {
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg: {
+          channels: {
+            msteams: {
+              appId: "app-id",
+              tenantId: "tenant-id",
+              authType: "federated",
+              certificatePath: "/private/openclaw-msteams-unused-certificate.pem",
+              useManagedIdentity: true,
+            },
+          },
+        } as OpenClawConfig,
+      })?.actions,
+    ).toContain("upload-file");
+  });
+
   it("routes upload-file through sendMessageMSTeams with filename override", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
     const mediaAccess = {
