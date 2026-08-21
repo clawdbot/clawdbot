@@ -12,6 +12,8 @@ import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recover
 import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
+  resolveEffectiveCleanupMode,
+  shouldDeleteSubagentAttachments,
 } from "./subagent-registry-cleanup.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
@@ -102,7 +104,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   const completion = ensureCompletionState(entry);
   completion.fallbackResultText = undefined;
   completion.fallbackCapturedAt = undefined;
-  if ((cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep) {
+  if (shouldDeleteSubagentAttachments(entry, cleanup)) {
     await safeRemoveAttachmentsDir(entry);
   }
   if (
@@ -119,7 +121,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   context.completeCleanupBookkeeping({
     runId,
     entry,
-    cleanup: cleanup ?? entry.cleanup,
+    cleanup: resolveEffectiveCleanupMode(entry, cleanup),
     completedAt: completedAt ?? Date.now(),
   });
   if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
@@ -184,7 +186,7 @@ export const retryDeferredCompletedAnnounces = (
 const finalizeSubagentCleanup = async (
   context: SubagentLifecycleAnnounceCleanupContext,
   runId: string,
-  cleanup: "delete" | "keep",
+  requestedCleanup: "delete" | "keep",
   announceOutcome: SubagentAnnounceFlowOutcome,
   cleanupGeneration: number,
   options?: {
@@ -198,6 +200,9 @@ const finalizeSubagentCleanup = async (
   if (!entry) {
     return;
   }
+  // Re-resolved against the committed outcome: an unconfirmed child must not
+  // have its session or attachments destroyed by this attempt.
+  const cleanup = resolveEffectiveCleanupMode(entry, requestedCleanup);
   if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
     await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
     return;
@@ -209,8 +214,7 @@ const finalizeSubagentCleanup = async (
       entry.suppressCompletionDelivery = undefined;
     }
     entry.wakeOnDescendantSettle = undefined;
-    const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-    if (shouldDeleteAttachments) {
+    if (shouldDeleteSubagentAttachments(entry, cleanup)) {
       await safeRemoveAttachmentsDir(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -290,8 +294,7 @@ const finalizeSubagentCleanup = async (
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
     const completionReason = resolveCleanupCompletionReason(entry);
-    const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-    if (shouldDeleteAttachments) {
+    if (shouldDeleteSubagentAttachments(entry, cleanup)) {
       await safeRemoveAttachmentsDir(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -390,7 +393,12 @@ export const startSubagentAnnounceCleanupFlow = (
     // kill. The sweeper re-enters here after durable reconciliation.
     return false;
   }
-  const cleanup = entry.cleanup;
+  // A run completed on its deadline with no observed child stop keeps its child
+  // session: deleting it would destroy a session that may still be in use, and
+  // the announce this flow is about to send says exactly that the child may
+  // still be running. `entry.cleanup` is untouched, so the archive deadline
+  // still arms and the sweeper performs the deletion once retention expires.
+  const cleanup = resolveEffectiveCleanupMode(entry);
   let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
   if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
     const cleanupGeneration = beginSubagentCleanup(context, runId);

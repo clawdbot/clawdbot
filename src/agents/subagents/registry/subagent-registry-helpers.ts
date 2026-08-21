@@ -19,6 +19,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -374,7 +375,14 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
   const archiveAfterMs =
     entry.spawnMode === "session" || completedAt === undefined
       ? undefined
-      : resolveArchiveAfterMs(cfg);
+      : // Terminal cleanup skips sessions.delete while a child stop is
+        // unconfirmed, which makes the archive pass the owner of the deferred
+        // deletion. Disabling auto-archive must not leave that child session
+        // unowned, so fall back to the default window instead of no deadline.
+        (resolveArchiveAfterMs(cfg) ??
+        (shouldDeferTerminalCleanupForUnconfirmedChild(entry)
+          ? DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES * 60_000
+          : undefined));
   const expectedArchiveAt =
     completedAt !== undefined && archiveAfterMs !== undefined
       ? completedAt + archiveAfterMs

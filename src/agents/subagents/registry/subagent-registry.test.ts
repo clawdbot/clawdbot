@@ -2281,6 +2281,138 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("keeps a delete-cleanup child session alive when only the wait deadline expired", async () => {
+    const startedAt = Date.now();
+    let waitAttempts = 0;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore({
+        updatedAt: startedAt,
+        status: "running",
+        sessionId: "sess-unconfirmed",
+        lifecycleRevision: "rev-unconfirmed",
+      }),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-unconfirmed-delete-cleanup",
+      task: "unconfirmed child keeps its session",
+      cleanup: "delete",
+      runTimeoutSeconds: 1,
+    });
+
+    await waitForFast(() => {
+      expect(waitAttempts).toBeGreaterThanOrEqual(1);
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    // Regression (openclaw-kkv1 round 1): completing on the stored deadline
+    // observed nothing, so the child may still be running. Handing the announce
+    // cleanup: "delete" would submit sessions.delete with deleteTranscript for a
+    // live session — the announce itself says the child may still be working.
+    const announceParams = getMockCallArg(
+      mocks.runSubagentAnnounceFlow,
+      0,
+      0,
+      "unconfirmed announce params",
+    );
+    expect(announceParams.cleanup).toBe("keep");
+    expect(announceParams.onBeforeDeleteChildSession).toBeUndefined();
+    const deleteCalls = () =>
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete");
+    expect(deleteCalls()).toHaveLength(0);
+    // Deferred, not cancelled. The row keeps cleanup: "delete", so the archive
+    // pass still owns the deletion. This config disables auto-archive
+    // (archiveAfterMinutes: 0), which must not leave the child session unowned:
+    // a deferred cleanup arms the default window instead of no deadline at all.
+    const completedRun = findRequesterRun("run-unconfirmed-delete-cleanup");
+    expect(completedRun?.cleanup).toBe("delete");
+    expect(completedRun?.execution.outcome?.timeoutDisposition).toBe("child-unconfirmed");
+    expect(completedRun?.archiveAtMs).toBe(startedAt + 1_000 + 60 * 60_000);
+
+    vi.setSystemTime(startedAt + 1_000 + 61 * 60_000);
+    await mod.testing.sweepOnceForTests();
+    expect(deleteCalls()).toHaveLength(1);
+    expect(deleteCalls()[0]?.[0]).toMatchObject({
+      method: "sessions.delete",
+      params: expect.objectContaining({ expectedSessionId: "sess-unconfirmed" }),
+    });
+    expect(findRequesterRun("run-unconfirmed-delete-cleanup")).toBeUndefined();
+  });
+
+  it("skips silent-cleanup session deletion for an unconfirmed child but keeps it for an observed stop", async () => {
+    const sessionStore = () =>
+      createSessionStore({
+        updatedAt: Date.now(),
+        status: "running",
+        sessionId: "sess-silent",
+        lifecycleRevision: "rev-silent",
+      });
+    const deleteCalls = () =>
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete");
+
+    // The silent path (expectsCompletionMessage: false) submits sessions.delete
+    // itself rather than delegating to the announce flow, so it needs its own
+    // coverage. Both identities are present, so a skipped delete can only come
+    // from the disposition — see the observed-stop half below.
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(sessionStore());
+    mod.registerSubagentRun({
+      runId: "run-unconfirmed-silent-cleanup",
+      task: "unconfirmed silent cleanup",
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      runTimeoutSeconds: 1,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Settled either way: the fix keeps the row (cleanup downgraded to keep, so
+    // it is not retired), the unfixed path retires it after deleting. Waiting on
+    // "settled" rather than on the row keeps the delete assertion below the one
+    // that fails when the fix is absent.
+    await waitForFast(() => {
+      const run = findRequesterRun("run-unconfirmed-silent-cleanup");
+      expect(run === undefined || typeof run.cleanupCompletedAt === "number").toBe(true);
+    });
+    expect(deleteCalls()).toHaveLength(0);
+    expect(
+      findRequesterRun("run-unconfirmed-silent-cleanup")?.execution.outcome?.timeoutDisposition,
+    ).toBe("child-unconfirmed");
+
+    // Same run shape, same session identities, but agent.wait now carries a
+    // terminal snapshot. Deletion must still happen, or the fix has simply
+    // disabled delete-mode cleanup.
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout", stopReason: "run_timeout", endedAt: Date.now() };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue(sessionStore());
+    mod.registerSubagentRun({
+      runId: "run-observed-silent-cleanup",
+      task: "observed silent cleanup",
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+    });
+    await waitForFast(() => {
+      expect(deleteCalls()).toHaveLength(1);
+    });
+  });
+
   it("marks a run timeout as an observed child stop when agent.wait carries a terminal snapshot", async () => {
     let waitAttempts = 0;
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
