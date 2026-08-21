@@ -6,7 +6,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const { getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
+const { cancelAllMock, getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
+  cancelAllMock: vi.fn<() => Promise<void>>(),
   getRuntimeConfigMock: vi.fn(),
   stopAllMock: vi.fn<() => Promise<void>>(),
 }));
@@ -14,6 +15,16 @@ const { getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
 vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("./cron-exit-watchers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cron-exit-watchers.js")>()),
+  createCronExitWatchers: () => ({
+    reconcile: vi.fn(),
+    cancel: vi.fn(),
+    cancelAll: cancelAllMock,
+    activeJobIds: () => [],
+  }),
 }));
 
 vi.mock("./cron-stream-watchers.js", async (importOriginal) => ({
@@ -73,8 +84,40 @@ async function cleanGatewayCron({ state, stateDir }: StartedGatewayCron): Promis
 
 describe("gateway cron stop-and-drain automation ownership", () => {
   beforeEach(() => {
+    cancelAllMock.mockReset();
+    cancelAllMock.mockResolvedValue(undefined);
     getRuntimeConfigMock.mockReset();
     stopAllMock.mockReset();
+  });
+
+  it("waits for cancelled exit watchers to settle before completing the drain", async () => {
+    const exitWatcherDrain = createDeferred();
+    cancelAllMock.mockReturnValue(exitWatcherDrain.promise);
+    stopAllMock.mockResolvedValue(undefined);
+    const original = await startGatewayCron("exit-watcher");
+
+    try {
+      let drained = false;
+      const drain = original.state.cron.stopAndDrain?.().then(() => {
+        drained = true;
+      });
+      if (!drain) {
+        throw new Error("expected cron stop-and-drain");
+      }
+
+      await vi.waitFor(() => expect(cancelAllMock).toHaveBeenCalledOnce());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(drained).toBe(false);
+
+      exitWatcherDrain.resolve(undefined);
+      await drain;
+      expect(drained).toBe(true);
+    } finally {
+      exitWatcherDrain.resolve(undefined);
+      await cleanGatewayCron(original);
+    }
   });
 
   it("unregisters a stopped scheduler when stream draining fails and permits retry", async () => {

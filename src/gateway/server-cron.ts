@@ -184,7 +184,7 @@ function reconcileCronExitWatchers(params: {
   jobs: CronJob[];
 }) {
   if (!params.cronEnabled) {
-    params.exitWatchers.cancelAll();
+    void params.exitWatchers.cancelAll();
     return;
   }
   params.exitWatchers.reconcile(params.jobs);
@@ -1318,12 +1318,15 @@ export function buildGatewayCronService(params: {
     streamWatcherReconciliations +
     (exitWatchersRef.current?.activeJobIds().length ?? 0) +
     (streamWatchersRef.current?.activeJobIds().length ?? 0);
+  // cron.stop begins cancellation synchronously; stopAndDrain joins this same
+  // settlement so a replacement owner cannot start over live predecessors.
+  let exitWatchersStopPromise: Promise<void> | undefined;
   const stopExitWatchers = () => {
     // Late completion cleanup can request reconciliation after shutdown.
     // Fence new requests before cancellation so stopped children cannot respawn.
     exitWatchersStopped = true;
     exitWatcherGeneration += 1;
-    exitWatchersRef.current?.cancelAll();
+    exitWatchersStopPromise ??= exitWatchersRef.current?.cancelAll() ?? Promise.resolve();
   };
   // cron.stop launches this teardown asynchronously and stopAndDrain awaits
   // it; memoizing keeps that one drain instead of queueing every owner a
@@ -1373,13 +1376,15 @@ export function buildGatewayCronService(params: {
   };
   cron.stopAndDrain = async () => {
     cron.stop();
+    const exitWatchersStop = exitWatchersStopPromise ?? Promise.resolve();
     const streamWatchersStop = stopStreamWatchers().then(
       () => ({ ok: true as const }),
       (error: unknown) => ({ ok: false as const, error }),
     );
     const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
-    const [activeRunDrain, streamWatchersResult] = await Promise.all([
+    const [activeRunDrain, , streamWatchersResult] = await Promise.all([
       waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+      exitWatchersStop,
       streamWatchersStop,
     ]);
     if (!activeRunDrain.drained) {
@@ -1441,7 +1446,8 @@ export function buildGatewayCronService(params: {
     }
     exitWatchersStopped = false;
     streamWatchersStopped = false;
-    // A reload restart owns a fresh watcher lifecycle; the next stop must run.
+    // A restart owns a fresh watcher lifecycle; the next stop must drain it.
+    exitWatchersStopPromise = undefined;
     streamWatchersStopPromise = undefined;
     streamWatchersRef.current?.resume();
     if (generation !== streamWatcherGeneration) {
