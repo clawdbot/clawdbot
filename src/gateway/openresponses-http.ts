@@ -789,12 +789,10 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const content =
-        Array.isArray(payloads) && payloads.length > 0
-          ? payloads
-              .map((p) => (typeof p.text === "string" ? p.text : ""))
-              .filter(Boolean)
-              .join("\n\n")
-          : "No response from OpenClaw.";
+        (Array.isArray(payloads) ? payloads : [])
+          .map((p) => (typeof p.text === "string" ? p.text : ""))
+          .filter(Boolean)
+          .join("\n\n") || "No response from OpenClaw.";
 
       const response = createResponseResource({
         id: responseId,

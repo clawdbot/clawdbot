@@ -2127,6 +2127,106 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
+  describe("non-streaming assistant output visibility", () => {
+    it.each([
+      {
+        name: "an image-only reply",
+        payloads: [{ mediaUrls: ["/tmp/generated-image.png"] }],
+      },
+      {
+        name: "a voice-only reply",
+        payloads: [{ mediaUrls: ["/tmp/generated-voice.ogg"], audioAsVoice: true }],
+      },
+      {
+        name: "an empty-text reply",
+        payloads: [{ text: "" }],
+      },
+      {
+        name: "multiple replies without visible text",
+        payloads: [{ text: "" }, { mediaUrls: ["/tmp/generated-image.png"] }],
+      },
+    ])("returns the existing fallback for $name", async ({ payloads }) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+
+      const res = await postResponses(enabledPort, {
+        stream: false,
+        model: "openclaw",
+        input: "Describe the result.",
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        status?: string;
+        output?: Array<{
+          type?: string;
+          role?: string;
+          phase?: string;
+          content?: Array<{ type?: string; text?: string }>;
+        }>;
+      };
+      expect(json.status).toBe("completed");
+      expect(json.output?.[0]).toMatchObject({
+        type: "message",
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "output_text", text: "No response from OpenClaw." }],
+      });
+    });
+
+    it("preserves ordinary nonempty assistant text beside a media-only reply", async () => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [
+          { mediaUrls: ["/tmp/generated-image.png"] },
+          { text: "The generated image is ready." },
+          { text: "Use the image in your response." },
+        ],
+      } as never);
+
+      const res = await postResponses(enabledPort, {
+        stream: false,
+        model: "openclaw",
+        input: "Describe the result.",
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+      expect(json.output?.[0]?.content?.[0]?.text).toBe(
+        "The generated image is ready.\n\nUse the image in your response.",
+      );
+    });
+
+    it("keeps tool-call responses without assistant commentary function-only", async () => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ mediaUrls: ["/tmp/generated-image.png"] }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: "{}" }],
+        },
+      } as never);
+
+      const res = await postResponses(enabledPort, {
+        stream: false,
+        model: "openclaw",
+        input: "Check the weather.",
+        tools: WEATHER_TOOL,
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        status?: string;
+        output?: Array<{ type?: string; name?: string }>;
+      };
+      expect(json.status).toBe("completed");
+      expect(json.output?.map((item) => item.type)).toEqual(["function_call"]);
+      expect(json.output?.[0]?.name).toBe("get_weather");
+    });
+  });
+
   it("preserves assistant text alongside non-stream function_call output", async () => {
     const port = enabledPort;
     agentCommandMock.mockClear();
