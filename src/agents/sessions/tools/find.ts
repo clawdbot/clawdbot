@@ -12,7 +12,7 @@ import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { normalizePositiveLimit } from "./limits.js";
+import { normalizePositiveLimit, SESSION_TOOL_STDERR_TAIL_BYTES } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
@@ -292,6 +292,9 @@ export function createFindToolDefinition(
               result = await runUtf8CommandWithTimeout([fdPath, ...args], {
                 noOutputTimeoutMs: FD_STALL_TIMEOUT_MS,
                 signal,
+                // Keep the pre-refactor stderr bound; the runner default tail
+                // is 16 MiB.
+                maxOutputBytes: { stderr: SESSION_TOOL_STDERR_TAIL_BYTES },
               });
             } catch (error) {
               const outputErrorStream =

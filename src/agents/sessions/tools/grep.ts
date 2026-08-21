@@ -12,7 +12,7 @@ import { runUtf8CommandWithTimeout, type SpawnResult } from "../../../process/ex
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { normalizePositiveLimit } from "./limits.js";
+import { normalizePositiveLimit, SESSION_TOOL_STDERR_TAIL_BYTES } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
@@ -339,8 +339,10 @@ export function createGrepToolDefinition(
                 signal,
                 // stdout is parsed incrementally via onOutputChunk; retaining
                 // the runner's default 16 MiB tail would duplicate it. stderr
-                // keeps its tail for exit-error messages.
+                // keeps its tail for exit-error messages, bounded to the
+                // pre-refactor 64 KiB instead of the 16 MiB runner default.
                 outputCapture: { stdout: "discard" },
+                maxOutputBytes: { stderr: SESSION_TOOL_STDERR_TAIL_BYTES },
                 onOutputChunk: (chunk, stream): boolean | undefined => {
                   if (stream !== "stdout") {
                     return undefined;

@@ -17,6 +17,7 @@ vi.mock("../../utils/tools-manager.js", () => ({
 type RunnerOptions = {
   signal?: AbortSignal;
   noOutputTimeoutMs?: number;
+  maxOutputBytes?: { stdout?: number; stderr?: number };
   outputCapture?: {
     stdout?: "head" | "tail" | "discard";
     stderr?: "head" | "tail" | "discard";
@@ -346,6 +347,9 @@ describe("grep tool streaming", () => {
     expect(runnerOptions().noOutputTimeoutMs).toBe(60_000);
     // stdout is parsed via onOutputChunk, so the runner must not also retain it.
     expect(runnerOptions().outputCapture).toEqual({ stdout: "discard" });
+    // The pre-refactor stderr tail was bounded to 64 KiB; the runner default
+    // is 16 MiB, so the tool must pass the smaller bound explicitly.
+    expect(runnerOptions().maxOutputBytes).toEqual({ stderr: 64 * 1024 });
 
     const rejection = expect(result).rejects.toThrow(
       "ripgrep timed out after 60 seconds without output",

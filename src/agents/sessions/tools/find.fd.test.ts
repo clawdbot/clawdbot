@@ -22,6 +22,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type RunnerOptions = {
   signal?: AbortSignal;
   noOutputTimeoutMs?: number;
+  maxOutputBytes?: { stdout?: number; stderr?: number };
   onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => boolean | void;
 };
 
@@ -138,6 +139,9 @@ it("rejects and kills fd when the search stalls without output past the deadline
   const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
   await vi.waitFor(() => expect(runUtf8CommandWithTimeout).toHaveBeenCalledOnce());
   expect(runnerOptions().noOutputTimeoutMs).toBe(60_000);
+  // The pre-refactor stderr tail was bounded to 64 KiB; the runner default is
+  // 16 MiB, so the tool must pass the smaller bound explicitly.
+  expect(runnerOptions().maxOutputBytes).toEqual({ stderr: 64 * 1024 });
 
   const rejection = expect(result).rejects.toThrow("fd timed out after 60 seconds without output");
   await vi.advanceTimersByTimeAsync(60_000);
