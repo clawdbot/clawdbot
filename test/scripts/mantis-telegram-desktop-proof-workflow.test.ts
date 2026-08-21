@@ -666,6 +666,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish [--focus-message-id ID]`");
     expect(prompt).toContain("Identical relevant observations are unproven");
+    expect(prompt).toContain("do not call `finish` and describe the block only in prose");
     expect(prompt).toContain("`block --reason TEXT [--missing-primitive NAME]`");
     expect(prompt).toContain("`@{sut}`");
     expect(prompt).toContain("raw full-window footage remains");

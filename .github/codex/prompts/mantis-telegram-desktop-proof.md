@@ -100,6 +100,8 @@ pass claim requires an observed, material baseline/candidate difference caused
 by the changed behavior. Identical relevant observations are unproven: use
 `block`, never claim the PR fixed them. When the expected result is silence,
 focus the session-owned user message that triggered the silent outcome.
+Decide before finalizing each lane. If its setup did not exercise the intended
+behavior, call `block`; do not call `finish` and describe the block only in prose.
 
 ## Judge and publish
 
