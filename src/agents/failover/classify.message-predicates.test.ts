@@ -24,8 +24,8 @@ describe("Claude subscription usage credits (#122010)", () => {
     "You're out of usage credits. Run /usage-credits to keep using Fable 5 or /model to switch models.";
 
   it("classifies claude-cli usage-credit exhaustion as billing", () => {
-    // Left unmatched this lands in `unknown`, which does not advance the model fallback
-    // chain, so a configured cross-provider fallback is never reached.
+    // Left unmatched `classifyFailoverReason` returns `null`, which does not advance the
+    // model fallback chain, so a configured cross-provider fallback is never reached.
     expect(isBillingErrorMessage(reported)).toBe(true);
     expect(classifyFailoverReason(reported, { provider: "anthropic" })).toBe("billing");
   });
