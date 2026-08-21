@@ -201,6 +201,23 @@ describe("projectModelCatalogEntryForRoute", () => {
     });
   });
 
+  it("marks configured reasoning overrides as authoritative", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", reasoning: false }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveConfiguredModelCatalogOverrides({ cfg, entry: platformEntry })).toEqual({
+      reasoning: false,
+      configuredReasoning: false,
+    });
+  });
+
   it("merges logical overrides from canonical duplicate model rows", () => {
     const cfg = {
       models: {

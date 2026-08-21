@@ -436,33 +436,34 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
     const clientEpoch = this.connectionLifecycle.epoch;
     const agentId = this.selectedAgentId;
+    const agentEpoch = this.agentEpoch;
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
+    const ownsProbe = () =>
+      this.isCurrentClient(client, clientEpoch) &&
+      this.agentEpoch === agentEpoch &&
+      this.selectedAgentId === agentId &&
+      this.probeEpochs.get(cardId) === probeEpoch;
     this.setBusy(key, true);
     this.setMessage(cardId, null);
     try {
       const results: ModelsProbeResult[] = [];
       for (const provider of providers) {
+        if (!ownsProbe()) {
+          return;
+        }
         results.push(
           await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
         );
       }
-      if (
-        this.isCurrentClient(client, clientEpoch) &&
-        this.selectedAgentId === agentId &&
-        this.probeEpochs.get(cardId) === probeEpoch
-      ) {
+      if (ownsProbe()) {
         this.probeResults = {
           ...this.probeResults,
           [cardId]: mergeProbeResults(cardId, results),
         };
       }
     } catch (error) {
-      if (
-        !this.isCurrentClient(client, clientEpoch) ||
-        this.selectedAgentId !== agentId ||
-        this.probeEpochs.get(cardId) !== probeEpoch
-      ) {
+      if (!ownsProbe()) {
         return;
       }
       if (isMissingMethodError(error)) {
@@ -475,10 +476,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.setMessage(cardId, { kind: "error", text: modelProviderErrorMessage(error) });
       }
     } finally {
-      if (
-        this.isCurrentClient(client, clientEpoch) &&
-        this.probeEpochs.get(cardId) === probeEpoch
-      ) {
+      if (ownsProbe()) {
         this.setBusy(key, false);
       }
     }
@@ -607,8 +605,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const modelBehavior = readModelBehaviorConfig(agentsDefaults);
     // This keeps the pre-move General busy gate sourced from the same update state.
     const configBusy = this.configBusy();
+    const providerUsage = data.providerUsage?.ok ? data.providerUsage.value : null;
     const cards = buildModelProviderCards({
       ...data,
+      providerUsage,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
@@ -627,6 +627,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
       refreshing: this.refreshTask.status === TaskStatus.PENDING,
       error: rosterError ?? data.error ?? data.catalogError,
+      providerUsageFailed: data.providerUsage?.ok === false,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,

@@ -4,11 +4,17 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
-  enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  normalizeSqliteNonNegativeInteger,
+  readSqliteBusyTimeout,
+  runWithSqliteBusyTimeout,
+  setSqliteBusyTimeout,
+  type SqliteLockFailureReporting,
+} from "../infra/sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
@@ -18,7 +24,6 @@ import {
 import {
   assertSqliteIntegrity,
   confirmSqliteFileIntegrity,
-  isTerminalSqliteIntegrityError,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
@@ -29,12 +34,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
-import { isSqliteSchemaVersionError, readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import {
-  configureSqliteConnectionPragmas,
-  configureSqlitePreSchemaPragmas,
-  type SqliteWalMaintenance,
-} from "../infra/sqlite-wal.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { VERSION } from "../version.js";
@@ -59,6 +59,7 @@ import {
   assertSupportedSchemaVersion,
   resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
+import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import {
@@ -83,6 +84,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 import { describeAgentPathMigration, warnAgentPathMigration } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
+  isOpenClawStateWriteContentionError,
   OpenClawStateOwnershipError,
   runWithOpenClawStateWriteAccess,
 } from "./openclaw-state-ownership.js";
@@ -367,7 +369,12 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
   );
 }
 
-function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv): void {
+function ensureSchema(
+  db: DatabaseSync,
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+  busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+): void {
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
   // Rebuilding referenced tables requires disabling FK enforcement before BEGIN.
@@ -461,7 +468,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
         warnAgentPathMigration(stateDbLog, pathMigration, pathname);
       },
       {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        busyTimeoutMs,
         databaseLabel: pathname,
         operationLabel: "state.schema.ensure",
       },
@@ -539,76 +546,12 @@ function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: strin
   assertOpenClawStateDatabaseForMaintenance(database, { pathname });
 }
 
-function assertStateDatabaseIntegrityBeforeMutation(
-  database: DatabaseSync,
-  pathname: string,
-): void {
-  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  const userVersion = readSqliteUserVersion(database);
-  const hasApplicationSchema = database
-    .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
-    .get();
-  const migrationPending =
-    (userVersion === 0 && hasApplicationSchema) ||
-    (userVersion > 0 && userVersion < OPENCLAW_STATE_SCHEMA_VERSION);
-  if (migrationPending) {
-    stateDbLog.info("state database schema migration pending; verifying integrity first", {
-      fromVersion: userVersion,
-      path: pathname,
-      toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-  }
-  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    // Every physical open proves the full file before schema mutation or exposure.
-    assertSqliteIntegrity(database, pathname);
-  }
-}
-
-function openUnpublishedOpenClawStateDatabase(
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): OpenClawStateDatabase {
-  ensureOpenClawStatePermissions(pathname, env);
-  const db = openNodeSqliteDatabase(pathname);
-  enableNodeSqliteKyselyStatementCache(db);
-  const walMaintenance = (() => {
-    let maintenance: SqliteWalMaintenance | undefined;
-    try {
-      db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      assertSupportedSchemaVersion(db, pathname);
-      assertStateDatabaseIntegrityBeforeMutation(db, pathname);
-      configureSqlitePreSchemaPragmas(db, {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-      });
-      maintenance = configureSqliteConnectionPragmas(db, {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-        databaseLabel: "openclaw-state",
-        databasePath: pathname,
-        foreignKeys: true,
-        synchronous: "NORMAL",
-      });
-      ensureSchema(db, pathname, env);
-      return maintenance;
-    } catch (err) {
-      maintenance?.close();
-      db.close();
-      if (
-        err instanceof Error &&
-        (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
-      ) {
-        recordOpenClawStateDatabaseOpenFailure(pathname, err);
-      }
-      throw err;
-    }
-  })();
-  ensureOpenClawStatePermissions(pathname, env);
-  return { db, path: pathname, walMaintenance };
-}
-
 /** Open or return a cached shared state database after schema and migration checks. */
 
-export function openOpenClawStateDatabase(
+function openOpenClawStateDatabaseWithBusyTimeout(
   options: OpenClawStateDatabaseOptions = {},
+  busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  lockFailureReporting: SqliteLockFailureReporting = "report",
 ): OpenClawStateDatabase {
   const env = options.env ?? process.env;
   if (options.database) {
@@ -642,18 +585,27 @@ export function openOpenClawStateDatabase(
   let unpublished: OpenClawStateDatabase | undefined;
   try {
     unpublished = runWithOpenClawStateWriteAccess(
-      { databasePath: pathname, env },
+      { databasePath: pathname, busyTimeoutMs, env },
       "fresh state database open",
       () => {
         if (cached) {
           // A closed handle can leave Kysely and WAL helpers cached; clear both under access.
           stateDbCache.closeStaleCachedOpenClawStateDatabase(cached);
         }
-        return (unpublished = openUnpublishedOpenClawStateDatabase(pathname, env));
+        return (unpublished = openUnpublishedStateDatabase({
+          pathname,
+          env,
+          busyTimeoutMs,
+          lockFailureReporting,
+          ensureSchema: (database) => ensureSchema(database, pathname, env, busyTimeoutMs),
+          recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
+        }));
       },
     );
   } catch (error) {
-    stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
+    if (lockFailureReporting === "report" || !isOpenClawStateWriteContentionError(error)) {
+      stateDbCache.recordOpenClawStateDatabaseLifecycleOpenError(pathname, error);
+    }
     if (!unpublished) {
       throw error;
     }
@@ -668,6 +620,38 @@ export function openOpenClawStateDatabase(
     throw error;
   }
   return stateDbCache.publishOpenClawStateDatabase(unpublished);
+}
+
+/** Open or return a cached shared state database after schema and migration checks. */
+export function openOpenClawStateDatabase(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateDatabase {
+  return openOpenClawStateDatabaseWithBusyTimeout(options);
+}
+
+/** Run one operation through the shared owner without waiting synchronously on SQLite locks. */
+export function runWithOpenClawStateBusyTimeout<T>(
+  operation: (database: OpenClawStateDatabase) => T,
+  options: OpenClawStateDatabaseOptions,
+  busyTimeoutMs: number,
+): T {
+  const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
+  const existing = options.database ?? getOpenClawStateDatabaseIfOpen(options);
+  if (existing) {
+    return runWithSqliteBusyTimeout(existing.db, normalizedTimeoutMs, () => operation(existing), {
+      lockFailureReporting: "suppress",
+    });
+  }
+  const opened = openOpenClawStateDatabaseWithBusyTimeout(options, normalizedTimeoutMs, "suppress");
+  try {
+    return runWithSqliteBusyTimeout(opened.db, normalizedTimeoutMs, () => operation(opened), {
+      lockFailureReporting: "suppress",
+    });
+  } finally {
+    if (opened.db.isOpen) {
+      setSqliteBusyTimeout(opened.db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+    }
+  }
 }
 
 /** Run a synchronous immediate transaction against the shared state database. */
@@ -702,7 +686,7 @@ export function runOpenClawStateWriteTransaction<T>(
         return operation(database);
       },
       {
-        busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        busyTimeoutMs: transactionOptions.busyTimeoutMs ?? readSqliteBusyTimeout(database.db),
         databaseLabel: database.path,
         ...transactionOptions,
         operationLabel: transactionOptions.operationLabel ?? "state.write",

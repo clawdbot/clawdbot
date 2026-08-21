@@ -2,6 +2,7 @@
  * Gateway pre-auth hardening tests.
  */
 import http from "node:http";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -526,6 +527,75 @@ describe("gateway pre-auth hardening", () => {
       });
     } finally {
       await harness.close();
+    }
+  });
+
+  it("opens only the startup generation core preauth transport during restart drain", async () => {
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    wss.on("connection", (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "startup-preauth", ts: Date.now() },
+        }),
+      );
+    });
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      clients,
+      preauthConnectionBudget: createPreauthConnectionBudget(1),
+      resolvedAuth,
+      isStartupPending: () => true,
+      workerIngressEnabled: true,
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    markGatewayRestartDraining();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const challenge = new Promise<string>((resolve) => {
+      ws.once("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as { payload?: { nonce?: unknown } };
+        const nonce = frame.payload?.nonce;
+        resolve(typeof nonce === "string" ? nonce : "");
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve) => {
+        ws.once("open", resolve);
+      });
+      await expect(challenge).resolves.toBe("startup-preauth");
+      await expect(requestUpgradeRejection(port, WORKER_PUBLIC_INGRESS_PATH)).resolves.toEqual({
+        status: 503,
+        body: "Worker websocket admission closed",
+      });
+    } finally {
+      ws.close();
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 

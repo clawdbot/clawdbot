@@ -163,6 +163,64 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
   expect(row?.updatedAt).toBe(2);
 });
 
+test("sessions.changed clears exact run ids only for an explicit tombstone", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeRunIds: ["run-exact"],
+    },
+  ]);
+
+  const omitted = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "run-progress",
+    updatedAt: 2,
+    hasActiveRun: true,
+  });
+  expect(omitted.row?.activeRunIds).toEqual(["run-exact"]);
+
+  const tombstoned = reconcileSessionChanged(omitted.result, {
+    sessionKey: key,
+    reason: "run-progress",
+    updatedAt: 3,
+    hasActiveRun: true,
+    activeRunIds: null,
+  });
+  expect(tombstoned.row?.activeRunIds).toBeUndefined();
+});
+
+test("authoritative snapshot omission clears cached exact run ids", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "direct",
+      sessionId: "session-main",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeRunIds: ["run-stale"],
+    },
+  ]);
+
+  const reconciled = reconcileSessionHistory(
+    result,
+    {
+      key,
+      kind: "direct",
+      sessionId: "session-main",
+      updatedAt: 2,
+      hasActiveRun: true,
+    },
+    undefined,
+  );
+
+  expect(reconciled?.sessions[0]?.activeRunIds).toBeUndefined();
+});
+
 test("sessions.changed invalidates the complete owner facet until canonical refresh", () => {
   const key = "agent:main:main";
   const result = buildResult([
@@ -174,7 +232,7 @@ test("sessions.changed invalidates the complete owner facet until canonical refr
       owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
     },
   ]);
-  result.creators = [{ type: "human", id: "profile-ada", label: "Ada" }];
+  result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -185,7 +243,7 @@ test("sessions.changed invalidates the complete owner facet until canonical refr
   });
 
   expect(reconciled.result?.sessions[0]?.createdActor?.id).toBe("profile-bob");
-  expect(reconciled.result?.creators).toBeUndefined();
+  expect(reconciled.result?.owners).toBeUndefined();
 });
 
 test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
@@ -194,7 +252,7 @@ test("sessions.changed preserves the owner facet when ownership is unchanged", (
   const result = buildResult([
     { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
   ]);
-  result.creators = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
+  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -204,7 +262,7 @@ test("sessions.changed preserves the owner facet when ownership is unchanged", (
     owner: { actor: createdActor },
   });
 
-  expect(reconciled.result?.creators).toEqual([
+  expect(reconciled.result?.owners).toEqual([
     { type: createdActor.type, id: createdActor.id, label: createdActor.label },
   ]);
 });
@@ -215,7 +273,7 @@ test("sessions.changed applies reassignment and invalidates the complete owner f
   const result = buildResult([
     { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
   ]);
-  result.creators = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
+  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -232,7 +290,7 @@ test("sessions.changed applies reassignment and invalidates the complete owner f
     actor: { id: "research" },
     assignedAt: 2,
   });
-  expect(reconciled.result?.creators).toBeUndefined();
+  expect(reconciled.result?.owners).toBeUndefined();
 });
 
 describe("reconcileSessionChanged", () => {

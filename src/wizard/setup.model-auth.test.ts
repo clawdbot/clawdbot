@@ -152,6 +152,51 @@ describe("runSetupModelAuthStep", () => {
     });
   });
 
+  it("targets the system agent when an explicit fleet selects Claude CLI", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: "/tmp/main-agent", workspace: "/tmp/main-workspace" },
+          ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" },
+        },
+      },
+    };
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/main-agent", {
+      allowKeychainPrompt: false,
+      readOnly: true,
+    });
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "anthropic-cli",
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+      }),
+    );
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/main-workspace",
+      }),
+    );
+  });
+
   it("validates an interactive skip against the configured default agent", async () => {
     const config = createDefaultAgentConfig();
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");

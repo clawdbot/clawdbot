@@ -424,12 +424,13 @@ wa-popover.new-session-page__select::part(body) {
   min-width: 224px;
   max-width: min(320px, calc(100vw - 24px));
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
+.agent-select--compact .agent-select__menu-title,
 .new-session-page__menu-title {
   padding: 4px 8px 2px;
   color: var(--muted);
@@ -631,7 +632,7 @@ wa-popover.new-session-page__project-popover::part(body) {
 }
 
 .new-session-page__start-submit[aria-busy="true"] svg {
-  animation: new-session-start-spin 0.75s linear infinite;
+  animation: new-session-start-spin 2.25s linear infinite;
 }
 
 @keyframes new-session-start-spin {

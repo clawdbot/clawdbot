@@ -30,6 +30,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
+import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isInvalidCronSessionTargetIdError,
@@ -253,60 +254,31 @@ async function assertValidCronUpdatePatch(params: {
       delivery: effectiveDelivery,
     });
   }
-  // failureAlert is a separate field from delivery, so a failureAlert-only patch
-  // skips the delivery check above. Validate when this edit touches a field that
-  // can change the announce channel routing: the alert's own channel/target/mode,
-  // or delivery itself (an alert without its own channel/target inherits the job
-  // delivery channel, so a delivery change can invalidate it). Editing unrelated
-  // alert fields (after/cooldown/includeSkipped) must not be blocked by a channel
-  // stored before this validation existed. The merged value carries the effective
-  // mode, and the validator no-ops for alerts that only inherit delivery.
+  // Compare the canonical before/after policy so route-changing edits are
+  // validated without blocking threshold-only edits on legacy stored channels.
   const failureAlertPatch = params.patch.failureAlert;
   const failureAlertRoutingPatched =
     failureAlertPatch &&
     ("channel" in failureAlertPatch || "to" in failureAlertPatch || "mode" in failureAlertPatch);
-  // Enabling a previously OFF alert makes it start inheriting the job delivery
-  // route, so validate even when the enabling patch (`--failure-alert`,
-  // `--failure-alert-after`) carries no routing key of its own. An alert is
-  // already ON - so an object-only edit only changes threshold/cooldown - when it
-  // has per-job config or when global `cron.failureAlert.enabled` is true;
-  // resolveFailureAlert() treats those as active, so re-validating their inherited
-  // route would block unrelated edits on a legacy channel that already delivers.
-  const globalAlertsEnabled = params.cfg.cron?.failureAlert?.enabled === true;
-  const currentAlertActive =
-    params.currentJob.failureAlert !== false &&
-    (params.currentJob.failureAlert !== undefined || globalAlertsEnabled);
-  const nextAlertActive =
-    nextJob.failureAlert !== false && (nextJob.failureAlert !== undefined || globalAlertsEnabled);
-  const alertNewlyEnabled = !currentAlertActive && nextAlertActive;
-  // A delivery change only affects the alert when the alert inherits the changed
-  // delivery field (its own channel/to is unset). Gating on that avoids blocking
-  // unrelated delivery edits (bestEffort, failureDestination) on jobs that carry
-  // a stale explicit alert channel. A delivery `mode` change is included because
-  // switching to/from webhook clears the inherited channel/target in
-  // mergeCronDelivery, which can make an inheriting alert ambiguous.
-  const deliveryPatch = params.patch.delivery;
-  const mergedAlert = nextJob.failureAlert;
-  const alertUsesInheritedChannel = !mergedAlert || mergedAlert.channel === undefined;
-  const alertUsesInheritedTarget = !mergedAlert || mergedAlert.to === undefined;
-  const deliveryAffectsInheritedAlert =
-    deliveryPatch &&
-    nextAlertActive &&
-    (("channel" in deliveryPatch && alertUsesInheritedChannel) ||
-      ("to" in deliveryPatch && alertUsesInheritedTarget) ||
-      ("mode" in deliveryPatch && alertUsesInheritedChannel));
-  const currentAlertRoutingOverride =
-    params.currentJob.failureAlert &&
-    (params.currentJob.failureAlert.channel !== undefined ||
-      params.currentJob.failureAlert.to !== undefined ||
-      params.currentJob.failureAlert.mode !== undefined);
-  const alertResetToGlobal =
-    failureAlertPatch === null && nextAlertActive && currentAlertRoutingOverride;
+  const currentAlert = resolveFailureAlert(
+    { deps: { cronConfig: params.cfg.cron } },
+    params.currentJob,
+  );
+  const nextAlert = resolveFailureAlert(
+    { deps: { cronConfig: params.cfg.cron } },
+    { ...nextJob, delivery: effectiveDelivery },
+  );
+  const alertNewlyEnabled = currentAlert === null && nextAlert !== null;
+  const alertRouteChanged =
+    currentAlert?.mode !== nextAlert?.mode ||
+    currentAlert?.channel !== nextAlert?.channel ||
+    currentAlert?.to !== nextAlert?.to ||
+    currentAlert?.accountId !== nextAlert?.accountId ||
+    currentAlert?.threadId !== nextAlert?.threadId;
   if (
     failureAlertRoutingPatched ||
     alertNewlyEnabled ||
-    deliveryAffectsInheritedAlert ||
-    alertResetToGlobal
+    (alertRouteChanged && (params.patch.delivery !== undefined || failureAlertPatch === null))
   ) {
     await assertValidCronFailureAlert({
       cfg: params.cfg,
@@ -524,6 +496,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled?: "all" | "enabled" | "disabled";
       scheduleKind?: "all" | "at" | "every" | "cron";
       lastRunStatus?: "all" | "ok" | "error" | "skipped" | "unknown";
+      trigger?: "all" | "conditional" | "unconditional";
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
@@ -544,6 +517,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled: p.enabled,
       scheduleKind: p.scheduleKind,
       lastRunStatus: p.lastRunStatus,
+      trigger: p.trigger,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
       agentId: callerScope?.agentId ?? p.agentId,

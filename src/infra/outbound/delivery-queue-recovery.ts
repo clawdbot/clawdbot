@@ -298,8 +298,7 @@ function buildRecoveryDeliverParams(
     preparedBatch: entry.preparedBatch,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
-    replyToId: entry.replyToId,
-    replyToMode: entry.replyToMode,
+    reply: entry.reply,
     formatting: entry.formatting,
     identity: entry.identity,
     bestEffort: entry.bestEffort,
@@ -461,8 +460,8 @@ function buildReconciledCommitContext(params: {
     replyToId:
       params.entry.effectiveReplyToId !== undefined
         ? params.entry.effectiveReplyToId
-        : params.entry.replyToId,
-    replyToMode: params.entry.replyToMode,
+        : params.entry.reply?.replyToId,
+    replyToMode: params.entry.reply?.source === "implicit" ? params.entry.reply.mode : undefined,
     threadId: params.entry.threadId,
     silent: params.entry.silent,
     result,
@@ -1231,6 +1230,12 @@ export async function drainPendingDeliveriesCore(opts: {
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
 }): Promise<void> {
+  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
+  await migrateLegacyPendingOutboundDeliveries({
+    cfg: opts.cfg,
+    log: opts.log,
+    stateDir: opts.stateDir,
+  });
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadPendingDeliveries(opts.stateDir)).filter(

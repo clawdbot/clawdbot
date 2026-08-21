@@ -67,7 +67,6 @@ describe("conversation registry", () => {
     });
 
     const conversations = listConversations({ agentId: "main", storePath }, { channel: "reef" });
-    expect(conversations).toHaveLength(2);
     expect(conversations.map((entry) => entry.target).toSorted()).toEqual([
       "reef:peer-a",
       "reef:peer-b",

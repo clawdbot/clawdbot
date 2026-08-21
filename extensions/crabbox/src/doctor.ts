@@ -44,7 +44,7 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
   return {
     id: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
     kind: "plugin",
-    description: "Verify configured Crabbox cloud worker binaries before dispatch.",
+    description: "Verify configured Crabbox cloud worker profiles before dispatch.",
     source: "crabbox",
     async detect(ctx) {
       const profiles = Object.entries(ctx.cfg.cloudWorkers?.profiles ?? {}).filter(
@@ -56,7 +56,8 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
       const probes = new Map<string, ReturnType<typeof doctorRuntime.probeCrabboxVersion>>();
       const findings: HealthFinding[] = [];
       for (const [profileId, profile] of profiles) {
-        const explicitBinary = nonEmptyString(readRecord(profile.settings)?.binary);
+        const settings = readRecord(profile.settings);
+        const explicitBinary = nonEmptyString(settings?.binary);
         const binary = findCrabboxBinary({
           ...(explicitBinary ? { explicit: explicitBinary } : {}),
           openclawRoot,

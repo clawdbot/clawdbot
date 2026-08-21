@@ -179,6 +179,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_environments.node_device_id TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_session_placement_moves.abandon_source INTEGER",
       "worker_session_placement_moves.target_machine_class TEXT",
       "worktrees.run_end_cleanup_json TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
@@ -186,6 +187,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "session_groups.worktree INTEGER",
       "installed_plugin_index.workspace_dir TEXT",
       "secret_store_entries.allowed_hosts TEXT",
+      "skill_workshop_proposals.claim_released_time INTEGER",
     ]);
 
     const database = createGlobalDatabase();

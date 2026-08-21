@@ -576,6 +576,12 @@ describe("cron service timer seam coverage", () => {
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toEqual({
       status: "error",
       error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+      errorClassification: { kind: "permanent" },
+      failureNotificationDetail: {
+        kind: "script-failure",
+        source: "payload",
+        code: "invalid_input",
+      },
     });
   });
 

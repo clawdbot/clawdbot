@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   appendCapturedOutput,
@@ -91,7 +92,7 @@ type NodeWorkerSupervisorOptions = {
   env?: NodeJS.ProcessEnv;
   capacity?: number;
   capacityWaitMs?: number;
-  onAvailabilityChanged?: (available: boolean) => void;
+  onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   workspace?: NodeWorkerWorkspaceRuntime;
 };
 

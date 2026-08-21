@@ -226,27 +226,36 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         },
       ),
       list: vi.fn(async () => jobs),
-      listPage: vi.fn(async (opts?: { agentId?: string; limit?: number; offset?: number }) => {
-        const requestedAgentId = opts?.agentId?.trim().toLowerCase();
-        const filteredJobs = requestedAgentId
-          ? jobs.filter((job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId)
-          : jobs;
-        const total = filteredJobs.length;
-        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-        const defaultLimit = total === 0 ? 50 : total;
-        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-        const pageJobs = filteredJobs.slice(offset, offset + limit);
-        const nextOffset = offset + pageJobs.length;
-        return {
-          jobs: pageJobs,
-          snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
-          total,
-          offset,
-          limit,
-          hasMore: nextOffset < total,
-          nextOffset: nextOffset < total ? nextOffset : null,
-        };
-      }),
+      listPage: vi.fn(
+        async (opts?: {
+          agentId?: string;
+          limit?: number;
+          offset?: number;
+          trigger?: "all" | "conditional" | "unconditional";
+        }) => {
+          const requestedAgentId = opts?.agentId?.trim().toLowerCase();
+          const filteredJobs = requestedAgentId
+            ? jobs.filter(
+                (job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId,
+              )
+            : jobs;
+          const total = filteredJobs.length;
+          const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+          const defaultLimit = total === 0 ? 50 : total;
+          const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+          const pageJobs = filteredJobs.slice(offset, offset + limit);
+          const nextOffset = offset + pageJobs.length;
+          return {
+            jobs: pageJobs,
+            snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
+            total,
+            offset,
+            limit,
+            hasMore: nextOffset < total,
+            nextOffset: nextOffset < total ? nextOffset : null,
+          };
+        },
+      ),
     },
     logGateway: {
       info: vi.fn(),
@@ -925,13 +934,17 @@ describe("cron method validation", () => {
     });
   });
 
-  it("keeps unscoped cron.list agentId filtering global for operator callers", async () => {
+  it("forwards unscoped cron.list filters for operator callers", async () => {
     const context = createCronContext(createCronJob({ agentId: "worker" }));
 
-    const { respond } = await invokeCron("cron.list", { agentId: "worker" }, { context });
+    const { respond } = await invokeCron(
+      "cron.list",
+      { agentId: "worker", trigger: "conditional" },
+      { context },
+    );
 
     expect(context.cron.listPage).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "worker" }),
+      expect.objectContaining({ agentId: "worker", trigger: "conditional" }),
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -2952,17 +2965,17 @@ describe("cron method validation", () => {
     createCronJob({ failureAlert: { channel: "c0example01", mode: "announce" } }),
   );
 
-  // Job omits mode and inherits the global webhook mode, so runtime never uses
-  // the channel; validation must not reject it (matches resolveFailureAlert).
-  failureAlertUpdateAccepted(
-    "does not validate an inherited-webhook failureAlert channel on cron.update (global mode)",
+  // An explicit job channel selects announce routing ahead of the global
+  // webhook destination, so the canonical resolver must validate it.
+  failureAlertUpdateRejected(
+    "validates an explicit failureAlert channel ahead of a global webhook on cron.update",
     { failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" } },
     createCronJob(),
     globalFailureAlertConfig(telegramSlackConfig(), { enabled: true, mode: "webhook" }),
   );
 
-  failureAlertAddAccepted(
-    "does not validate an inherited-webhook failureAlert channel on cron.add (global mode)",
+  failureAlertAddRejected(
+    "validates an explicit failureAlert channel ahead of a global webhook on cron.add",
     agentTurnCronParams({
       name: "inherited webhook alert",
       failureAlert: { channel: "C0EXAMPLE01", to: "https://example.invalid/hook" },
@@ -3031,10 +3044,10 @@ describe("cron method validation", () => {
     }),
   );
 
-  // Enabling an alert with no routing key of its own makes it inherit the job
-  // delivery channel; a legacy-invalid one must be rejected, not persisted.
-  failureAlertUpdateRejected(
-    "validates a newly enabled alert (--failure-alert-after) that inherits a legacy-invalid delivery channel",
+  // Route-backed alerts are already active by default, so a threshold-only edit
+  // must not revalidate a legacy channel that the patch does not change.
+  failureAlertUpdateAccepted(
+    "does not revalidate a route-backed legacy channel for a threshold-only edit",
     { failureAlert: { after: 3 } },
     createRoutedCronJob("c0legacyinvalid", "123"),
   );

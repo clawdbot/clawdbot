@@ -13,9 +13,12 @@ import {
   hashSkillProposalContent,
   MAX_PROPOSAL_SUPPORT_FILES,
   prepareSkillProposalSupportFiles,
-  type PreparedSkillProposalSupportFile,
 } from "./store.js";
-import type { SkillProposalScan, SkillProposalSupportFileInput } from "./types.js";
+import type {
+  PreparedSkillProposalSupportFile,
+  SkillProposalScan,
+  SkillProposalSupportFileInput,
+} from "./types.js";
 
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;

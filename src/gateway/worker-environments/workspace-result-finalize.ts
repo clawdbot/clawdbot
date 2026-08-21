@@ -115,6 +115,8 @@ export async function reconcileWorkspaceAfterTurn(params: {
   localWorkspaceDir: string;
   transcriptTarget: Parameters<typeof SessionManager.open>[0];
   tunnel: WorkerTunnelHandle;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
   const currentPlacement = params.placements.get(params.placement.sessionId);
   const generationMatches =
@@ -175,6 +177,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
         if (!journal.wasAccepted()) {
           throw new Error("Cloud worker workspace reconciliation was not durably accepted");
         }
+        if (params.prepareAcceptedWorkspacePublication) {
+          await params.prepareAcceptedWorkspacePublication(params.turnClaim).catch(() => undefined);
+        }
         params.placements.acceptWorkspaceResult(params.turnClaim);
         const recordedStagedResultRef = params.placements
           .listPendingWorkspaceResults()
@@ -223,6 +228,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
             );
           },
         });
+        await params.publishAcceptedWorkspace?.(params.turnClaim);
         await settleStagedWorkspaceResult({
           placements: params.placements,
           turnClaim: params.turnClaim,
@@ -279,6 +285,8 @@ export async function executeRemoteExecTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   localWorkspaceDir: string;
   runLocal: () => Promise<EmbeddedAgentRunResult>;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<EmbeddedAgentRunResult> {
   const environment = params.environments.get(params.placement.environmentId);
   if (
@@ -318,6 +326,12 @@ export async function executeRemoteExecTurn(params: {
     localWorkspaceDir: params.localWorkspaceDir,
     transcriptTarget,
     tunnel,
+    ...(params.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(params.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
+      : {}),
   });
   if (executionError) {
     throw executionError instanceof Error

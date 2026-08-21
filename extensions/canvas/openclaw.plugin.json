@@ -1,6 +1,7 @@
 {
   "id": "canvas",
   "doctorContract": {
+    "configRepair": true,
     "stateMigrations": true
   },
   "activation": {
@@ -8,35 +9,25 @@
   },
   "enabledByDefault": true,
   "name": "Canvas",
-  "description": "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
+  "description": "Presents hosted widget documents on paired macOS panels.",
   "skills": ["./skills"],
   "contracts": {
     "tools": ["canvas"]
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["canvasHost"]
+    "compatibilityMigrationPaths": [
+      "canvasHost",
+      "plugins.entries.canvas.config.host"
+    ]
   },
   "uiHints": {
     "host": {
-      "label": "Canvas Host",
-      "help": "Serves local Canvas and A2UI files for paired nodes.",
+      "label": "Widget Presenter",
+      "help": "Controls hosted widget document and renderer routes.",
       "advanced": true
     },
     "host.enabled": {
-      "label": "Canvas Host Enabled",
-      "advanced": true
-    },
-    "host.root": {
-      "label": "Canvas Host Root Directory",
-      "help": "Directory to serve. Defaults to the OpenClaw state canvas directory.",
-      "advanced": true
-    },
-    "host.port": {
-      "label": "Canvas Host Port",
-      "advanced": true
-    },
-    "host.liveReload": {
-      "label": "Canvas Host Live Reload",
+      "label": "Widget Presenter Enabled",
       "advanced": true
     }
   },
@@ -49,16 +40,6 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean"
-          },
-          "root": {
-            "type": "string"
-          },
-          "port": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "liveReload": {
             "type": "boolean"
           }
         }

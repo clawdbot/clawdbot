@@ -11,8 +11,8 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
-  listAgentIds,
   resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId,
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope.js";
@@ -79,13 +79,13 @@ type HooksReportTarget = {
 function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
   const requested = rawAgentId?.trim();
   const requestedAgentId = requested ? normalizeAgentId(requested) : undefined;
-  if (requestedAgentId && !listAgentIds(config).includes(requestedAgentId)) {
-    throw new Error(
-      `Unknown agent id "${requested}". Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
-    );
+  if (requestedAgentId) {
+    resolveConfiguredAgentId(config, requestedAgentId);
   }
   const agentId =
     requestedAgentId ??
+    // Status reporting narrows to one workspace, so it keeps demanding an explicit
+    // choice rather than adopting the system agent and hiding the other agents' hooks.
     tryResolveLegacyCompatibilityAgentId(config) ??
     resolveDefaultAgentId(config, {
       surface: "hooks status reporting",

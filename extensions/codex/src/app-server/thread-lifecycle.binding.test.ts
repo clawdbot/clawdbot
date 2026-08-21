@@ -114,6 +114,7 @@ function createParams(sessionFile: string, workspaceDir: string) {
 }
 
 const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  project_doc_max_bytes: 131_072,
   "features.goals": false,
   "tools.update_plan.enabled": false,
   "features.code_mode": true,
@@ -1284,7 +1285,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
         return {
-          layers: [],
+          layers: [
+            {
+              name: {
+                type: "packagedDefaults",
+                file: "/managed/codex/defaults.toml",
+              },
+            },
+          ],
           config: {
             mcp_servers: {
               "arbitrary.server": { command: "ignored" },

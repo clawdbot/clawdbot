@@ -310,9 +310,11 @@ package with `run_release_soak=true` or explicit focused groups.
 Stable-publish uses `release_profile=stable`.
 
 ```bash
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 That helper is for regular releases. Extended-stable dispatches Full Release
@@ -321,11 +323,15 @@ Validation directly from and against `extended-stable/YYYY.M.33` with
 replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
 classification and run-identity rules.
 
-The helper pins the Tooling SHA on trusted `main`, passes the resolved Code SHA
-as `expected_sha`, and records the canonical release branch as context. It
-infers `beta` for alpha/beta package versions and `stable` for
-stable/correction versions. Pass `-f release_profile=full` only for the broad
-advisory provider/media sweep. Do not make `full` faster by silently dropping
+The helper verifies and pins the recorded Tooling SHA on trusted `main`, passes
+the resolved Code SHA as `expected_sha`, and records the canonical release
+branch as context. Reuse that SHA for the release; never refresh it from moving
+`main`. Regular release branches accept only their final package version or a
+matching beta prerelease. Tideclaw alpha validation uses its matching alpha
+branch and exact alpha tag. The helper infers `beta` for beta candidates and
+exact alpha tags, and `stable` for stable/correction versions. Pass
+`-f release_profile=full` only for the broad advisory provider/media sweep. Do
+not make `full` faster by silently dropping
 suites; use the bounded phase that matches the release decision.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the

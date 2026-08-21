@@ -39,31 +39,34 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "approval" | "board" | "swarm" | "workboard";
+  fixture?: "approval" | "board" | "code-fences" | "swarm" | "workboard";
   host: string;
+  operatorScopes?: string[];
   port: number;
 };
 
 type SessionListOptions = {
-  creators?: readonly SessionCreatorFixture[];
+  owners?: readonly SessionActorFixture[];
   hasMore: boolean;
   nextOffset: number | null;
   offset?: number;
   totalCount: number;
 };
 
-type SessionCreatorFixture = { type: "human" | "agent"; id: string; label: string };
+type SessionActorFixture = { type: "human" | "agent"; id: string; label: string };
 
-// Two creator identities so the sidebar's collaborative ownership chrome
-// (owner avatars + People filter) renders in the mock harness.
-const MOCK_SESSION_CREATORS: readonly SessionCreatorFixture[] = [
-  { type: "human", id: "profile-peter", label: "Peter" },
-  { type: "human", id: "profile-mira", label: "Mira" },
-];
-const [MOCK_CREATOR_PETER, MOCK_CREATOR_MIRA] = MOCK_SESSION_CREATORS as [
-  SessionCreatorFixture,
-  SessionCreatorFixture,
-];
+const MOCK_ACTOR_PETER: SessionActorFixture = {
+  type: "human",
+  id: "profile-peter",
+  label: "Peter",
+};
+const MOCK_ACTOR_MIRA: SessionActorFixture = {
+  type: "human",
+  id: "profile-mira",
+  label: "Mira",
+};
+// These actors are also the effective owners because the mock rows are unassigned.
+const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
@@ -153,6 +156,10 @@ function parseArgs(args: string[]): CliOptions {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), options.port);
+    } else if (arg === "--operator-scopes") {
+      options.operatorScopes = parseOperatorScopes(args[++i]);
+    } else if (arg.startsWith("--operator-scopes=")) {
+      options.operatorScopes = parseOperatorScopes(arg.slice("--operator-scopes=".length));
     }
   }
   return options;
@@ -162,7 +169,13 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "approval" && value !== "board" && value !== "swarm" && value !== "workboard") {
+  if (
+    value !== "approval" &&
+    value !== "board" &&
+    value !== "code-fences" &&
+    value !== "swarm" &&
+    value !== "workboard"
+  ) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -171,6 +184,14 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
 function parsePort(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : fallback;
+}
+
+function parseOperatorScopes(value: string | undefined): string[] | undefined {
+  const scopes = (value ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+  return scopes.length > 0 ? scopes : undefined;
 }
 
 function sessionRow(
@@ -207,7 +228,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     hasMore: options.hasMore,
     limitApplied: 50,
     nextOffset: options.nextOffset,
-    ...(options.creators ? { creators: options.creators } : {}),
+    ...(options.owners ? { owners: options.owners } : {}),
     offset: options.offset ?? 0,
     path: "",
     sessions,
@@ -219,13 +240,13 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
 function pagedSessionsListResponse(
   sessions: unknown[],
   offset: number,
-  creators?: readonly SessionCreatorFixture[],
+  owners?: readonly SessionActorFixture[],
 ) {
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
   return sessionsListResponse(page, {
-    creators,
+    owners,
     hasMore: nextOffset < sessions.length,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
     offset: normalizedOffset,
@@ -256,18 +277,18 @@ function buildSessionRows(params: {
 function buildSessionListCases(
   sessions: unknown[],
   matchBase: Record<string, unknown> = {},
-  creators?: readonly SessionCreatorFixture[],
+  owners?: readonly SessionActorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
   for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
     cases.push({
       match: { ...matchBase, offset },
-      response: pagedSessionsListResponse(sessions, offset, creators),
+      response: pagedSessionsListResponse(sessions, offset, owners),
     });
   }
   cases.push({
     match: matchBase,
-    response: pagedSessionsListResponse(sessions, 0, creators),
+    response: pagedSessionsListResponse(sessions, 0, owners),
   });
   return cases;
 }
@@ -277,6 +298,60 @@ function buildSearchSessionListCases(
   searchTerms: string[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
+}
+
+function buildActivitySessionRows(baseTime: number) {
+  const owners = {
+    molty: { type: "agent", id: "profile-molty", label: "Molty" },
+    riley: { type: "human", id: "presence-riley", label: "Riley" },
+    colin: { type: "human", id: "presence-colin", label: "Colin" },
+    patricia: {
+      type: "human",
+      id: "presence-patricia",
+      label: "patricia.erichsen@example.com",
+    },
+    unresolved: { type: "human", id: "147591189530201337" },
+  } as const;
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const fixtures = [
+    ["release-check", "Release readiness check", owners.riley, 5 * 60_000],
+    ["api-notes", "Gateway API notes", owners.molty, 20 * 60_000],
+    ["design-review", "Activity feed design review", owners.colin, hour],
+    ["archive-audit", "Archive retention audit", owners.unresolved, 3 * hour],
+    ["support-handoff", "Support handoff", owners.patricia, 6 * hour],
+    ["mobile-smoke", "Mobile layout smoke test", owners.riley, 18 * hour],
+    ["provider-matrix", "Provider matrix cleanup", owners.molty, 30 * hour],
+    ["docs-pass", "Operator docs pass", owners.colin, 2 * day],
+    ["queue-review", "Queue behavior review", owners.patricia, 2.5 * day],
+    ["identity-trace", "Identity trace", owners.unresolved, 3 * day],
+    ["channel-followup", "Channel delivery follow-up", owners.riley, 4 * day],
+    ["tooling-refresh", "Tooling refresh", owners.molty, 5 * day],
+    ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
+    ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
+  ] as const;
+  const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
+  return fixtures.map(([key, label, owner, age]) =>
+    sessionRow(`agent:activity:${key}`, label, baseTime - age, {
+      ...(key === "archive-audit"
+        ? {
+            activeRunIds: ["mock-activity-live-run"],
+            hasActiveRun: true,
+            observerDigest: {
+              headline: "Waiting on a fictional mock approval",
+              health: "waiting-on-user",
+              revision: 1,
+              runId: "mock-activity-live-run",
+              updatedAt: baseTime - age,
+            },
+            status: "running",
+          }
+        : {}),
+      createdActor: owner,
+      hasAutomation: automationKeys.has(key),
+      owner: { actor: owner },
+    }),
+  );
 }
 
 function usageCostTotals(totalTokens: number, totalCost = 0) {
@@ -1078,6 +1153,25 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   return messages;
 }
 
+function buildCodeFenceChatHistory(baseTime: number): unknown[] {
+  const proseFence = (language: string, label: string) => {
+    const lines = Array.from({ length: 16 }, (_, index) => `${label} line ${index + 1}`);
+    return `\`\`\`${language}\n${lines.join("\n")}\n\`\`\``;
+  };
+  const jsonLines = Array.from({ length: 18 }, (_, index) => `  "item-${index + 1}",`);
+  jsonLines[jsonLines.length - 1] = `  "item-${jsonLines.length}"`;
+  return [
+    chatHistoryMessage("assistant", proseFence("text", "Plain text"), baseTime),
+    chatHistoryMessage("assistant", proseFence("md", "Markdown alias"), baseTime + 1_000),
+    chatHistoryMessage("assistant", proseFence("markdown", "Markdown"), baseTime + 2_000),
+    chatHistoryMessage(
+      "assistant",
+      `\`\`\`json\n[\n${jsonLines.join("\n")}\n]\n\`\`\``,
+      baseTime + 3_000,
+    ),
+  ];
+}
+
 function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
@@ -1094,6 +1188,7 @@ async function createChatPickerScenario(
     createdAt: baseTime,
     updatedAt: baseTime,
     emails: ["riley@example.com"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const devicePairSetupCode = Buffer.from(
@@ -1402,7 +1497,9 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
+  const activitySessions = buildActivitySessionRows(Date.now());
   const sessions = [
+    ...activitySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
@@ -1432,7 +1529,7 @@ async function createChatPickerScenario(
       status: "running",
     }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
-      createdActor: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_ACTOR_MIRA,
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
       status: "running",
@@ -1445,7 +1542,7 @@ async function createChatPickerScenario(
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
       category: "Research",
-      createdActor: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_ACTOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
@@ -1455,7 +1552,7 @@ async function createChatPickerScenario(
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
-      createdActor: MOCK_CREATOR_PETER,
+      createdActor: MOCK_ACTOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       observerDigest: {
@@ -1500,8 +1597,8 @@ async function createChatPickerScenario(
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
-      archivedBy: MOCK_CREATOR_MIRA,
-      createdActor: MOCK_CREATOR_PETER,
+      archivedBy: MOCK_ACTOR_MIRA,
+      createdActor: MOCK_ACTOR_PETER,
       totalTokens: 42_000,
     }),
     sessionRow(
@@ -1541,7 +1638,10 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
-  const historyMessages = buildScrollableChatHistory(baseTime);
+  const historyMessages =
+    fixture === "code-fences"
+      ? buildCodeFenceChatHistory(baseTime)
+      : buildScrollableChatHistory(baseTime);
   const planSessionInfo = {
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
@@ -1619,6 +1719,7 @@ async function createChatPickerScenario(
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
+    serverBuildId: "mock",
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -1627,6 +1728,7 @@ async function createChatPickerScenario(
     featureMethods: [
       "browser.request",
       "chat.abort",
+      "config.schema",
       "chat.metadata",
       "chat.startup",
       "question.list",
@@ -2442,6 +2544,82 @@ async function createChatPickerScenario(
           },
         ],
       },
+      // Saturated-main fixture so the debug page and overlay render queued and
+      // group-budget states, not just idle lanes.
+      "diagnostics.lanes": {
+        ts: baseTime,
+        lanes: [
+          {
+            lane: "cron",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+          },
+          {
+            lane: "cron-nested",
+            queuedCount: 0,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+            group: "cron-hooks",
+            groupActive: 2,
+            groupBudget: 4,
+          },
+          {
+            lane: "hook-dispatch",
+            queuedCount: 2,
+            activeCount: 1,
+            maxConcurrent: 4,
+            draining: false,
+            generation: 1,
+            group: "cron-hooks",
+            groupActive: 2,
+            groupBudget: 4,
+            reservedForLane: 1,
+            blockedBy: "group-budget",
+          },
+          {
+            lane: "main",
+            queuedCount: 3,
+            activeCount: 16,
+            maxConcurrent: 16,
+            draining: false,
+            generation: 7,
+            blockedBy: "lane",
+          },
+          {
+            lane: "nested",
+            queuedCount: 0,
+            activeCount: 0,
+            maxConcurrent: 1,
+            draining: false,
+            generation: 1,
+          },
+          {
+            lane: "subagent",
+            queuedCount: 5,
+            activeCount: 8,
+            maxConcurrent: 8,
+            draining: false,
+            generation: 4,
+            blockedBy: "lane",
+          },
+        ],
+        dynamic: {
+          laneCount: 23,
+          activeCount: 9,
+          queuedCount: 4,
+          queuedLaneCount: 3,
+        },
+      },
+      status: {
+        eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },
+        uptimeMs: 5_412_000,
+      },
+      "last-heartbeat": { ts: baseTime },
       "sessions.list": {
         cases: [
           // Child fetches must precede the catch-all page case (subset match).
@@ -2459,7 +2637,7 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
+          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_OWNERS),
         ],
       },
       ...(fixture === "workboard" ? workboardMocks.methodResponses : {}),
@@ -2770,6 +2948,9 @@ async function waitForShutdown(): Promise<void> {
 
 const options = parseArgs(process.argv.slice(2));
 const scenario = await createChatPickerScenario(options.fixture);
+if (options.operatorScopes) {
+  scenario.operatorScopes = options.operatorScopes;
+}
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
@@ -2784,7 +2965,7 @@ const server = await createServer({
       branch: null,
       dirty: null,
       release: false,
-      buildId: "mock",
+      buildId: scenario.serverBuildId,
     }),
   },
   logLevel: "error",

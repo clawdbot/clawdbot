@@ -470,6 +470,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               id: preparedWorktree.id,
               branch: preparedWorktree.branch,
               repoRoot: preparedWorktree.repoRoot,
+              canonicalWorkspaceDir: workspace,
             },
             ...(provisioned
               ? {
@@ -477,7 +478,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
                     await managedWorktrees.remove({
                       id: preparedWorktree.id,
                       reason: "session-create-failed",
-                      force: true,
+                      allowSnapshotLoss: true,
                     });
                   },
                 }
@@ -627,6 +628,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
+    }
+    if (created.postCommit.status === "failed") {
+      runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
     registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     const createdWorktree = sessionWorktree

@@ -12,6 +12,7 @@ import {
   FAILOVER_REASONS,
   type FailoverReason,
 } from "../../packages/gateway-protocol/src/failover-reasons.js";
+import { resolveCronCompletionStatus } from "./completion-status.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
@@ -25,6 +26,7 @@ type CronRunStatus = import("./types.js").CronRunStatus;
 const CRON_TASK_DETAIL_KIND = "cron-run";
 const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
 const cronRunStatusSchema = z.enum(["ok", "error", "skipped"]);
+const cronCompletionStatusSchema = z.enum(["succeeded", "failed", "unknown"]);
 const cronDeliveryStatusSchema = z.enum(["delivered", "not-delivered", "unknown", "not-requested"]);
 const optionalCronStringSchema = z.string().optional().catch(undefined);
 const optionalNonBlankCronStringSchema = z
@@ -78,6 +80,7 @@ const cronRunLogEntrySchema = z.looseObject({
     .transform((value) => normalizeTimestamp(value))
     .pipe(z.number()),
   status: cronRunStatusSchema.optional().catch(undefined),
+  completionStatus: cronCompletionStatusSchema.optional().catch(undefined),
   error: optionalCronStringSchema,
   errorReason: z
     .custom<FailoverReason>(
@@ -149,6 +152,13 @@ export function parseCronRunLogEntryObject(
     jobId: entryObj.jobId,
     action: "finished",
     status: entryObj.status,
+    completionStatus:
+      entryObj.completionStatus ??
+      resolveCronCompletionStatus({
+        status: entryObj.status,
+        delivered: entryObj.delivered,
+        deliveryStatus: entryObj.deliveryStatus,
+      }),
     error: entryObj.error,
     errorReason: entryObj.errorReason,
     summary: entryObj.summary,
@@ -198,6 +208,7 @@ export function cronRunLogEntryToTaskDetail(
   const detail = toJsonValue({
     kind: CRON_TASK_DETAIL_KIND,
     status: entry.status,
+    completionStatus: entry.completionStatus,
     storeKey: options.storeKey,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
@@ -294,7 +305,14 @@ export function cronRunStatusToTaskStatus(
   entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
   if (entry.status === "ok") {
-    return "succeeded";
+    const completionStatus =
+      entry.completionStatus ??
+      resolveCronCompletionStatus({
+        status: entry.status,
+        delivered: entry.delivered,
+        deliveryStatus: entry.deliveryStatus,
+      });
+    return completionStatus === "succeeded" ? "succeeded" : "failed";
   }
   return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }

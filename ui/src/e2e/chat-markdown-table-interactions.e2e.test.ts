@@ -94,10 +94,52 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         .toContain("Service\tOwner\tRegion\tStatus\tVersion\tDeploy\tIncidents\tNotes");
 
       await expand.focus();
+      const inlineTable = shell.locator("table");
+      const inlineHeader = inlineTable.locator("th").first();
+      const inlineCell = inlineTable.locator("td").first();
       await expand.click();
       const dialog = page.locator("dialog.markdown-table-dialog");
       await expect.poll(() => dialog.getAttribute("open")).toBe("");
-      expect(await dialog.locator("table").textContent()).toContain("Gateway");
+      const fullscreenTable = dialog.locator("table");
+      const fullscreenHeader = fullscreenTable.locator("th").first();
+      const fullscreenCell = fullscreenTable.locator("td").first();
+      expect(await fullscreenTable.textContent()).toContain("Gateway");
+      const tableProperties = [
+        "background-color",
+        "border-collapse",
+        "border-top-width",
+        "box-shadow",
+      ] as const;
+      const cellProperties = [
+        "background-color",
+        "border-right-width",
+        "border-bottom-color",
+        "overflow-wrap",
+        "white-space",
+        "word-break",
+      ] as const;
+      const readStyles = async (locator: typeof inlineTable, properties: readonly string[]) =>
+        locator.evaluate((element, propertyNames) => {
+          const styles = getComputedStyle(element);
+          return Object.fromEntries(
+            propertyNames.map((property) => {
+              const value = styles.getPropertyValue(property);
+              if (!value) {
+                throw new Error(`Missing computed value for ${property}`);
+              }
+              return [property, value];
+            }),
+          );
+        }, properties);
+      expect(await readStyles(fullscreenTable, tableProperties)).toEqual(
+        await readStyles(inlineTable, tableProperties),
+      );
+      expect(await readStyles(fullscreenHeader, cellProperties)).toEqual(
+        await readStyles(inlineHeader, cellProperties),
+      );
+      expect(await readStyles(fullscreenCell, cellProperties)).toEqual(
+        await readStyles(inlineCell, cellProperties),
+      );
       if (captureProof) {
         await page.screenshot({
           animations: "disabled",
@@ -105,6 +147,21 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         });
       }
 
+      const dialogBounds = await dialog.boundingBox();
+      if (!dialogBounds) {
+        throw new Error("Expanded table dialog has no layout bounds");
+      }
+      await page.mouse.click(
+        Math.max(1, dialogBounds.x - 8),
+        dialogBounds.y + Math.min(8, dialogBounds.height / 2),
+      );
+      await expect.poll(() => dialog.count()).toBe(0);
+      await expect
+        .poll(() => expand.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+
+      await expand.click();
+      await expect.poll(() => dialog.getAttribute("open")).toBe("");
       await page.keyboard.press("Escape");
       await expect.poll(() => dialog.count()).toBe(0);
       await expect

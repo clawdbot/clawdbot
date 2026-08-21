@@ -162,6 +162,7 @@ env:
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
   NODE_VERSION: "24.16.0"
+  RELEASE_ISOLATION_TOOLING_CONTRACT: "1"
 
 jobs:
   resolve_target:
@@ -192,15 +193,91 @@ jobs:
             --expected-sha "$EXPECTED_SHA" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Checkout target package manifest
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          path: target
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
       - name: Validate release inputs
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_REF: ${{ inputs.ref }}
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" && "$RELEASE_PROFILE" != "beta" ]]; then
             echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
             exit 1
+          fi
+
+          context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
+          context_ref="${context_ref#refs/heads/}"
+          context_ref="${context_ref#refs/tags/}"
+          target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
+          release_version_pattern=""
+          expected_version=""
+          identity_kind=""
+          if [[ "$context_ref" =~ ^release/([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}"
+            release_version_pattern="${expected_version//./\\.}"
+            identity_kind="release branch"
+            if [[ "$target_version" != "$expected_version" &&
+                  ! "$target_version" =~ ^${release_version_pattern}-beta\.[1-9][0-9]*$ ]]; then
+              echo "Target package version ${target_version} does not belong to release branch ${context_ref}; expected ${expected_version} or a beta prerelease of it." >&2
+              exit 1
+            fi
+          elif [[ "$context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}"
+            identity_kind="extended-stable branch"
+          elif [[ "$context_ref" =~ ^v([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}"
+            identity_kind="release tag"
+          elif [[ -n "$TARGET_CONTEXT_REF" ]]; then
+            echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
+            exit 1
+          fi
+          if [[ -n "$expected_version" &&
+                "$identity_kind" != "release branch" &&
+                "$target_version" != "$expected_version" ]]; then
+            echo "Target package version ${target_version} does not match ${identity_kind} ${context_ref}; expected ${expected_version}." >&2
+            exit 1
+          fi
+          if [[ -n "$TARGET_CONTEXT_REF" ]]; then
+            if [[ ! "$TARGET_REF" =~ ^[a-f0-9]{40}$ || "$TARGET_REF" != "$TARGET_SHA" ]]; then
+              echo "target_context_ref requires ref to be the resolved full Validation SHA." >&2
+              exit 1
+            fi
+            repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
+            if [[ "$identity_kind" == "release tag" ]]; then
+              remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}^{}" | awk 'NR == 1 { print $1 }')"
+              if [[ -z "$remote_sha" ]]; then
+                remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}" | awk 'NR == 1 { print $1 }')"
+              fi
+              if [[ "$remote_sha" != "$TARGET_SHA" ]]; then
+                echo "Target SHA ${TARGET_SHA} does not match release tag ${context_ref} at ${remote_sha:-missing}." >&2
+                exit 1
+              fi
+            else
+              remote_sha="$(git ls-remote --heads "$repository_url" "refs/heads/${context_ref}" | awk 'NR == 1 { print $1 }')"
+              if [[ -z "$remote_sha" ]]; then
+                echo "Release context branch ${context_ref} does not resolve." >&2
+                exit 1
+              fi
+              comparison_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_SHA}...${remote_sha}" --jq .status)"
+              if [[ "$comparison_status" != "ahead" && "$comparison_status" != "identical" ]]; then
+                echo "Target SHA ${TARGET_SHA} is not reachable from release context branch ${context_ref} at ${remote_sha}." >&2
+                exit 1
+              fi
+            fi
           fi
 
       - name: Summarize target
@@ -230,6 +307,7 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Validation SHA: \`${TARGET_SHA}\`"
             echo "- Tooling SHA: \`${TOOLING_SHA}\`"
+            echo "- Frozen tuple: \`${TARGET_SHA} / ${TOOLING_SHA} / ${RERUN_GROUP}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Fail fast: \`${FAIL_FAST}\`"
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
@@ -633,7 +711,7 @@ jobs:
             local workflow="$1"
             local dispatch_run_name="$2"
             shift 2
-            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id
+            local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id status conclusion url poll_count run_json jobs_json child_head_sha encoded_workflow_ref current_workflow_sha expected_workflow_id started_epoch elapsed_seconds elapsed_minutes
 
             encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
             current_workflow_sha="$(
@@ -722,6 +800,7 @@ jobs:
             fi
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+            started_epoch="$(date +%s)"
 
             fail_fast_failed_jobs() {
               if [[ "$FAIL_FAST" != "true" ]]; then
@@ -792,9 +871,9 @@ jobs:
               poll_count=$((poll_count + 1))
               if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
-              fi
-              if (( poll_count % 10 == 0 )); then
-                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                elapsed_seconds=$(( $(date +%s) - started_epoch ))
+                elapsed_minutes=$(( elapsed_seconds / 60 ))
+                echo "Still waiting on ${workflow} after ${elapsed_minutes}m: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: (.url // .html_url)}' || true
               fi
               sleep 60

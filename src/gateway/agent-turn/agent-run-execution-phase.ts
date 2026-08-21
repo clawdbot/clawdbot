@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
@@ -9,6 +10,7 @@ import {
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { loadPublishedGatewayReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -21,11 +23,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
@@ -66,6 +70,7 @@ export function startAgentRunExecution(params: {
   resolvedSessionKey?: string;
   requestedSessionKey?: string;
   resolvedSessionId?: string;
+  storePath?: string;
   agentId?: string;
   activeSessionAgentId: string;
   delivery: AgentDeliveryPhaseResult;
@@ -101,12 +106,16 @@ export function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): void {
   const { prepared } = params;
+  let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   let releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = (options) => {
+    const refsToDiscard = unpersistedOffloadedRefs;
+    unpersistedOffloadedRefs = [];
     prepared.activeRunAbort.cleanup(options);
     prepared.activeGatewayWorkAdmission.release();
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
+    void discardPreparedInboundMedia(refsToDiscard, params.context.logGateway);
   };
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
@@ -194,6 +203,14 @@ export function startAgentRunExecution(params: {
       const ingressAgentId = params.resolvedSessionKey
         ? params.activeSessionAgentId
         : params.agentId;
+      const replyDispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+        agentId: params.activeSessionAgentId,
+      });
+      if (!replyDispatchRuntime?.pluginGeneration) {
+        throw new Error(
+          `prepared reply dispatch runtime was not published for ${params.activeSessionAgentId}`,
+        );
+      }
       // Plugin-owned additive grants stay internal to the authenticated in-process run.
       // Public agent params cannot supply them, and normal tool policy still filters them.
       const runtimePluginToolGrant =
@@ -201,6 +218,11 @@ export function startAgentRunExecution(params: {
         params.client.internal.pluginRuntimeOwnerId ===
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
+          : undefined;
+      const pluginSubagentToolsAllow =
+        params.client?.internal?.agentRunTracking === "plugin_subagent" &&
+        Array.isArray(params.client.internal.pluginSubagentToolsAllow)
+          ? [...params.client.internal.pluginSubagentToolsAllow]
           : undefined;
       const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
         collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
@@ -250,6 +272,10 @@ export function startAgentRunExecution(params: {
       dispatchAgentRunFromGateway(
         withAgentRunDispatchExecutionIdentity(
           {
+            commandRuntimeContext: {
+              config: replyDispatchRuntime.config,
+              pluginGeneration: replyDispatchRuntime.pluginGeneration,
+            },
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
               message,
@@ -290,9 +316,16 @@ export function startAgentRunExecution(params: {
               modelRun: params.request.modelRun === true,
               promptMode: params.request.promptMode,
               extraSystemPrompt: params.request.extraSystemPrompt,
+              gitCoauthorAttribution: prepareGitCoauthorAttribution({
+                agentId: params.activeSessionAgentId,
+                config: params.cfgForAgent ?? params.cfg,
+                currentProfileId: params.client?.authenticatedUserProfile?.profileId,
+                sessionKey: params.resolvedSessionKey,
+                storePath: params.storePath,
+              }),
               bootstrapContextMode: params.request.bootstrapContextMode,
               bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-              toolsAllow: params.restoredCronContinuation?.toolsAllow,
+              toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
               runtimePluginToolGrant,
               trustedInternalHandoff: prepared.trustedInternalHandoff,
               toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
@@ -326,6 +359,10 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
+                bindGatewayContextResolver(
+                  admittedRunContext,
+                  params.context.resolveGatewayContext,
+                );
                 const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
                 if (!authority) {
                   throw new Error("agent run delegated authority was not admitted");
@@ -343,7 +380,15 @@ export function startAgentRunExecution(params: {
               cleanupBundleMcpOnRunEnd: params.request.cleanupBundleMcpOnRunEnd,
               abortSignal: prepared.activeRunAbort.controller.signal,
               lifecycleGeneration: params.lifecycleGeneration,
-              onExecutionStarted: () => prepared.activeRunAbort.markExecutionStarted(),
+              onExecutionStarted: () => {
+                if (prepared.activeRunAbort.markExecutionStarted() && params.resolvedSessionKey) {
+                  emitSessionsChanged(params.context, {
+                    sessionKey: params.resolvedSessionKey,
+                    agentId: params.agentId,
+                    reason: "agent.run.started",
+                  });
+                }
+              },
               onActiveModelSelected: createAgentRunModelSelectionHandler({
                 context: params.context,
                 runId: params.runId,
@@ -398,6 +443,7 @@ export function startAgentRunExecution(params: {
             context: params.context,
             taskTrackingMode: prepared.dispatchTaskTrackingMode,
             restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
+            canonicalSkillWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir,
           },
           executionIdentitySpawnFacts,
         ),

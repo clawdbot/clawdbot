@@ -134,6 +134,15 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("labels the message input independently of its placeholder", () => {
+    const { container } = renderComposer();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(textarea?.getAttribute("aria-label")).toBe(
+      t("chat.composer.placeholder", { name: "OpenClaw" }),
+    );
+  });
+
   it("keeps composing enabled and explains queued delivery while offline", () => {
     const { container } = renderComposer({
       offline: true,

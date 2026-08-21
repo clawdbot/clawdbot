@@ -40,7 +40,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}
+  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}
   cancel-in-progress: ${{ inputs.target_ref == 'main' }}
 
 env:

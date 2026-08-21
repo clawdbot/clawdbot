@@ -1,7 +1,7 @@
 // Fal provider module implements model/runtime integration.
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { applyFalConfig, FAL_DEFAULT_IMAGE_MODEL_REF } from "./onboard.js";
+import { applyFalConfig } from "./onboard.js";
 
 const PROVIDER_ID = "fal";
 
@@ -21,7 +21,6 @@ export function createFalProvider(): ProviderPlugin {
         flagName: "--fal-api-key",
         envVar: "FAL_KEY",
         promptMessage: "Enter fal API key",
-        defaultModel: FAL_DEFAULT_IMAGE_MODEL_REF,
         expectedProviders: ["fal"],
         applyConfig: (cfg) => applyFalConfig(cfg),
         wizard: {

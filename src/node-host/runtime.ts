@@ -15,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
@@ -62,7 +63,7 @@ type PreparedNodeHostRuntime = {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
-    onRunnerAvailabilityChanged?: (available: boolean) => void;
+    onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -321,7 +322,7 @@ export async function prepareNodeHostRuntime(params?: {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
       const mcpAbort = new AbortController();
       const workerWorkspace = workerRunsEnabled
         ? new NodeWorkerWorkspaceRuntime({ env })
@@ -332,7 +333,7 @@ export async function prepareNodeHostRuntime(params?: {
       const workerSupervisor = workerRunsEnabled
         ? createNodeWorkerSupervisor({
             env,
-            onAvailabilityChanged: onRunnerAvailabilityChanged,
+            onCapacityChanged: onRunnerCapacityChanged,
             workspace: workerWorkspace,
           })
         : undefined;

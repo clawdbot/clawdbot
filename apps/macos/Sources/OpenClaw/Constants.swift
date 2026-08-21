@@ -48,9 +48,13 @@ let cookieSyncEnabledKey = "openclaw.cookieSyncEnabled"
 let cookieSyncIntoProfileKey = "openclaw.cookieSyncIntoProfile"
 let cookieSyncDomainsKey = "openclaw.cookieSyncDomains"
 
-func isComputerControlEnabled(defaults: UserDefaults = AppDefaults.standard) -> Bool {
+func isComputerControlEnabled(
+    defaults: UserDefaults = AppDefaults.standard,
+    launchPlan: AppLaunchRuntimePlan = .current) -> Bool
+{
     // object(forKey:) preserves an explicit false; bool(forKey:) would conflate it with an unset default.
-    defaults.object(forKey: computerControlEnabledKey) as? Bool ?? true
+    let storedValue = defaults.object(forKey: computerControlEnabledKey) as? Bool ?? true
+    return launchPlan.resolveComputerControlEnabled(storedValue)
 }
 
 let activeComputerPresenceEnabledKey = "openclaw.activeComputerPresenceEnabled"

@@ -15,6 +15,8 @@ import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
 const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
+const RELEASE_ISOLATION_TOOLING_CONTRACT = "1";
+const RELEASE_ISOLATION_TOOLING_CONTRACT_ENV = "RELEASE_ISOLATION_TOOLING_CONTRACT";
 const RELEASE_EVIDENCE_VERIFIER_PATHS = [
   "scripts/release-ci-summary.mjs",
   ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
@@ -22,15 +24,20 @@ const RELEASE_EVIDENCE_VERIFIER_PATHS = [
 const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
 export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
+const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
   stdio: ["ignore", "pipe", "inherit"],
   timeout: GH_READ_TIMEOUT_MS,
 } satisfies ExecFileSyncOptionsWithStringEncoding;
-const RELEASE_BRANCH_PATTERN =
-  /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
-const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
+const RELEASE_BRANCH_PATTERN = /^release\/([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)$/u;
+const EXTENDED_STABLE_BRANCH_PATTERN = /^extended-stable\/([0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
+const RELEASE_CONTEXT_BRANCH_PATTERN =
+  /^(?:release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
+const RELEASE_TAG_PATTERN =
+  /^v([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*)?)$/u;
+const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
@@ -68,7 +75,7 @@ function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates temporary remote branches pinned to the exact Tooling SHA and Validation SHA,
-dispatches Full Release Validation with the Validation SHA branch as its ref input
+dispatches Full Release Validation with the full Validation SHA as its ref input
 and expected_sha as its immutable identity,
 watches the parent run, verifies all child workflow head SHAs match the trusted
 workflow lineage through the release evidence manifest, then deletes both
@@ -76,8 +83,10 @@ temporary branches by default. --keep-branch retains both branches. Exact-target
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
 -f fail_fast=true to cancel each child after its first failed job. The release
-profile defaults to beta for alpha/beta package versions and stable otherwise;
-pass -f release_profile=full for the broad advisory sweep.`);
+branch accepts only its final package version or a matching beta prerelease.
+Exact alpha tags remain supported for Tideclaw. The release profile defaults to
+beta for beta candidates and exact alpha tags, and stable otherwise; pass
+-f release_profile=full for the broad advisory sweep.`);
 }
 
 function run(command: string, args: string[], options: CommandOptions = {}) {
@@ -218,10 +227,18 @@ export function parseArgs(argv: string[]) {
   }
   if (
     args.targetRef &&
-    !RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    !RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
     !RELEASE_TAG_PATTERN.test(args.targetRef)
   ) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
+  }
+  if (
+    RELEASE_CONTEXT_BRANCH_PATTERN.test(args.targetRef) &&
+    !SHA_PATTERN.test(args.workflowSha.toLowerCase())
+  ) {
+    throw new Error(
+      "release-branch validation requires --workflow-sha with an explicit full Tooling SHA",
+    );
   }
   return args;
 }
@@ -230,7 +247,7 @@ export function resolveRemoteTargetRefSha(
   targetRef: string,
   executeGit: (args: string[]) => string = (args) => run("git", args),
 ) {
-  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
     return (
       executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(/\s+/u)[0] ??
       ""
@@ -245,12 +262,56 @@ export function resolveRemoteTargetRefSha(
   return executeGit(["ls-remote", "--tags", "origin", tagRef]).split(/\s+/u)[0] ?? "";
 }
 
-function verifyTargetRef(targetRef: string, targetSha: string) {
+export function verifyTargetRef(
+  targetRef: string,
+  targetSha: string,
+  targetVersion: string,
+  resolveRemoteSha: (ref: string) => string = resolveRemoteTargetRefSha,
+  isAncestor: (ancestor: string, descendant: string) => boolean = (ancestor, descendant) =>
+    runStatus("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+      stdio: ["ignore", "ignore", "ignore"],
+    }).status === 0,
+) {
   if (!targetRef) {
     return targetSha;
   }
-  const remoteSha = resolveRemoteTargetRefSha(targetRef);
-  if (remoteSha !== targetSha) {
+  const releaseMatch = targetRef.match(RELEASE_BRANCH_PATTERN);
+  const extendedStableMatch = targetRef.match(EXTENDED_STABLE_BRANCH_PATTERN);
+  const tagMatch = targetRef.match(RELEASE_TAG_PATTERN);
+  if (releaseMatch) {
+    const releaseVersion = releaseMatch[1]!;
+    const prereleaseMatch = targetVersion.match(
+      /^([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)-beta\.[1-9][0-9]*$/u,
+    );
+    if (targetVersion !== releaseVersion && prereleaseMatch?.[1] !== releaseVersion) {
+      throw new Error(
+        `Target package version ${targetVersion} does not belong to release branch ${targetRef}; expected ${releaseVersion} or a beta prerelease of it`,
+      );
+    }
+  } else if (extendedStableMatch) {
+    if (targetVersion !== extendedStableMatch[1]) {
+      throw new Error(
+        `Target package version ${targetVersion} does not match extended-stable branch ${targetRef}`,
+      );
+    }
+  } else if (tagMatch && targetVersion !== tagMatch[1]) {
+    throw new Error(
+      `Target package version ${targetVersion} does not match release tag ${targetRef}`,
+    );
+  }
+  const remoteSha = resolveRemoteSha(targetRef);
+  if (!remoteSha) {
+    throw new Error(`Target ref ${targetRef} does not resolve to a commit`);
+  }
+  if (RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)) {
+    if (!isAncestor(targetSha, remoteSha)) {
+      throw new Error(
+        `Target SHA ${targetSha} is not reachable from release branch ${targetRef} at ${remoteSha}`,
+      );
+    }
+    return targetRef;
+  }
+  if (remoteSha.toLowerCase() !== targetSha.toLowerCase()) {
     throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
   }
   return targetRef;
@@ -265,7 +326,7 @@ function fetchTargetRef(targetRef: string) {
   if (!targetRef) {
     return;
   }
-  const sourceRef = RELEASE_BRANCH_PATTERN.test(targetRef)
+  const sourceRef = RELEASE_CONTEXT_BRANCH_PATTERN.test(targetRef)
     ? `refs/heads/${targetRef}`
     : `refs/tags/${targetRef}`;
   run("git", ["fetch", "--no-tags", "origin", sourceRef], {
@@ -290,10 +351,10 @@ function resolveTargetSha(requestedSha: string, targetRef: string) {
   return resolvedSha;
 }
 
-export function releaseProfileForTarget(
+function targetVersionForTarget(
   targetSha: string,
   readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
-): "beta" | "stable" {
+): string {
   let version: unknown;
   try {
     version = JSON.parse(readPackageJson(targetSha)).version;
@@ -303,7 +364,18 @@ export function releaseProfileForTarget(
   if (typeof version !== "string" || !/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(version)) {
     throw new Error(`Target SHA ${targetSha} has an invalid package version`);
   }
+  return version;
+}
+
+function releaseProfileForVersion(version: string): "beta" | "stable" {
   return /-(?:alpha|beta)\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
+}
+
+export function releaseProfileForTarget(
+  targetSha: string,
+  readPackageJson: (sha: string) => string = (sha) => run("git", ["show", `${sha}:package.json`]),
+): "beta" | "stable" {
+  return releaseProfileForVersion(targetVersionForTarget(targetSha, readPackageJson));
 }
 
 function resolveTrustedWorkflowSha(requestedSha: string) {
@@ -375,10 +447,31 @@ function readWorkflowRun(parentRunId: string, workflowSha: string) {
   return workflowRun;
 }
 
+function readActiveParentJobs(parentRunId: string) {
+  const response: unknown = JSON.parse(
+    execGhRead(
+      ["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}/jobs?per_page=100`],
+      GH_READ_OPTIONS,
+    ),
+  );
+  if (!isJsonRecord(response) || !Array.isArray(response.jobs)) {
+    throw new Error(`Full Release Validation run ${parentRunId} returned invalid jobs`);
+  }
+  return response.jobs
+    .filter((job) => isJsonRecord(job) && job.status !== "completed")
+    .map((job) => ({
+      name: isJsonRecord(job) ? stringValue(job.name, "<unnamed>") : "<unnamed>",
+      status: isJsonRecord(job) ? stringValue(job.status, "pending") : "pending",
+      url: isJsonRecord(job) ? stringValue(job.html_url) : "",
+    }));
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
-  const deadline = Date.now() + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
+  const startedAt = Date.now();
+  const deadline = startedAt + FULL_RELEASE_WAIT_TIMEOUT_MINUTES * 60_000;
+  let nextProgressAt = startedAt + FULL_RELEASE_PROGRESS_INTERVAL_MS;
   while (Date.now() < deadline) {
     let suite: Record<string, unknown> | undefined;
     try {
@@ -407,6 +500,24 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
       throw new Error(
         `Full Release Validation concluded ${stringValue(suite.conclusion, "unknown").toLowerCase()}: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
       );
+    }
+    const now = Date.now();
+    if (now >= nextProgressAt) {
+      const elapsedMinutes = Math.floor((now - startedAt) / 60_000);
+      try {
+        const activeJobs = readActiveParentJobs(parentRunId);
+        console.log(
+          `Parent run progress after ${elapsedMinutes}m: ${activeJobs.length} active job(s)`,
+        );
+        for (const job of activeJobs) {
+          console.log(`- ${job.name}: ${job.status}${job.url ? ` ${job.url}` : ""}`);
+        }
+      } catch (error) {
+        console.warn(
+          `Parent run progress query failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      nextProgressAt += FULL_RELEASE_PROGRESS_INTERVAL_MS;
     }
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
@@ -477,6 +588,14 @@ export function assertTrustedWorkflowHarness(
   }
   if (
     !isJsonRecord(workflow) ||
+    !isJsonRecord(workflow.env) ||
+    workflow.env[RELEASE_ISOLATION_TOOLING_CONTRACT_ENV] !== RELEASE_ISOLATION_TOOLING_CONTRACT
+  ) {
+    throw new Error(
+      `Tooling SHA ${workflowSha} does not declare ${RELEASE_ISOLATION_TOOLING_CONTRACT_ENV}=${RELEASE_ISOLATION_TOOLING_CONTRACT} in ${TRUSTED_WORKFLOW_PATH}`,
+    );
+  }
+  if (
     !isJsonRecord(workflow.on) ||
     !isJsonRecord(workflow.on.workflow_dispatch) ||
     !isJsonRecord(workflow.on.workflow_dispatch.inputs) ||
@@ -543,9 +662,10 @@ function verifyReleaseEvidence(parentRunId: string, workflowSha: string) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
-  args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  const targetVersion = targetVersionForTarget(targetSha);
+  args.inputs.release_profile ??= releaseProfileForVersion(targetVersion);
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
-  const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
+  const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   assertTrustedWorkflowHarness(workflowSha);
   const shortSha = workflowSha.slice(0, 12);
@@ -554,7 +674,7 @@ function main() {
   const targetBranch = `validation/target-${targetSha.slice(0, 12)}-${Date.now()}`;
   const remoteTargetBranchRef = `refs/heads/${targetBranch}`;
   const dispatchInputs = {
-    ref: targetBranch,
+    ref: targetSha,
     expected_sha: targetSha,
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,
@@ -562,6 +682,9 @@ function main() {
 
   console.log(`Validation SHA: ${targetSha}`);
   console.log(`Tooling SHA: ${workflowSha}`);
+  console.log(
+    `Frozen validation tuple: candidate=${targetSha} tooling=${workflowSha} rerun_group=${args.inputs.rerun_group}`,
+  );
   console.log(`Temporary target ref: ${targetBranch}`);
   console.log(`Temporary workflow ref: ${branch}`);
 

@@ -20,7 +20,10 @@ import {
   consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { readEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
+import {
+  isDeliveredCoreCurrentChannelWidgetResult,
+  readEmbeddedMessageDeliveryFact,
+} from "./embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -181,11 +184,18 @@ export async function handleToolExecutionEnd(
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
+  const terminate =
+    result !== null &&
+    typeof result === "object" &&
+    "terminate" in result &&
+    result.terminate === true;
   ctx.state.toolMetas.push({
     toolName,
+    toolCallId,
     meta,
     replaySafe: callSummary.replaySafe,
     isError: observerIsError,
+    ...(terminate ? { terminate: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -236,7 +246,6 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
-  ctx.state.lastToolRecovery = terminal.lastToolRecovery;
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -290,7 +299,7 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
-  const deliveredCurrentSourceReply =
+  const deliveredMessageToolSourceReply =
     didDeliverMessagingResult &&
     isDeliveredMessageToolOnlySourceReplyResult({
       sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
@@ -300,7 +309,16 @@ export async function handleToolExecutionEnd(
       isError: isToolError,
       deliveryConfirmed: didDeliverMessagingResult,
     });
-  const sourceReplyFinal = deliveredCurrentSourceReply
+  const deliveredCurrentSourceReply =
+    deliveredMessageToolSourceReply ||
+    isDeliveredCoreCurrentChannelWidgetResult({
+      coreBuiltinToolNames: ctx.params.coreBuiltinToolNames,
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      result,
+      isToolError,
+    });
+  const sourceReplyFinal = deliveredMessageToolSourceReply
     ? resolveMessageToolSourceReplyFinal(startArgs)
     : undefined;
   ctx.state.pendingMessagingTexts.delete(toolCallId);
@@ -326,13 +344,15 @@ export async function handleToolExecutionEnd(
   }
   if (deliveredCurrentSourceReply) {
     ctx.state.messageToolOnlySourceReplyDelivered = true;
-    const sourceReplyText = readMessageToolSourceReplyText(startArgs);
-    const normalizedSourceReplyText = sourceReplyText
-      ? normalizeTextForComparison(sourceReplyText)
-      : "";
-    if (normalizedSourceReplyText) {
-      ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
-      ctx.trimMessagingToolSent();
+    if (deliveredMessageToolSourceReply) {
+      const sourceReplyText = readMessageToolSourceReplyText(startArgs);
+      const normalizedSourceReplyText = sourceReplyText
+        ? normalizeTextForComparison(sourceReplyText)
+        : "";
+      if (normalizedSourceReplyText) {
+        ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
+        ctx.trimMessagingToolSent();
+      }
     }
     ctx.params.onDeliveredMessageToolOnlySourceReply?.();
   }

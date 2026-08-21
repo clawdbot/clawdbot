@@ -84,6 +84,7 @@ type DirectSpawnEvidence = {
 type ChildState = {
   childThreadId: string;
   parentThreadId: string;
+  readonly agentId?: string;
   agentPathKeys: Set<string>;
   assistantMessagesByTurn: Map<string, ChildAssistantMessages>;
   recoveryAttempt: number;
@@ -534,7 +535,7 @@ class Monitor {
       this.resumeChild(childState);
     }
     if (childState && !childState.terminal) {
-      this.emitChildTaskActivity(notification, childState.childThreadId);
+      this.emitChildTaskActivity(notification, childState);
     }
     this.captureChildAssistantMessage(notification);
     await this.handleChildTurnCompletion(notification);
@@ -569,24 +570,27 @@ class Monitor {
 
   private emitChildTaskActivity(
     notification: CodexServerNotification,
-    childThreadId: string,
+    childState: ChildState,
   ): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return;
     }
-    const runId = codexNativeSubagentRunId(childThreadId);
+    const owner = {
+      runId: codexNativeSubagentRunId(childState.childThreadId),
+      ...(childState.agentId ? { agentId: childState.agentId } : {}),
+    };
     if (notification.method === "item/agentMessage/delta") {
       const delta = readString(params, "delta");
       if (delta) {
-        emitAgentEvent({ runId, stream: "assistant", data: { delta } });
+        emitAgentEvent({ ...owner, stream: "assistant", data: { delta } });
       }
       return;
     }
     if (notification.method === "item/reasoning/summaryTextDelta") {
       const delta = readString(params, "delta");
       if (delta) {
-        emitAgentEvent({ runId, stream: "thinking", data: { delta } });
+        emitAgentEvent({ ...owner, stream: "thinking", data: { delta } });
       }
       return;
     }
@@ -595,14 +599,14 @@ class Monitor {
     }
     const item = readItem(params.item);
     if (item?.type === "agentMessage" && notification.method === "item/completed" && item.text) {
-      emitAgentEvent({ runId, stream: "assistant", data: { text: item.text } });
+      emitAgentEvent({ ...owner, stream: "assistant", data: { text: item.text } });
     }
     const projection = projectNormalizedToolItem({
       phase: notification.method === "item/started" ? "start" : "result",
       item,
     });
     if (projection?.event) {
-      emitAgentEvent({ runId, ...projection.event });
+      emitAgentEvent({ ...owner, ...projection.event });
     }
   }
 
@@ -811,7 +815,7 @@ class Monitor {
       const state = parentThreadId ? this.parentStates.get(parentThreadId) : undefined;
       if (state && childThreadId && parentThreadId) {
         return this.registerChildThread(
-          parentThreadId,
+          state,
           childThreadId,
           agentPath === undefined ? {} : { agentPath },
         )
@@ -889,7 +893,7 @@ class Monitor {
                     { parentThreadId, childThreadId },
                     owner,
                   )
-                : this.registerChildThread(parentThreadId, childThreadId),
+                : this.registerChildThread(state, childThreadId),
             ) && accepted;
         }
         if (!accepted) {
@@ -1310,14 +1314,14 @@ class Monitor {
   }
 
   private registerChildThread(
-    parentThreadIdInput: string,
+    state: ParentState,
     childThreadIdInput: string,
     options: {
       agentPath?: string;
       claimDirectChild?: (threadId: string) => (() => void) | undefined;
     } = {},
   ): ChildState | undefined {
-    const parentThreadId = parentThreadIdInput.trim();
+    const parentThreadId = state.parentThreadId;
     const childThreadId = childThreadIdInput.trim();
     if (!parentThreadId || !childThreadId || this.disposed) {
       return undefined;
@@ -1350,6 +1354,7 @@ class Monitor {
       childState = {
         childThreadId,
         parentThreadId,
+        agentId: state.agentId,
         agentPathKeys: new Set<string>(),
         assistantMessagesByTurn: new Map<string, ChildAssistantMessages>(),
         recoveryAttempt: 0,
@@ -1377,9 +1382,7 @@ class Monitor {
       childState.releaseDirectChild = options.claimDirectChild(childThreadId);
     }
     this.registerAgentPath(childState, childThreadId);
-    this.parentStates
-      .get(parentThreadId)
-      ?.mirror?.markAuthoritativeCompletionExpected(childThreadId);
+    state.mirror?.markAuthoritativeCompletionExpected(childThreadId);
     const agentPath = normalizeOptionalString(options.agentPath);
     if (agentPath) {
       this.registerAgentPath(childState, agentPath);
@@ -1406,7 +1409,7 @@ class Monitor {
     evidence: DirectSpawnEvidence,
     owner: ParentOwner | undefined,
   ): ChildState | undefined {
-    const childState = this.registerChildThread(state.parentThreadId, evidence.childThreadId, {
+    const childState = this.registerChildThread(state, evidence.childThreadId, {
       ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
       ...(owner?.claimDirectChild ? { claimDirectChild: owner.claimDirectChild } : {}),
     });
@@ -1457,7 +1460,7 @@ class Monitor {
     }
     for (const evidence of pending) {
       if (evidence.parentThreadId === state.parentThreadId) {
-        const childState = this.registerChildThread(state.parentThreadId, evidence.childThreadId, {
+        const childState = this.registerChildThread(state, evidence.childThreadId, {
           ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
           claimDirectChild: owner.claimDirectChild,
         });
@@ -1923,7 +1926,7 @@ class Monitor {
         this.prepareParentTaskRuntime(state);
         this.parentStates.set(parentThreadId, state);
       }
-      const childState = this.registerChildThread(parentThreadId, candidate.childThreadId);
+      const childState = this.registerChildThread(state, candidate.childThreadId);
       if (!childState) {
         this.pruneParentIfUnused(state);
         return;

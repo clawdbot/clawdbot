@@ -378,7 +378,6 @@ describe("provider attribution", () => {
       OPENCLAW_VERSION: "2026.3.22",
     });
 
-    expect(policy).toBeDefined();
     expect(policy).toEqual({
       provider: "nvidia",
       enabledByDefault: true,

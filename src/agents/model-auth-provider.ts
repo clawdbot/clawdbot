@@ -1,7 +1,6 @@
 /**
  * Ordered credential resolution for one provider request.
  */
-import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -12,6 +11,7 @@ import {
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
   type AuthProfileStore,
@@ -603,13 +603,13 @@ export async function resolveApiKeyForProviderCore(params: {
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(agentDir);
-  const resolvedAgentDir = path.dirname(authStorePath);
+  const agentDirContext = agentDir ? ` (agentDir: ${resolveUserPath(agentDir)})` : "";
   throw new ProviderAuthError(
     "missing-provider-auth",
     provider,
     [
       `No API key found for provider "${provider}".`,
-      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
+      `Auth store: ${authStorePath}${agentDirContext}.`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy only portable static auth profiles from the main agentDir.`,
     ].join(" "),
   );

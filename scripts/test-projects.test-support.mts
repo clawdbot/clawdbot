@@ -65,7 +65,7 @@ import {
   pluginSdkLightTestFiles,
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
-import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
+import { fullSuiteVitestShards, tuiPtyTestFiles } from "../test/vitest/vitest.test-shards.mjs";
 import {
   isToolingIsolatedTestFile,
   toolingIsolatedTestFiles,
@@ -1631,6 +1631,7 @@ function findDirectImportersWithGitGrep(
 ) {
   const tooling = options.tooling === true;
   const cacheKey = `${cwd}\0${tooling ? "tooling" : "source"}\0${importedFile}`;
+  const isTestHelper = importedFile.startsWith("test/helpers/");
   if (cachedDirectImporters.has(cacheKey)) {
     return cachedDirectImporters.get(cacheKey) ?? null;
   }
@@ -1650,7 +1651,8 @@ function findDirectImportersWithGitGrep(
       cachedDirectImporters.set(cacheKey, null);
       return null;
     }
-    if (candidates.length > 800) {
+    // Central test helpers intentionally fan out broadly; incomplete scans silently drop owning tests.
+    if (candidates.length > 800 && !isTestHelper) {
       skippedBroadTerm = true;
       continue;
     }
@@ -1677,14 +1679,11 @@ function findDirectImportersWithGitGrep(
         }
       }
     }
-    if (importedFile.startsWith("test/helpers/") && importers.length > 0 && term.includes("/")) {
+    if (isTestHelper && importers.length > 0 && term.includes("/")) {
       break;
     }
   }
-  const result =
-    skippedBroadTerm && importers.length === 0 && !importedFile.startsWith("test/helpers/")
-      ? null
-      : importers;
+  const result = skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
   cachedDirectImporters.set(cacheKey, result);
   return result;
 }
@@ -3063,6 +3062,17 @@ function resolvePromptSnapshotFixtureTargets(changedPath: string) {
   return ["test/scripts/prompt-snapshots.test.ts"];
 }
 
+function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
+  const match = /^packages\/([^/]+)\/test\/fixtures\/([^/]+)\/.+$/u.exec(changedPath);
+  const packageName = match?.[1];
+  const fixtureFamily = match?.[2];
+  if (!packageName || !fixtureFamily) {
+    return null;
+  }
+  const owner = `packages/${packageName}/src/${fixtureFamily}.test.ts`;
+  return fs.existsSync(path.join(cwd, owner)) ? [owner] : null;
+}
+
 function resolveAppcastTargets(changedPath: string) {
   return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
 }
@@ -3079,7 +3089,8 @@ function resolvePreciseChangedTestTargets(
       : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
-    resolvePromptSnapshotFixtureTargets(changedPath);
+    resolvePromptSnapshotFixtureTargets(changedPath) ??
+    resolvePackageFixtureTargets(changedPath, cwd);
   if (mappedTargets) {
     return mappedTargets;
   }
@@ -3250,10 +3261,10 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
   }
-  if (isPathAtOrUnder(relative, "ui/src")) {
+  if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
   }
-  if (relative.startsWith("src/tui/tui-pty-")) {
+  if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
     return "tuiPty";
   }
   if (relative.endsWith(".e2e.test.ts")) {

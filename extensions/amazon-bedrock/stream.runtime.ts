@@ -70,13 +70,23 @@ import {
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  finalizeTerminalToolCallArguments,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+type Block = (TextContent | ThinkingContent | ToolCall) & {
+  index?: number;
+  partialJson?: string;
+};
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
+type PendingBedrockToolCall = {
+  block: ToolCall & Pick<Block, "partialJson">;
+  contentIndex: number;
+};
 
 function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
   return resolveClaudeFable5ModelIdentity(model) !== undefined;
@@ -160,6 +170,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     };
 
     const blocks = output.content as Block[];
+    const pendingToolCallEnds: PendingBedrockToolCall[] = [];
     const redactedReasoningChunks = new Map<number, Uint8Array[]>();
     const fable5 = usesClaudeFable5BedrockContract(model);
     // Claude classifiers may refuse after partial output. Hold every event until
@@ -315,6 +326,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
             output,
             eventSink,
             redactedReasoningChunks,
+            pendingToolCallEnds,
           );
         } else if (item.messageStop) {
           sawMessageStop = true;
@@ -359,20 +371,23 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
       // Some valid provider streams omit contentBlockStop; never persist their scratch state.
       for (const block of blocks) {
-        if (block.index !== undefined) {
+        if (block.index !== undefined && block.type !== "toolCall") {
           handleContentBlockStop(
             { contentBlockIndex: block.index },
             blocks,
             output,
             eventSink,
             redactedReasoningChunks,
+            pendingToolCallEnds,
           );
         }
       }
+      flushPendingBedrockToolCalls(pendingToolCallEnds, blocks, output, eventSink);
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as Block).index;
         // partialJson is only a streaming scratch buffer; never persist it.
@@ -523,11 +538,12 @@ function handleContentBlockStart(
   const start = event.start;
 
   if (start?.toolUse) {
+    const startArguments = isRecord(start.toolUse) ? start.toolUse.input : undefined;
     const block: Block = {
       type: "toolCall",
       id: start.toolUse.toolUseId || "",
       name: start.toolUse.name || "",
-      arguments: {},
+      arguments: isRecord(startArguments) ? startArguments : {},
       partialJson: "",
       index,
     };
@@ -653,19 +669,20 @@ function handleContentBlockStop(
   output: AssistantMessage,
   stream: BedrockEventSink,
   redactedReasoningChunks: Map<number, Uint8Array[]>,
+  pendingToolCallEnds: PendingBedrockToolCall[],
 ): void {
   const index = blocks.findIndex((b) => b.index === event.contentBlockIndex);
   const block = blocks[index];
   if (!block) {
     return;
   }
-  delete block.index;
-
   switch (block.type) {
     case "text":
+      delete block.index;
       stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
       break;
     case "thinking":
+      delete block.index;
       if (block.redacted) {
         const chunks = redactedReasoningChunks.get(event.contentBlockIndex!);
         if (chunks) {
@@ -688,11 +705,34 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
-      // Finalize in-place and strip the scratch buffer so replay only
-      // carries parsed arguments.
-      delete (block as Block).partialJson;
-      stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
+      delete block.index;
+      pendingToolCallEnds.push({ block, contentIndex: index });
       break;
+  }
+}
+
+function flushPendingBedrockToolCalls(
+  pending: PendingBedrockToolCall[],
+  blocks: Block[],
+  output: AssistantMessage,
+  stream: BedrockEventSink,
+): void {
+  if (blocks.some((block) => block.type === "toolCall" && block.index !== undefined)) {
+    throw new Error("Provider completed stream with an incomplete tool call");
+  }
+  finalizeTerminalToolCallArguments(
+    pending.map(({ block }) => block),
+    (block) =>
+      block.partialJson && block.partialJson.length > 0 ? block.partialJson : block.arguments,
+  );
+  for (const toolCall of pending) {
+    delete toolCall.block.partialJson;
+    stream.push({
+      type: "toolcall_end",
+      contentIndex: toolCall.contentIndex,
+      toolCall: toolCall.block,
+      partial: output,
+    });
   }
 }
 

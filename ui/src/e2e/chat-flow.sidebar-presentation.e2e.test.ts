@@ -104,7 +104,10 @@ suite.define(() => {
       await secondRow.getByText("Using bash").waitFor();
       const heightAfter = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
 
-      expect(heightAfter).toBe(heightBefore);
+      // Sub-pixel tolerance: getBoundingClientRect returns 1/65536 fractions that
+      // drift under CPU contention, so exact equality fails ~1 run in 3 in a loaded
+      // shard. The contract is "the row does not change size", not bit-identical floats.
+      expect(heightAfter).toBeCloseTo(heightBefore, 1);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
         await secondRow.screenshot({
@@ -316,7 +319,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps session titles on the first line and status on a fixed second line", async () => {
+  it("keeps session titles on the first line and collapses rows that have no second line", async () => {
     if (captureUiProofEnabled) {
       await mkdir(sessionSecondRowProofDir, { recursive: true });
     }
@@ -331,6 +334,7 @@ suite.define(() => {
     const page = await context.newPage();
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
+    const longKey = "agent:main:long-title-session";
     await installMockGateway(page, {
       methodResponses: {
         "sessions.list": chatSessionListResponse([
@@ -360,6 +364,17 @@ suite.define(() => {
             kind: "direct",
             label: "A session without secondary metadata",
             updatedAt: 1,
+          },
+          {
+            key: longKey,
+            kind: "direct",
+            label:
+              "An extremely long single-line session title that keeps going and going far past the sidebar width",
+            updatedAt: 1,
+            activeRunIds: ["run-long-title"],
+            hasActiveRun: true,
+            status: "running",
+            unread: true,
           },
         ]),
       },
@@ -412,9 +427,16 @@ suite.define(() => {
           subtitle: rect(".sidebar-recent-session__subtitle"),
         };
       });
-      const plainHeight = await plainRow.evaluate((row) => row.getBoundingClientRect().height);
+      const plain = await plainRow.evaluate((row) => ({
+        height: row.getBoundingClientRect().height,
+        singleLine: row.classList.contains("sidebar-recent-session--single-line"),
+      }));
 
-      expect(layout.busyHeight).toBeCloseTo(plainHeight, 1);
+      // A row with no secondary metadata no longer reserves the second line: it
+      // collapses so its endcap rides beside the title instead of hanging alone
+      // beneath it. Only rows that actually have a subtitle keep the two-line shape.
+      expect(plain.singleLine).toBe(true);
+      expect(plain.height).toBeLessThan(layout.busyHeight);
       expect(layout.badges.top).toBeGreaterThanOrEqual(layout.name.bottom - 1);
       expect(layout.name.right).toBeGreaterThan(layout.badges.left);
       expect((layout.badges.top + layout.badges.bottom) / 2).toBeCloseTo(
@@ -436,6 +458,37 @@ suite.define(() => {
         expect(atom.top).toBeGreaterThanOrEqual(layout.endcap.top);
         expect(atom.bottom).toBeLessThanOrEqual(layout.endcap.bottom);
       }
+
+      // A long title must truncate instead of crushing the collapsed row's icon
+      // endcap: the spinner/unread icons keep their intrinsic width and stay
+      // inside the row, exactly like the two-line endcap under a long subtitle.
+      const longRow = page.locator(`.sidebar-recent-session[data-session-key="${longKey}"]`);
+      const longLayout = await longRow.evaluate((row) => {
+        const endcap = row.querySelector(".sidebar-recent-session__details-endcap");
+        const name = row.querySelector(".sidebar-recent-session__name");
+        if (!endcap || !name) {
+          throw new Error("Missing long-title session row fixture");
+        }
+        const endcapBox = endcap.getBoundingClientRect();
+        const rowBox = row.getBoundingClientRect();
+        return {
+          atoms: Array.from(
+            endcap.querySelectorAll(":scope :is(svg, .session-run-spinner, .session-unread-dot)"),
+            (element) => element.getBoundingClientRect().width,
+          ),
+          endcapWidth: endcapBox.width,
+          endcapRight: endcapBox.right,
+          nameOverflowing: name.scrollWidth > name.clientWidth,
+          rowRight: rowBox.right,
+          singleLine: row.classList.contains("sidebar-recent-session--single-line"),
+        };
+      });
+      expect(longLayout.singleLine).toBe(true);
+      expect(longLayout.nameOverflowing).toBe(true);
+      expect(longLayout.endcapRight).toBeLessThanOrEqual(longLayout.rowRight);
+      const intrinsicAtomWidth = longLayout.atoms.reduce((sum, width) => sum + width, 0);
+      expect(intrinsicAtomWidth).toBeGreaterThan(0);
+      expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
 
       await busyRow.hover();
       await expect

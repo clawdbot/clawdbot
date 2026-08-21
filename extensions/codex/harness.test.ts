@@ -20,6 +20,7 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
   createCodexTestBindingStore,
   sessionBindingIdentity,
@@ -202,6 +203,10 @@ describe("Codex agent harness supports()", () => {
           },
         },
       },
+      model: {
+        id: "gpt-5.6-sol",
+        params: buildCodexRuntimeModelParams("gpt-5.6-sol", "codex-execution-model"),
+      },
     } as unknown as Parameters<NonNullable<typeof attemptHarness.runAttempt>>[0];
 
     await attemptHarness.runAttempt?.(params);
@@ -210,6 +215,7 @@ describe("Codex agent harness supports()", () => {
       params,
       expect.objectContaining({
         pluginConfig: { appServer: { transport: "stdio", homeScope: "user" } },
+        runtimeModelId: "codex-execution-model",
       }),
     );
   });

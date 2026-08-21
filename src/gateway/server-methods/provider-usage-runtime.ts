@@ -115,6 +115,8 @@ export function getProviderUsageRuntimeSnapshot(params: {
   const authStoreGeneration = getRuntimeAuthProfileStoreSnapshotRevision(agentDir);
   if (
     current?.configRef === configRef &&
+    // Prepared owners can advance before the ambient snapshot; their exact store fences reuse.
+    (params.store === undefined || current.store === params.store) &&
     current.agentDir === agentDir &&
     current.agentId === agentId &&
     current.pluginRegistryGeneration === pluginRegistryGeneration &&

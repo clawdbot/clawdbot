@@ -56,6 +56,16 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each([{}, { local: true }])("exposes usage cost in completion and help", (options) => {
+    const commands = getSlashCommands(options);
+    const usage = commands.find((command) => command.name === "usage");
+
+    expect(usage?.description).toContain("cost summary");
+    expect(usage?.getArgumentCompletions?.("co")).toEqual([{ value: "cost", label: "cost" }]);
+    expect(shouldSubmitExactArgumentCompletion("/usage cost", commands)).toBe(true);
+    expect(helpText(options)).toContain("/usage <off|tokens|full|cost|reset|");
+  });
+
   it.each([
     { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
     { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },

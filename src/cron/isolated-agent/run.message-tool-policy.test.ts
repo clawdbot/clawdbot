@@ -1,6 +1,6 @@
 // Message tool policy tests cover message tool availability during cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { applyJobPatch } from "../service/jobs.js";
@@ -16,6 +16,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
   queueCronMessageToolDeliveryAwarenessMock,
@@ -1270,6 +1271,45 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         verifiedMessageToolDelivery: true,
         satisfiesSourceDelivery: true,
       },
+    });
+  });
+
+  it("passes deferred same-source awareness to current-session dispatch", async () => {
+    const sourceSessionKey = "agent:default:messagechat:direct:123";
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        store: { [sourceSessionKey]: makeCronSessionEntry({ sessionId: "source-session" }) },
+      }),
+    );
+    runEmbeddedAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([
+        {
+          tool: "message",
+          provider: "messagechat",
+          to: "123",
+          text: "Current-session completion.",
+        },
+      ]),
+    );
+    queueCronMessageToolDeliveryAwarenessMock.mockResolvedValueOnce(queueSourceAwareness);
+    const job = makeAnnounceMessageToolJob() as unknown as Record<string, unknown>;
+    job.sessionTarget = "current";
+    job.sessionKey = sourceSessionKey;
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: job as never,
+    });
+
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ deferredTargetSessionKey: sourceSessionKey }),
+    );
+    expectDispatchFields({
+      sourceSessionKey,
+      queueSourceSessionMessageToolAwareness: queueSourceAwareness,
     });
   });
 

@@ -28,6 +28,12 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
+  chatMessagesContainQueuedSend,
+  OFFLINE_QUEUE_STORAGE_ERROR,
+  preserveQueuedUserTurn,
+  surfaceChatDeliveryFailure,
+} from "./chat-send-support.ts";
+import {
   listStoredChatOutboxes,
   storedChatOutboxScopeKey,
   type StoredChatOutbox,
@@ -36,16 +42,12 @@ import {
 import { formatConnectError } from "./connect-error.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { isChatBusy } from "./run-lifecycle.ts";
-import {
-  chatMessagesContainQueuedSend,
-  OFFLINE_QUEUE_STORAGE_ERROR,
-  preserveQueuedUserTurn,
-  surfaceChatDeliveryFailure,
-} from "./steer-lifecycle.ts";
 
 export type QueuedChatSendResult = "sent" | "pending" | "failed";
 export type QueuedChatStorageMode = "durable" | "memory";
 export type QueuedChatSendOptions = {
+  /** Fresh selected-session sends may let the Gateway resolve its effective active-run mode. */
+  allowActiveRunSend?: boolean;
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;
@@ -281,6 +283,9 @@ async function reconcileStoredChatOutboxHead(
   // bubbles even mid-run, and a missing row falls through conservatively.
   const neverAttempted =
     (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
+  if (neverAttempted && item.queueMode) {
+    return "send";
+  }
   if (neverAttempted) {
     const row =
       !isUiGlobalSessionKey(outbox.sessionKey) || host.sessions.state.agentId === outbox.agentId
@@ -372,12 +377,20 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return "empty";
     }
-    const storedItem = outbox.queue.find(
-      (entry) =>
-        lane.freshAdmissions.has(entry.id) ||
-        entry.sendState !== "failed" ||
-        entry.localCommandName,
+    // A fresh active-run send is an explicit operator action, not work queued
+    // behind the run. Let it bypass older FIFO rows; ordinary fresh admissions
+    // still preserve their existing order.
+    const freshActiveRunItem = outbox.queue.find(
+      (entry) => lane.freshAdmissions.has(entry.id) && Boolean(entry.queueMode),
     );
+    const storedItem =
+      freshActiveRunItem ??
+      outbox.queue.find(
+        (entry) =>
+          lane.freshAdmissions.has(entry.id) ||
+          entry.sendState !== "failed" ||
+          entry.localCommandName,
+      );
     const freshItem = storedItem && lane.freshAdmissions.has(storedItem.id);
     const item = freshItem
       ? (readQueuedMessageById(host, storedItem.id) ?? storedItem)

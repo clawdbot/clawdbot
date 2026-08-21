@@ -52,6 +52,7 @@ type ChatModelControlsProps = {
   onModelSetup?: () => void;
   onModelPickerOpen?: () => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
+  onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
@@ -150,6 +151,25 @@ function resolveChatModelPickerLabel(
 function formatPickerModelLabel(label: string): string {
   const match = /^Default \((.+)\)$/u.exec(label);
   return match?.[1] ?? label;
+}
+
+function resolveCatalogTriggerStatus(
+  state: ChatModelCatalogState,
+  optionCount: number,
+): string | undefined {
+  if (state.status === "offline") {
+    return t("common.offline");
+  }
+  if (state.status === "error") {
+    return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
+  }
+  if (!state.hasSnapshot && ["idle", "loading", "refreshing"].includes(state.status)) {
+    return t("chat.modelControls.loadingModels");
+  }
+  if (state.hasSnapshot && optionCount === 0) {
+    return t("chat.modelControls.noModelsAvailable");
+  }
+  return undefined;
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
@@ -329,21 +349,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalogLoadingWithoutSnapshot =
     !managedCatalog.hasSnapshot &&
     ["idle", "loading", "refreshing"].includes(managedCatalog.status);
-  const catalogSnapshotEmpty = managedCatalog.hasSnapshot && modelOptions.length === 0;
-  const catalogTriggerStatus =
-    managedCatalog.status === "offline"
-      ? t("common.offline")
-      : managedCatalog.status === "error"
-        ? t(
-            managedCatalog.hasSnapshot
-              ? "chat.modelControls.modelsRefreshFailed"
-              : "chat.modelControls.modelsUnavailable",
-          )
-        : catalogLoadingWithoutSnapshot
-          ? t("chat.modelControls.loadingModels")
-          : catalogSnapshotEmpty
-            ? t("chat.modelControls.noModelsAvailable")
-            : undefined;
+  const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
@@ -382,6 +388,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onOpen: props.onModelPickerOpen,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
+        onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}

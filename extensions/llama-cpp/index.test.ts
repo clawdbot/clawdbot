@@ -75,12 +75,11 @@ beforeEach(() => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   vi.clearAllMocks();
 });
 
-function registerTextProvider(): ProviderPlugin {
+function captureTextRegistration(): { providers: ProviderPlugin[] } {
   const providers: ProviderPlugin[] = [];
   llamaCppPlugin.register(
     createTestPluginApi({
@@ -93,7 +92,14 @@ function registerTextProvider(): ProviderPlugin {
       registerProvider: (provider) => providers.push(provider),
     }),
   );
-  return expectDefined(providers[0], "llama.cpp provider");
+  return { providers };
+}
+
+function registerTextProvider(): ProviderPlugin {
+  return expectDefined(
+    captureTextRegistration().providers.find((provider) => provider.id === LLAMA_CPP_PROVIDER_ID),
+    "llama.cpp provider",
+  );
 }
 
 function configuredOptions() {
@@ -141,16 +147,28 @@ describe("llama.cpp provider plugin", () => {
   });
 
   it("uses the normal OpenAI-compatible text transport", () => {
-    expect(registerTextProvider()).toEqual(
+    const { providers } = captureTextRegistration();
+    const provider = expectDefined(providers[0], "llama.cpp provider");
+
+    expect(providers.map((registered) => registered.id)).toEqual([LLAMA_CPP_PROVIDER_ID]);
+    expect(provider).toEqual(
       expect.objectContaining({
         id: LLAMA_CPP_PROVIDER_ID,
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
-        auth: [expect.objectContaining({ id: "local" })],
+        auth: expect.arrayContaining([
+          expect.objectContaining({ id: "local" }),
+          expect.objectContaining({ id: "existing-server" }),
+        ]),
       }),
     );
-    expect(registerTextProvider()).not.toHaveProperty("createStreamFn");
+    expect(provider.auth.map((method) => method.id)).toEqual(["local", "existing-server"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual([
+      "llama-cpp",
+      "llama-cpp-existing-server",
+    ]);
+    expect(provider).not.toHaveProperty("createStreamFn");
   });
 
   it("registers local embeddings through the generic provider contract", () => {

@@ -152,6 +152,7 @@ type StatusMemorySearchManagerResolver = (params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose: "status";
+  inspectSources: true;
 }) => Promise<{
   manager: StatusMemorySearchManager | null;
 }>;
@@ -310,6 +311,7 @@ export async function resolveGatewayProbeSnapshot(params: {
         .then(({ probeGateway }) =>
           probeGateway({
             url: gatewayConnection.url,
+            config: params.cfg,
             auth: gatewayProbeAuthResolution.auth,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
@@ -439,6 +441,7 @@ async function resolveMemoryManagerStatusSnapshot(
     cfg: params.cfg,
     agentId,
     purpose: "status",
+    inspectSources: true,
   });
   if (!manager) {
     return null;

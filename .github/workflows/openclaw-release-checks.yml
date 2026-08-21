@@ -127,7 +127,7 @@ on:
         type: string
 
 concurrency:
-  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
 
 env:
@@ -2081,6 +2081,8 @@ jobs:
       - name: Dispatch and await trusted Telegram QA
         env:
           GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         shell: bash
@@ -2094,7 +2096,7 @@ jobs:
             RUN_NAME="$run_name" gh api -X GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
               -F event=workflow_dispatch \
-              -F branch=main \
+              -F branch="$PARENT_WORKFLOW_REF" \
               -F per_page=100 \
               --jq '[.workflow_runs[] | select(.display_title == env.RUN_NAME) | {id, head_sha}]'
           }
@@ -2127,51 +2129,40 @@ jobs:
           trap 'exit 130' INT
           trap 'exit 143' TERM
 
-          for dispatch_attempt in 1 2 3 4 5; do
-            expected_trusted_workflow_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha
-            )"
-            dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${dispatch_attempt}-$(openssl rand -hex 16)"
-            run_name="OpenClaw Release Telegram QA ${dispatch_id}"
-            run_id=""
-            child_head_sha=""
+          dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 16)"
+          run_name="OpenClaw Release Telegram QA ${dispatch_id}"
+          child_head_sha=""
 
-            gh workflow run "$workflow" \
-              --repo "$GITHUB_REPOSITORY" \
-              --ref main \
-              -f dispatch_id="$dispatch_id" \
-              -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
-              -f target_context_ref="$TARGET_CONTEXT_REF" \
-              -f target_ref="$TARGET_SHA" \
-              -f target_sha="$TARGET_SHA"
+          gh workflow run "$workflow" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$PARENT_WORKFLOW_REF" \
+            -f dispatch_id="$dispatch_id" \
+            -f expected_trusted_workflow_sha="$PARENT_WORKFLOW_SHA" \
+            -f target_context_ref="$TARGET_CONTEXT_REF" \
+            -f target_ref="$TARGET_SHA" \
+            -f target_sha="$TARGET_SHA"
 
-            for _ in $(seq 1 60); do
-              matches_json="$(find_child_runs)"
-              match_count="$(jq 'length' <<<"$matches_json")"
-              if ((match_count > 1)); then
-                echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
-                exit 1
-              fi
-              if ((match_count == 1)); then
-                run_id="$(jq -r '.[0].id' <<<"$matches_json")"
-                child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
-                break
-              fi
-              sleep 5
-            done
-            if [[ -z "$run_id" ]]; then
-              echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+          for _ in $(seq 1 60); do
+            matches_json="$(find_child_runs)"
+            match_count="$(jq 'length' <<<"$matches_json")"
+            if ((match_count > 1)); then
+              echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
               exit 1
             fi
-            if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then
+            if ((match_count == 1)); then
+              run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+              child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
               break
             fi
-            echo "Trusted main moved from ${expected_trusted_workflow_sha} to ${child_head_sha} during dispatch attempt ${dispatch_attempt}; retrying." >&2
-            cancel_child
-            run_id=""
+            sleep 5
           done
           if [[ -z "$run_id" ]]; then
-            echo "Trusted main kept moving during Telegram QA dispatch; refusing an unpinned child." >&2
+            echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+            exit 1
+          fi
+          if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "Telegram QA used tooling SHA ${child_head_sha}, expected ${PARENT_WORKFLOW_SHA}." >&2
+            cancel_child
             exit 1
           fi
 

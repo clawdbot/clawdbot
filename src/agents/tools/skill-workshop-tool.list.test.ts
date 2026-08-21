@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -51,6 +52,49 @@ afterEach(async () => {
 });
 
 describe("skill_workshop list", () => {
+  it("lists a pending proposal whose draft is missing", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-missing-draft-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+    });
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Missing Draft",
+      description: "Proposal with a missing draft artifact.",
+      proposal_content: "# Missing Draft\n",
+    });
+    const proposalId = (created.details as { id: string }).id;
+    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+    if (!record) {
+      throw new Error(`expected stored proposal ${proposalId}`);
+    }
+    await fs.rm(
+      path.join(testState.stateDir, "skill-workshop", "proposals", proposalId, record.draftFile),
+    );
+
+    const listed = await tool.execute("call-list", { action: "list" });
+    const listText = (listed.content[0] as { text: string }).text;
+    expect(listText).toContain(proposalId);
+    expect(listText).toContain("draft missing");
+    expect(listed.details).toMatchObject({
+      proposals: [
+        { id: proposalId, status: "pending", kind: "create", degradedState: "draft-missing" },
+      ],
+    });
+    await expect(
+      tool.execute("call-inspect", { action: "inspect", proposal_id: proposalId }),
+    ).rejects.toThrow(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`);
+    await expect(
+      tool.execute("call-apply", { action: "apply", proposal_id: proposalId }),
+    ).rejects.toThrow(`Skill proposal draft is missing: ${proposalId}. Reject and re-propose it.`);
+    await expect(
+      tool.execute("call-reject", { action: "reject", proposal_id: proposalId }),
+    ).resolves.toMatchObject({ details: { id: proposalId, status: "rejected" } });
+  });
+
   it.each([0, 1.5, "1.5", "25items", "many"])(
     "rejects invalid list limit %s before touching proposal state",
     async (limit) => {

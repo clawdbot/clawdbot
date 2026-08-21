@@ -26,7 +26,10 @@ import {
   type RuntimeParityResult,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
-import { findQaSuiteSummaryAccountingError } from "./suite-summary.js";
+import {
+  findQaSuiteSummaryAccountingError,
+  findQaSuiteSummaryCompletionError,
+} from "./suite-summary.js";
 import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
 const QA_CONFIDENCE_VERDICTS = [
@@ -363,6 +366,14 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
       passed: false,
       status: "unknown",
       details: "qa-suite-summary payload was not an object",
+    };
+  }
+  const completionError = findQaSuiteSummaryCompletionError(payload);
+  if (completionError) {
+    return {
+      passed: false,
+      status: "unknown",
+      details: `qa-suite-summary ${completionError}`,
     };
   }
   const accountingError = findQaSuiteSummaryAccountingError(payload);

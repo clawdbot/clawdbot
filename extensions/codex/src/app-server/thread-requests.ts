@@ -11,6 +11,7 @@ import {
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   isJsonObject,
@@ -69,7 +70,7 @@ const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent_v2": false,
 };
 
-// Exact Codex 0.147 registry features that can expose a model-visible tool or
+// Exact Codex 0.148 registry features that can expose a model-visible tool or
 // host capability. One list owns both the thread deny patch and requirement pin rejection.
 const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "apps",
@@ -140,6 +141,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 ]);
 
 const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
+  "packagedDefaults",
   "mdm",
   "system",
   "enterpriseManaged",
@@ -325,6 +327,7 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
+  const configured = buildCodexProjectDocThreadConfig(config);
   // Native goal RPCs remain available through app-server, but the Codex goals
   // feature also starts autonomous turns. Keep it disabled until a run owner exists.
   const codeModeConfig: JsonObject = {
@@ -333,7 +336,7 @@ export function buildCodexRuntimeThreadConfig(
   };
   if (options.nativeCodeModeEnabled === false) {
     const disabledConfig = mergeCodexThreadConfigs(
-      config,
+      configured,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
@@ -350,7 +353,7 @@ export function buildCodexRuntimeThreadConfig(
   if (options.nativeCodeModeOnlyEnabled === true) {
     const merged = mergeCodexThreadConfigs(
       codeModeConfig,
-      config,
+      configured,
       CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
       {
@@ -366,7 +369,7 @@ export function buildCodexRuntimeThreadConfig(
   }
   const merged = mergeCodexThreadConfigs(
     codeModeConfig,
-    config,
+    configured,
     CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
     CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
   ) ?? {

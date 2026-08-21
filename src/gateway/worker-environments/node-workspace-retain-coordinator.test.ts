@@ -27,7 +27,7 @@ const node = {
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   workerHost: {
     enabled: true,
-    capacity: "available",
+    capacity: { total: 2, available: 2 },
     bundleRetention: 1,
     bundleStatus: 1,
   },
@@ -130,6 +130,7 @@ function createHarness(
     },
   );
   const transport: NodeWorkerSupervisorTransport = {
+    hasCurrentRunner: () => false,
     listCurrentNodes: async () => [params.node ?? node],
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,
@@ -196,7 +197,7 @@ describe("node workspace retain coordinator", () => {
         ...node,
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundleRetention: 1,
         },
       },
@@ -416,7 +417,7 @@ describe("node workspace retain coordinator", () => {
     const { coordinator, invoke } = createHarness({
       node: {
         ...node,
-        workerHost: { enabled: true, capacity: "available" },
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
       },
     });
 

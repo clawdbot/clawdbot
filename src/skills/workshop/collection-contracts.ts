@@ -1,3 +1,5 @@
+import type { PluginHookSkillArtifact } from "../../plugins/hook-types.js";
+
 export const MAX_RECONCILED_SKILLS = 200;
 export const MAX_RECONCILED_SKILL_BYTES = 240_000;
 
@@ -36,4 +38,11 @@ export type WritableSkillCollectionEntry = {
   description?: string;
   baseDir: string;
   filePath: string;
+  workshopOwned: boolean;
+};
+
+export type SkillCollectionChange = {
+  action: "created" | "updated" | "removed";
+  before?: PluginHookSkillArtifact;
+  after?: PluginHookSkillArtifact;
 };

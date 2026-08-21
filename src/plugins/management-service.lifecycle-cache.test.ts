@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearPluginMetadataLifecycleCaches,
   registerPluginMetadataProcessMemoLifecycleClear,
@@ -51,8 +52,13 @@ function metadataSnapshot(pluginId?: string) {
 }
 
 describe("plugin management catalog lifecycle", () => {
-  it("serves the first plugins.list load from prewarmed metadata and official catalog caches", async () => {
+  beforeEach(() => {
+    mocks.metadata.mockReset();
+    mocks.officialCatalog.mockReset();
     clearPluginMetadataLifecycleCaches();
+  });
+
+  it("serves the first plugins.list load from prewarmed metadata and official catalog caches", async () => {
     mocks.metadata
       .mockReturnValueOnce(metadataSnapshot())
       .mockReturnValueOnce(metadataSnapshot("fresh-plugin"));
@@ -98,5 +104,68 @@ describe("plugin management catalog lifecycle", () => {
     expect(refreshed.plugins).toEqual([
       expect.objectContaining({ id: "fresh-plugin", installed: true, enabled: true }),
     ]);
+  });
+
+  it("retries a failed official catalog prewarm and keeps the recovered catalog process-stable", async () => {
+    mocks.metadata.mockReturnValue(metadataSnapshot());
+    mocks.officialCatalog
+      .mockRejectedValueOnce(new Error("transient catalog bootstrap"))
+      .mockResolvedValueOnce({ source: "hosted", entries: [] });
+
+    await expect(listManagedPlugins({ config: {}, env: {} })).rejects.toThrow(
+      "transient catalog bootstrap",
+    );
+    await expect(listManagedPlugins({ config: {}, env: {} })).resolves.toMatchObject({
+      plugins: [],
+    });
+    await expect(listManagedPlugins({ config: {}, env: {} })).resolves.toMatchObject({
+      plugins: [],
+    });
+    expect(mocks.officialCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a refreshed catalog when an older lifecycle generation rejects later", async () => {
+    const retiredCatalog = createDeferred<{ source: "hosted"; entries: never[] }>();
+    mocks.metadata.mockReturnValue(metadataSnapshot());
+    mocks.officialCatalog
+      .mockReturnValueOnce(retiredCatalog.promise)
+      .mockResolvedValueOnce({ source: "hosted", entries: [] });
+
+    const retiredLoad = listManagedPlugins({ config: {}, env: {} });
+    const retiredFailure = expect(retiredLoad).rejects.toThrow("retired catalog bootstrap");
+    await Promise.resolve();
+    expect(mocks.officialCatalog).toHaveBeenCalledTimes(1);
+
+    clearPluginMetadataLifecycleCaches();
+
+    await expect(listManagedPlugins({ config: {}, env: {} })).resolves.toMatchObject({
+      plugins: [],
+    });
+    retiredCatalog.reject(new Error("retired catalog bootstrap"));
+    await retiredFailure;
+
+    await expect(listManagedPlugins({ config: {}, env: {} })).resolves.toMatchObject({
+      plugins: [],
+    });
+    expect(mocks.officialCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a successfully resolved bundled-fallback catalog process-stable", async () => {
+    mocks.metadata.mockReturnValue(metadataSnapshot());
+    mocks.officialCatalog.mockResolvedValueOnce({
+      source: "bundled-fallback",
+      entries: [],
+      error: "hosted feed unavailable",
+    });
+
+    const first = await listManagedPlugins({ config: {}, env: {} });
+    const second = await listManagedPlugins({ config: {}, env: {} });
+
+    expect(first.diagnostics).toContainEqual({
+      level: "warn",
+      message: "Official plugin catalog fallback: hosted feed unavailable",
+    });
+    expect(second).toEqual(first);
+    expect(mocks.officialCatalog).toHaveBeenCalledOnce();
   });
 });

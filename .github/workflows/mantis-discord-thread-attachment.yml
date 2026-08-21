@@ -1,8 +1,6 @@
 name: Mantis Discord Thread Attachment
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       candidate_ref:

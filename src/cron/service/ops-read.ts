@@ -17,6 +17,7 @@ import type {
   CronJobsEnabledFilter,
   CronJobsLastRunStatusFilter,
   CronJobsScheduleKindFilter,
+  CronJobsTriggerFilter,
   CronListPageOptions,
   CronListPageResult,
 } from "./list-page-types.js";
@@ -306,6 +307,17 @@ function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRun
   return "all";
 }
 
+function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter {
+  if (
+    opts?.trigger === "all" ||
+    opts?.trigger === "conditional" ||
+    opts?.trigger === "unconditional"
+  ) {
+    return opts.trigger;
+  }
+  return "all";
+}
+
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
@@ -314,6 +326,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const scheduleKindFilter = resolveScheduleKindFilter(opts);
     const lastRunStatusFilter = resolveLastRunStatusFilter(opts);
+    const triggerFilter = resolveTriggerFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
     const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
@@ -338,6 +351,12 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
         lastRunStatusFilter !== "all" &&
         (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
       ) {
+        return false;
+      }
+      if (triggerFilter === "conditional" && !job.trigger) {
+        return false;
+      }
+      if (triggerFilter === "unconditional" && job.trigger) {
         return false;
       }
       if (!query) {

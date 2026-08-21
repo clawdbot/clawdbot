@@ -453,22 +453,26 @@ redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
 evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
 posts inline PR evidence through the Mantis GitHub App when `pr_number` is
 set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`) or directly from a pull request comment:
-
-```text
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
-```
+(`scenario_id: telegram-live`).
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper for PR visual proof. Start it from the Actions UI with
 freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a PR comment:
+telegram-desktop-proof`), or from a maintainer PR comment:
 
 ```text
-@openclaw-mantis telegram desktop proof
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
+
+ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
+automatically for branches in `openclaw/openclaw`. Fork PRs require the
+maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
+posts the active workflow link in its evidence comment and replaces that same
+comment with the result. Any text after the mention is optional proof guidance.
+Manual requests stop before desktop setup and comment
+`There was nothing visible to test in this PR at all.` when the diff has no
+Telegram-visible behavior.
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves
 the change, runs the real-user Crabbox Telegram Desktop proof lane on

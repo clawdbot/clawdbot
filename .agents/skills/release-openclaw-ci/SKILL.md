@@ -16,7 +16,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Hold the release scope once a release branch or Code SHA exists. Validate and
   ship that exact release; do not turn moving `main` into a second work queue.
 - Record every active validation run as the immutable tuple **Validation SHA +
-  Tooling SHA**. Validation SHA maps to the Code SHA for product validation or
+  Tooling SHA + rerun group**. Validation SHA maps to the Code SHA for product validation or
   the Release SHA for changelog-only validation; it is not a third release
   identity. A branch or temporary ref is context and transport.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
@@ -161,24 +161,35 @@ Prefer an immutable trusted-main workflow revision, target the exact Code SHA:
   satisfy a newer `main`-only check.
 
 ```bash
+TOOLING_SHA="<exact-main-ancestor-sha>"
 node scripts/full-release-validation-at-sha.mjs \
   --sha <code-sha> \
-  --target-ref release/YYYY.M.PATCH
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 For regular `release/*` validation, never raw-dispatch the workflow without
-`target_context_ref` (the helper's `--target-ref` records it); the
-extended-stable `.33+` canonical-branch dispatch below is the one exception —
-there the SHA-pinned helper's `release-ci/*` identity is rejected, so it
-dispatches without `target_context_ref` by design. Trusted-workflow
-release-branch CI passes `target_ref` + `release_candidate_ref`; never
-`release_gate` there — it requires workflow head == target. (The PR-head
-ci.yml fallback below is a different dispatch and does use
-`release_gate=true`.)
+`target_context_ref` (the helper's `--target-ref` records it). Canonical
+`release/*` and `extended-stable/*` workflow refs remain supported routes, but
+their Telegram child must retain the exact parent workflow ref and SHA through
+OIDC and attestation. Trusted-workflow release-branch CI passes `target_ref` +
+`release_candidate_ref`; never `release_gate` there — it requires workflow head
+== target. (The PR-head ci.yml fallback below is a different dispatch and does
+use `release_gate=true`.)
+
+The release branch may advance after the Code SHA is frozen. The helper accepts
+that frozen SHA only while it remains an ancestor of the canonical release
+branch and its package version is either the branch's final version or a
+matching beta prerelease. Alpha remains on the Tideclaw path with a matching
+alpha branch and exact alpha tag. Extended-stable branches and all tags require
+an exact package-version match.
+Always pass the previously recorded full Tooling SHA for release-branch runs.
+Never replace it with a fresh `main` lookup. The Tooling SHA must declare the
+current release-isolation contract; older workflow revisions fail closed.
 
 For immutable workflow proof on a moving `main`, use
 `pnpm ci:full-release --sha <code-sha> --target-ref
-release/YYYY.M.PATCH`. Its canonical `release-ci/*` ref keeps evidence reuse
+release/YYYY.M.PATCH --workflow-sha <tooling-sha>`. Its canonical `release-ci/*` ref keeps evidence reuse
 enabled after proving the workflow commit is still on trusted `main` lineage.
 Pass `-f reuse_evidence=false` only when the operator intentionally needs a
 fresh full run.
@@ -190,20 +201,22 @@ against the Release SHA. The parent must report
 dispatching child lanes. Npm preflight and package/install acceptance still run
 against the exact Release SHA and its new tarball bytes.
 
-The SHA-pinned helper infers `beta` for alpha/beta package versions and `stable`
-for stable/correction versions and passes the Validation SHA + Tooling SHA run
-identity. `beta` without soak is the bounded beta-publish gate. Run broad live
-QA and E2E as postpublish confidence with `run_release_soak=true` or explicit
-groups. Stable and full profiles force the release soak. Use a narrow
-`rerun_group` after focused fixes; never widen automatically.
+The SHA-pinned helper infers `beta` for matching beta release candidates and
+exact alpha tags, and `stable` for stable/correction versions, then passes the
+Validation SHA + Tooling SHA run identity. `beta` without soak is the bounded
+beta-publish gate. Run broad live QA and E2E as postpublish confidence with
+`run_release_soak=true` or explicit groups. Stable and full profiles force the
+release soak. Use a narrow `rerun_group` after focused fixes; never widen
+automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For `.33+`, dispatch from and target the canonical branch; the regular
-SHA-pinned helper would produce a rejected `release-ci/*` identity:
+For `.33+`, dispatch from and target the canonical branch. This direct route is
+intentional: downstream extended-stable evidence requires the canonical branch
+identity, while Telegram still authenticates the exact branch SHA:
 
 ```bash
 RELEASE_SHA="$(git rev-parse HEAD)"

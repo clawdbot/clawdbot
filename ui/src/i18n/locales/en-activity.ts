@@ -38,7 +38,6 @@ const enActivity = {
       done: "Done",
       error: "Error",
     },
-    subtitle: "Ephemeral agent activity derived from live session events.",
     runInspector: {
       activityView: "Activity view",
       liveMode: "Live activity",

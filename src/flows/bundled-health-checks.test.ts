@@ -140,7 +140,7 @@ describe("registerBundledHealthChecks", () => {
 
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "memory-core",
-      artifactBasename: "api.js",
+      artifactBasename: "doctor-health-api.js",
     });
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalledWith(
       expect.objectContaining({ dirName: "llama-cpp" }),

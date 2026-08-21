@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
@@ -19,10 +20,6 @@ import {
   isPromotionOriginBlocked,
 } from "./dreaming-consolidation-candidates.js";
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  readMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import {
   hashMemoryContent,
@@ -258,13 +255,12 @@ export async function applyShortTermPromotions(
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
 
-  const dailyProvenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir });
+  const dailyProvenanceEntries = await listMemoryArtifactProvenance({ workspaceDir });
   const dailyProvenanceByPath = new Map(
-    dailyProvenanceEntries.map((entry) => [entry.key.replaceAll("\\", "/"), entry.value]),
+    dailyProvenanceEntries.map((entry) => [
+      entry.relativePath.replaceAll("\\", "/"),
+      entry.provenance,
+    ]),
   );
   const store = await withShortTermLock(workspaceDir, async () => readStore(workspaceDir, nowIso));
   const currentCandidates = options.candidates.map((candidate) => {

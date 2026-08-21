@@ -1,6 +1,7 @@
 import type {
   SessionCreatedActor,
   SessionsAssignOwnerParams,
+  WorkerExecutionMode,
 } from "../../packages/gateway-protocol/src/index.js";
 
 /** Agent identity fields returned by gateway session listing APIs. */
@@ -23,6 +24,8 @@ export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
   cloudPlacementSupported?: boolean;
+  cloudPlacementExecutionMode?: WorkerExecutionMode;
+  devicePlacementSupported?: boolean;
   source:
     | "env"
     | "agent"
@@ -75,7 +78,7 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   nextOffset?: number | null;
   hasMore?: boolean;
   /** Complete owner facet for the filtered result, independent of pagination. */
-  creators?: SessionOwnerFacetIdentity[];
+  owners?: SessionOwnerFacetIdentity[];
   defaults: TDefaults;
   sessions: TRow[];
 };

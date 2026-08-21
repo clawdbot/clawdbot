@@ -154,7 +154,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         sessionId,
         sessionKey: compactTarget.primaryKey,
         storePath,
-      }).catch(() => []);
+      });
       if (transcriptEvents.length === 0) {
         respond(
           true,
@@ -355,7 +355,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             sessionId,
             sessionKey: compactTarget.primaryKey,
             storePath,
-          }).catch(() => []);
+          });
           if (transcriptEvents.length === 0) {
             respond(
               true,
