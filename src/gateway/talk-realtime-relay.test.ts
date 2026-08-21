@@ -2792,6 +2792,78 @@ describe("talk realtime gateway relay", () => {
     expect(relaySessions.has(session.relaySessionId)).toBe(true);
   });
 
+  it("splits large provider audio into ordered 20 ms relay frames", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport();
+      },
+    };
+    const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: (event: string, payload: Record<string, unknown>) => {
+          events.push({ event, payload });
+        },
+      } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+    void sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("audio").toString("base64"),
+    });
+    const audio = Buffer.alloc(960 * 33 + 137);
+    for (let index = 0; index < audio.length; index += 1) {
+      audio[index] = index % 251;
+    }
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "response.created",
+      responseId: "response-1",
+    });
+    bridgeRequest?.onEvent?.({
+      direction: "server",
+      type: "response.output_audio.delta",
+      itemId: "item-1",
+      responseId: "response-1",
+    });
+    bridgeRequest?.onAudio(audio);
+
+    const audioPayloads = events
+      .map((entry) => entry.payload)
+      .filter((payload) => payload.type === "audio");
+    const frames = audioPayloads.map((payload) =>
+      Buffer.from(String(payload.audioBase64), "base64"),
+    );
+    expect(frames).toHaveLength(34);
+    expect(frames.every((frame) => frame.byteLength <= 960)).toBe(true);
+    expect(frames.at(-1)?.byteLength).toBe(137);
+    expect(Buffer.concat(frames)).toEqual(audio);
+    for (const [index, payload] of audioPayloads.entries()) {
+      expectRecordFields(payload, {
+        itemId: "item-1",
+        responseId: "response-1",
+      });
+      expectRecordFields(payload.talkEvent, {
+        type: "output.audio.delta",
+        turnId: "turn-1",
+        seq: index + 3,
+        payload: { byteLength: frames[index]?.byteLength },
+      });
+    }
+    expect(events.some((entry) => entry.payload.type === "error")).toBe(false);
+    expect(events.some((entry) => entry.payload.type === "close")).toBe(false);
+  });
+
   it("ignores provider clear with no live response owner", () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const provider = createIdleRelayProvider();

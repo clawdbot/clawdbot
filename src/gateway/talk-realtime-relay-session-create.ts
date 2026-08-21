@@ -57,6 +57,9 @@ import {
 import { enqueueRelayVoiceTranscript } from "./talk-realtime-relay-voice.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 
+// The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
+const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
+
 function isRelayAssistantEchoTranscript(session: RelaySession | undefined, text: string): boolean {
   return session?.harness.isLikelyAssistantEchoTranscript(text) ?? false;
 }
@@ -220,20 +223,26 @@ export function createTalkRealtimeRelaySession(
         if (!outputTurnId) {
           return;
         }
-        emit(
-          {
-            relaySessionId,
-            type: "audio",
-            audioBase64: audio.toString("base64"),
-            ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
-            ...(outputOwnership.responseId ? { responseId: outputOwnership.responseId } : {}),
-          },
-          {
-            type: "output.audio.delta",
-            turnId: outputTurnId,
-            payload: { byteLength: audio.byteLength },
-          },
-        );
+        for (let offset = 0; offset < audio.byteLength; offset += RELAY_OUTPUT_AUDIO_FRAME_BYTES) {
+          const frame = audio.subarray(
+            offset,
+            Math.min(offset + RELAY_OUTPUT_AUDIO_FRAME_BYTES, audio.byteLength),
+          );
+          emit(
+            {
+              relaySessionId,
+              type: "audio",
+              audioBase64: frame.toString("base64"),
+              ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
+              ...(outputOwnership.responseId ? { responseId: outputOwnership.responseId } : {}),
+            },
+            {
+              type: "output.audio.delta",
+              turnId: outputTurnId,
+              payload: { byteLength: frame.byteLength },
+            },
+          );
+        }
       },
       clearAudio: (reason) => {
         const relay = getActiveRelay();
