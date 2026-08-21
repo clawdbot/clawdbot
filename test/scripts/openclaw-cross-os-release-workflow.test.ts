@@ -237,7 +237,7 @@ describe("cross-OS release checks workflow", () => {
     expect(capture.run).toContain("package_required=false");
     expect(capture.run).toContain("group_selected cross-os && cross_os_scheduled=true");
     expect(capture.run).toContain(
-      '"$live_e2e_scheduled" == "true" && -z "${repo_live_suite_filter// }"',
+      '"$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter"',
     );
 
     const producer = job(workflow, "prepare_release_package");

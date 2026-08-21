@@ -262,6 +262,30 @@ function runReleaseGroupCapture(
   return execution.outputs;
 }
 
+function executeParentFilterNormalization(liveSuiteFilter = "", crossOsSuiteFilter = "") {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-parent-filter-normalization-"));
+  const output = join(root, "github-output");
+  writeFileSync(output, "");
+  try {
+    const normalize = step(
+      job(readWorkflow(FULL_RELEASE), "resolve_target"),
+      "Normalize suite filters",
+    );
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", normalize.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        RAW_CROSS_OS_SUITE_FILTER: crossOsSuiteFilter,
+        RAW_LIVE_SUITE_FILTER: liveSuiteFilter,
+      },
+    });
+    return { output: readFileSync(output, "utf8"), result };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("release validation no-push transport", () => {
   it("routes release retries through explicit concrete groups and resource gates", () => {
     const full = readWorkflow(FULL_RELEASE);
@@ -296,10 +320,12 @@ describe("release validation no-push transport", () => {
       'contains(fromJSON(\'["all","plugin-prerelease","cross-os","package"]\'), inputs.rerun_group)',
     );
     expect(candidate.if).toContain(
-      "(inputs.rerun_group == 'live-e2e' && inputs.live_suite_filter == '')",
+      "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
     const verify = step(job(full, "summary"), "Verify child workflow results");
-    expect(verify.env?.LIVE_SUITE_FILTER).toBe("${{ inputs.live_suite_filter }}");
+    expect(verify.env?.LIVE_SUITE_FILTER).toBe(
+      "${{ needs.resolve_target.outputs.live_suite_filter }}",
+    );
     expect(verify.run).toContain('[[ -n "${LIVE_SUITE_FILTER// }" ]] || candidate_required=1');
 
     expect(capture.run).toContain(
@@ -402,14 +428,64 @@ describe("release validation no-push transport", () => {
   });
 
   it("skips package and Docker prep for a focused repo live-E2E retry", () => {
-    const outputs = runReleaseGroupCapture("live-e2e", false, "repo-e2e");
+    const outputs = runReleaseGroupCapture("live-e2e", false, " Repo-E2E,\trepo-smoke ");
 
     expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(["live-e2e"]);
     expect(outputs.live_e2e_scheduled).toBe("true");
-    expect(outputs.repo_live_suite_filter).toBe("repo-e2e");
+    expect(outputs.live_suite_filter).toBe("repo-e2e,repo-smoke");
+    expect(outputs.repo_live_suite_filter).toBe("repo-e2e,repo-smoke");
     expect(outputs.package_required).toBe("false");
     expect(outputs.docker_required).toBe("false");
   });
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty live filter %j before install-smoke scheduling",
+    (filter) => {
+      const parent = executeParentFilterNormalization(filter);
+      const child = executeReleaseGroupCapture("install-smoke", false, filter);
+
+      expect(parent.result.status).not.toBe(0);
+      expect(parent.result.stderr).toContain(
+        "live_suite_filter must contain at least one suite selector",
+      );
+      expect(child.result.status).not.toBe(0);
+      expect(child.result.stderr).toContain(
+        "live_suite_filter must contain at least one suite selector",
+      );
+      expect(child.outputs.install_smoke_scheduled).toBeUndefined();
+    },
+  );
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty live filter %j before live-E2E can widen or require prep",
+    (filter) => {
+      const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, filter);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live_suite_filter must contain at least one suite selector");
+      expect(outputs.live_e2e_scheduled).toBeUndefined();
+      expect(outputs.package_required).toBeUndefined();
+      expect(outputs.docker_required).toBeUndefined();
+    },
+  );
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty cross-OS filter %j before cross-OS scheduling",
+    (filter) => {
+      const parent = executeParentFilterNormalization("", filter);
+      const child = executeReleaseGroupCapture("cross-os", false, "", filter);
+
+      expect(parent.result.status).not.toBe(0);
+      expect(parent.result.stderr).toContain(
+        "cross_os_suite_filter must contain at least one suite selector",
+      );
+      expect(child.result.status).not.toBe(0);
+      expect(child.result.stderr).toContain(
+        "cross_os_suite_filter must contain at least one suite selector",
+      );
+      expect(child.outputs.cross_os_scheduled).toBeUndefined();
+    },
+  );
 
   it("fails before a QA selector can collapse into an unfiltered live-E2E run", () => {
     const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, "qa-live-matrix");

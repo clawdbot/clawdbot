@@ -517,7 +517,27 @@ jobs:
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
-          if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER_INPUT// }" &&
+          normalize_suite_filter() {
+            local raw="$1"
+            local normalized=""
+            local token
+            while IFS= read -r token; do
+              [[ -z "$token" ]] && continue
+              normalized+="${normalized:+,}${token}"
+            done < <(printf '%s\n' "$raw" | tr '[:upper:]' '[:lower:]' | tr ',[:space:]' '\n')
+            printf '%s' "$normalized"
+          }
+          live_suite_filter="$(normalize_suite_filter "$RELEASE_LIVE_SUITE_FILTER_INPUT")"
+          cross_os_suite_filter="$(normalize_suite_filter "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT")"
+          if [[ -n "$RELEASE_LIVE_SUITE_FILTER_INPUT" && -z "$live_suite_filter" ]]; then
+            echo "live_suite_filter must contain at least one suite selector." >&2
+            exit 1
+          fi
+          if [[ -n "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT" && -z "$cross_os_suite_filter" ]]; then
+            echo "cross_os_suite_filter must contain at least one suite selector." >&2
+            exit 1
+          fi
+          if [[ -n "$cross_os_suite_filter" &&
                 "$RELEASE_RERUN_GROUP_INPUT" != "cross-os" ]]; then
             echo "cross_os_suite_filter requires rerun_group=cross-os; received ${RELEASE_RERUN_GROUP_INPUT}." >&2
             exit 1
@@ -525,9 +545,9 @@ jobs:
 
           qa_filter_seen=false
           repo_filter_seen=false
-          filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
+          filter="$live_suite_filter"
           repo_live_suite_filter="$filter"
-          if [[ -n "${filter// }" ]]; then
+          if [[ -n "$filter" ]]; then
             repo_filter_tokens=()
             matrix_selected=false
             buzz_selected=false
@@ -537,12 +557,8 @@ jobs:
             slack_selected=false
             disabled_required_lanes=()
 
-            IFS=', ' read -r -a filter_tokens <<< "$filter"
+            IFS=',' read -r -a filter_tokens <<< "$filter"
             for token in "${filter_tokens[@]}"; do
-              token="${token//$'\t'/}"
-              token="${token//$'\r'/}"
-              token="${token//$'\n'/}"
-              [[ -z "$token" ]] && continue
               case "$token" in
                 qa-live|qa-live-all|qa-all)
                   qa_filter_seen=true
@@ -672,7 +688,7 @@ jobs:
           group_selected qa-live && qa_live_scheduled=true
 
           docker_required=false
-          if [[ "$live_e2e_scheduled" == "true" && -z "${repo_live_suite_filter// }" ]]; then
+          if [[ "$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter" ]]; then
             docker_required=true
           fi
           package_required=false
@@ -698,9 +714,9 @@ jobs:
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'skip_package_telegram_e2e=%s\n' "$skip_package_telegram_e2e"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
-            printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'live_suite_filter=%s\n' "$live_suite_filter"
             printf 'repo_live_suite_filter=%s\n' "$repo_live_suite_filter"
-            printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
+            printf 'cross_os_suite_filter=%s\n' "$cross_os_suite_filter"
             printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
             printf 'qa_live_buzz_enabled=%s\n' "$qa_live_buzz_enabled"
             printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"

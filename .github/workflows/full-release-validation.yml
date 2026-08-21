@@ -169,6 +169,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
+      live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
+      cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
     steps:
       - name: Checkout trusted workflow helper
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -190,6 +192,38 @@ jobs:
             --ref "$TARGET_REF" \
             --expected-sha "$EXPECTED_SHA" \
             --github-output "$GITHUB_OUTPUT"
+
+      - name: Normalize suite filters
+        id: filters
+        env:
+          RAW_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RAW_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+        run: |
+          set -euo pipefail
+          normalize_suite_filter() {
+            local raw="$1"
+            local normalized=""
+            local token
+            while IFS= read -r token; do
+              [[ -z "$token" ]] && continue
+              normalized+="${normalized:+,}${token}"
+            done < <(printf '%s\n' "$raw" | tr '[:upper:]' '[:lower:]' | tr ',[:space:]' '\n')
+            printf '%s' "$normalized"
+          }
+          live_suite_filter="$(normalize_suite_filter "$RAW_LIVE_SUITE_FILTER")"
+          cross_os_suite_filter="$(normalize_suite_filter "$RAW_CROSS_OS_SUITE_FILTER")"
+          if [[ -n "$RAW_LIVE_SUITE_FILTER" && -z "$live_suite_filter" ]]; then
+            echo "live_suite_filter must contain at least one suite selector." >&2
+            exit 1
+          fi
+          if [[ -n "$RAW_CROSS_OS_SUITE_FILTER" && -z "$cross_os_suite_filter" ]]; then
+            echo "cross_os_suite_filter must contain at least one suite selector." >&2
+            exit 1
+          fi
+          {
+            printf 'live_suite_filter=%s\n' "$live_suite_filter"
+            printf 'cross_os_suite_filter=%s\n' "$cross_os_suite_filter"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout target package manifest
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -302,8 +336,8 @@ jobs:
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ steps.filters.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ steps.filters.outputs.cross_os_suite_filter }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
         run: |
           plugin_prerelease_node_exclusions="$(jq -c . <<< "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")"
@@ -424,8 +458,8 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -531,7 +565,7 @@ jobs:
   prepare_release_candidate:
     name: Prepare shared release candidate
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && (contains(fromJSON('["all","plugin-prerelease","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && inputs.live_suite_filter == '')) }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && (contains(fromJSON('["all","plugin-prerelease","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) }}
     permissions:
       actions: read
       contents: read
@@ -1136,8 +1170,8 @@ jobs:
           FAIL_FAST: ${{ inputs.fail_fast }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -1234,7 +1268,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
@@ -1758,8 +1792,8 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
-          CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          LIVE_SUITE_FILTER: ${{ needs.resolve_target.outputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
