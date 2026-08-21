@@ -14,36 +14,60 @@ const SESSION_TOOL_FOLLOWUPS = [
   [
     "sessions_search",
     "sessions_history",
-    "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    "Search your own past sessions for matching user and assistant text.",
+    "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
   ],
   [
     "conversations_send",
     "conversations_list",
-    "Find the exact conversationRef with conversations_list.",
+    "through a conversationRef.",
+    "through a conversationRef from conversations_list.",
   ],
-  ["sessions_spawn", "agents_list", "Find configured agent ids with agents_list."],
-  ["sessions_spawn", "agents_wait", "Await collector runs with agents_wait."],
-  ["sessions_spawn", "subagents", "Check spawns via `subagents`."],
-  ["sessions_spawn", "sessions_history", "Check spawns via `sessions_history`."],
+  ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
+  [
+    "sessions_spawn",
+    "agents_wait",
+    "`groupId` groups a batch.",
+    "`groupId` groups a batch; await with agents_wait.",
+  ],
 ] as const;
 
-function describeAvailableSessionFollowups(
-  toolName: string,
+function describeAvailableSessionTool(
+  tool: AnyAgentTool,
   availableTools: ReadonlySet<string>,
-): string[] {
-  if (toolName === "sessions_send") {
+): string {
+  let description = tool.description;
+  // Preserve byte-stable default prompt placement while gating every named sibling.
+  for (const [sourceTool, requiredTool, original, expanded] of SESSION_TOOL_FOLLOWUPS) {
+    if (sourceTool === tool.name && availableTools.has(requiredTool)) {
+      description = description.replace(original, expanded);
+    }
+  }
+  if (tool.name === "sessions_send") {
     const deliveryTools = ["conversations_send", "conversations_turn"].filter((name) =>
       availableTools.has(name),
     );
-    return availableTools.has("conversations_list") && deliveryTools.length > 0
-      ? [
-          `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`,
-        ]
-      : [];
+    if (availableTools.has("conversations_list") && deliveryTools.length > 0) {
+      const guidance = `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`;
+      description = description.replace(
+        " Thread chats rejected:",
+        ` ${guidance} Thread chats rejected:`,
+      );
+    }
   }
-  return SESSION_TOOL_FOLLOWUPS.filter(
-    ([sourceTool, requiredTool]) => sourceTool === toolName && availableTools.has(requiredTool),
-  ).map((followup) => followup[2]);
+  if (tool.name === "sessions_spawn") {
+    const statusTools = ["subagents", "sessions_history"].filter((name) =>
+      availableTools.has(name),
+    );
+    if (statusTools.length > 0) {
+      const guidance = statusTools.map((name) => `\`${name}\``).join("/");
+      description = description.replace(
+        "No spawn for quick lookup/single read.",
+        `No spawn for quick lookup/single read. Check spawns via ${guidance}.`,
+      );
+    }
+  }
+  return description;
 }
 
 /** Return tools with cross-tool guidance adjusted for the tools that survived filtering. */
@@ -71,9 +95,7 @@ export function applyToolAvailabilityDescriptions(
     if (tool.name === "agents_wait") {
       return replaceDescription(tool, describeAgentsWaitTool(hasSessionsSpawnTool));
     }
-    const followups = describeAvailableSessionFollowups(tool.name, availableTools);
-    return followups.length > 0
-      ? replaceDescription(tool, `${tool.description} ${followups.join(" ")}`)
-      : tool;
+    const description = describeAvailableSessionTool(tool, availableTools);
+    return description === tool.description ? tool : replaceDescription(tool, description);
   });
 }

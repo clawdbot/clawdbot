@@ -179,6 +179,25 @@ describe("createOpenClawCodingTools availability guidance", () => {
     }
   });
 
+  it("preserves the existing fully authorized session-send description byte for byte", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      { name: "sessions_send", description: describeSessionsSendTool() },
+      { name: "conversations_list", description: "list" },
+      { name: "conversations_send", description: "send" },
+      { name: "conversations_turn", description: "turn" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toBe(
+      [
+        "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
+        "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+        "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
+        'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
+        "watch:true: notice arrives when others later change target session.",
+      ].join(" "),
+    );
+  });
+
   it("keeps authorized history guidance and the prepared session URL", () => {
     const sessionLinkBase = "https://gateway.example/control";
     const [tool] = applyToolAvailabilityDescriptions([
@@ -191,6 +210,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).toContain(`${sessionLinkBase}/chat/<agentId>`);
+    expect(tool?.description.indexOf("Follow up with sessions_history")).toBeLessThan(
+      tool?.description.indexOf("When pointing the user at a session") ?? Infinity,
+    );
   });
 
   it("restores conversation lookup guidance only when lookup is authorized", () => {
@@ -199,8 +221,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
       { name: "conversations_list", description: "lookup" } as AnyAgentTool,
     ]);
 
-    expect(tool?.description).toContain("conversations_list");
-    expect(tool?.description).toContain("does not run the local agent");
+    expect(tool?.description).toBe(
+      "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
+    );
   });
 
   it("keeps only authorized spawn follow-ups without losing prepared runtime facts", () => {
@@ -218,12 +241,31 @@ describe("createOpenClawCodingTools availability guidance", () => {
       { name: "sessions_history", description: "history" },
     ] as AnyAgentTool[]);
 
-    expect(tool?.description).toContain("agents_list");
+    expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).not.toContain("agents_wait");
     expect(tool?.description).not.toContain("subagents");
     expect(tool?.description).toContain("persistent/thread-bound");
     expect(tool?.description).toContain("(self: current session only)");
     expect(tool?.description).not.toContain('runtime="acp"');
+  });
+
+  it("preserves original inline spawn guidance when every follow-up remains available", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_spawn",
+        description: describeSessionsSpawnTool({ acpAvailable: false, swarmEnabled: true }),
+      },
+      ...["agents_list", "agents_wait", "subagents", "sessions_history"].map((name) => ({
+        name,
+        description: "available",
+      })),
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("configured agent (see agents_list);");
+    expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
+    expect(tool?.description).toContain(
+      "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
+    );
   });
 });
