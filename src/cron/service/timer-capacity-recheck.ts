@@ -1,8 +1,13 @@
 /** Tracks capacity-triggered child ticks without leaking the parent timer lifecycle. */
-export function createCronCapacityRecheckTracker(requestRecheck: () => Promise<void> | undefined) {
+export function createCronCapacityRecheckTracker(
+  requestRecheck: () => Promise<void> | undefined,
+  requestRecheckAfterClose: () => Promise<void> | undefined,
+) {
   let pendingActivations = 0;
   let activationsAllowRecheck = true;
   let activationGateResolved = false;
+  let activationGateAllowsRecheck = false;
+  let closed = false;
   let resolveActivationGate!: (allowRecheck: boolean) => void;
   const activationGate = new Promise<boolean>((resolve) => {
     resolveActivationGate = resolve;
@@ -14,6 +19,7 @@ export function createCronCapacityRecheckTracker(requestRecheck: () => Promise<v
       return;
     }
     activationGateResolved = true;
+    activationGateAllowsRecheck = allowRecheck;
     resolveActivationGate(allowRecheck);
   };
 
@@ -35,6 +41,12 @@ export function createCronCapacityRecheckTracker(requestRecheck: () => Promise<v
       }
     },
     request() {
+      if (closed) {
+        if (activationGateAllowsRecheck) {
+          void requestRecheckAfterClose();
+        }
+        return;
+      }
       const recheck = activationGate.then(async (allowRecheck) => {
         if (allowRecheck) {
           await requestRecheck();
@@ -44,6 +56,7 @@ export function createCronCapacityRecheckTracker(requestRecheck: () => Promise<v
       void recheck.finally(() => trackedRechecks.delete(recheck));
     },
     abort() {
+      closed = true;
       resolveActivationGateOnce(false);
     },
     async drain() {

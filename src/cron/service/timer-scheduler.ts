@@ -140,6 +140,12 @@ function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | u
   });
 }
 
+function requestIndependentImmediateCronRecheck(
+  state: CronServiceState,
+): Promise<void> | undefined {
+  return runOutsideGatewayRootWorkAdmission(() => requestImmediateCronRecheck(state));
+}
+
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
   let admission;
@@ -170,8 +176,9 @@ async function onAdmittedTimer(state: CronServiceState) {
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
-  const capacityRechecks = createCronCapacityRecheckTracker(() =>
-    requestImmediateCronRecheck(state),
+  const capacityRechecks = createCronCapacityRecheckTracker(
+    () => requestImmediateCronRecheck(state),
+    () => requestIndependentImmediateCronRecheck(state),
   );
   let allowEmptyCapacityRecheck = false;
   try {
@@ -218,9 +225,7 @@ async function onAdmittedTimer(state: CronServiceState) {
             ? () => capacityRechecks.request()
             : () =>
                 // A zero-admission tick returns before this wake and cannot drain it.
-                runOutsideGatewayRootWorkAdmission(() => {
-                  void requestImmediateCronRecheck(state);
-                }),
+                void requestIndependentImmediateCronRecheck(state),
         );
         allowEmptyCapacityRecheck = admittedDue.length > 0;
       }
@@ -412,6 +417,7 @@ async function onAdmittedTimer(state: CronServiceState) {
               return pMapSkip;
             }
             if (execution.kind === "skipped") {
+              settleThisInitialActivation(!stopAdmittingDueJobs && !state.stopped);
               return pMapSkip;
             }
             if (execution.handled) {
