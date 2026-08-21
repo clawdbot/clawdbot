@@ -337,6 +337,17 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.heapShortfall).toBeNull();
   });
 
+  it("applies admission to the direct unified declaration plan", () => {
+    const result = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts", "--filter", TSDOWN_UNIFIED_CONFIG_GROUP],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.invocations).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+  });
+
   it.each([
     ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
     ["CLI override", ["--no-dts"], {}],

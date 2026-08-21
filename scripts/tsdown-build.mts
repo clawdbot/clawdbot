@@ -961,6 +961,16 @@ export function resolveTsdownBuildInvocation(
   };
 }
 
+function selectsMainUnifiedBuild(args: string[]) {
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  const filter = readForwardedOption(args, ["--filter", "-F"]);
+  return (
+    config !== undefined &&
+    path.resolve(config) === path.resolve("tsdown.config.ts") &&
+    filter === TSDOWN_UNIFIED_CONFIG_GROUP
+  );
+}
+
 /** Builds declarations in dependency order without overlapping the largest graphs. */
 export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   const forwardedArgs = params.args ?? [];
@@ -976,20 +986,13 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
   const hasForwardedConfig = aiArgs.some(isConfigArg);
 
-  const forwardedConfig = readForwardedOption(forwardedArgs, ["--config", "-c"]);
-  const forwardedFilter = readForwardedOption(forwardedArgs, ["--filter", "-F"]);
-  const mainConfigPath = path.resolve("tsdown.config.ts");
-  const selectsMainUnifiedBuild =
-    forwardedConfig !== undefined &&
-    path.resolve(forwardedConfig) === mainConfigPath &&
-    forwardedFilter === TSDOWN_UNIFIED_CONFIG_GROUP;
   const declarationEnv =
     declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
       ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "0" }
       : env;
 
   if (hasForwardedConfig) {
-    if (declarationsEnabled && selectsMainUnifiedBuild) {
+    if (declarationsEnabled && selectsMainUnifiedBuild(forwardedArgs)) {
       return [TSDOWN_UNIFIED_CONFIG_GROUP, ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS].map((group) =>
         resolveTsdownBuildInvocation({
           ...params,
@@ -1034,11 +1037,14 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
 }
 
 function isFullTsdownBuildPlan(args: string[], env: NodeJS.ProcessEnv) {
-  if (args.some(isConfigArg) || args.some(isFilterArg)) {
+  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
+  const declarationsEnabled = dtsArg
+    ? dtsArg === "--dts"
+    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  if (!declarationsEnabled) {
     return false;
   }
-  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  return (!args.some(isConfigArg) && !args.some(isFilterArg)) || selectsMainUnifiedBuild(args);
 }
 
 export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
