@@ -536,9 +536,9 @@ describe("telegram user Crabbox proof log polling", () => {
 
   it("injects the requested Telegram link-preview setting before startup", () => {
     const disabledConfigRoot = writeSutConfig({
+      configPatch: { channels: { telegram: { linkPreview: false } } },
       gatewayPort: 19042,
       groupId: "group",
-      linkPreview: false,
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -561,9 +561,15 @@ describe("telegram user Crabbox proof log polling", () => {
 
   it("injects the requested fixed human delay before startup", () => {
     const delayedConfigRoot = writeSutConfig({
+      configPatch: {
+        agents: {
+          defaults: {
+            humanDelay: { maxMs: 1200, minMs: 1200, mode: "custom" },
+          },
+        },
+      },
       gatewayPort: 19042,
       groupId: "group",
-      humanDelayFixedMs: 1200,
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",

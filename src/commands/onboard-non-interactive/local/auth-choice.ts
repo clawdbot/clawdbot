@@ -36,8 +36,6 @@ type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
 >;
 
-const GENERIC_NON_INTERACTIVE_AUTH_CHOICES = ["oauth", "setup-token", "token", "apiKey"];
-
 /** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: OpenClawConfig;
@@ -176,18 +174,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  const validAuthChoices = Array.from(
-    new Set([
-      ...formatAuthChoiceChoicesForCli({
-        includeLegacyAliases: false,
-        includeSkip: true,
-        config: nextConfig,
-        workspaceDir: params.target.workspaceDir,
-        env: process.env,
-      }).split("|"),
-      ...GENERIC_NON_INTERACTIVE_AUTH_CHOICES,
-    ]),
-  );
+  const validAuthChoices = formatAuthChoiceChoicesForCli({
+    includeSkip: true,
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  }).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
     runtime.error(
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
@@ -309,16 +301,11 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (
-    authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error(
-      authChoice === "oauth"
-        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
-        : "OAuth requires interactive mode.",
-    );
+    runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
     return null;
   }

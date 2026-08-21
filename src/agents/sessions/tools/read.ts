@@ -32,7 +32,7 @@ import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, resolveReadPath } from "./path-utils.js";
+import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
@@ -216,7 +216,7 @@ function getCompactReadClassification(
     return undefined;
   }
 
-  const absolutePath = resolveReadPath(rawPath, cwd);
+  const absolutePath = resolveToCwd(rawPath, cwd);
   const fileName = basename(absolutePath);
   if (fileName === "SKILL.md") {
     return { kind: "skill", label: basename(dirname(absolutePath)) || fileName };
@@ -239,7 +239,7 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
     return await resolveMediaReferenceLocalPath(normalizedMediaSource);
   }
-  return resolveReadPath(filePath, cwd);
+  return resolveToCwd(filePath, cwd);
 }
 
 async function resolveReadToolPath(
@@ -247,7 +247,7 @@ async function resolveReadToolPath(
   filePath: string,
   cwd: string,
 ): Promise<{ absolutePath: string; note?: string }> {
-  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveReadPath(filePath, cwd));
+  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
   try {
     await ops.access(absolutePath);
     return { absolutePath };

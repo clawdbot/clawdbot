@@ -86,6 +86,10 @@ import {
   type CronStreamFireDisposition,
   resolveStreamStopReason,
 } from "./cron-stream-watchers.js";
+import {
+  fenceScheduledGatewayContextResolver,
+  runWithScheduledGatewayContext,
+} from "./scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
@@ -93,6 +97,7 @@ import {
   sendGatewayCronWebhook,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   bumpSessionAutomationVersion,
   claimSessionAutomationEpoch,
@@ -184,7 +189,7 @@ function reconcileCronExitWatchers(params: {
   jobs: CronJob[];
 }) {
   if (!params.cronEnabled) {
-    params.exitWatchers.cancelAll();
+    void params.exitWatchers.cancelAll();
     return;
   }
   params.exitWatchers.reconcile(params.jobs);
@@ -354,8 +359,14 @@ export function buildGatewayCronService(params: {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   env?: NodeJS.ProcessEnv;
+  resolveGatewayContext?: () => GatewayRequestContext | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
+  // Fence the raw context reference behind its Gateway instance lifecycle so a
+  // long-running scheduled turn cannot resolve a retired context after shutdown.
+  const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
+    params.resolveGatewayContext,
+  );
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
@@ -760,6 +771,15 @@ export function buildGatewayCronService(params: {
       }
       return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, sessionKey });
     },
+    ...(scheduledGatewayContextResolver
+      ? {
+          runSchedulerOwned: async <T>(run: () => Promise<T>) =>
+            await runWithScheduledGatewayContext({
+              resolveGatewayContext: scheduledGatewayContextResolver,
+              run,
+            }),
+        }
+      : {}),
     requestHeartbeat: (opts) => {
       const { agentId, sessionKey } = resolveCronTarget({
         ...opts,
@@ -1318,12 +1338,15 @@ export function buildGatewayCronService(params: {
     streamWatcherReconciliations +
     (exitWatchersRef.current?.activeJobIds().length ?? 0) +
     (streamWatchersRef.current?.activeJobIds().length ?? 0);
+  // cron.stop begins cancellation synchronously; stopAndDrain joins this same
+  // settlement so a replacement owner cannot start over live predecessors.
+  let exitWatchersStopPromise: Promise<void> | undefined;
   const stopExitWatchers = () => {
     // Late completion cleanup can request reconciliation after shutdown.
     // Fence new requests before cancellation so stopped children cannot respawn.
     exitWatchersStopped = true;
     exitWatcherGeneration += 1;
-    exitWatchersRef.current?.cancelAll();
+    exitWatchersStopPromise ??= exitWatchersRef.current?.cancelAll() ?? Promise.resolve();
   };
   // cron.stop launches this teardown asynchronously and stopAndDrain awaits
   // it; memoizing keeps that one drain instead of queueing every owner a
@@ -1373,13 +1396,15 @@ export function buildGatewayCronService(params: {
   };
   cron.stopAndDrain = async () => {
     cron.stop();
+    const exitWatchersStop = exitWatchersStopPromise ?? Promise.resolve();
     const streamWatchersStop = stopStreamWatchers().then(
       () => ({ ok: true as const }),
       (error: unknown) => ({ ok: false as const, error }),
     );
     const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
-    const [activeRunDrain, streamWatchersResult] = await Promise.all([
+    const [activeRunDrain, , streamWatchersResult] = await Promise.all([
       waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+      exitWatchersStop,
       streamWatchersStop,
     ]);
     if (!activeRunDrain.drained) {
@@ -1434,25 +1459,33 @@ export function buildGatewayCronService(params: {
   };
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
-    const generation = streamWatcherGeneration;
+    const exitGeneration = exitWatcherGeneration;
+    const streamGeneration = streamWatcherGeneration;
+    const lifecycleChanged = () =>
+      exitGeneration !== exitWatcherGeneration || streamGeneration !== streamWatcherGeneration;
+    await exitWatchersStopPromise;
+    if (lifecycleChanged()) {
+      return;
+    }
     await startCron();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     exitWatchersStopped = false;
     streamWatchersStopped = false;
-    // A reload restart owns a fresh watcher lifecycle; the next stop must run.
+    // A restart owns a fresh watcher lifecycle; the next stop must drain it.
+    exitWatchersStopPromise = undefined;
     streamWatchersStopPromise = undefined;
     streamWatchersRef.current?.resume();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     await reconcileStreamWatchers();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     await reconcileHeartbeatJobs();
-    if (generation !== streamWatcherGeneration) {
+    if (lifecycleChanged()) {
       return;
     }
     // Register only once started, under the build-time epoch, so a stale lazy

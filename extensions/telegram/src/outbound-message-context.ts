@@ -43,7 +43,7 @@ type TelegramOutboundGroupHistoryRecord = {
   chatId: string | number;
   messageId: number;
   text?: string;
-  messageThreadId?: number;
+  threadSpec?: TelegramThreadSpec;
   timestamp?: number;
 };
 
@@ -179,11 +179,12 @@ export async function recordOutboundMessageForPromptContext(params: {
     });
     if (params.recordGroupHistory !== false) {
       const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);
+      const threadSpec = providerObservedThread ?? params.successfulSendThread;
       outboundGroupHistoryRecorders.get(params.account.accountId)?.({
         chatId: params.chatId,
         messageId: params.messageId,
         text: params.text ?? cacheMessage.text ?? cacheMessage.caption,
-        ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+        ...(threadSpec ? { threadSpec } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       });
     }

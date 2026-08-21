@@ -20,6 +20,7 @@ import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-cho
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
+import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 
 export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
@@ -43,30 +44,28 @@ const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "json",
 ]);
 
-function listUnsupportedModernOptions(command: Command): string[] {
-  const optionsByKey = new Map<string, (typeof command.options)[number]>();
-  for (const option of command.options) {
-    const key = option.attributeName();
-    if (MODERN_ONBOARD_OPTION_KEYS.has(key) || command.getOptionValueSource(key) !== "cli") {
-      continue;
-    }
-    const existing = optionsByKey.get(key);
-    const valueIsNegated = command.getOptionValue(key) === false;
-    if (!existing || option.negate === valueIsNegated) {
-      // Positive and --no-* forms can share one Commander attribute. Report
-      // only the spelling whose parsed value actually won.
-      optionsByKey.set(key, option);
-    }
+function validateRecommendationParentOptions(
+  command: Command,
+  runtime: RuntimeEnv,
+  allowJson = false,
+): boolean {
+  const unsupported = listExplicitOptionFlagsExcept(
+    command,
+    allowJson ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+  );
+  if (unsupported.length === 0) {
+    return true;
   }
-  return [...optionsByKey.values()]
-    .map((option) => option.long ?? option.short ?? option.flags)
-    .toSorted();
+  runtime.error(
+    `This recommendations command does not support parent option(s): ${unsupported.join(", ")}.`,
+  );
+  runtime.exit(1);
+  return false;
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
-  includeLegacyAliases: true,
-  includeSkip: true,
-});
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
+const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
+const NO_RECOMMENDATION_PARENT_OPTIONS = new Set<string>();
 
 type OnboardAuthFlag = {
   readonly cliOption: string;
@@ -261,6 +260,9 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (!validateRecommendationParentOptions(command, defaultRuntime, true)) {
+          return;
+        }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         onboardRecommendationsCommand(
@@ -279,6 +281,12 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts: { retry?: string[] }) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (
+          !validateRecommendationParentOptions(command, defaultRuntime) ||
+          !validateRecommendationParentOptions(recommendations, defaultRuntime)
+        ) {
+          return;
+        }
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
@@ -291,6 +299,12 @@ export function registerOnboardCommand(program: Command): void {
     .action(async () => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (
+          !validateRecommendationParentOptions(command, defaultRuntime) ||
+          !validateRecommendationParentOptions(recommendations, defaultRuntime)
+        ) {
+          return;
+        }
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         refreshOnboardRecommendationsCommand(defaultRuntime);
@@ -301,7 +315,10 @@ export function registerOnboardCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
-        const unsupportedOptions = listUnsupportedModernOptions(commandRuntime);
+        const unsupportedOptions = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          MODERN_ONBOARD_OPTION_KEYS,
+        );
         if (unsupportedOptions.length > 0) {
           defaultRuntime.error(
             [

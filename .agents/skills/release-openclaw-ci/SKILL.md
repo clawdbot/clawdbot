@@ -19,6 +19,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   Tooling SHA + rerun group**. Validation SHA maps to the Code SHA for product validation or
   the Release SHA for changelog-only validation; it is not a third release
   identity. A branch or temporary ref is context and transport.
+- Freeze the candidate SHA/ref and Tooling SHA/ref once. Main lineage authorizes
+  the initial Tooling SHA selection; it does not authorize replacing that
+  tooling after `main` advances.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
   product defects, package/provenance defects in the bytes to publish, security
   defects, or failures that make publication impossible. Queue other findings
@@ -26,6 +29,10 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Use trusted `main` workflow revisions as immutable dispatch sources. Do not
   adopt newer main code, repair unrelated main CI, wait for broad main health,
   or expand a release fix because the workflow source lives on `main`.
+- Once publication binds the Tooling SHA to an exact protected lightweight
+  `release-publish/<12sha>-<provenance-run>` tag, that live tag-to-SHA mapping
+  remains authoritative when `main` advances. The suffix records tag-creation
+  provenance; it is not the current parent run id.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
   release branch. If the required main landing policy is blocked by unrelated
@@ -79,9 +86,18 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 
 ## Run identity and retry budget
 
-Record Validation SHA, Tooling SHA, target context ref, parent run id, attempt,
-and phase before watching or recovering Full Release Validation. Keep Code SHA
-and Release SHA separately in the lifecycle ledger.
+Record Validation SHA, Tooling SHA/ref, target context ref, parent run id,
+attempt, and phase before watching or recovering Full Release Validation. Keep
+Code SHA and Release SHA separately in the lifecycle ledger. Record the
+immutable Release Publish parent receipt separately from tag provenance.
+
+For the core and plugin npm mutations enforced by this foundation, re-read the
+exact protected lightweight tag and revalidate the exact parent run tuple
+immediately before each publish or dist-tag mutation. Reject a missing, moved,
+annotated, or wrong-SHA tag; a repository, workflow, run id, attempt, tooling
+identity, or parent-state mismatch; and any same-name branch. Never refresh
+either identity from current `main`. Treat other privileged writers as blocked
+until their dependent enforcement changes land.
 
 - Conceptual phases map to current inputs as follows:
   - `beta-publish`: `release_profile=beta`, `run_release_soak=false`
@@ -96,6 +112,12 @@ and Release SHA separately in the lifecycle ledger.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
+  `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
+  or `performance`. Never use the removed `release-checks` handle. `qa` is
+  only a direct-child manual aggregate, not a controller retry API.
+- Filtered retries fail closed unless the filter belongs to the selected group.
+  Never turn an empty derived filter into an unfiltered broad run.
 - A new all-group parent is justified only when shared orchestration changed,
   earlier evidence is invalid for the selected tuple, or the operator explicitly
   requests it. Record the invalidating event.

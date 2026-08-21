@@ -7,6 +7,7 @@ import type {
   CronJob,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
+  CronJobsScheduleKindFilter,
   CronJobsTriggerFilter,
   CronJobsListResult,
   CronJobsSortBy,
@@ -191,7 +192,6 @@ export type CronFieldKey =
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 

@@ -4,6 +4,7 @@ import {
   emitAgentEvent as emitGlobalAgentEvent,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
+  type AgentMessage,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -26,6 +27,7 @@ import {
   buildCodexAttemptResult,
   type CodexAppServerToolTelemetry,
 } from "./event-projector-result.js";
+import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
@@ -155,6 +157,24 @@ export class CodexAppServerEventProjector {
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
+  }
+
+  buildSteeringTranscriptPrefix(): AgentMessage[] {
+    const commentaryMessages = this.assistantProjection
+      .collectCommentaryMessages()
+      .filter(({ itemId }) => this.completedItemIds.has(itemId));
+    return buildCodexMessagesSnapshot({
+      runParams: this.params,
+      turnId: this.turnId,
+      upstreamUserText: this.options.upstreamUserText,
+      reasoningText: undefined,
+      planText: undefined,
+      commentaryMessages,
+      toolMessages: this.toolTranscriptProjection.transcriptMessages,
+      lastAssistant: undefined,
+      createAssistantMirrorMessage: (title, text) =>
+        this.assistantProjection.createAssistantMirrorMessage(title, text),
+    }).filter((message) => message.role !== "user");
   }
 
   hasCompletedTerminalAssistantText(): boolean {

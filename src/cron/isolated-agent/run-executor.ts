@@ -589,6 +589,7 @@ function createCronPromptExecutor(params: {
                 cliSessionBinding: guardedCliSessionBinding,
                 skillsSnapshot: params.skillsSnapshot,
                 messageChannel,
+                agentAccountId: params.resolvedDelivery.accountId,
                 sourceReplyDeliveryMode,
                 requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                 cliSessionBindingFacts: {

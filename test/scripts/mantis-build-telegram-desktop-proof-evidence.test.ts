@@ -20,7 +20,11 @@ afterEach(() => {
 function makeLane(
   name: "baseline" | "candidate",
   sha: string,
-  options: { diagnosticOnly?: boolean; status?: "pass" | "fail"; withGif?: boolean } = {},
+  options: {
+    diagnosticOnly?: boolean;
+    status?: "blocked" | "fail" | "pass";
+    withGif?: boolean;
+  } = {},
 ) {
   const repo = mkdtempSync(path.join(tmpdir(), `mantis-telegram-${name}-repo-`));
   tempDirs.push(repo);
@@ -188,6 +192,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     ]);
 
     expect(manifest.comparison.pass).toBe(false);
+    expect(manifest.comparison.outcome).toBe("fail");
     expect(manifest.artifacts).toContainEqual(
       expect.objectContaining({
         lane: "candidate",
@@ -198,6 +203,43 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(
       readFileSync(path.join(outputDir, "candidate", "telegram-desktop-proof.png"), "utf8"),
     ).toBe("candidate png");
+  });
+
+  it("preserves a blocked lane as a distinct non-failure outcome", () => {
+    const baselineSha = "a".repeat(40);
+    const candidateSha = "b".repeat(40);
+    const baseline = makeLane("baseline", baselineSha, { status: "blocked", withGif: false });
+    const candidate = makeLane("candidate", candidateSha, { status: "blocked", withGif: false });
+    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-blocked-proof-"));
+    tempDirs.push(outputDir);
+
+    const { manifest } = writeTelegramDesktopProofEvidence([
+      "--output-dir",
+      outputDir,
+      "--baseline-repo-root",
+      baseline.repo,
+      "--baseline-output-dir",
+      baseline.outputDir,
+      "--baseline-sha",
+      baselineSha,
+      "--baseline-status",
+      "blocked",
+      "--candidate-repo-root",
+      candidate.repo,
+      "--candidate-output-dir",
+      candidate.outputDir,
+      "--candidate-sha",
+      candidateSha,
+      "--candidate-status",
+      "blocked",
+    ]);
+
+    expect(manifest.comparison).toMatchObject({
+      baseline: { status: "blocked" },
+      candidate: { status: "blocked" },
+      outcome: "blocked",
+      pass: false,
+    });
   });
 
   it("preserves an unattested diagnostic-only startup failure", () => {

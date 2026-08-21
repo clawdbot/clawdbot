@@ -7,6 +7,7 @@ import {
   resolveHeartbeatAgents,
   startHeartbeatRunner,
   type HeartbeatRunner,
+  runHeartbeatOnce,
 } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import {
@@ -18,6 +19,10 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import {
+  fenceScheduledGatewayContextResolver,
+  runWithScheduledGatewayContext,
+} from "./scheduled-run-gateway-context.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
@@ -361,9 +366,23 @@ export function activateGatewayScheduledServices(params: {
         "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
       );
   }
+  // Scheduled heartbeat wakes fire from a timer with no Gateway request, so
+  // without this the turn runs contextless and trusted built-in tools fail.
+  const heartbeatGatewayContextResolver = fenceScheduledGatewayContextResolver(
+    params.resolveGatewayContext,
+  );
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,
     readCurrentConfig: getRuntimeConfig,
+    ...(heartbeatGatewayContextResolver
+      ? {
+          runOnce: async (opts: Parameters<typeof runHeartbeatOnce>[0]) =>
+            await runWithScheduledGatewayContext({
+              resolveGatewayContext: heartbeatGatewayContextResolver,
+              run: async () => await runHeartbeatOnce(opts),
+            }),
+        }
+      : {}),
   });
   const sessionUpstreamMonitor = startSessionUpstreamMonitor();
   const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({

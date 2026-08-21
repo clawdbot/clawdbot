@@ -67,7 +67,6 @@ jobs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       request_source: ${{ steps.resolve.outputs.request_source }}
       should_run: ${{ steps.resolve.outputs.should_run }}
-      visibility_decision: ${{ steps.read_decision.outputs.decision }}
     steps:
       - name: Resolve refs and target PR
         id: resolve
@@ -180,11 +179,6 @@ jobs:
             setOutput("publish_artifact_name", publishArtifactName);
             setOutput("publish_run_id", inputs.publish_run_id || "");
             setOutput("request_source", requestSource);
-            setOutput(
-              "requires_preflight",
-              requestSource === "clawsweeper_label" || publishArtifactName ? "false" : "true",
-            );
-
       - name: Create Mantis status token
         id: mantis_status_token
         if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
@@ -277,85 +271,10 @@ jobs:
             });
             core.setFailed("Mantis could not publish its durable status comment.");
 
-      - name: Checkout preflight refs
-        id: checkout
-        if: ${{ steps.resolve.outputs.should_run == 'true' && steps.resolve.outputs.requires_preflight == 'true' }}
-        continue-on-error: true
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Fetch exact PR head
-        id: fetch
-        if: ${{ steps.checkout.outcome == 'success' }}
-        continue-on-error: true
-        env:
-          BASELINE_SHA: ${{ steps.resolve.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ steps.resolve.outputs.candidate_revision }}
-          MANTIS_PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin \
-            "$BASELINE_SHA" \
-            "+refs/pull/${MANTIS_PR_NUMBER}/head:refs/remotes/origin/mantis-preflight"
-          git cat-file -e "${BASELINE_SHA}^{commit}"
-          test "$(git rev-parse refs/remotes/origin/mantis-preflight)" = "$CANDIDATE_SHA"
-
-      - name: Classify visible behavior
-        id: classify
-        if: ${{ steps.fetch.outcome == 'success' }}
-        continue-on-error: true
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
-        env:
-          BASELINE_SHA: ${{ steps.resolve.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ steps.resolve.outputs.candidate_revision }}
-          MANTIS_INSTRUCTIONS: ${{ steps.resolve.outputs.instructions }}
-          MANTIS_PR_CONTEXT: ${{ steps.resolve.outputs.pr_context }}
-        with:
-          openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-          codex-version: 0.148.0
-          prompt-file: .github/codex/prompts/mantis-telegram-desktop-preflight.md
-          output-schema: |
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["decision"],
-              "properties": {
-                "decision": { "type": "string", "enum": ["run", "skip"] }
-              }
-            }
-          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: low
-          sandbox: read-only
-          codex-args: '["-c","service_tier=\"fast\""]'
-          safety-strategy: drop-sudo
-          allow-bot-users: github-actions[bot]
-
-      - name: Read visibility decision
-        id: read_decision
-        if: ${{ always() }}
-        env:
-          CLASSIFIER_OUTCOME: ${{ steps.classify.outcome }}
-          CLASSIFIER_RESULT: ${{ steps.classify.outputs.final-message }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          decision=run
-          if [[ "$CLASSIFIER_OUTCOME" == success ]] &&
-            jq -e '.decision == "run" or .decision == "skip"' <<<"$CLASSIFIER_RESULT" >/dev/null; then
-            decision="$(jq -r '.decision' <<<"$CLASSIFIER_RESULT")"
-          else
-            echo "::notice::Mantis visibility preflight was unavailable; continuing with proof."
-          fi
-          echo "decision=$decision" >> "$GITHUB_OUTPUT"
-
   run_telegram_desktop_proof:
     name: Run agentic native Telegram proof
     needs: resolve_request
-    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == '' && needs.resolve_request.outputs.visibility_decision != 'skip'
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
     environment: qa-live-shared
@@ -740,21 +659,23 @@ jobs:
           sudo install -m 0755 "$tdlib_dir/tdlib-v1.8.0-linux-x64/lib/libtdjson.so" /usr/local/lib/libtdjson.so
           # The Convex credential is the real mutex for the shared Telegram account:
           # a concurrent holder fails this acquire, so no separate run-level lock is
-          # needed. Retry while another run finishes, then fail with a clear reason.
+          # needed. Observed 2026-08: a complete proof held the account for 34m;
+          # four hours covers burst backfills while reserving roughly two hours
+          # of the job limit for proof, publication, and cleanup.
           echo "lease_file=$credential_dir/lease.json" >> "$GITHUB_OUTPUT"
-          deadline=$(( SECONDS + 15 * 60 ))
+          lease_deadline=$(( SECONDS + 4 * 60 * 60 ))
           until node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
             --user-driver-dir "$credential_dir/user-driver" \
             --desktop-workdir "$credential_dir/desktop" \
             --lease-file "$credential_dir/lease.json" \
             --payload-output "$credential_dir/payload.json" \
             --credential-role ci; do
-            if (( SECONDS >= deadline )); then
-              echo "::error::The shared QA Telegram account is still leased by another run after 15 minutes." >&2
+            if (( SECONDS >= lease_deadline )); then
+              echo "::error::The shared QA Telegram account remained busy for four hours." >&2
               exit 1
             fi
-            echo "Shared QA Telegram account is busy; retrying in 60s." >&2
-            sleep 60
+            echo "Shared QA Telegram account is busy; retrying in 15s." >&2
+            sleep 15
           done
           chmod 0700 "$credential_dir" "$credential_dir/user-driver"
           sut_credential_dir="/tmp/openclaw-mantis-sut-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -975,20 +896,16 @@ jobs:
             select((.summary | type) == "string" and (.summary | length) <= 4000) |
             select((.comparison.baseline.expected | type) == "string" and (.comparison.baseline.expected | length) <= 1000) |
             select((.comparison.candidate.expected | type) == "string" and (.comparison.candidate.expected | length) <= 1000) |
-            select((.comparison.pass | type) == "boolean") |
-            select((.comparison.candidate.fixed | type) == "boolean") |
             {
               summary,
               baselineExpected: .comparison.baseline.expected,
-              candidateExpected: .comparison.candidate.expected,
-              comparisonPass: .comparison.pass,
-              candidateFixed: .comparison.candidate.fixed
+              candidateExpected: .comparison.candidate.expected
             }
           ' "$agent_manifest" > "$judgment"
           baseline_status="$(sudo jq -r '.comparison.baseline.status' "$agent_manifest")"
           candidate_status="$(sudo jq -r '.comparison.candidate.status' "$agent_manifest")"
-          [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" ]]
-          [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" ]]
+          [[ "$baseline_status" == "pass" || "$baseline_status" == "fail" || "$baseline_status" == "blocked" ]]
+          [[ "$candidate_status" == "pass" || "$candidate_status" == "fail" || "$candidate_status" == "blocked" ]]
           copy_verified_artifacts() {
             local lane="$1"
             local facts_file="$2"
@@ -1047,6 +964,18 @@ jobs:
                 (.artifacts.trimmedVideoCropped.bytes > 10000)
               ' "$verdict" >/dev/null
             fi
+            if [[ "$fact_status" == "blocked" ]]; then
+              sudo jq -e '
+                (.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200 and
+                (.blocked.reason | type) == "string" and (.blocked.reason | length) > 0 and (.blocked.reason | length) <= 2000
+              ' "$verdict" >/dev/null
+              lane_status="blocked"
+            elif [[ "$fact_status" == "complete" ]]; then
+              [[ "$lane_status" == "pass" || "$lane_status" == "fail" ]]
+            else
+              lane_status="fail"
+            fi
+            printf -v "${lane}_status" '%s' "$lane_status"
             if [[ "$pre_attestation_failure" != "true" ]]; then
               sudo jq -e --arg lane "$lane" --arg sha "$expected_sha" \
                 '.lane == $lane and .sha == $sha' \
@@ -1104,15 +1033,16 @@ jobs:
           sudo jq --slurpfile judgment "$judgment" '
             .summary = $judgment[0].summary |
             .comparison.baseline.expected = $judgment[0].baselineExpected |
-            .comparison.candidate.expected = $judgment[0].candidateExpected |
-            .comparison.pass = $judgment[0].comparisonPass |
-            .comparison.candidate.fixed = $judgment[0].candidateFixed
+            .comparison.candidate.expected = $judgment[0].candidateExpected
           ' "$manifest" | sudo tee "$trusted_manifest" >/dev/null
           sudo mv "$trusted_manifest" "$manifest"
 
           jq -e '
-            (.comparison.pass == false) or
-            (.comparison.baseline.status == "pass" and .comparison.candidate.status == "pass")
+            (.comparison.outcome == "pass" and .comparison.pass == true and
+              .comparison.baseline.status == "pass" and .comparison.candidate.status == "pass") or
+            (.comparison.outcome == "blocked" and .comparison.pass == false and
+              (.comparison.baseline.status == "blocked" or .comparison.candidate.status == "blocked")) or
+            (.comparison.outcome == "fail" and .comparison.pass == false)
           ' "$manifest" >/dev/null
 
           token="$(sudo jq -r '.sutToken' "$SUT_CREDENTIAL_DIR/credential.json")"
@@ -1223,7 +1153,7 @@ jobs:
             echo "Mantis agent did not produce ${manifest}." >&2
             exit 1
           fi
-          comparison_status="$(jq -r 'if .comparison.pass then "pass" else "fail" end' "$manifest")"
+          comparison_status="$(jq -er '.comparison.outcome | select(. == "pass" or . == "fail" or . == "blocked")' "$manifest")"
           echo "comparison_status=${comparison_status}" >> "$GITHUB_OUTPUT"
 
       - name: Upload Mantis Telegram desktop artifacts
@@ -1326,63 +1256,12 @@ jobs:
             }
 
       - name: Fail when Mantis Telegram desktop proof failed
-        if: ${{ always() && steps.inspect.outputs.output_dir != '' && steps.inspect.outputs.comparison_status != 'pass' }}
+        if: ${{ always() && steps.inspect.outputs.output_dir != '' && steps.inspect.outputs.comparison_status != 'pass' && steps.inspect.outputs.comparison_status != 'blocked' }}
         env:
           COMPARISON_STATUS: ${{ steps.inspect.outputs.comparison_status }}
         run: |
           echo "Mantis Telegram desktop proof failed: comparison=${COMPARISON_STATUS:-unset}." >&2
           exit 1
-
-  report_no_visible_change:
-    name: Report no visible Telegram change
-    needs: resolve_request
-    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.visibility_decision == 'skip'
-    runs-on: ubuntu-24.04
-    environment: qa-live-shared
-    permissions: {}
-    steps:
-      - name: Create Mantis GitHub App token
-        id: mantis_app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
-          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-pull-requests: write
-
-      - name: Comment that no visible proof applies
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
-        with:
-          github-token: ${{ steps.mantis_app_token.outputs.token }}
-          script: |
-            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
-            const body = `${marker}\nThere was nothing visible to test in this PR at all.`;
-            const { owner, repo } = context.repo;
-            const issueNumber = Number(process.env.TARGET_PR);
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number: issueNumber,
-              per_page: 100,
-            });
-            const existing = comments.findLast(
-              (comment) =>
-                comment.user?.login === "openclaw-mantis[bot]" &&
-                comment.body?.includes(marker),
-            );
-            if (!existing) {
-              core.info("A newer Mantis run owns the PR status; skipping stale no-change output.");
-              return;
-            }
-            await github.rest.issues.updateComment({
-              owner,
-              repo,
-              comment_id: existing.id,
-              body,
-            });
 
   publish_existing_telegram_desktop_proof:
     name: Publish existing native Telegram proof

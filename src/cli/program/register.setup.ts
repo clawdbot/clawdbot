@@ -13,7 +13,7 @@ import type {
 } from "../../commands/onboard-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
+import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import {
@@ -52,24 +52,6 @@ function hasExplicitOnboardingOption(command: Command): boolean {
     const name = option.attributeName();
     return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
   });
-}
-
-function listUnsupportedBaselineOptions(command: Command): string[] {
-  const optionsByName = new Map<string, (typeof command.options)[number]>();
-  for (const option of command.options) {
-    const name = option.attributeName();
-    if (BASELINE_OPTION_NAMES.has(name) || command.getOptionValueSource(name) !== "cli") {
-      continue;
-    }
-    const existing = optionsByName.get(name);
-    const valueIsNegated = command.getOptionValue(name) === false;
-    if (!existing || option.negate === valueIsNegated) {
-      optionsByName.set(name, option);
-    }
-  }
-  return [...optionsByName.values()]
-    .map((option) => option.long ?? option.short ?? option.flags)
-    .toSorted();
 }
 
 async function isConfiguredInstance(): Promise<boolean> {
@@ -115,7 +97,7 @@ async function runOnboardingEntry(
   runtime: RuntimeEnv,
 ): Promise<void> {
   if (options.baseline) {
-    const unsupportedOptions = listUnsupportedBaselineOptions(commandRuntime);
+    const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
     if (unsupportedOptions.length > 0) {
       runtime.error(`--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`);
       runtime.exit(1);

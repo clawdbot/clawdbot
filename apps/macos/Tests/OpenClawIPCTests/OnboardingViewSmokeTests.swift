@@ -213,19 +213,28 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `detected CLI starts its gateway after this Mac is selected`() {
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: false,
+    @Test func `detected CLI follows the selected onboarding connection mode`() {
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
             executableReady: true,
-            installing: false))
-        #expect(OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
+            installing: false) == .remote)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
             executableReady: true,
-            installing: false))
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
+            installing: false) == .local)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .unconfigured,
             executableReady: true,
-            installing: true))
+            installing: false) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
+            executableReady: true,
+            installing: true) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
+            executableReady: false,
+            installing: false) == nil)
+        #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
     }
 
     @Test func `later gateway readiness revises a pinned CLI activation failure`() {

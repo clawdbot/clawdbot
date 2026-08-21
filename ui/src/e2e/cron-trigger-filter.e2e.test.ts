@@ -61,7 +61,7 @@ suite.define(() => {
               ],
             },
             "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-            "cron.status": { enabled: true, jobs: 2, nextWakeAtMs: null },
+            "cron.status": { enabled: true, triggersEnabled: false, jobs: 2, nextWakeAtMs: null },
           },
         });
 

@@ -8,6 +8,10 @@ import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js"
 import { resolveAuthoredModelContextTokens } from "../../agents/context-resolution.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
+  isEmbeddedRunTerminalToolFailure,
+} from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
@@ -349,6 +353,11 @@ export async function finalizeCronRun(params: {
     hasFatalErrorPayload,
     embeddedRunError,
   } = cronPayloadOutcome;
+  const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
+  const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
+  if (hasFatalErrorPayload && hasTerminalToolFailure) {
+    summary = CODE_MODE_MCP_CATALOG_MISS_MESSAGE;
+  }
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -372,7 +381,7 @@ export async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
-        hasFatalErrorPayload
+        hasFatalErrorPayload && !hasTerminalToolFailure
           ? createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",

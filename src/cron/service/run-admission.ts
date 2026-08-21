@@ -647,11 +647,15 @@ export async function executeQueuedCronRun(params: {
     };
     let outcome: TimedCronRunOutcome;
     try {
-      const result = await executeJobCoreWithTimeout(state, executionJob, {
-        runId: taskRunId,
-        activeJobMarker,
-        runReceipt: started.runReceipt,
-      });
+      const execute = async () =>
+        await executeJobCoreWithTimeout(state, executionJob, {
+          runId: taskRunId,
+          activeJobMarker,
+          runReceipt: started.runReceipt,
+        });
+      const result = state.deps.runSchedulerOwned
+        ? await state.deps.runSchedulerOwned(execute)
+        : await execute();
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
     } catch (error) {
       const receiptSettlementDisposition =

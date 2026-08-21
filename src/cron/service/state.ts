@@ -157,6 +157,8 @@ export type CronServiceDeps = {
     sessionKey?: string;
     agentId?: string;
   }) => DeliveryContext | undefined;
+  /** Runs timer and startup work inside the owning Gateway's detached scope. */
+  runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
@@ -372,6 +374,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  triggersEnabled: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   ensureCustomElementDefined,
   LazyCustomElementRequestController,
@@ -82,7 +83,7 @@ describe("optional custom element requests", () => {
     requests.request(element, continuation);
 
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(requests.visibleState).toMatchObject({
         status: "error",
         element,
@@ -95,7 +96,7 @@ describe("optional custom element requests", () => {
     requests.retry();
 
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
-    await vi.waitFor(() => expect(continuation).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(element.loadModule).toHaveBeenCalledTimes(2);
     expect(requests.visibleState).toBeUndefined();
   });
@@ -129,15 +130,15 @@ describe("optional custom element requests", () => {
     };
 
     requests.requestWhileActive(activeElement, true);
-    await vi.waitFor(() => expect(activeElement.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(activeElement.loadModule).toHaveBeenCalledOnce());
     requests.request(foregroundElement);
-    await vi.waitFor(() => expect(foregroundElement.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(foregroundElement.loadModule).toHaveBeenCalledOnce());
     resolveForeground?.();
-    await vi.waitFor(() => expect(requests.visibleState?.element).toBe(activeElement));
+    await waitForFast(() => expect(requests.visibleState?.element).toBe(activeElement));
 
     const error = new Error("active chunk unavailable");
     rejectActive?.(error);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(requests.visibleState).toMatchObject({
         element: activeElement,
         error,
@@ -162,7 +163,7 @@ describe("optional custom element requests", () => {
     };
 
     requests.requestWhileActive(element, true);
-    await vi.waitFor(() => expect(requests.visibleState?.status).toBe("error"));
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     requests.close();
     requests.requestWhileActive(element, true);
 
@@ -171,7 +172,7 @@ describe("optional custom element requests", () => {
 
     requests.requestWhileActive(element, false);
     requests.requestWhileActive(element, true);
-    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledTimes(2));
   });
 
   it("delegates stale recovery before falling back to the same in-place load", async () => {
@@ -191,12 +192,12 @@ describe("optional custom element requests", () => {
     };
 
     requests.request(element, continuation);
-    await vi.waitFor(() => expect(requests.visibleState?.status).toBe("error"));
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(requests.visibleState).toMatchObject({ stale: true });
 
     requests.retry();
 
-    await vi.waitFor(() => expect(continuation).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(retryStale).toHaveBeenCalledOnce();
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
@@ -222,12 +223,12 @@ describe("optional custom element requests", () => {
 
     requests.request(element, continuation);
     expect(requests.visibleState?.status).toBe("loading");
-    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
 
     requests.close();
     resolveLoad?.();
 
-    await vi.waitFor(() => expect(customElements.get(element.tagName)).toBeDefined());
+    await waitForFast(() => expect(customElements.get(element.tagName)).toBeDefined());
     expect(requests.visibleState).toBeUndefined();
     expect(continuation).not.toHaveBeenCalled();
   });
@@ -246,11 +247,11 @@ describe("optional custom element requests", () => {
     requests.preload(element);
     requests.preload(element);
 
-    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
     expect(requests.visibleState).toBeUndefined();
 
     requests.request(element);
-    await vi.waitFor(() => expect(requests.visibleState?.status).toBe("error"));
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
 });

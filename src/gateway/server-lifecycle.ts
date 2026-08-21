@@ -217,6 +217,7 @@ export async function prepareGatewayLifecycle(params: {
       cfg: cfgAtStart,
       deps,
       broadcast,
+      resolveGatewayContext: runtime.resolvePluginGatewayContext,
     }),
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
@@ -249,11 +250,9 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
     setEarlyRuntimeHandles: (handles: {
-      bonjourStop: typeof runtimeState.bonjourStop;
       getActiveTaskCount: () => number;
       skillsChangeUnsub: typeof runtimeState.skillsChangeUnsub;
     }) => {
-      runtimeState.bonjourStop = handles.bonjourStop;
       activeTaskCount.get = handles.getActiveTaskCount;
       runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
     },
@@ -514,7 +513,7 @@ export async function prepareGatewayLifecycle(params: {
     const transport = transportBridge.current();
     await transport?.portalService.closeAll();
     await shutdownRuntime.createGatewayCloseHandler({
-      bonjourStop: runtimeState.bonjourStop,
+      bonjourStop: kernel.swapBonjourStop(null),
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
       channelIds,

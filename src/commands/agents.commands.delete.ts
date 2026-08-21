@@ -37,11 +37,13 @@ import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
+import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
+import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -61,6 +63,10 @@ type AgentsDeleteOptions = {
 
 type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
 type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
+type AgentDeleteGatewayAttempt =
+  | { kind: "deleted"; result: AgentsDeleteResult }
+  | { kind: "fallback-unreachable" }
+  | { kind: "fallback-credentials-required" };
 
 function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, message: string): void {
   if (opts.json) {
@@ -89,9 +95,9 @@ function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFaile
 async function maybeDeleteAgentThroughGateway(params: {
   agentId: string;
   deleteFiles: boolean;
-}): Promise<AgentsDeleteResult | null> {
+}): Promise<AgentDeleteGatewayAttempt> {
   try {
-    return await callGateway<AgentsDeleteResult>({
+    const result = await callGateway<AgentsDeleteResult>({
       method: "agents.delete",
       params: {
         agentId: params.agentId,
@@ -101,12 +107,13 @@ async function maybeDeleteAgentThroughGateway(params: {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       requiredMethods: ["agents.delete"],
     });
+    return { kind: "deleted", result };
   } catch (error) {
-    if (
-      (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) ||
-      isGatewayCredentialsRequiredError(error)
-    ) {
-      return null;
+    if (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) {
+      return { kind: "fallback-unreachable" };
+    }
+    if (isGatewayCredentialsRequiredError(error)) {
+      return { kind: "fallback-credentials-required" };
     }
     throw error;
   }
@@ -231,11 +238,12 @@ export async function agentsDeleteCommand(
     ? pruneAgentConfig(cfg, agentId)
     : { config: cfg, removedBindings: 0, removedAllow: 0, clearedOwnerRefs: [] };
 
-  const gatewayResult = await maybeDeleteAgentThroughGateway({
+  const gatewayAttempt = await maybeDeleteAgentThroughGateway({
     agentId,
     deleteFiles: true,
   });
-  if (gatewayResult) {
+  if (gatewayAttempt.kind === "deleted") {
+    const gatewayResult = gatewayAttempt.result;
     if (opts.json) {
       const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
       const workspaceRetained = workspaceSharedWith.length > 0;
@@ -276,18 +284,27 @@ export async function agentsDeleteCommand(
     existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
   );
   try {
-    if (configured) {
-      await replaceConfigFile({
-        nextConfig: result.config,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-        writeOptions: {
-          allowedAgentRosterRemovals: [agentId],
-          ...(opts.json ? { skipOutputLogs: true } : {}),
-        },
+    const commitRoster = async () =>
+      await withAgentExecApprovalsRemoved(agentId, async () => {
+        if (configured) {
+          await replaceConfigFile({
+            nextConfig: result.config,
+            ...(baseHash !== undefined ? { baseHash } : {}),
+            writeOptions: {
+              allowedAgentRosterRemovals: [agentId],
+              ...(opts.json ? { skipOutputLogs: true } : {}),
+            },
+          });
+          if (!opts.json) {
+            logConfigUpdated(runtime);
+          }
+        }
       });
-      if (!opts.json) {
-        logConfigUpdated(runtime);
-      }
+    if (gatewayAttempt.kind === "fallback-unreachable") {
+      await withLocalAgentCronJobsRemoved(agentId, () => cfg, commitRoster);
+    } else {
+      // Credential resolution fails before transport, so a live scheduler may still own the store.
+      await commitRoster();
     }
     deletion.commit();
   } catch (error) {
@@ -365,10 +382,18 @@ export async function agentsDeleteCommand(
       removed,
       failed,
       ...(purgeFailed ? { purgeFailed: true } : {}),
+      ...(gatewayAttempt.kind === "fallback-credentials-required"
+        ? { cronCleanupSkipped: true }
+        : {}),
     });
   } else {
     runtime.log(`Deleted agent: ${agentId}`);
     logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
     logSessionPurgeWarning(runtime, agentId, purgeFailed);
+  }
+  if (gatewayAttempt.kind === "fallback-credentials-required") {
+    runtime.error(
+      `Warning: cron cleanup was skipped for deleted agent "${agentId}" because the Gateway could not be authenticated; scheduled jobs may remain.`,
+    );
   }
 }

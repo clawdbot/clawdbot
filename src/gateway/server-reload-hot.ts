@@ -120,6 +120,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
+        // Without this a cron hot reload silently drops scheduler gateway
+        // context, so scheduled runs regress to contextless after any reload.
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       });
     }
 

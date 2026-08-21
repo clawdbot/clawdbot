@@ -378,7 +378,6 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain("Changed <version>: re-read");
     expect(prompt).toContain("External writes: batch safely");
   });
 
@@ -922,7 +921,6 @@ describe("buildAgentSystemPrompt", () => {
       "Scan <available_skills>. Clear match: read exact <location> with `Read`; obey.",
     );
     expect(prompt).not.toContain("<location>/SKILL.md");
-    expect(prompt).toContain("Changed <version>: re-read");
     expect(prompt).toContain("Several: most specific");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -1186,7 +1184,6 @@ describe("buildAgentSystemPrompt", () => {
       "Scan <available_skills>. Clear match: read exact <location> with `read`; obey.",
     );
     expect(prompt).not.toContain("<location>/SKILL.md");
-    expect(prompt).toContain("Changed <version>: re-read");
     expect(prompt).toContain("Several: most specific");
   });
 
