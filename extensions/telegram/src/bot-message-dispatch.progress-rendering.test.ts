@@ -129,6 +129,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       });
       expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("Read");
 
+      await replyOptions?.onItemEvent?.({
+        toolCallId: "inspect-1",
+        kind: "tool",
+        name: "Read",
+        phase: "end",
+        status: "completed",
+      });
+      expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("Read");
+
       await replyOptions?.onToolStart?.({
         name: "exec",
         phase: "start",
@@ -146,6 +155,47 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       });
       expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("Exec");
       expect(draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text).not.toContain("↳");
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: false } } },
+    });
+  });
+
+  it("drops an in-flight tool render when the plan advances", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [
+          { step: "Inspect", status: "in_progress" },
+          { step: "Patch", status: "pending" },
+        ],
+      });
+      const callsBeforeRace = draftStream.updatePreview.mock.calls.length;
+      const staleToolRender = replyOptions?.onToolStart?.({
+        name: "Read",
+        phase: "start",
+        toolCallId: "inspect-race",
+      });
+      const nextPlanRender = replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+        ],
+      });
+      await Promise.all([staleToolRender, nextPlanRender]);
+
+      const racedPreviews = draftStream.updatePreview.mock.calls
+        .slice(callsBeforeRace)
+        .map((call) => call[0]?.text ?? "");
+      expect(racedPreviews.some((text) => text.includes("Read"))).toBe(false);
+      expect(racedPreviews.at(-1)).toContain("▸ Patch");
       return { queuedFinal: false };
     });
 

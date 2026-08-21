@@ -10,6 +10,12 @@ import {
 // It merges status, tool, reasoning, and commentary updates until the final reply replaces them.
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
+  createProgressDraftPlanState,
+  type ChannelProgressDraftPlanLayout,
+  resolveProgressDraftPlanLayout,
+  resolveProgressDraftPlanStatusHeadline,
+} from "./progress-draft-plan-state.js";
+import {
   formatReasoningProgressDisplayLine,
   mergeReasoningProgressText,
   normalizeCommentaryProgressText,
@@ -56,43 +62,9 @@ export type ChannelProgressDraftCompositorSnapshot = Readonly<{
 type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
   lines?: readonly ChannelProgressDraftCompositorLine[];
+  planLayout?: ChannelProgressDraftPlanLayout;
+  isCurrentPlanGeneration?: () => boolean;
 };
-
-function normalizePlanStepText(step: string | undefined): string {
-  return step?.replace(/\s+/g, " ").trim() ?? "";
-}
-
-function resolveActivePlanStepKey(steps: readonly AgentPlanStep[] | undefined): string | undefined {
-  if (!steps?.length) {
-    return undefined;
-  }
-  const activeIndex = steps.findIndex((entry) => entry.status === "in_progress");
-  if (activeIndex >= 0) {
-    const activeStep = normalizePlanStepText(steps[activeIndex]?.step);
-    const occurrence = steps
-      .slice(0, activeIndex + 1)
-      .filter((entry) => normalizePlanStepText(entry.step) === activeStep).length;
-    return `active:${activeStep}:${occurrence}`;
-  }
-  return steps.every((entry) => entry.status === "completed") ? "completed" : undefined;
-}
-
-function resolvePlanStatusHeadline(steps: readonly AgentPlanStep[] | undefined): string {
-  if (!steps?.length) {
-    return "";
-  }
-  const currentIndex = steps.findIndex((entry) => entry.status === "in_progress");
-  const fallbackIndex = steps.findIndex((entry) => entry.status === "pending");
-  const stepIndex = currentIndex >= 0 ? currentIndex : fallbackIndex;
-  if (stepIndex >= 0) {
-    const step = normalizePlanStepText(steps[stepIndex]?.step);
-    const counter = `${stepIndex + 1}/${steps.length}`;
-    return step ? `⏳ ${counter} · ${step}` : `⏳ ${counter}`;
-  }
-  return steps.every((entry) => entry.status === "completed")
-    ? `✅ ${steps.length}/${steps.length}`
-    : "";
-}
 
 /** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
@@ -174,7 +146,7 @@ export function createChannelProgressDraftCompositor(params: {
   let narrationText = "";
   let planSteps: AgentPlanStep[] | undefined;
   let planExplanation = "";
-  let activePlanStepKey: string | undefined;
+  const planState = createProgressDraftPlanState();
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
   const diffStatTracker = createProgressDraftDiffStatTracker({
@@ -213,7 +185,9 @@ export function createChannelProgressDraftCompositor(params: {
       preambleText && (preambleIsFresh || !effectiveNarration) ? preambleText : effectiveNarration;
     return (
       authoredStatus ||
-      (params.derivePlanStatusHeadline === true ? resolvePlanStatusHeadline(planSteps) : "")
+      (params.derivePlanStatusHeadline === true
+        ? resolveProgressDraftPlanStatusHeadline(planSteps)
+        : "")
     );
   };
 
@@ -268,7 +242,7 @@ export function createChannelProgressDraftCompositor(params: {
     narrationText = "";
     planSteps = undefined;
     planExplanation = "";
-    activePlanStepKey = undefined;
+    planState.reset();
     diffStatTracker.reset();
     lastStartRendered = false;
   };
@@ -282,8 +256,18 @@ export function createChannelProgressDraftCompositor(params: {
     if (!text || (text === lastRenderedText && !structuredStateChanged)) {
       return false;
     }
+    const planLayout = resolveProgressDraftPlanLayout(planSteps, params.entry);
+    const isCurrentPlanGeneration =
+      params.resetRollingLinesOnPlanStepChange === true
+        ? planState.createGenerationGuard()
+        : undefined;
     const observed = await settleProgressVisibilityCallbackResult(
-      params.update(text, { ...options, lines: [...lines] }),
+      params.update(text, {
+        ...options,
+        lines: [...lines],
+        ...(planLayout ? { planLayout } : {}),
+        ...(isCurrentPlanGeneration ? { isCurrentPlanGeneration } : {}),
+      }),
     );
     if (!observed.visible) {
       return false;
@@ -463,6 +447,8 @@ export function createChannelProgressDraftCompositor(params: {
     pushLine: noteProgress,
     onTool: diffStatTracker.stageToolEvent,
     onItem: diffStatTracker.commitItemEvent,
+    shouldAcceptEvent: (input) =>
+      params.resetRollingLinesOnPlanStepChange !== true || planState.acceptEvent(input),
     ...(params.buildProgressEventLine ? { buildLine: params.buildProgressEventLine } : {}),
   });
 
@@ -574,15 +560,9 @@ export function createChannelProgressDraftCompositor(params: {
       }
       const nextPlanSteps =
         steps && steps.length > 0 ? steps.map((entry) => ({ ...entry })) : undefined;
-      const nextActivePlanStepKey = resolveActivePlanStepKey(nextPlanSteps);
-      if (
-        params.resetRollingLinesOnPlanStepChange === true &&
-        activePlanStepKey !== undefined &&
-        nextActivePlanStepKey !== activePlanStepKey
-      ) {
+      if (params.resetRollingLinesOnPlanStepChange === true && planState.update(nextPlanSteps)) {
         clearRollingProgressLines();
       }
-      activePlanStepKey = nextActivePlanStepKey;
       planSteps = nextPlanSteps;
       planExplanation = options?.explanation?.replace(/\s+/g, " ").trim() ?? "";
       if (!planSteps && !planExplanation) {

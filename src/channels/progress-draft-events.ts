@@ -14,6 +14,7 @@ type ProgressPayload<TEvent extends ChannelProgressDraftLineInput["event"]> = Om
 type ToolProgressPayload = ProgressPayload<"tool"> & { detailMode?: "explain" | "raw" };
 type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & { kind?: string };
 type ChannelProgressDraftEventLine = string | ChannelProgressDraftLine;
+type ChannelProgressDraftEventInput = Exclude<ChannelProgressDraftLineInput, { event: "plan" }>;
 export type ChannelProgressDraftEventLineBuilder = (
   input: ChannelProgressDraftLineInput,
   options?: ChannelProgressLineOptions,
@@ -24,15 +25,21 @@ export function createChannelProgressDraftEventHandlers(params: {
   buildLine?: ChannelProgressDraftEventLineBuilder;
   onTool?: (payload: ToolProgressPayload) => void;
   onItem?: (payload: ItemProgressPayload) => void;
+  shouldAcceptEvent?: (input: ChannelProgressDraftEventInput) => boolean;
   pushLine: (
     line: ChannelProgressDraftEventLine | undefined,
     options?: { toolName?: string; startImmediately?: boolean },
   ) => Promise<boolean>;
 }) {
   const pushEvent = (
-    input: Exclude<ChannelProgressDraftLineInput, { event: "plan" }>,
+    input: ChannelProgressDraftEventInput,
     detailMode?: "explain" | "raw",
+    onAccepted?: () => void,
   ) => {
+    if (params.shouldAcceptEvent?.(input) === false) {
+      return Promise.resolve(false);
+    }
+    onAccepted?.();
     const lineOptions = detailMode ? { detailMode } : undefined;
     const line = params.buildLine
       ? params.buildLine(input, lineOptions)
@@ -43,13 +50,13 @@ export function createChannelProgressDraftEventHandlers(params: {
   return {
     pushToolEvent: (payload: ToolProgressPayload) => {
       const { detailMode, ...input } = payload;
-      params.onTool?.(payload);
-      return pushEvent({ event: "tool", ...input }, detailMode);
+      return pushEvent({ event: "tool", ...input }, detailMode, () => params.onTool?.(payload));
     },
     pushItemEvent: (payload: ItemProgressPayload) => {
       const { kind: itemKind, ...input } = payload;
-      params.onItem?.(payload);
-      return pushEvent({ event: "item", ...input, itemKind });
+      return pushEvent({ event: "item", ...input, itemKind }, undefined, () =>
+        params.onItem?.(payload),
+      );
     },
     pushApprovalEvent: (payload: ProgressPayload<"approval">) => {
       return payload.phase === "requested"

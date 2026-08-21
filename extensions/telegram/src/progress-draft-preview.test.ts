@@ -41,8 +41,9 @@ describe("renderTelegramProgressDraftPreview", () => {
     });
     const status = "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test";
 
-    const html = renderTelegramProgressDraftPreview(status, lines, false, true);
-    const rich = renderTelegramProgressDraftPreview(status, lines, true, true);
+    const planLayout = { lineCount: 3, activeLineIndex: 1 };
+    const html = renderTelegramProgressDraftPreview(status, lines, false, true, planLayout);
+    const rich = renderTelegramProgressDraftPreview(status, lines, true, true, planLayout);
 
     expect(html.text).toMatch(/▸ Patch<br>↳ .*Exec.*<br>↳ .*Read.*<br>▢ Test/u);
     expect(rich.text).toMatch(/▸ Patch\n↳ 🛠️ .*\n↳ 📖 .*\n▢ Test/u);
@@ -63,6 +64,36 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(renderTelegramProgressDraftPreview("Working", [line], false, true).text).toBe(
       "Working<br><b>🛠️ Exec</b>",
     );
+  });
+
+  it("uses structured plan layout when authored text begins with the active marker", () => {
+    const line = buildChannelProgressDraftLine({
+      event: "tool",
+      toolCallId: "call-1",
+      name: "Read",
+      phase: "start",
+    });
+    if (!line) {
+      throw new Error("expected a progress line for Read");
+    }
+
+    const active = renderTelegramProgressDraftPreview(
+      "▸ authored headline\n\n✅ Inspect\n▸ Patch\n▢ Test",
+      [line],
+      false,
+      true,
+      { lineCount: 3, activeLineIndex: 1 },
+    );
+    expect(active.text).toMatch(/✅ Inspect<br>▸ Patch<br>↳ .*Read.*<br>▢ Test/u);
+
+    const pendingOnly = renderTelegramProgressDraftPreview(
+      "▸ authored headline\n\n▢ Patch",
+      [line],
+      false,
+      true,
+      { lineCount: 1 },
+    );
+    expect(pendingOnly.text).toBe("<b>▸ authored headline</b><br>▢ Patch<br><b>📖 Read</b>");
   });
 
   it("prints one tool icon per line for every backend spelling", () => {

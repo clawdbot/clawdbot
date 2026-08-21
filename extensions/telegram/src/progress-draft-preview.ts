@@ -158,8 +158,11 @@ function insertWorkLinesAfterActivePlanStep<T>(
   statusLines: readonly string[],
   renderedStatusLines: readonly T[],
   renderedWorkLines: readonly T[],
+  planLayout?: Readonly<{ lineCount: number; activeLineIndex?: number }>,
 ): T[] {
-  const activePlanIndex = statusLines.findIndex((line) => /^▸(?:\s|$)/u.test(line));
+  const planStartIndex = Math.max(0, statusLines.length - (planLayout?.lineCount ?? 0));
+  const activePlanIndex =
+    planLayout?.activeLineIndex === undefined ? -1 : planStartIndex + planLayout.activeLineIndex;
   if (activePlanIndex < 0 || renderedWorkLines.length === 0) {
     return [...renderedStatusLines, ...renderedWorkLines];
   }
@@ -175,6 +178,7 @@ export function renderTelegramProgressDraftPreview(
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
   statusHeadlineActive = false,
+  planLayout?: Readonly<{ lineCount: number; activeLineIndex?: number }>,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   if (statusHeadlineActive) {
@@ -183,7 +187,7 @@ export function renderTelegramProgressDraftPreview(
       .map((line) => line.trim())
       .filter(Boolean);
     const workLines = lines.filter(isStatusHeadlineWorkLine);
-    const hasActivePlanStep = statusLines.some((line) => /^▸(?:\s|$)/u.test(line));
+    const hasActivePlanStep = planLayout?.activeLineIndex !== undefined;
     const renderedLines = workLines
       .map(renderTelegramProgressLine)
       .filter(Boolean)
@@ -201,6 +205,7 @@ export function renderTelegramProgressDraftPreview(
           statusLines,
           renderedStatusLines,
           renderedLines,
+          planLayout,
         ).join("<br>"),
         parseMode: "HTML",
       };
@@ -222,11 +227,13 @@ export function renderTelegramProgressDraftPreview(
       statusLines,
       richStatusParts,
       richLineParts,
+      planLayout,
     );
     const plainText = insertWorkLinesAfterActivePlanStep(
       statusLines,
       statusLines,
       plainLineTexts,
+      planLayout,
     ).join("\n");
     return {
       text: plainText,
