@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -11,13 +12,18 @@ type LabelerRule = Array<{
 }>;
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const extensionsRoot = path.join(repoRoot, "extensions");
 const labelerPath = path.join(repoRoot, ".github/labeler.yml");
 
-const extensionDirectories = readdirSync(extensionsRoot, { withFileTypes: true })
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => entry.name)
-  .toSorted();
+const extensionDirectories = [
+  ...new Set(
+    execFileSync("git", ["ls-files", "--", "extensions"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    })
+      .split("\n")
+      .flatMap((file) => file.match(/^extensions\/([^/]+)\//)?.[1] ?? []),
+  ),
+].toSorted();
 const extensionDirectorySet = new Set(extensionDirectories);
 const labeler = parse(readFileSync(labelerPath, "utf8")) as Record<string, LabelerRule>;
 const extensionGlobDirectories = Object.values(labeler)

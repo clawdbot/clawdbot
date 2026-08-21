@@ -5,7 +5,6 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   runChannelIngressDeadLettersHealth,
-  runDeliveryFailuresHealth,
   runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
@@ -93,6 +92,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Gateway auth",
       healthCheckIds: ["core/doctor/gateway-auth"],
       run: params.runGatewayAuthHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:node-hosting-preconditions",
+      label: "Node hosting preconditions",
+      healthChecks: {
+        description: "Gateway config can authenticate and onboard node and worker hosts.",
+        async detect(ctx) {
+          const { collectNodeHostingPreconditionFindings } =
+            await import("../commands/doctor-node-hosting-preconditions.js");
+          return collectNodeHostingPreconditionFindings(ctx.cfg);
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:command-owner",
@@ -285,11 +296,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       id: "doctor:channel-ingress-dead-letters",
       label: "Channel ingress dead letters",
       run: runChannelIngressDeadLettersHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:delivery-failures",
-      label: "Delivery failures",
-      run: runDeliveryFailuresHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

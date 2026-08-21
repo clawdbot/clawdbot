@@ -27,6 +27,7 @@ const MODEL_OVERRIDE_RUNTIME_FIELDS = [
   "model",
   "fallbackNotice",
   "contextTokens",
+  "contextTokensSource",
   "contextBudgetStatus",
 ] as const satisfies ReadonlyArray<keyof SessionEntry>;
 const MODEL_OVERRIDE_RUNTIME_FIELD_SET = new Set<keyof SessionEntry>(MODEL_OVERRIDE_RUNTIME_FIELDS);
@@ -37,9 +38,7 @@ const MODEL_OVERRIDE_DEPENDENT_FIELDS = new Set<keyof SessionEntry>([
   "thinkingLevel",
 ]);
 
-const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["thinkingLevel"] as const satisfies ReadonlyArray<
-  keyof SessionEntry
->;
+const MODEL_OVERRIDE_CONFLICT_DEPENDENT_FIELDS = ["thinkingLevel"] as const;
 
 const MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS = [
   "abortedLastRun",
@@ -224,20 +223,13 @@ export function projectSessionSnapshotChanges(params: {
     restartRecoveryRunsOnlyConsumed(params.initial, params.current);
   if (
     mainRecoveryChanged &&
+    !mainRecoveryOwnershipChangedConcurrently &&
     (!mainRecoveryChangedConcurrently || currentOnlyConsumedLifecycleFences)
   ) {
-    // Apply all three fields together: a stale healthy flag can otherwise hide a newer marker.
-    // A healthy run first marks its claim non-interrupted; token-scoped release
-    // removes the aggregate only after the final concurrent owner exits.
-    if (
-      mainRecoveryOwnershipChangedConcurrently &&
-      isCanonicalMainSessionRecoveryClear(params.next)
-    ) {
-      patch.abortedLastRun = false;
-    } else if (!mainRecoveryOwnershipChangedConcurrently) {
-      for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
-        patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
-      }
+    // Apply all three fields together. Concurrent ownership changes settle through
+    // their lifecycle/release owner, never through an older run-local snapshot.
+    for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
+      patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
     }
   }
 

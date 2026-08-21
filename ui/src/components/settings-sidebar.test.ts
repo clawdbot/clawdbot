@@ -274,6 +274,42 @@ describe("settings sidebar search", () => {
     expect(result?.textContent?.trim()).toBe("Agent Defaults");
   });
 
+  it("excludes admin-only pages and config blocks from non-admin search", () => {
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        canAdmin: false,
+        searchQuery: "security",
+        searchBlockMatches: [
+          {
+            routeId: "security",
+            label: "Security policy",
+            hash: "#config-section-security",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    expect(container.querySelector('a[href="/settings/security"]')).toBeNull();
+    expect(container.querySelector('a[href$="#config-section-security"]')).toBeNull();
+    expect(container.querySelector('a[href="/settings/approvals"]')).not.toBeNull();
+  });
+
   it("keeps Memory search results on the canonical Settings tab path", () => {
     const onNavigate = vi.fn();
     render(
@@ -378,7 +414,14 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
+    expect(labels()).toEqual([
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud workers",
+    ]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
@@ -490,6 +533,47 @@ describe("settings sidebar search", () => {
     expect(buildChip?.variant).toBe("settings");
     buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
     expect(onNavigate).toHaveBeenCalledWith("about");
+  });
+
+  it("keeps pending approvals actionable from the settings sidebar", () => {
+    const onNavigate = vi.fn();
+    const onOpenApprovals = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "1.0.0",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate,
+        onOpenApprovals,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: saveIndicator(),
+      }),
+      container,
+    );
+
+    const attention = container.querySelector<
+      HTMLElement & {
+        onNavigate?: (routeId: string) => void;
+        onOpenApprovals?: () => void;
+      }
+    >("openclaw-sidebar-attention");
+    expect(attention).not.toBeNull();
+    expect(attention?.nextElementSibling?.tagName).toBe("OPENCLAW-SIDEBAR-UPDATE-CARD");
+
+    attention?.onOpenApprovals?.();
+    expect(onOpenApprovals).toHaveBeenCalledOnce();
+    attention?.onNavigate?.("approvals");
+    expect(onNavigate).toHaveBeenCalledWith("approvals");
   });
 
   it("shows the offline retry action without an online status", () => {

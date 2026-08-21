@@ -438,6 +438,7 @@ describe("runDreamNarrative", () => {
     expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
     expect(runOptions.lightContext).toBe(true);
     expect(runOptions.deliver).toBe(false);
+    expect(runOptions.disableTools).toBe(true);
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);

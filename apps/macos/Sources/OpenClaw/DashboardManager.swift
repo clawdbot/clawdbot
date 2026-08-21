@@ -11,7 +11,7 @@ private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: 
 final class DashboardManager {
     static let shared = DashboardManager(
         automaticGatewayProfileRefreshEnabled:
-        AppLaunchPresentationPolicy.current.allowsGatewayUIKeychainAccess)
+        AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
 
     private struct AuxiliaryWindowInstance {
         var target: DashboardGatewayTarget
@@ -1022,6 +1022,27 @@ extension DashboardManager {
         case .openSettings:
             AppNavigationActions.openSettings(tab: .gateways)
         }
+    }
+
+    func handleGatewaySetup(_ link: GatewayConnectDeepLink) {
+        NSApp.activate(ignoringOtherApps: true)
+        let coordinator = DashboardGatewaySetupCoordinator(
+            adapter: DashboardPrimaryGatewayAdapter(state: AppStateStore.shared),
+            confirm: { title, message in
+                let alert = DashboardWindowController.makeGatewaySetupAlert(title: title, message: message)
+                return alert.runModal() == .alertFirstButtonReturn
+            },
+            presentError: { title, message in
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = message
+                alert.alertStyle = .warning
+                alert.runModal()
+            },
+            openConnectionSettings: {
+                AppNavigationActions.openSettings(tab: .connection)
+            })
+        coordinator.handle(link)
     }
 
     func openOrFocusDashboard(for target: DashboardGatewayTarget) {

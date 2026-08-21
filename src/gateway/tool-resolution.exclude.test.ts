@@ -10,6 +10,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
+  agentAccountId?: string;
+  agentChannel?: string;
   clientCaps?: string[];
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   inheritedToolAllowlist?: string[];
@@ -17,6 +19,8 @@ type CreateOpenClawToolsArg = {
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
+  gatewayCallerAccountId?: string;
+  gatewayCallerChannel?: string | null;
   sourceReplyOnly?: boolean;
 };
 
@@ -32,6 +36,7 @@ type CreateOpenClawCodingToolsArg = {
     mode: "account";
     ownerSessionKey: string;
     ownerAccountId: string;
+    ownerOrigin: { kind: "external"; channel: string } | { kind: "local" } | { kind: "unknown" };
   };
 };
 
@@ -199,6 +204,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         mode: "account",
         ownerSessionKey: "agent:main:qa-channel:group:ops",
         ownerAccountId: "default",
+        ownerOrigin: { kind: "external", channel: "qa-channel" },
       },
     });
 
@@ -216,7 +222,16 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           mode: "account",
           ownerSessionKey: "agent:main:qa-channel:group:ops",
           ownerAccountId: "default",
+          ownerOrigin: { kind: "external", channel: "qa-channel" },
         },
+      }),
+    );
+    expect(readCreateToolsArgs()).toEqual(
+      expect.objectContaining({
+        agentChannel: undefined,
+        agentAccountId: undefined,
+        gatewayCallerAccountId: "default",
+        gatewayCallerChannel: "qa-channel",
       }),
     );
     expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();

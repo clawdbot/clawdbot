@@ -1,4 +1,4 @@
-import prettyMilliseconds from "pretty-ms";
+import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
 
 export function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString([], {
@@ -23,9 +23,7 @@ export function formatIso(iso?: string) {
 
 export function formatDuration(ms: number): string {
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
-  return prettyMilliseconds(Math.max(0, roundedMs), {
-    unitCount: 2,
-  });
+  return formatDurationCompact(Math.max(0, roundedMs), { showYears: true, spaced: true }) ?? "0ms";
 }
 
 export function esc(text: string) {

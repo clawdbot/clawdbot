@@ -13,6 +13,7 @@ import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import {
   getHeartbeatWakeAbortSignal,
+  HEARTBEAT_SKIP_PREEMPTED,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatWakeHandler,
@@ -662,11 +663,8 @@ describe("startHeartbeatRunner", () => {
     await pokeIntervalWake();
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // The wake layer auto-retries the busy interval wake every 1s; the busy
-    // skips must not advance nextDueMs, so each retry reaches runOnce until
-    // the 6th attempt succeeds.
     for (let i = 0; i < 5; i++) {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     }
     expect(runSpy).toHaveBeenCalledTimes(6);
     const scheduledSlotCallsBeforeInterval = callTimes.filter(
@@ -1157,26 +1155,16 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("retryable busy skip does not poison the cooldown for the next retry", async () => {
-    // Reproduces P2 finding from #75439 review: if a targeted exec-event wake
-    // hits requests-in-flight on its first attempt, the wake layer retries the
-    // same reason. The cooldown must NOT have been advanced by the busy attempt
-    // — otherwise the retry would falsely defer with `not-due`/`min-spacing`.
+  it.each([
+    [HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, 1_500],
+    [HEARTBEAT_SKIP_PREEMPTED, 60_500],
+  ])("retryable %s does not poison the next retry", async (skipReason, retryDelayMs) => {
     useFakeHeartbeatTime();
-    let attempt = 0;
-    const runSpy = vi.fn().mockImplementation(async () => {
-      attempt += 1;
-      if (attempt === 1) {
-        return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
-      }
-      return { status: "ran", durationMs: 1 } as const;
-    });
-
-    const runner = startHeartbeatRunner({
-      cfg: heartbeatConfig(),
-      runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
+    const runSpy = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "skipped", reason: skipReason })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
 
     requestHeartbeat({
       source: "exec-event",
@@ -1188,22 +1176,13 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Wake layer retries via DEFAULT_RETRY_MS (1s). Advance past it.
-    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(retryDelayMs);
 
-    // The retry must NOT be deferred to `not-due` or `min-spacing`. Since the
-    // first attempt was a retryable busy skip, the cooldown bookkeeping was
-    // never recorded — so the retry should reach runOnce normally.
     expect(runSpy).toHaveBeenCalledTimes(2);
     expectRunCallFields(runSpy, 1, {
       reason: "exec-event",
       sessionKey: "agent:main:main",
     });
-    await expect(runSpy.mock.results[1]?.value).resolves.toEqual({
-      status: "ran",
-      durationMs: 1,
-    });
-
     runner.stop();
   });
 });

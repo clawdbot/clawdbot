@@ -4,6 +4,8 @@ import type { SourceInfo } from "../../agents/sessions/source-info.js";
 
 export interface Skill {
   name: string;
+  /** Human-readable title from the first Markdown H1, falling back to the identifier. */
+  displayName?: string;
   description: string;
   /** Additional loading guidance rendered with the location in full and compact catalogs. */
   locationNote?: string;
@@ -11,8 +13,6 @@ export interface Skill {
   readContent?: string;
   filePath: string;
   baseDir: string;
-  /** Deterministic marker for the SKILL.md content rendered as <version>. */
-  promptVersion?: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.
@@ -30,7 +30,24 @@ export function escapeSkillXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-const COMPACT_DESCRIPTION_MAX_CHARS = 220;
+export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
+const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
+const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
+
+function humanizeSkillIdentifier(value: string): string {
+  return value
+    .trim()
+    .split(/[-_]+/u)
+    .filter(Boolean)
+    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
+    .join(" ");
+}
+
+export function resolveSkillDisplayName(content: string, fallbackName: string): string {
+  const body = content.replace(SKILL_FRONTMATTER_BLOCK, "");
+  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
+  return heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
+}
 
 function truncateSkillDescription(description: string, maxChars: number): string {
   const normalized = description.replace(/\s+/g, " ").trim();
@@ -56,7 +73,6 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     "Use the read tool to load a skill's file when the task matches its description.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -68,9 +84,6 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
     lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
-    }
-    if (skill.promptVersion) {
-      lines.push(`    <version>${escapeSkillXml(skill.promptVersion)}</version>`);
     }
     lines.push("  </skill>");
   }
@@ -95,7 +108,6 @@ export function formatSkillsCompactForPrompt(
     descriptionMaxChars > 0
       ? "Use the read tool to load a skill's file when the task matches its name or description."
       : "Use the read tool to load a skill's file when the task matches its name.",
-    "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -112,9 +124,6 @@ export function formatSkillsCompactForPrompt(
     lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
-    }
-    if (skill.promptVersion) {
-      lines.push(`    <version>${escapeSkillXml(skill.promptVersion)}</version>`);
     }
     lines.push("  </skill>");
   }

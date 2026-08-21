@@ -14,8 +14,8 @@ import {
   EXTERNAL_CLI_SYNC_TTL_MS,
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
+  authProfilesLog,
 } from "./constants.js";
-import { authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
@@ -86,6 +86,7 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: CLAUDE_CLI_PROFILE_ID,
     provider: "claude-cli",
+    aliases: ["anthropic"],
     readCredentials: (options) => {
       const credential = readClaudeCliCredentialsCached({
         ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,

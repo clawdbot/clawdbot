@@ -86,4 +86,30 @@
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟工作階段，並透過已配對的手機回覆"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手機代理"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"背景任務"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"工作階段群集"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"注意"</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"狀態：%1$s"</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"就緒"</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在重新整理"</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"無法使用"</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在載入 Pulse"</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在從配對的手機讀取有限的彙總資料。"</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已排入佇列"</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"執行中"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已完成"</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"完成"</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"失敗"</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"群組"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"待處理的請求"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"有限的使用中與近期快照"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"使用中的工作清單已達上限"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"近期工作清單已達上限"</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"啟用中"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"閒置"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"階段 %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已排隊 %1$d、執行中 %2$d、已完成 %3$d、失敗 %4$d、隱藏 %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"還有未顯示的階段"</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"未知"</string>
 </resources>

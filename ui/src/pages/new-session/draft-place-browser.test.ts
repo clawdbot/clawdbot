@@ -1,8 +1,10 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { loadNewSessionPreference, patchNewSessionPreference } from "./preferences.ts";
 
 class ControllerHost implements ReactiveControllerHost {
   readonly updateComplete = Promise.resolve(true);
@@ -11,7 +13,11 @@ class ControllerHost implements ReactiveControllerHost {
   requestUpdate() {}
 }
 
-function createBrowser(request: (method: string) => Promise<unknown>) {
+afterEach(() => {
+  localStorage.clear();
+});
+
+function createBrowser(request: (method: string) => Promise<unknown>, data?: NewSessionRouteData) {
   const host = new ControllerHost();
   const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
   const context = {
@@ -26,18 +32,25 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
         },
       },
     },
+    sessions: {
+      state: {
+        groupSettings: [{ name: "Client", cwd: "/workspace/client", worktree: false }],
+      },
+      groupsGeneration: () => 1,
+      groupsStatus: () => "ready",
+    },
   } as unknown as ApplicationContext;
   const gateway = new DraftGatewayState(
     host,
     () => ({
       context,
-      data: undefined,
+      data,
       isConnected: true,
       isAdmin: false,
       canStartAsDraft: false,
       visibility: "normal",
       cloudProfileId: "",
-      pendingCloud: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
+      pendingPlacement: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
       agentsHydrated: false,
     }),
     {
@@ -47,7 +60,7 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
       onVisibilityRetired: vi.fn(),
       onCloudProfileCleared: vi.fn(),
       onCloudState: vi.fn(),
-      onPendingCloudReset: vi.fn(),
+      onPendingPlacementReset: vi.fn(),
       onRecoveryReady: vi.fn(),
       onAdoptAgentDefaults: vi.fn(),
     },
@@ -58,9 +71,6 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
     gateway,
     () => ({
       context,
-      nodes: [],
-      folder: "",
-      execNode: "",
       isAdmin: false,
     }),
     {
@@ -73,10 +83,27 @@ function createBrowser(request: (method: string) => Promise<unknown>) {
       body: () => null,
     },
   );
-  return browser;
+  return { browser, gateway };
 }
 
 describe("DraftPlaceBrowser", () => {
+  it("tracks overlapping popover hides independently", () => {
+    const { browser } = createBrowser(async () => ({}));
+
+    browser.onPopoverHide("project");
+    browser.onPopoverHide("where");
+
+    expect(browser.popoverHiding("project")).toBe(true);
+    expect(browser.popoverHiding("where")).toBe(true);
+
+    browser.onPopoverAfterHide("project");
+    expect(browser.popoverHiding("project")).toBe(false);
+    expect(browser.popoverHiding("where")).toBe(true);
+
+    browser.onPopoverAfterHide("where");
+    expect(browser.popoverHiding("where")).toBe(false);
+  });
+
   it.each([
     ["the Gateway omits recents", async () => ({ projects: [] })],
     [
@@ -86,7 +113,7 @@ describe("DraftPlaceBrowser", () => {
       },
     ],
   ])("keeps roster recents when %s", async (_label, request) => {
-    const browser = createBrowser(request);
+    const { browser } = createBrowser(request);
 
     await browser.refreshProjects();
 
@@ -95,7 +122,6 @@ describe("DraftPlaceBrowser", () => {
         sessions: [{ execCwd: "/workspace/recent" }],
         workspace: "/workspace",
         workspaceRoots: ["/workspace"],
-        execNodes: [],
         isAdmin: false,
       }),
     ).toEqual([
@@ -105,5 +131,38 @@ describe("DraftPlaceBrowser", () => {
         displayName: "recent",
       },
     ]);
+  });
+});
+
+describe("DraftGatewayState", () => {
+  it("keeps group route defaults isolated from ordinary New Session preferences", () => {
+    patchNewSessionPreference("ws://gateway.example", "main", {
+      folder: "/workspace/ordinary",
+      worktree: true,
+    });
+    const { gateway } = createBrowser(async () => ({}), {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "",
+      group: "Client",
+      groupStatus: "resolved",
+      groupCwd: "/workspace/client",
+      groupWorktree: false,
+      groupCatalogGeneration: 1,
+      groupDefaultsStatus: "ready",
+      model: "",
+      catalogLabel: "",
+      startTerminal: false,
+    });
+
+    expect(gateway.readPreference("main")).toBeNull();
+    gateway.persistPreference("main", "/workspace", {
+      folder: "/workspace/client",
+      worktree: false,
+    });
+    expect(loadNewSessionPreference("ws://gateway.example", "main")).toEqual({
+      folder: "/workspace/ordinary",
+      worktree: true,
+    });
   });
 });

@@ -41,13 +41,11 @@ import {
   validateTalkSessionSteerParams,
   validateWakeParams,
   type ValidationError,
-} from "./index.js";
-import type {
-  ConfigSchemaLookupParams,
-  ModelsListParams,
-  SessionsCatalogListParams,
-  SessionsCatalogStartTerminalParams,
-  TalkEvent,
+  type ConfigSchemaLookupParams,
+  type ModelsListParams,
+  type SessionsCatalogListParams,
+  type SessionsCatalogStartTerminalParams,
+  type TalkEvent,
 } from "./index.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
@@ -168,8 +166,9 @@ describe("lazy protocol validators", () => {
       { archived: false },
       { archived: true },
       { archived: "all" },
+      { involvingMe: true },
     ]);
-    expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+    expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
   it("validates session board face list and patch values", () => {
@@ -571,6 +570,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",

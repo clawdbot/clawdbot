@@ -90,6 +90,17 @@ function createFixture() {
     yieldDetected: false,
     yieldMessage: null as string | null,
   };
+  const activeSession = {
+    messages: [],
+    agent: {
+      state: { messages: [] },
+      streamFn: vi.fn(),
+    },
+  };
+  const sessionManager = {
+    appendCustomEntry: vi.fn(),
+    getEntries: vi.fn(() => []),
+  };
   let prePromptMessageCount = 1;
 
   const setPrePromptMessageCount = vi.fn((count: number) => {
@@ -169,18 +180,6 @@ function createFixture() {
     submissionInput.onSteeringAcknowledged();
   });
   mocks.handlePromptError.mockResolvedValue({});
-
-  const activeSession = {
-    messages: [],
-    agent: {
-      state: { messages: [] },
-      streamFn: vi.fn(),
-    },
-  };
-  const sessionManager = {
-    appendCustomEntry: vi.fn(),
-    getEntries: vi.fn(() => []),
-  };
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },
@@ -213,6 +212,7 @@ function createFixture() {
       toolResultPromptProjectionState: {},
     },
     execution: {
+      mediaOwnerAgentId: "main",
       effectiveFsWorkspaceOnly: false,
       effectiveWorkspace: "/tmp/workspace",
       sandbox: null,
@@ -261,6 +261,7 @@ function createFixture() {
       setFinalPromptText,
       markBeforeAgentRunBlocked,
       markYieldAborted,
+      isRunBudgetTimeoutAbort: () => false,
       readYieldState: () => yieldState,
       stopAcceptingSteerMessages,
       takePendingMidTurnPrecheckRequest: () => undefined,
@@ -409,9 +410,47 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     );
   });
 
+  it("keeps a run-budget timeout failure-free for partial-output salvage", async () => {
+    const fixture = createFixture();
+    const timeoutAbort = new Error("request timed out");
+    mocks.submitPrompt.mockRejectedValueOnce(timeoutAbort);
+    mocks.handlePromptError.mockResolvedValueOnce({
+      promptFailure: { error: timeoutAbort, source: "prompt" },
+    });
+    fixture.input.lifecycle.isRunBudgetTimeoutAbort = (error) => error === timeoutAbort;
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBeNull();
+    expect(fixture.state.promptErrorSource).toBeNull();
+  });
+
+  it("records a provider failure that races a run-budget timeout", async () => {
+    const fixture = createFixture();
+    const providerError = new Error("provider failed");
+    mocks.submitPrompt.mockRejectedValueOnce(providerError);
+    mocks.handlePromptError.mockResolvedValueOnce({
+      promptFailure: { error: providerError, source: "prompt" },
+    });
+    fixture.input.lifecycle.isRunBudgetTimeoutAbort = () => false;
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBe(providerError);
+    expect(fixture.state.promptErrorSource).toBe("prompt");
+  });
+
   it("releases steering when preflight skips provider submission", async () => {
     const fixture = createFixture();
     const promptError = new Error("preflight rejected");
+    mocks.preparePromptExecution.mockResolvedValueOnce({
+      images: [],
+      imageFactIndexes: [],
+      detectedRefs: [],
+      failedMediaCount: 1,
+      loadedCount: 0,
+      skippedCount: 1,
+    });
     mocks.observePrompt.mockImplementationOnce(() => {
       fixture.order.push("observe");
       return { skipPromptSubmission: true };

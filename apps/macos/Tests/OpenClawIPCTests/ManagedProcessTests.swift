@@ -4,8 +4,6 @@ import Testing
 @testable import OpenClaw
 
 #if canImport(Darwin)
-import Darwin
-
 struct ManagedProcessTests {
     @Test func `launch failures preserve the executable description`() async {
         let executable = "/tmp/openclaw-missing-process-\(UUID().uuidString)"
@@ -16,15 +14,6 @@ struct ManagedProcessTests {
         } catch {
             #expect(error.localizedDescription.contains(executable))
         }
-    }
-
-    @Test func `termination waits for the original child to exit`() async throws {
-        let process = try await self.start(executable: "/bin/sleep", arguments: ["30"])
-
-        await process.terminate()
-
-        #expect(!process.isRunning)
-        #expect(self.terminatedBySignal(process.terminationStatus, SIGTERM))
     }
 
     @Test func `abortive termination interrupts the stdin grace period`() async throws {
@@ -110,7 +99,6 @@ struct ManagedProcessTests {
 
         #expect(ContinuousClock.now - startedAt < .seconds(2))
         #expect(!process.isRunning)
-        #expect(self.terminatedBySignal(process.terminationStatus, SIGTERM))
         #expect(TestProcessSupport.processIsGone(childPID))
     }
 
@@ -130,11 +118,6 @@ struct ManagedProcessTests {
             error: .discarded)
         _ = try await process.waitUntilStarted()
         return process
-    }
-
-    private func terminatedBySignal(_ status: TerminationStatus?, _ signal: Int32) -> Bool {
-        guard case let .signaled(code) = status else { return false }
-        return code == signal
     }
 }
 #endif

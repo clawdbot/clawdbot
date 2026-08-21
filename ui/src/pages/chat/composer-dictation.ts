@@ -2,6 +2,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   floatToG711Ulaw,
@@ -70,7 +71,7 @@ function messageFromError(error: unknown): string {
   if (error instanceof DOMException) {
     return describeRealtimeTalkInputError(error);
   }
-  return error instanceof Error ? error.message : String(error);
+  return formatUiError(error);
 }
 
 function isAbortError(error: unknown): boolean {
@@ -305,9 +306,10 @@ class ComposerDictationSession {
     }
     if (payload.type === "error") {
       this.reportFailure(
-        typeof payload.message === "string" && payload.message.trim()
-          ? payload.message.trim()
-          : t("chat.composer.dictationFailed"),
+        formatUiExternalText(
+          typeof payload.message === "string" ? payload.message : undefined,
+          t("chat.composer.dictationFailed"),
+        ),
       );
       return;
     }

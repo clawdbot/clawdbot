@@ -5,7 +5,6 @@ import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.j
 import {
   createDeliveryState,
   deliverFallback,
-  deliverProgressCollapseSummary,
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -289,7 +288,6 @@ export const dispatchTelegramMessage = async (
     cfg,
     runtime,
     replyToMode,
-    streamMode,
     telegramCfg,
     telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
@@ -348,7 +346,6 @@ export const dispatchTelegramMessage = async (
   const progressState = createProgressState(
     turnConfig,
     draftState,
-    () => turn,
     async () => await prepareAnswerLaneForToolProgress(turn),
   );
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
@@ -396,8 +393,7 @@ export const dispatchTelegramMessage = async (
       turn.dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      // Terminal order: stop producers, drain queued drafts, materialize accepted text,
-      // clean previews, then collapse the progress window.
+      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
       turn.progressCompositor.cancel();
       await waitForDraftEvents(turn);
       try {
@@ -407,15 +403,6 @@ export const dispatchTelegramMessage = async (
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
       await cleanupDrafts(turn, isDispatchSuperseded());
-      if (
-        streamMode === "progress" &&
-        turn.sawProgressFinal &&
-        !turn.dispatchError &&
-        !turn.hadErrorReplyFailureOrSkip &&
-        !isDispatchSuperseded()
-      ) {
-        await deliverProgressCollapseSummary(turn);
-      }
     }
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
@@ -518,7 +505,8 @@ export const dispatchTelegramMessage = async (
       {
         outcome:
           turn.agentRunFailed ||
-          (!turn.finalAnswerDelivered && (turn.dispatchError != null || sentFallback))
+          turn.dispatchError != null ||
+          (!turn.finalAnswerDelivered && sentFallback)
             ? "error"
             : "done",
       },

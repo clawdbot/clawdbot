@@ -22,6 +22,7 @@ const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
 const TELEGRAM_USER_ID_RE = /^\d+$/u;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_CHUNKED_PAYLOAD_MAX_CHUNKS = 4096;
+type QaCredentialRole = "ci" | "maintainer";
 const COMMAND_TIMEOUT_MS = optionalPositiveInteger(
   process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_COMMAND_TIMEOUT_MS?.trim(),
   120_000,
@@ -49,8 +50,8 @@ function usage(): never {
       "Usage:",
       "  node --import tsx scripts/e2e/telegram-user-credential.ts export (--desktop-tdata-dir <path> | --desktop-tdata-archive <tdata.tgz>) --output <payload.json>",
       "  node --import tsx scripts/e2e/telegram-user-credential.ts restore --payload-file <payload.json> --user-driver-dir <path> --desktop-workdir <path>",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>]",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>]",
+      "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>] [--credential-role maintainer|ci]",
+      "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>] [--credential-role maintainer|ci]",
     ].join("\n"),
   );
 }
@@ -61,8 +62,8 @@ function printUsage() {
       "Usage:",
       "  node --import tsx scripts/e2e/telegram-user-credential.ts export (--desktop-tdata-dir <path> | --desktop-tdata-archive <tdata.tgz>) --output <payload.json>",
       "  node --import tsx scripts/e2e/telegram-user-credential.ts restore --payload-file <payload.json> --user-driver-dir <path> --desktop-workdir <path>",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>]",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>]",
+      "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>] [--credential-role maintainer|ci]",
+      "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>] [--credential-role maintainer|ci]",
     ].join("\n"),
   );
 }
@@ -313,24 +314,57 @@ export function buildTelegramUserCredentialOwnerId() {
   return `telegram-user-${randomUUID()}`;
 }
 
-async function resolveConvexLeaseConfig(opts: Map<string, string>) {
+function isTruthyCi(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+export function resolveTelegramUserCredentialRole(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): QaCredentialRole {
+  const normalized = value?.trim().toLowerCase() || (isTruthyCi(env.CI) ? "ci" : "maintainer");
+  if (normalized === "ci" || normalized === "maintainer") {
+    return normalized;
+  }
+  throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
+}
+
+async function resolveConvexLeaseConfig(opts: Map<string, string>, leaseRole?: QaCredentialRole) {
   const envFile = opts.get("env-file") || DEFAULT_CONVEX_ENV_FILE;
   const fileEnv = await readEnvFile(envFile);
+  const requestedRole = opts.get("credential-role") || process.env.OPENCLAW_QA_CREDENTIAL_ROLE;
+  const actorRole = leaseRole ?? resolveTelegramUserCredentialRole(requestedRole);
+  if (
+    leaseRole &&
+    requestedRole &&
+    resolveTelegramUserCredentialRole(requestedRole) !== leaseRole
+  ) {
+    throw new Error(`Credential role does not match the lease role "${leaseRole}".`);
+  }
   const siteUrl =
     opts.get("site-url") ||
     process.env.OPENCLAW_QA_CONVEX_SITE_URL?.trim() ||
     fileEnv.OPENCLAW_QA_CONVEX_SITE_URL;
   const token =
-    opts.get("ci-secret") ||
-    process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim() ||
-    fileEnv.OPENCLAW_QA_CONVEX_SECRET_CI;
+    actorRole === "ci"
+      ? opts.get("ci-secret") ||
+        process.env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim() ||
+        fileEnv.OPENCLAW_QA_CONVEX_SECRET_CI
+      : process.env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim() ||
+        fileEnv.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER;
   if (!siteUrl) {
     throw new Error("Missing OPENCLAW_QA_CONVEX_SITE_URL.");
   }
   if (!token) {
-    throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_CI.");
+    throw new Error(
+      actorRole === "ci"
+        ? "Missing OPENCLAW_QA_CONVEX_SECRET_CI."
+        : "Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER.",
+    );
   }
   return {
+    actorRole,
     siteUrl,
     token,
     leaseTtlMs: optionalPositiveInteger(
@@ -390,6 +424,7 @@ function parseChunkedPayloadMarker(payload: unknown) {
 
 async function hydratePayloadFromLease(params: {
   acquired: JsonObject;
+  actorRole: QaCredentialRole;
   ownerId: string;
   siteUrl: string;
   token: string;
@@ -410,7 +445,7 @@ async function hydratePayloadFromLease(params: {
       body: {
         kind: TELEGRAM_USER_QA_CREDENTIAL_KIND,
         ownerId: params.ownerId,
-        actorRole: "ci",
+        actorRole: params.actorRole,
         credentialId,
         leaseToken,
         index,
@@ -603,7 +638,7 @@ async function leaseAndRestoreTelegramUser(opts: Map<string, string>) {
     body: {
       kind: TELEGRAM_USER_QA_CREDENTIAL_KIND,
       ownerId: config.ownerId,
-      actorRole: "ci",
+      actorRole: config.actorRole,
       leaseTtlMs: config.leaseTtlMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
     },
@@ -612,7 +647,7 @@ async function leaseAndRestoreTelegramUser(opts: Map<string, string>) {
     siteUrl: config.siteUrl,
     kind: TELEGRAM_USER_QA_CREDENTIAL_KIND,
     ownerId: config.ownerId,
-    actorRole: "ci",
+    actorRole: config.actorRole,
     credentialId: requireString(acquired, "credentialId"),
     leaseToken: requireString(acquired, "leaseToken"),
   };
@@ -620,6 +655,7 @@ async function leaseAndRestoreTelegramUser(opts: Map<string, string>) {
   try {
     const payload = await hydratePayloadFromLease({
       acquired,
+      actorRole: config.actorRole,
       siteUrl: config.siteUrl,
       token: config.token,
       ownerId: config.ownerId,
@@ -680,8 +716,9 @@ async function releaseTelegramUserLease(opts: Map<string, string>) {
   if (!leaseFile) {
     usage();
   }
-  const config = await resolveConvexLeaseConfig(opts);
   const lease = await readJson(leaseFile);
+  const leaseRole = resolveTelegramUserCredentialRole(requireString(lease, "actorRole"));
+  const config = await resolveConvexLeaseConfig(opts, leaseRole);
   await releaseTelegramUserLeaseBody({
     siteUrl: config.siteUrl,
     token: config.token,

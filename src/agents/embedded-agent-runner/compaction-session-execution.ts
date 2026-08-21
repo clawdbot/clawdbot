@@ -1,11 +1,17 @@
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 /**
  * Executes compaction while owning the transcript lock, session lifecycle,
  * hooks, checkpoint, and optional successor transcript rotation.
  */
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -22,7 +28,7 @@ import {
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
@@ -56,6 +62,7 @@ import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
+import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
@@ -219,6 +226,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: AgentSession | undefined;
+        let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
         try {
           const createdSession = await createAgentSessionForEmbeddedRunner(
             {
@@ -241,7 +249,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           applySystemPromptToSession(session, systemPromptText);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
-          await prepareCompactionSessionAgent({
+          const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({
             session,
             llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
             providerStreamFn,
@@ -271,6 +279,19 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: diagnosticCompactionRunId,
+            workKey: diagnosticCompactionRunId,
+          });
+          markDiagnosticEmbeddedRunStarted({
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: diagnosticCompactionRunId,
+            workKey: diagnosticCompactionRunId,
+            owner: diagnosticOwner,
+          });
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {
@@ -285,6 +306,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: nextDiagnosticModelCallId,
+              ownerGeneration: diagnosticOwner.generation,
             },
           );
 
@@ -330,14 +352,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           // limitHistoryTurns can orphan tool_result blocks by removing the
           // assistant message that contained the matching tool_use.
           const limited = transcriptPolicy.repairToolUseResultPairing
-            ? sanitizeToolUseResultPairing(truncated, {
-                erroredAssistantResultPolicy: "drop",
-                ...(effectiveModel.api === "openai-responses" ||
-                effectiveModel.api === "azure-openai-responses" ||
-                effectiveModel.api === "openai-chatgpt-responses"
-                  ? { missingToolResultText: "aborted" }
-                  : {}),
-              })
+            ? sanitizeToolUseResultPairingForModel(
+                truncated,
+                effectiveModel.api === "openai-responses" ||
+                  effectiveModel.api === "azure-openai-responses" ||
+                  effectiveModel.api === "openai-chatgpt-responses",
+              )
             : truncated;
           if (limited.length > 0) {
             session.agent.state.messages = limited;
@@ -360,7 +380,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             metrics: beforeHookMetrics,
             onHookMessages: params.onCompactionHookMessages,
           });
-          const { messageCountOriginal } = beforeHookMetrics;
+          const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
+            beforeHookMetrics;
           const diagEnabled = log.isEnabled("debug");
           const preMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
@@ -390,80 +411,81 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
 
           const compactStartedAt = Date.now();
-          // Measure compactedCount from the original pre-limiting transcript so compaction
-          // lifecycle metrics represent total reduction through the compaction pipeline.
-          const messageCountCompactionInput = messageCountOriginal;
-          // Estimate all limited transcript messages before compaction. This is the
-          // same token domain as messagesAfter; result.tokensBefore can cover only the
-          // summarizable subset.
-          let limitedTranscriptTokensBefore = 0;
-          try {
-            limitedTranscriptTokensBefore = limited.reduce(
-              (sum, msg) => sum + estimateTokens(msg),
-              0,
-            );
-          } catch {
-            // If token estimation throws on a malformed message, fall back to 0 so
-            // the sanity check below becomes a no-op instead of crashing compaction.
-          }
-          const activeSession = session;
-          const result = await compactWithSafetyTimeout(
-            () => {
-              setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return resolveEffectiveCompactionMode(params.config) === "default" &&
-                trigger !== "manual"
-                ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
-                : activeSession.compact(params.customInstructions);
+          const serverResult = await attemptServerEndpointCompaction({
+            trigger,
+            streamFn: session.agent.streamFn,
+            model: effectiveModel,
+            context: { systemPrompt: systemPromptText, messages: session.messages },
+            sessionManager,
+            extraParams: effectiveExtraParams,
+            customInstructions: params.customInstructions,
+            requestOptions: {
+              apiKey: transportApiKey,
+              sessionId: params.sessionId,
+              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+              timeoutMs: compactionTimeoutMs,
+              signal: params.abortSignal,
             },
-            compactionTimeoutMs,
-            {
-              abortSignal: params.abortSignal,
-              onCancel: () => {
-                activeSession.abortCompaction();
-              },
-            },
-          );
-          const effectiveFirstKeptEntryId = result.firstKeptEntryId;
-          const postCompactionLeafId =
-            typeof sessionManager.getLeafId === "function"
-              ? (sessionManager.getLeafId() ?? undefined)
-              : undefined;
-          // Estimate tokens after compaction by summing token estimates for remaining messages
-          const tokensAfter = estimateTokensAfterCompaction({
-            messagesAfter: session.messages,
-            observedTokenCount,
-            fullSessionTokensBefore: limitedTranscriptTokensBefore,
-            estimateTokensFn: estimateTokens,
           });
+          const activeSession = session;
+          const clientResult = serverResult
+            ? undefined
+            : await compactWithSafetyTimeout(
+                () => {
+                  setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
+                  return resolveEffectiveCompactionMode(params.config) === "default" &&
+                    trigger !== "manual"
+                    ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
+                    : activeSession.compact(params.customInstructions);
+                },
+                compactionTimeoutMs,
+                {
+                  abortSignal: params.abortSignal,
+                  onCancel: () => {
+                    activeSession.abortCompaction();
+                  },
+                },
+              );
+          const effectiveFirstKeptEntryId = clientResult?.firstKeptEntryId;
+          const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
+          // Estimate tokens after compaction by summing token estimates for remaining messages
+          const tokensAfter =
+            serverResult?.usage.output_tokens ??
+            estimateTokensAfterCompaction({
+              messagesAfter: session.messages,
+              observedTokenCount,
+              fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
+              estimateTokensFn: estimateTokens,
+            });
           const messageCountAfter = session.messages.length;
-          const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
-          const activeSessionId = params.sessionId;
+          const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
           const activeSessionFile = formatSqliteSessionFileMarker({
             ...sessionTarget,
-            sessionId: activeSessionId,
+            sessionId: params.sessionId,
           });
-          const activePostLeafId = postCompactionLeafId;
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
-            sessionId: activeSessionId,
+            sessionId: params.sessionId,
             agentId: sessionAgentId,
             sessionFile: activeSessionFile,
           });
-          checkpointSnapshotRetained = await persistCompactionCheckpoint({
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionId: activeSessionId,
-            trigger: params.trigger,
-            snapshot: checkpointSnapshot,
-            summary: result.summary,
-            firstKeptEntryId: effectiveFirstKeptEntryId,
-            tokensBefore: observedTokenCount ?? result.tokensBefore,
-            tokensAfter,
-            sessionFile: activeSessionFile,
-            leafId: activePostLeafId,
-            createdAt: compactStartedAt,
-          });
+          if (clientResult) {
+            checkpointSnapshotRetained = await persistCompactionCheckpoint({
+              config: params.config,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              trigger: params.trigger,
+              snapshot: checkpointSnapshot,
+              summary: clientResult.summary,
+              firstKeptEntryId: effectiveFirstKeptEntryId,
+              tokensBefore: observedTokenCount ?? clientResult.tokensBefore,
+              tokensAfter,
+              sessionFile: activeSessionFile,
+              leafId: sessionManager.getLeafId?.() ?? undefined,
+              createdAt: compactStartedAt,
+            });
+          }
           const postMetrics = diagEnabled
             ? summarizeCompactionMessages(session.messages)
             : undefined;
@@ -483,7 +505,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
           await runAfterCompactionHooks({
             hookRunner,
-            sessionId: activeSessionId,
+            sessionId: params.sessionId,
             sessionAgentId,
             hookSessionKey,
             missingSessionKey,
@@ -493,25 +515,32 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             tokensAfter,
             compactedCount,
             sessionFile: activeSessionFile,
-            ...(activeSessionId !== params.sessionId
-              ? { previousSessionId: params.sessionId }
-              : {}),
-            summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
-            tokensBefore: result.tokensBefore,
+            summaryLength: clientResult?.summary.length,
+            tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
             onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,
             compacted: true,
+            ...(serverResult ? { compactionKind: "server-endpoint" as const } : {}),
             result: {
-              summary: result.summary,
-              firstKeptEntryId: effectiveFirstKeptEntryId,
-              tokensBefore: observedTokenCount ?? result.tokensBefore,
+              ...(clientResult
+                ? {
+                    summary: clientResult.summary,
+                    firstKeptEntryId: clientResult.firstKeptEntryId,
+                  }
+                : { kind: "server-endpoint" as const }),
+              tokensBefore: serverResult
+                ? tokensBefore
+                : (observedTokenCount ?? clientResult!.tokensBefore),
               tokensAfter,
-              details: result.details,
-              sessionId: undefined,
-              sessionFile: undefined,
+              details: serverResult
+                ? {
+                    compactionKind: "server-endpoint" as const,
+                    droppedMessageCount: serverResult.usage.dropped_message_count,
+                  }
+                : clientResult!.details,
             },
           };
         } catch (err) {
@@ -531,6 +560,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
           throw err;
         } finally {
+          // Retire exact recovery authority before asynchronous session cleanup can yield.
+          if (diagnosticOwner) {
+            closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+          }
           try {
             await flushPendingToolResultsAfterIdle({
               agent: session?.agent,

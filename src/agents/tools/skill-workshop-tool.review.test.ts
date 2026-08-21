@@ -316,15 +316,17 @@ describe("skill_workshop review mode", () => {
       proposalOnly: true,
       updateProposals: true,
       proposalMutationBudget: { remaining: 1 },
+      modelContextWindowTokens: 200_000,
     });
     const read = await reviewTool.execute("review-read", {
       action: "read",
       skill_name: "big-skill",
     });
     const text = (read.content[0] as { text: string }).text;
-    expect(read.details).toMatchObject({ skillKey: "big-skill", truncated: true });
-    expect(text.length).toBeLessThanOrEqual(20_000 + 100);
-    expect(text).toContain("[truncated: skill exceeds the Workshop read budget]");
+    expect(read.details).toMatchObject({ skillKey: "big-skill", contentIncluded: false });
+    expect(text.length).toBeLessThanOrEqual(20_000);
+    expect(text).toContain("Content omitted");
+    expect(text).not.toContain("A detailed operational line.");
 
     await expect(
       reviewTool.execute("oversized-patch", {

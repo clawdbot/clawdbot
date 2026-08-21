@@ -28,7 +28,7 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
-import { createCodexTrajectoryRecorder, type CodexHostTrajectoryRecorder } from "./trajectory.js";
+import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
@@ -47,17 +47,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeHookRelayEvents,
   } = connection;
   const { toolBridge } = attemptTools;
-  const hostTrajectoryRecorder = (
-    params as typeof params & { trajectoryRecorder?: CodexHostTrajectoryRecorder | null }
-  ).trajectoryRecorder;
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
-    trajectoryRecorder: hostTrajectoryRecorder,
+    trajectory: params.hostCapabilities.trajectory,
     tools: toolBridge.availableSpecs,
-    warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
   const state = {
     client: undefined as unknown as CodexAppServerClient,
@@ -72,6 +68,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
       | undefined,
+    runtimeContinuationStarted: false,
     nativePreToolUseFailureFallbackActive: false,
     nativePreToolUseFailureFallbackTerminalReason: undefined as
       | CodexNativePreToolUseFailure["disposition"]
@@ -136,7 +133,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
-    embeddedAgentLog.info("codex app-server one-shot cleanup checked shared client retirement", {
+    // Runs on every one-shot attempt teardown; routine retirement checks are
+    // diagnostic detail, not operator-facing info.
+    embeddedAgentLog.debug("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -187,6 +186,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
       rejectPendingDirectChild: (childThreadId, reason) =>
         state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+      ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+        ? {
+            onDirectChildAccepted: () => {
+              state.runtimeContinuationStarted = true;
+            },
+          }
+        : {}),
     });
   };
   const releaseCurrentRoute = () => {
@@ -261,7 +267,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             relay: state.nativeHookRelay,
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-            loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()

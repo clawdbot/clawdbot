@@ -19,8 +19,8 @@ function hasStructuredToolInvocation(message: AssistantMessage): boolean {
     if (!block || typeof block !== "object") {
       return false;
     }
-    const record = block as unknown as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type.trim() : "";
+    const rawType = Reflect.get(block, "type");
+    const type = typeof rawType === "string" ? rawType.trim() : "";
     if (
       type === "toolCall" ||
       type === "toolUse" ||
@@ -31,7 +31,10 @@ function hasStructuredToolInvocation(message: AssistantMessage): boolean {
     ) {
       return true;
     }
-    return Array.isArray(record.tool_calls) || Array.isArray(record.toolCalls);
+    return (
+      Array.isArray(Reflect.get(block, "tool_calls")) ||
+      Array.isArray(Reflect.get(block, "toolCalls"))
+    );
   });
 }
 

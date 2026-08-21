@@ -1,6 +1,6 @@
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue-recovery.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
 
 export const boundedCronCompletionRetention = {

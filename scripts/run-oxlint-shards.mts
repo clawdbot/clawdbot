@@ -4,12 +4,10 @@ import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  acquireLocalHeavyCheckLockSync,
   ensureRepoToolNodeModulesLink,
-  resolveLocalHeavyCheckEnv,
+  resolveLocalCheckEnv,
   resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForOxlint,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
@@ -254,86 +252,62 @@ export async function main(
 ) {
   const runner = path.resolve("scripts", "run-oxlint.mjs");
   const shardArgs = parseShardRunnerArgs(extraArgs);
-  const env = resolveLocalHeavyCheckEnv(runtimeEnv);
-  const hasMetadataOnlyFlag = shardArgs.oxlintArgs.some((arg) =>
-    ["--help", "-h", "--version", "-V", "--rules", "--print-config", "--init"].includes(arg),
+  const env = resolveLocalCheckEnv(runtimeEnv);
+  const shards = createOxlintShards({
+    cwd: process.cwd(),
+    env,
+    platform: process.platform,
+    splitCore: shardArgs.splitCore,
+  });
+  const selectedShards = selectCoreOxlintStripe(
+    filterOxlintShards(shards, shardArgs.only),
+    shardArgs.coreStripe,
   );
-  const shouldAcquireParentLock =
-    !hasMetadataOnlyFlag ||
-    shouldAcquireLocalHeavyCheckLockForOxlint(shardArgs.oxlintArgs, {
-      cwd: process.cwd(),
-      env,
-    });
-  const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
-      ? () => {}
-      : shouldAcquireParentLock
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint shards",
-          })
-        : () => {};
 
-  try {
-    const shards = createOxlintShards({
-      cwd: process.cwd(),
+  ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
+  const prepareResult = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
+    selectedShards,
+    shardArgs.oxlintArgs,
+  )
+    ? spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
+        ],
+        {
+          stdio: "inherit",
+          env,
+        },
+      )
+    : undefined;
+
+  if (prepareResult?.error) {
+    throw prepareResult.error;
+  }
+  if (prepareResult && (prepareResult.status ?? 1) !== 0) {
+    process.exitCode = prepareResult.status ?? 1;
+  } else {
+    const shardConcurrency = resolveOxlintShardConcurrency({
       env,
       platform: process.platform,
       splitCore: shardArgs.splitCore,
     });
-    const selectedShards = selectCoreOxlintStripe(
-      filterOxlintShards(shards, shardArgs.only),
-      shardArgs.coreStripe,
+    const hostResources = resolveHostResources();
+    // stderr: stdout may carry machine-readable oxlint output for callers.
+    console.error(
+      `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
+        `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
     );
-
-    ensureRepoToolNodeModulesLink(resolveRepoToolBinPath("oxlint"));
-    const prepareResult = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
-      selectedShards,
-      shardArgs.oxlintArgs,
-    )
-      ? spawnSync(
-          process.execPath,
-          [
-            "--import",
-            "tsx",
-            path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-          ],
-          {
-            stdio: "inherit",
-            env,
-          },
-        )
-      : undefined;
-
-    if (prepareResult?.error) {
-      throw prepareResult.error;
-    }
-    if (prepareResult && (prepareResult.status ?? 1) !== 0) {
-      process.exitCode = prepareResult.status ?? 1;
-    } else {
-      const shardConcurrency = resolveOxlintShardConcurrency({
-        env,
-        platform: process.platform,
-        splitCore: shardArgs.splitCore,
-      });
-      const hostResources = resolveHostResources();
-      // stderr: stdout may carry machine-readable oxlint output for callers.
-      console.error(
-        `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
-          `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
-      );
-      const results = await runShards({
-        concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
-        entries: selectedShards,
-        env,
-        extraArgs: shardArgs.oxlintArgs,
-        runner,
-      });
-      process.exitCode = results.find((status) => status !== 0) ?? 0;
-    }
-  } finally {
-    releaseLock();
+    const results = await runShards({
+      concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
+      entries: selectedShards,
+      env,
+      extraArgs: shardArgs.oxlintArgs,
+      runner,
+    });
+    process.exitCode = results.find((status) => status !== 0) ?? 0;
   }
 }
 
@@ -437,18 +411,26 @@ export function filterOxlintShards<T extends { name: string }>(shards: T[], only
   );
 }
 
-/** Select one deterministic, disjoint stripe of split core lint targets. */
-export function selectCoreOxlintStripe<T extends { name: string }>(
-  shards: T[],
-  stripe: CoreStripe | undefined,
-) {
+/** Aggregate one deterministic, disjoint stripe into a single core Program. */
+export function selectCoreOxlintStripe(shards: OxlintShard[], stripe: CoreStripe | undefined) {
   if (!stripe) {
     return shards;
   }
   if (shards.length === 0 || shards.some((shard) => !shard.name.startsWith("core:"))) {
     throw new Error("--core-stripe requires a non-empty core-only shard selection");
   }
-  return shards.filter((_, index) => index % stripe.total === stripe.index - 1);
+  const targets = shards
+    .filter((_, index) => index % stripe.total === stripe.index - 1)
+    .flatMap((shard) => shard.args.slice(2));
+  if (targets.length === 0) {
+    return [];
+  }
+  return [
+    {
+      name: `core:stripe:${stripe.index}`,
+      args: ["--tsconfig", CORE_TS_CONFIG, ...targets],
+    },
+  ];
 }
 
 export function shouldPrepareExtensionPackageBoundaryArtifactsForShards(
@@ -532,7 +514,6 @@ export async function runShard({ env, extraArgs, runner, shard }: ShardRunnerOpt
     detached: useProcessGroup,
     env: {
       ...env,
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
       OPENCLAW_OXLINT_SKIP_PREPARE: "1",
     },
   });

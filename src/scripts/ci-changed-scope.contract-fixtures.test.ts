@@ -20,6 +20,7 @@ describe("shared Apple contract fixture CI scope", () => {
   });
 
   it.each([
+    "src/shared/worker-bundle-hash.ts",
     "src/worker/workspace-rsync-receiver.ts",
     "src/gateway/worker-environments/workspace-sync.ts",
     "src/gateway/worker-environments/workspace-sync-helpers.ts",

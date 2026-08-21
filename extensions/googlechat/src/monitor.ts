@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Googlechat plugin module implements monitor behavior.
 import {
   formatInboundMediaUnavailableText,
@@ -9,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -169,7 +171,7 @@ function resolveBotDisplayName(params: {
   if (accountName?.trim()) {
     return accountName.trim();
   }
-  const agent = config.agents?.list?.find((a) => a.id === agentId);
+  const agent = resolveAgentConfig(config, agentId);
   if (agent?.name?.trim()) {
     return agent.name.trim();
   }
@@ -225,6 +227,16 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+    cfg: config,
+    channel: "googlechat",
+    accountId: account.accountId,
+    peer: {
+      kind: isGroup ? ("group" as const) : ("direct" as const),
+      id: spaceId,
+    },
+  });
+
   const access = await applyGoogleChatInboundAccessPolicy({
     account,
     config,
@@ -236,6 +248,12 @@ async function processMessageWithPipeline(params: {
     senderName,
     senderEmail,
     rawBody,
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(message.name ? { messageId: message.name } : {}),
+      inboundEventKind: "user_request",
+    },
     statusSink,
     logVerbose: (messageLocal) => logVerbose(core, runtime, messageLocal),
   });
@@ -261,16 +279,6 @@ async function processMessageWithPipeline(params: {
   if (shouldSuppressGoogleChatBotLoop({ botLoopProtection, core, runtime })) {
     return;
   }
-
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: config,
-    channel: "googlechat",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? ("group" as const) : ("direct" as const),
-      id: spaceId,
-    },
-  });
 
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
     contentType: attachment.contentType,
@@ -314,6 +322,7 @@ async function processMessageWithPipeline(params: {
 
   const replyThreadName = isGroup ? message.thread?.name : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: access.channelIngress,
     channel: "googlechat",
     accountId: route.accountId,
     messageId: message.name,
@@ -580,4 +589,3 @@ export function resolveGoogleChatWebhookPath(params: {
     defaultPath: "/googlechat",
   });
 }
-import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";

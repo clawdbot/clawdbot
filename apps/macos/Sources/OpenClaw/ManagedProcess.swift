@@ -20,7 +20,6 @@ final class ManagedProcess: @unchecked Sendable {
         private var childHandles: [FileHandle]
         private var abortiveTerminationRequested = false
         private var finished = false
-        private var status: TerminationStatus?
 
         init(childHandles: [FileHandle]) {
             self.childHandles = childHandles
@@ -28,10 +27,6 @@ final class ManagedProcess: @unchecked Sendable {
 
         var isRunning: Bool {
             self.lock.withLock { !self.finished }
-        }
-
-        var terminationStatus: TerminationStatus? {
-            self.lock.withLock { self.status }
         }
 
         var shouldAbortGracefulTermination: Bool {
@@ -50,8 +45,8 @@ final class ManagedProcess: @unchecked Sendable {
             handles.forEach { try? $0.close() }
         }
 
-        func finish(status: TerminationStatus?) {
-            self.lock.withLock { (self.finished, self.status) = (true, status) }
+        func finish() {
+            self.lock.withLock { self.finished = true }
         }
 
         static func hasExited(_ processIdentifier: pid_t) -> Bool {
@@ -68,10 +63,6 @@ final class ManagedProcess: @unchecked Sendable {
 
     var isRunning: Bool {
         self.state.isRunning
-    }
-
-    var terminationStatus: TerminationStatus? {
-        self.state.terminationStatus
     }
 
     private init(
@@ -156,13 +147,13 @@ final class ManagedProcess: @unchecked Sendable {
                     _ = await self.waitForExit(pid, timeout: .milliseconds(250))
                     await killGroup()
                 }
-                state.finish(status: result.terminationStatus)
+                state.finish()
                 return result.terminationStatus
             } catch {
                 state.closeChildHandles()
                 let message = (error as? SubprocessError)?.description ?? error.localizedDescription
                 startContinuation.yield(.failure(StartFailure(message: message)))
-                state.finish(status: nil)
+                state.finish()
                 return nil
             }
         }

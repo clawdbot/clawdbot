@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 const mocks = vi.hoisted(() => ({
@@ -81,6 +82,7 @@ const view = {
   html: "<!doctype html><p>private fixture</p>",
   csp: { connectDomains: ["https://api.example.com"] },
   allowedAppToolNames: new Set(["shared", "app-only"]),
+  authorizeAppInteraction: undefined as (() => boolean | Promise<boolean>) | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "sunny" }] },
   requestTimeoutMs: 60_000,
@@ -128,6 +130,7 @@ describe("MCP App standalone host", () => {
     mocks.completeRetirement.mockResolvedValue(undefined);
     Object.assign(view, {
       allowedAppToolNames: new Set(["shared", "app-only"]),
+      authorizeAppInteraction: undefined,
       readOnly: undefined,
       requestTimeoutMs: 60_000,
       requestWindowStartedAtMs: nowMs,
@@ -402,6 +405,36 @@ describe("MCP App standalone host", () => {
     expect(runtime.callTool).toHaveBeenCalledTimes(1);
     expect(releaseRuntimeLease).toHaveBeenCalled();
     expect(mocks.completeRetirement).toHaveBeenCalledWith(runtime);
+  });
+
+  it("inherits post-catalog grant revalidation from the shared operation boundary", async () => {
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred<Awaited<ReturnType<typeof runtime.getCatalog>>>();
+    runtime.getCatalog.mockImplementationOnce(async () => {
+      catalogStarted.resolve();
+      return await releaseCatalog.promise;
+    });
+    let grantActive = true;
+    view.authorizeAppInteraction = vi.fn(async () => grantActive);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+
+    const pending = request({
+      url: "/__openclaw__/mcp-app/view",
+      method: "POST",
+      authorization: `MCP-App ${issued.ticket}`,
+      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+    });
+    await catalogStarted.promise;
+    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+    grantActive = false;
+    releaseCatalog.resolve({
+      tools: [{ serverName: "demo", toolName: "app-only", uiVisibility: ["app"] }],
+    });
+
+    const denied = await pending;
+    expect(denied.res.statusCode).toBe(403);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
+    expect(runtime.callTool).not.toHaveBeenCalled();
   });
 
   it("keeps reconstructed views read-only while preserving resource reads", async () => {

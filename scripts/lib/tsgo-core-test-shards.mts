@@ -74,6 +74,26 @@ export function selectTsgoCoreTestShards(
   return [...selected, ...TSGO_TARGETED_TEST_SHARED_SHARDS];
 }
 
+/**
+ * Deterministic round-robin stripe over the full shard list for CI-level
+ * parallelism. Shard walls are near-uniform, so index striping stays balanced
+ * as shards are added; the union across stripes is exactly the full list.
+ */
+export function selectTsgoCoreTestStripe(
+  stripeSpec: string,
+): readonly { name: string; config: string }[] | undefined {
+  const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(stripeSpec);
+  if (!match) {
+    return undefined;
+  }
+  const stripe = Number(match[1]);
+  const stripeCount = Number(match[2]);
+  if (stripe > stripeCount) {
+    return undefined;
+  }
+  return TSGO_CORE_TEST_SHARDS.filter((_, index) => index % stripeCount === stripe - 1);
+}
+
 export function findTsgoCoreTestShardViolations(params: {
   canonicalRoots: readonly string[];
   maxRoots?: number;

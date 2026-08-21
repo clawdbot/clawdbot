@@ -63,6 +63,7 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
     mode: "detect",
   });
   expect(changedStore.outcomes).toEqual([{ kind: "no-legacy-rows" }]);
+  expect(changedStore.ledgerComplete).toBe(false);
 
   const restoredPath = path.join(root, "restored-main.sqlite");
   seedClaim("main", restoredPath, "agent:main:restored");
@@ -86,9 +87,21 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   expect(startupShortcut.outcomes).toEqual([
     { kind: "no-legacy-rows", detail: "matching completed ledger" },
   ]);
+  expect(startupShortcut.ledgerComplete).toBe(true);
+  expect(readClaim("main", mainPath, "agent:main:late")).toBeDefined();
+
+  const creationScan = await migrateLegacyMainSessionKeys({
+    cfg,
+    env,
+    mode: "detect",
+    forceScan: true,
+  });
+  expect(creationScan.ledgerComplete).toBe(false);
+  expect(creationScan.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
   expect(readClaim("main", mainPath, "agent:main:late")).toBeDefined();
 
   const repaired = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
+  expect(repaired.ledgerComplete).toBe(true);
   expect(repaired.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
   expect(readClaim("main", mainPath, "agent:main:late")).toBeUndefined();
   expect(readClaim("ops", opsPath, "agent:ops:late")).toBeDefined();

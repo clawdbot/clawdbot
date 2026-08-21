@@ -27,6 +27,8 @@ export type LegacyMainSessionMigrationResult = {
   armed: boolean;
   changes: string[];
   complete: boolean;
+  /** The current owner, main key, and physical source layout have a completed doctor ledger. */
+  ledgerComplete: boolean;
   legacyAgentId: string;
   mainKey: string;
   outcomes: LegacyMainSessionMigrationOutcome[];

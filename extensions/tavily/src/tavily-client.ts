@@ -203,6 +203,7 @@ export async function runTavilySearch(
     errorLabel: "Tavily Search",
     ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let remainingSearchContentChars = TAVILY_SEARCH_MAX_CONTENT_CHARS;
@@ -321,6 +322,7 @@ export async function runTavilyExtract(
     responseMaxBytes: TAVILY_EXTRACT_RESPONSE_MAX_BYTES,
     ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   let remainingContentChars = TAVILY_EXTRACT_MAX_CONTENT_CHARS;

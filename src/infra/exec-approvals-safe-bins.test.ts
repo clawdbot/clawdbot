@@ -393,6 +393,7 @@ describe("exec approvals safe bins", () => {
     const ok = isSafeBinUsage({
       argv: testCase.argv,
       resolution: {
+        kind: "executable",
         rawExecutable,
         resolvedPath: testCase.resolvedPath,
         executableName,
@@ -412,6 +413,7 @@ describe("exec approvals safe bins", () => {
     const ok = isSafeBinUsage({
       argv: ["head", "-n", "1"],
       resolution: {
+        kind: "executable",
         rawExecutable: "head",
         resolvedPath: "/custom/bin/head",
         executableName: "head",
@@ -427,6 +429,7 @@ describe("exec approvals safe bins", () => {
       return;
     }
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "head",
       resolvedPath: "/opt/homebrew/bin/head",
       resolvedRealPath: "/opt/homebrew/Cellar/coreutils/9.5/bin/head",
@@ -465,6 +468,7 @@ describe("exec approvals safe bins", () => {
     const ok = isSafeBinUsage({
       argv: ["head", "-n", "1"],
       resolution: {
+        kind: "executable",
         rawExecutable: "head",
         resolvedPath: "/usr/bin/head",
         executableName: "head",
@@ -482,6 +486,7 @@ describe("exec approvals safe bins", () => {
     const baseParams = {
       argv: ["head", "-n", "1"],
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "head",
         resolvedPath: "/tmp/custom/head",
         executableName: "head",
@@ -535,6 +540,7 @@ describe("exec approvals safe bins", () => {
     const allow = isSafeBinUsage({
       argv: ["echo", "hello"],
       resolution: {
+        kind: "executable",
         rawExecutable: "echo",
         resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
@@ -546,6 +552,7 @@ describe("exec approvals safe bins", () => {
     const deny = isSafeBinUsage({
       argv: ["echo", "hello", "world"],
       resolution: {
+        kind: "executable",
         rawExecutable: "echo",
         resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
@@ -565,6 +572,7 @@ describe("exec approvals safe bins", () => {
     const cwd = makeExecApprovalsTempDir();
     fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "sort",
       resolvedPath: "/usr/bin/sort",
       executableName: "sort",

@@ -7,6 +7,11 @@
 import { sleepWithAbort } from "@openclaw/retry";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
+  GatewayDrainingError,
+  retainGatewayRootWorkAdmissionContinuation,
+  runOutsideGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
   INGRESS_CLAIM_LEASE_MS,
@@ -26,8 +31,6 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
-export { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
-export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -41,6 +44,8 @@ import {
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
+export { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
+export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 
 /** Default claim→adoption stall before dead-lettering with handler-timeout. */
 export const DEFAULT_INGRESS_ADOPTION_STALL_MS = 5 * 60 * 1000;
@@ -319,6 +324,12 @@ export function createChannelIngressDrain<
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     err: unknown,
   ) => {
+    if (err instanceof GatewayDrainingError) {
+      // Root dispatch closes before durable transport admission during restart.
+      // Preserve the row for the successor without spending its failure budget.
+      await releaseClaim(claim, { recordAttempt: false });
+      return;
+    }
     const disposition = resolveIngressFailureDisposition({
       err,
       event: claim,
@@ -539,9 +550,20 @@ export function createChannelIngressDrain<
     armStallWatchdog(state);
     armClaimRefresh(state);
 
+    // drainOnce starts dispatches without awaiting them, so this task outlives
+    // the admission context it inherits (a detached pump root or the transport
+    // request that enqueued the event). Retain a live root until the task
+    // settles; when the inherited root is already released, dispatch outside it
+    // so the dead lease cannot make session admission refuse the turn as
+    // draining. A real restart drain still refuses both paths at admission.
+    const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
     state.task = (async () => {
       try {
-        const result = await options.dispatchClaimedEvent(claim, lifecycle);
+        const result = await (releaseRootWork
+          ? options.dispatchClaimedEvent(claim, lifecycle)
+          : runOutsideGatewayRootWorkAdmission(() =>
+              options.dispatchClaimedEvent(claim, lifecycle),
+            ));
         // dispose() leaves claims for recovery. Session abort mid-flight
         // (skipped/void) also leaves the claim; a terminal completed/failed
         // result still settles even if abort raced the return.
@@ -609,6 +631,8 @@ export function createChannelIngressDrain<
         await state.settleOnce(async () => {
           await applyFailureDisposition(claim, err);
         });
+      } finally {
+        releaseRootWork?.();
       }
     })();
 

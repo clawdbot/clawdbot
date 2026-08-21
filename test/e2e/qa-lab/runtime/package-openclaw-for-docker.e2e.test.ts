@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
@@ -250,6 +251,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/npm-json-output.mts",
       "scripts/lib/optional-bundled-clusters.mjs",
+      "scripts/lib/output-root-guard.mjs",
       "scripts/lib/record-shared.mjs",
       "scripts/lib/windows-cmd-helpers-runtime.mts",
       "scripts/lib/windows-taskkill.mjs",
@@ -361,6 +363,7 @@ describe("package-openclaw-for-docker", () => {
   });
 
   it("uses the source package build entrypoint with declaration generation", async () => {
+    const sourceDir = tempDirs.make("openclaw-package-build-source-");
     const calls: Array<{
       command: string;
       args: string[];
@@ -387,7 +390,7 @@ describe("package-openclaw-for-docker", () => {
     process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
 
     try {
-      await buildPackageArtifacts("/repo", {
+      await buildPackageArtifacts(sourceDir, {
         runImpl: async (
           command: string,
           args: string[],
@@ -437,7 +440,7 @@ describe("package-openclaw-for-docker", () => {
       {
         command: "pnpm",
         args: ["run", "build"],
-        cwd: "/repo",
+        cwd: sourceDir,
         dockerBuildExtensions: undefined,
         internalDockerBuildPluginIds: undefined,
         noPnpm: "1",
@@ -447,6 +450,45 @@ describe("package-openclaw-for-docker", () => {
         timeoutMs: 1234,
       },
     ]);
+  });
+
+  it("omits stale hashed dist output when frozen sources expose only their own build", async () => {
+    const sourceDir = tempDirs.make("openclaw-package-clean-dist-source-");
+    const outputDir = tempDirs.make("openclaw-package-clean-dist-output-");
+    const stalePath = path.join(sourceDir, "dist", "runtime-OLDHASH.js");
+    fs.mkdirSync(path.dirname(stalePath));
+    fs.writeFileSync(stalePath, "export const stale = true;\n");
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      `${JSON.stringify(
+        {
+          files: ["dist"],
+          name: "openclaw",
+          scripts: {
+            build:
+              "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/index.js','export {};\\n')\"",
+          },
+          version: "2026.4.25",
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await buildPackageArtifacts(sourceDir);
+    const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+      ...skipDocsMapLifecycle,
+      prepareChangelog: async () => {},
+      restoreChangelog: async () => {},
+    });
+    const entries: string[] = [];
+    await tar.t({
+      file: tarball,
+      onentry: (entry) => entries.push(entry.path),
+    });
+
+    expect(entries).toContain("package/dist/index.js");
+    expect(entries).not.toContain("package/dist/runtime-OLDHASH.js");
   });
 
   it("rejects loose package artifact timeout env values", async () => {

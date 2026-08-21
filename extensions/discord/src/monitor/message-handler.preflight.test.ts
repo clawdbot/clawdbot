@@ -371,6 +371,35 @@ describe("preflightDiscordMessage", () => {
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
   });
 
+  it("admits embed-only messages when their text appears after a textless first embed", async () => {
+    const channelId = "dm-channel-multiple-embeds";
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-multiple-embeds",
+        channelId,
+        content: "",
+        author: { id: "user-1", bot: false, username: "alice" },
+      }),
+      {
+        embeds: [
+          { image: { url: "https://cdn.discordapp.com/image.png" } },
+          { title: "Alert", description: "Details" },
+          { description: "Follow-up" },
+        ],
+      },
+    );
+
+    const result = await runDmPreflight({
+      channelId,
+      message,
+      discordConfig: { dmPolicy: "open" } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("Alert\nDetails\nFollow-up");
+    expect(preflight.messageText).toBe("Alert\nDetails\nFollow-up");
+  });
+
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",

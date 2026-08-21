@@ -1,8 +1,11 @@
-import { findStructuredAuthParamRanges, redactStructuredAuthHeaders } from "@openclaw/acp-core";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  findStructuredAuthParamRanges,
+  redactStructuredAuthHeaders,
+} from "../../packages/acp-core/src/structured-auth-redaction.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
@@ -1108,12 +1111,16 @@ export function getDefaultRedactPatterns(): string[] {
 // line boundaries, then split back. Use this instead of mapping redactSensitiveText when
 // options are resolved once per request.
 export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOptions): string[] {
-  if (resolved.mode === "off" || !resolved.patterns.length || lines.length === 0) {
+  if (lines.length === 0 || resolved.mode === "off") {
     return lines;
   }
+  const exactRedactedLines = lines.map((line) => redactRegisteredSecretValues(line, maskToken));
+  if (!resolved.patterns.length) {
+    return exactRedactedLines;
+  }
   const redactedLines = resolved.redactFormBodies
-    ? lines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
-    : lines;
+    ? exactRedactedLines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
+    : exactRedactedLines;
   let redacted = redactedLines.join("\n");
   if (resolved.redactStructuredAuthHeaders) {
     redacted = redactStructuredAuthHeaders(redacted, "***");

@@ -7,20 +7,20 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import {
+  type DeliverFn,
+  drainPendingDeliveriesCore,
+  type RecoveryLogger,
+  recoverPendingDeliveries,
+  withActiveDeliveryClaim,
+} from "./delivery-queue-recovery.js";
+import {
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
-} from "./delivery-queue-storage.js";
-import {
-  type DeliverFn,
-  drainPendingDeliveriesCore,
   enqueueDelivery,
   failDelivery,
-  type RecoveryLogger,
-  recoverPendingDeliveries,
-  withActiveDeliveryClaim,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -34,10 +34,16 @@ const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const migrateLegacyPendingOutboundDeliveriesMock = vi.hoisted(() =>
+  vi.fn(async () => ({ moved: 0, skipped: 0, remaining: 0 })),
+);
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
+}));
+vi.mock("./delivery-queue-migration.js", () => ({
+  migrateLegacyPendingOutboundDeliveries: migrateLegacyPendingOutboundDeliveriesMock,
 }));
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
@@ -152,6 +158,26 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
     resolveOutboundChannelMessageAdapterMock.mockReset();
+    migrateLegacyPendingOutboundDeliveriesMock.mockClear();
+  });
+
+  it("keeps one-time migration out of repeated canonical drains", async () => {
+    const drain = () =>
+      drainPendingDeliveriesCore({
+        drainKey: "gateway:outbound",
+        logLabel: "Outbound delivery retry",
+        cfg: stubCfg,
+        log: createRecoveryLog(),
+        stateDir: tmpDir,
+        deliver: vi.fn<DeliverFn>(),
+        selectEntry: () => ({ match: true }),
+      });
+
+    await drain();
+    await drain();
+    await drain();
+
+    expect(migrateLegacyPendingOutboundDeliveriesMock).not.toHaveBeenCalled();
   });
 
   it("drains entries that failed with 'no listener' error", async () => {
@@ -278,7 +304,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
     expect(admitDeferredDelivery).toHaveBeenCalledWith(expect.objectContaining({ cfg }));
     expect(deliver).not.toHaveBeenCalled();
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("retries immediately without resetting retry history", async () => {
@@ -310,7 +336,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("moves unknown-after-send entries to failed without replaying during reconnect drain", async () => {
+  it("removes random unknown-after-send entries without replaying during reconnect drain", async () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
@@ -320,7 +346,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
     expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
@@ -380,10 +406,10 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
-    // Should have moved to failed, not delivered
+    // Random delivery IDs do not need a reusable producer fence.
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-    expect(readOutboundQueueStatus(tmpDir, id)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir, id)).toBeUndefined();
   });
 
   it("second concurrent call is skipped (concurrency guard)", async () => {

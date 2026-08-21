@@ -250,9 +250,9 @@ describe("qa coverage report", () => {
         {
           coverageId: TEST_BROWSER_COVERAGE_ID,
           kind: "playwright",
-          path: "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+          path: "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
           role: "secondary",
-          scenarioRefs: ["qa/scenarios/ui/control-ui-plan-replay-reconnect.yaml"],
+          scenarioRefs: ["qa/scenarios/ui/control-ui-progress-card-live-placement.yaml"],
         },
       ]),
     );
@@ -393,7 +393,7 @@ describe("qa coverage report", () => {
     );
     for (const executionPath of [
       "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
-      "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+      "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
     ]) {
       expect(report).toContain(
         `secondary:playwright:${executionPath} (${TEST_BROWSER_COVERAGE_ID})`,
@@ -403,6 +403,103 @@ describe("qa coverage report", () => {
       );
     }
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
+  });
+
+  it.each(["script", "vitest", "playwright"] as const)(
+    "finds %s scenarios by execution paths outside their code refs",
+    (executionKind) => {
+      const executionPath = `test/producers/${executionKind}-only.ts`;
+      const scenario = scenarioWithCoverage({
+        primary: [TEST_EXECUTABLE_COVERAGE_ID],
+        executionKind,
+        executionPath,
+      });
+
+      expect(findQaScenarioMatches([scenario], executionPath)).toMatchObject([
+        { id: scenario.id, executionKind, executionPath },
+      ]);
+    },
+  );
+
+  it("finds every shared execution-path owner in deterministic scenario order", () => {
+    const executionPath = "test/producers/shared-evidence.ts";
+    const scenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+      executionKind: "script",
+      executionPath,
+    });
+    const scenarios = [
+      { ...scenario, id: "zulu-owner" },
+      { ...scenario, id: "alpha-owner" },
+    ];
+
+    expect(findQaScenarioMatches(scenarios, executionPath).map(({ id }) => id)).toStrictEqual([
+      "alpha-owner",
+      "zulu-owner",
+    ]);
+  });
+
+  it("normalizes portable execution-path query separators", () => {
+    const executionPath = "test/producers/windows-evidence.ts";
+    const scenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+      executionKind: "script",
+      executionPath,
+    });
+
+    expect(findQaScenarioMatches([scenario], executionPath.replaceAll("/", "\\"))).toMatchObject([
+      { id: scenario.id, executionPath },
+    ]);
+  });
+
+  it("finds every cataloged native scenario by its authoritative execution path", () => {
+    const scenarios = readQaScenarioPack().scenarios;
+    for (const scenario of scenarios) {
+      if (scenario.execution.kind !== "flow") {
+        expect(
+          findQaScenarioMatches(scenarios, scenario.execution.path).map(({ id }) => id),
+          scenario.id,
+        ).toContain(scenario.id);
+      }
+    }
+  });
+
+  it.each([
+    ["name", "metadata-proof"],
+    ["title", "scenario-title"],
+    ["tag", "scenario-category"],
+    ["coverage", TEST_EXECUTABLE_COVERAGE_ID],
+    ["code reference", "src/metadata/code-reference.ts"],
+    ["documentation reference", "docs/metadata/reference.md"],
+    ["source path", "qa/scenarios/metadata/flow-proof.yaml"],
+    ["capability", "scenario-capability"],
+  ] as const)("preserves existing flow scenario matching by %s", (_field, query) => {
+    const scenario = {
+      ...scenarioWithCoverage({
+        primary: [TEST_EXECUTABLE_COVERAGE_ID],
+        sourcePath: "qa/scenarios/metadata/flow-proof.yaml",
+      }),
+      id: "metadata-proof",
+      title: "scenario-title",
+      category: "scenario-category",
+      capabilities: ["scenario-capability"],
+      codeRefs: ["src/metadata/code-reference.ts"],
+      docsRefs: ["docs/metadata/reference.md"],
+    };
+
+    expect(findQaScenarioMatches([scenario], query).map(({ id }) => id)).toStrictEqual([
+      scenario.id,
+    ]);
+  });
+
+  it.each([
+    ["Gateway loopback and LAN access", "docker-gateway-network"],
+    ["qa-lab", "docker-gateway-network"],
+    ["runtime", "clawhub-marketplace-list"],
+  ] as const)("does not broaden ordinary metadata query %s", (query, unrelatedScenarioId) => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, query);
+
+    expect(matches.map(({ id }) => id)).not.toContain(unrelatedScenarioId);
   });
 
   it("renders Playwright matches as qa suite targets", () => {

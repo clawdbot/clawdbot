@@ -28,7 +28,6 @@ import Testing
             lanHost: lanHost,
             tailnetDns: tailnetDns,
             gatewayPort: gatewayPort,
-            canvasPort: nil,
             tlsEnabled: tlsEnabled,
             tlsFingerprintSha256: fingerprint,
             cliPath: nil)

@@ -219,7 +219,7 @@ describe("GatewayClient socket factory recovery", () => {
     });
     const client = new GatewayClient({
       url: "WSS://gateway.example:18789",
-      tlsFingerprint: "deadbeef",
+      tlsFingerprint: "ab".repeat(32),
       onConnectError,
       hostDeps: { beforeConnect },
     });
@@ -277,6 +277,12 @@ describe("GatewayClient socket factory recovery", () => {
       url: "ws://127.0.0.1:18789",
       tlsFingerprint: "deadbeef",
       expectedMessage: "gateway tls fingerprint requires wss:// gateway url",
+    },
+    {
+      label: "invalid TLS fingerprint",
+      url: "wss://gateway.example:18789",
+      tlsFingerprint: "deadbeef",
+      expectedMessage: "gateway tls fingerprint must be a SHA-256 fingerprint",
     },
   ])("does not retry $label", async ({ url, tlsFingerprint, expectedMessage }) => {
     vi.useFakeTimers();

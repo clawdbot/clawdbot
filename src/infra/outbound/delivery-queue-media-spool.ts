@@ -14,8 +14,8 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { fileStore } from "../file-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
-  cancelDeliveryQueueMediaStage,
-  createDeliveryQueueMediaStage,
+  cancelDeliveryQueueMediaRetention,
+  createDeliveryQueueMediaRetention,
   loadDeliveryQueueMediaRetentionSnapshot,
 } from "./delivery-queue-media-staging.js";
 
@@ -98,7 +98,9 @@ export async function stageQueuePayloadMedia(params: {
   // The SQLite stage row is visible before any artifact. GC either preserves it
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
-    artifacts.length > 0 ? createDeliveryQueueMediaStage(artifacts, params.stateDir) : undefined;
+    artifacts.length > 0
+      ? createDeliveryQueueMediaRetention(artifacts, "outbound-media-stage", params.stateDir)
+      : undefined;
   const store = openSpoolStore(params.stateDir, params.maxBytes);
   const publishedSources = new Set<string>();
 
@@ -161,7 +163,7 @@ export async function stageQueuePayloadMedia(params: {
       stagedPayloads.push(staged);
     }
   } catch (err) {
-    cancelDeliveryQueueMediaStage(mediaStageId, params.stateDir);
+    cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
     await releaseSpoolArtifacts(artifacts, params.stateDir);
     throw err;
   }
@@ -182,27 +184,14 @@ function spoolRelativePath(absolutePath: string, stateDir: string | undefined): 
     : null;
 }
 
-function isMissingArtifactError(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code;
-  return code === "ENOENT" || code === "not-found";
-}
-
-async function removeArtifact(
-  absolutePath: string,
-  stateDir: string | undefined,
-  strict = false,
-): Promise<void> {
+async function removeArtifact(absolutePath: string, stateDir: string | undefined): Promise<void> {
   const relative = spoolRelativePath(absolutePath, stateDir);
   if (!relative) {
     return;
   }
   try {
     await openSpoolStore(stateDir).remove(relative);
-  } catch (error) {
-    if (strict && !isMissingArtifactError(error)) {
-      throw error;
-    }
-  }
+  } catch {}
 }
 
 /** Discards spool artifacts whose durable row is already gone. Never throws. */
@@ -212,16 +201,6 @@ export async function releaseSpoolArtifacts(
 ): Promise<void> {
   for (const artifact of artifacts) {
     await removeArtifact(artifact, stateDir);
-  }
-}
-
-/** Removes exact queue-owned artifacts and surfaces operational cleanup failures. */
-export async function releaseSpoolArtifactsStrict(
-  artifacts: readonly string[],
-  stateDir?: string,
-): Promise<void> {
-  for (const artifact of artifacts) {
-    await removeArtifact(artifact, stateDir, true);
   }
 }
 
@@ -239,27 +218,6 @@ export function collectEntrySpoolPaths(
     }
   }
   return paths;
-}
-
-export async function findUnavailableReplayMedia(
-  payloads: readonly ReplyPayload[],
-  stateDir?: string,
-): Promise<string[]> {
-  const unavailable: string[] = [];
-  for (const source of payloads.flatMap(payloadMediaSources)) {
-    if (!isSpoolableSource(source)) {
-      continue;
-    }
-    if (!path.isAbsolute(source) || !spoolRelativePath(source, stateDir)) {
-      unavailable.push(source);
-      continue;
-    }
-    const stats = await fs.stat(source).catch(() => null);
-    if (!stats?.isFile()) {
-      unavailable.push(source);
-    }
-  }
-  return unavailable;
 }
 
 /**

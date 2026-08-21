@@ -1,18 +1,14 @@
-// Mattermost durable ingress tests cover append, recovery, tombstones, and merged adoption.
+// Mattermost durable ingress tests cover append, recovery, and tombstones.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createMattermostIngressMonitor,
-  type MattermostIngressLifecycle,
-} from "./monitor-ingress.js";
+import { createMattermostIngressMonitor } from "./monitor-ingress.js";
 
 type MattermostIngressQueue = NonNullable<
   Parameters<typeof createMattermostIngressMonitor>[0]["queue"]
@@ -43,12 +39,16 @@ function startMonitor(
   queue: MattermostIngressQueue,
   dispatch: MattermostIngressDispatch,
   accountId = "default",
+  runtime: Parameters<typeof createMattermostIngressMonitor>[0]["runtime"] = {
+    error: vi.fn(),
+    log: vi.fn(),
+  },
 ) {
   return createMattermostIngressMonitor({
     accountId,
     queue,
     dispatch,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime,
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
   });
@@ -77,29 +77,46 @@ async function withQueue<T>(fn: (queue: MattermostIngressQueue) => Promise<T>): 
   return await withStateDir(async (stateDir) => await fn(createQueue(stateDir, "default")));
 }
 
-function testLifecycle() {
-  const calls = {
-    adopted: vi.fn(async () => {}),
-    deferred: vi.fn(),
-    finalizing: vi.fn(),
-    abandoned: vi.fn(async () => {}),
-  };
-  const lifecycle: MattermostIngressLifecycle = {
-    abortSignal: new AbortController().signal,
-    onAdopted: calls.adopted,
-    onDeferred: calls.deferred,
-    onAdoptionFinalizing: calls.finalizing,
-    onAbandoned: calls.abandoned,
-  };
-  return { calls, lifecycle };
-}
-
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 
 describe("Mattermost durable ingress", () => {
+  it("visibly rejects an authorless event without disconnecting subsequent ingress", async () => {
+    await withQueue(async (queue) => {
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const dispatch = vi.fn();
+      const runtime = { error: vi.fn(), log: vi.fn() };
+      const monitor = startMonitor(queue, dispatch, "default", runtime);
+      try {
+        await monitor.receive(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-missing-author",
+                channel_id: "channel-1",
+                message: "hello",
+              }),
+            },
+            broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+          }),
+        );
+        expect(enqueue).not.toHaveBeenCalled();
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Mattermost posted event is missing post.user_id"),
+        );
+
+        await monitor.receive(postedEvent({ postId: "post-after-invalid" }));
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("propagates durable append failure before handler scheduling", async () => {
     await withQueue(async (queue) => {
       const appendError = new Error("sqlite unavailable");
@@ -443,6 +460,41 @@ describe("Mattermost durable ingress", () => {
     });
   });
 
+  it("dead-letters a persisted authorless post without using broadcast recipient identity", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "post-missing-author",
+        {
+          version: 1,
+          receivedAt: 1,
+          rawEvent: JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-missing-author",
+                channel_id: "channel-1",
+                message: "hello",
+              }),
+            },
+            broadcast: { channel_id: "channel-1", user_id: "broadcast-user" },
+          }),
+        },
+        { receivedAt: 1, laneKey: "channel:channel-1" },
+      );
+      const dispatch = vi.fn();
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect(
+          (await queue.enqueue("post-missing-author", {} as MattermostIngressPayload)).kind,
+        ).toBe("failed");
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("dead-letters permanent Mattermost auth failures", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn(async () => {
@@ -479,33 +531,5 @@ describe("Mattermost durable ingress", () => {
         await monitor.stop();
       }
     });
-  });
-});
-
-describe("Mattermost merged ingress lifecycle", () => {
-  it("fans adoption out to every constituent claim", async () => {
-    const first = testLifecycle();
-    const second = testLifecycle();
-    const merged = fanInChannelIngressLifecycles([first.lifecycle, second.lifecycle]);
-
-    merged.lifecycle?.onDeferred();
-    await merged.lifecycle?.onAdopted();
-    await merged.settle();
-
-    expect(first.calls.deferred).toHaveBeenCalledTimes(1);
-    expect(second.calls.deferred).toHaveBeenCalledTimes(1);
-    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
-  });
-
-  it("completes all claims when a gated flush never dispatches", async () => {
-    const first = testLifecycle();
-    const second = testLifecycle();
-    const merged = fanInChannelIngressLifecycles([first.lifecycle, second.lifecycle]);
-
-    await merged.settle();
-
-    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
-    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
   });
 });

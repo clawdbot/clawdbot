@@ -6,11 +6,11 @@ const MAX_COMPACT_INPUT_HINT_CHARS = 300;
 // promotable with headroom; the quick index independently truncates total bytes.
 const MAX_COMPACT_OUTPUT_HINT_CHARS = 800;
 const MAX_COMPACT_INPUT_SCHEMA_PROPERTIES = 16;
-const MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES = 21;
+const MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES = 22;
 const MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS = 128;
 const MAX_COMPACT_INPUT_DEPTH = 4;
 const MAX_COMPACT_OUTPUT_DEPTH = 6;
-const MAX_COMPACT_UNION_TYPES = 4;
+const MAX_COMPACT_UNION_TYPES = 5;
 // Keeps real literal unions such as agents_list's eight runtime sources renderable,
 // while the combined literal text remains independently capped below.
 const MAX_COMPACT_ENUM_VALUES = 8;
@@ -135,7 +135,7 @@ function compactSchemaUnion(
   }
   const variants = hasAnyOf ? schema.anyOf : schema.oneOf;
   // Bound before any per-variant scan: neither the eight-value literal cap nor
-  // the four-variant structural cap can render a larger union, so oversized
+  // the five-variant structural cap can render a larger union, so oversized
   // unions must be rejected in O(1) instead of O(variants).
   if (
     !Array.isArray(variants) ||

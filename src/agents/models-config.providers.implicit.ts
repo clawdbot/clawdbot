@@ -505,30 +505,31 @@ async function runProviderCatalogWithTimeout(
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const catalogRun = runProviderCatalog(params);
   const timeoutMs = params.timeoutMs ?? undefined;
   if (!timeoutMs) {
-    return await catalogRun;
+    return await runProviderCatalog(params);
   }
 
-  // Live discovery should not hang startup; timeout means skip this provider,
-  // while non-timeout catalog failures still surface to the caller.
+  const timeoutError = new Error(
+    `provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`,
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    const catalogRun = runProviderCatalog(params);
+    // Live discovery should not hang startup; a timeout skips this provider while
+    // preserving the rest of the prepared catalog.
     return await Promise.race([
       catalogRun,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          reject(
-            new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`),
-          );
+          reject(timeoutError);
         }, timeoutMs);
         timer.unref?.();
       }),
     ]);
   } catch (error) {
-    const message = formatErrorMessage(error);
-    if (message.includes("provider catalog timed out after")) {
+    if (error === timeoutError) {
+      const message = formatErrorMessage(error);
       params.reportCatalogOutcome?.({
         provider: params.provider.id,
         status: "unavailable",

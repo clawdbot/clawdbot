@@ -1,4 +1,5 @@
 // Defines plugin entry and install configuration types.
+import type { InstallRecordBase } from "./types.installs.js";
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
@@ -82,4 +83,3 @@ export type PluginsConfig = {
    */
   installs?: Record<string, PluginInstallRecord>;
 };
-import type { InstallRecordBase } from "./types.installs.js";

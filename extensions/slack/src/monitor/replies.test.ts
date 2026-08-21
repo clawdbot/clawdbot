@@ -1,4 +1,7 @@
 // Slack tests cover replies plugin behavior.
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
@@ -70,6 +73,17 @@ function requireSendCall(index = 0) {
     throw new Error(`sendMessageSlack call ${index} missing`);
   }
   return call;
+}
+
+function acceptedSlackSendResult(messageId: string, kind: "media" | "text" = "media") {
+  return {
+    messageId,
+    channelId: "C123",
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ channel: "slack", messageId, channelId: "C123" }],
+      kind,
+    }),
+  };
 }
 
 type SlashTestMessage = {
@@ -228,6 +242,7 @@ describe("deliverReplies identity passthrough", () => {
       mediaUrl: "https://example.com/report.png",
       threadTs: "thread-ts",
       accountId: "work",
+      onDeliveryResult: expect.any(Function),
       eventScope,
       textLimit: 4000,
       mediaMaxBytes: 1024,
@@ -239,6 +254,7 @@ describe("deliverReplies identity passthrough", () => {
       token: "xoxb-test",
       threadTs: "thread-ts",
       accountId: "work",
+      onDeliveryResult: expect.any(Function),
       eventScope,
       textLimit: 4000,
       mediaMaxBytes: 1024,
@@ -1211,11 +1227,19 @@ describe("deliverReplies message_sent hook", () => {
 
   it("emits one message_sent event after a multi-media reply succeeds", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const first = acceptedSlackSendResult("media-1");
+    const second = acceptedSlackSendResult("media-2");
     sendMock
-      .mockResolvedValueOnce({ messageId: "media-1", channelId: "C123" })
-      .mockResolvedValueOnce({ messageId: "media-2", channelId: "C123" });
+      .mockImplementationOnce(async (_target, _text, options) => {
+        await options.onDeliveryResult?.(first);
+        return first;
+      })
+      .mockImplementationOnce(async (_target, _text, options) => {
+        await options.onDeliveryResult?.(second);
+        return second;
+      });
 
-    await deliverReplies(
+    const result = await deliverReplies(
       baseParams({
         replies: [
           {
@@ -1226,6 +1250,7 @@ describe("deliverReplies message_sent hook", () => {
       }),
     );
 
+    expect(result).toBe(second);
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -1312,22 +1337,44 @@ describe("deliverReplies message_sent hook", () => {
 
   it("emits only failure when a later attachment in the payload fails", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const accepted = acceptedSlackSendResult("media-1");
+    const failure = new PlatformMessageNotDispatchedError("second_upload_failed", {
+      cause: new Error("upload connection refused"),
+    });
     sendMock
-      .mockResolvedValueOnce({ messageId: "media-1", channelId: "C123" })
-      .mockRejectedValueOnce(new Error("second_upload_failed"));
+      .mockImplementationOnce(async (_target, _text, options) => {
+        await options.onDeliveryResult?.(accepted);
+        return accepted;
+      })
+      .mockRejectedValueOnce(failure);
 
-    await expect(
-      deliverReplies(
-        baseParams({
-          replies: [
-            {
-              text: "two attachments",
-              mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
-            },
-          ],
-        }),
-      ),
-    ).rejects.toThrow(/second_upload_failed/);
+    const error = await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "two attachments",
+            mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
+          },
+        ],
+      }),
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      sentBeforeError: true,
+      visibleReplySent: true,
+      deliveryResult: {
+        messageIds: ["media-1"],
+        visibleReplySent: true,
+        receipt: {
+          primaryPlatformMessageId: "media-1",
+          platformMessageIds: ["media-1"],
+          parts: [{ platformMessageId: "media-1", kind: "media", index: 0 }],
+        },
+      },
+    });
+    expect((error as Error).cause).toBe(failure);
+    expect(sendMock).toHaveBeenCalledTimes(2);
 
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -1335,6 +1382,121 @@ describe("deliverReplies message_sent hook", () => {
       content: "two attachments",
       success: false,
     });
+  });
+
+  it("preserves an accepted internal chunk when the same Slack send later fails", async () => {
+    const accepted = acceptedSlackSendResult("chunk-1", "text");
+    const failure = new PlatformMessageNotDispatchedError("second_chunk_failed", {
+      cause: new Error("upload connection refused"),
+    });
+    sendMock.mockImplementationOnce(async (_target, _text, options) => {
+      await options.onDeliveryResult?.(accepted);
+      throw failure;
+    });
+
+    const error = await deliverReplies(baseParams({ replies: [{ text: "chunked reply" }] })).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["chunk-1"],
+        receipt: { platformMessageIds: ["chunk-1"] },
+        visibleReplySent: true,
+      },
+    });
+    expect((error as Error).cause).toBe(failure);
+    expect(sendMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves an undispatched first-send failure without a partial wrapper", async () => {
+    const failure = new PlatformMessageNotDispatchedError("first_upload_failed", {
+      cause: new Error("upload connection refused"),
+    });
+    sendMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      deliverReplies(
+        baseParams({
+          replies: [{ text: "one attachment", mediaUrls: ["https://example.com/one.png"] }],
+        }),
+      ),
+    ).rejects.toBe(failure);
+    expect(sendMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not carry accepted receipts into the next logical reply", async () => {
+    const accepted = acceptedSlackSendResult("reply-1", "text");
+    const failure = new PlatformMessageNotDispatchedError("next_reply_failed", {
+      cause: new Error("upload connection refused"),
+    });
+    sendMock
+      .mockImplementationOnce(async (_target, _text, options) => {
+        await options.onDeliveryResult?.(accepted);
+        return accepted;
+      })
+      .mockRejectedValueOnce(failure);
+
+    await expect(
+      deliverReplies(baseParams({ replies: [{ text: "accepted" }, { text: "never sent" }] })),
+    ).rejects.toBe(failure);
+    expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles real Slack transport chunks as visible failure without replaying the turn", async () => {
+    const failure = new PlatformMessageNotDispatchedError("third_chunk_failed", {
+      cause: new Error("upload connection refused"),
+    });
+    const postMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, ts: "chunk-1", channel: "C123" })
+      .mockResolvedValueOnce({ ok: true, ts: "chunk-2", channel: "C123" })
+      .mockRejectedValueOnce(failure);
+    const { sendMessageSlack } = await vi.importActual<typeof import("../send.js")>("../send.js");
+    sendMock.mockImplementationOnce(async (target, text, options) => {
+      return await sendMessageSlack(target, text, options);
+    });
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) =>
+        await deliverReplies(
+          baseParams({
+            replies: [payload],
+            eventScope: { teamId: "T123", client: { chat: { postMessage } } },
+          }),
+        ),
+      onError,
+      propagateRetryableNoSendFailure: true,
+    });
+
+    expect(dispatcher.sendFinalReply({ text: "a".repeat(9_000) })).toBe(true);
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(receipt).toMatchObject({
+      counts: { final: { failedBeforeSend: 0, failedAfterSend: 1 } },
+      anyVisibleDelivered: true,
+    });
+    expect(onError).toHaveBeenCalledOnce();
+    const deliveryError = onError.mock.calls[0]?.[0] as Error;
+    expect(deliveryError).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["chunk-1", "chunk-2"],
+        receipt: {
+          primaryPlatformMessageId: "chunk-1",
+          platformMessageIds: ["chunk-1", "chunk-2"],
+          parts: [
+            { platformMessageId: "chunk-1", kind: "text" },
+            { platformMessageId: "chunk-2", kind: "text" },
+          ],
+        },
+      },
+    });
+    expect(deliveryError.cause).toBe(failure);
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledTimes(3);
   });
 
   it("does not emit the plugin hook when no listener observes message_sent", async () => {

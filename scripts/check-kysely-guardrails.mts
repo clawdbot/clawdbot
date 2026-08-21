@@ -56,6 +56,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
+    "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
     "src/state/openclaw-state-db-maintenance.ts",
     "src/state/openclaw-state-db-operator-approval-migration.ts",
@@ -113,6 +114,8 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.meeting-transcripts-files.ts",
     "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
+    "src/infra/state-migrations.transcript-directives-archives.ts",
+    "src/infra/state-migrations.transcript-directives.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
   "session entry cache connection-local validity counters": [

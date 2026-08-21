@@ -1,5 +1,7 @@
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 // Shared type contracts for outbound planning, queueing, and transport.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
@@ -153,10 +155,13 @@ export type DeliverOutboundPayloadsCoreParams = {
   to: string;
   accountId?: string;
   payloads: ReplyPayload[];
+  /** Admitted run correlation copied into the prepared durable batch. */
+  runId?: string;
+  /** @internal Exact admitted execution provenance copied into durable custody. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** @internal Canonical post-policy batch used by queue recovery and physical delivery. */
   preparedBatch?: PreparedOutboundBatch;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
+  reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
@@ -177,7 +182,7 @@ export type DeliverOutboundPayloadsCoreParams = {
   /** @internal Reports a settled native payload for post-terminal message_sent observation. */
   onMessageSentEvent?: (event: MessageSentEvent, sourceIndex: number) => void;
   /** @internal Persists ambiguous-send state immediately before platform I/O. */
-  onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
+  onPlatformSendStart?: (route: PlatformSendRoute, sourceIndex?: number) => Promise<void>;
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
   /** @internal Stable producer id used to make queue creation idempotent across crashes. */
@@ -214,6 +219,8 @@ export type DeliverOutboundPayloadsCoreParams = {
  * outbound substrate, recovery, and compatibility paths.
  */
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+  replyToId?: string | null;
+  replyToMode?: ReplyToMode;
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
   /** @internal Fence recovery ownership at the same provider boundary as live sends. */

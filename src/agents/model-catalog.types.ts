@@ -24,6 +24,10 @@ export type ModelCatalogEntry = {
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
+  /** Config-authored reasoning override; internal provenance, never project to clients. */
+  configuredReasoning?: boolean;
+  /** Concrete runtime owner of thinking policy; internal and never project to clients. */
+  thinkingPolicyProvider?: string;
   input?: ModelInputType[];
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;

@@ -11,6 +11,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
+  listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
@@ -38,6 +39,7 @@ type BuildCache = {
   inputs: BuildCacheEntry[];
   outputs: BuildCacheEntry[];
   requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
+  requiredCacheHitOutputs?: string[];
   restore?: "always";
   runOnHit?: { env?: NodeJS.ProcessEnv; finalize?: "refresh" };
 };
@@ -229,12 +231,16 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
         env.OPENCLAW_BUILD_PRIVATE_QA === "1"
           ? listPluginSdkDeclarationOutputs(pluginSdkEntrypoints)
           : listPluginSdkDeclarationOutputs(),
+      // Shared declaration snapshots cannot make a replaced live dist complete.
+      // Rebuild the unified unit when its package artifacts are no longer intact.
+      requiredCacheHitOutputs: listPluginSdkDistArtifacts(),
       restore: "always",
       runOnHit: {
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
       },
     },
   },
+  tsxStep("external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"),
   tsxStep("check-cli-bootstrap-imports", "scripts/check-cli-bootstrap-imports.mts"),
   {
     label: "plugins:assets:copy",
@@ -257,7 +263,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
     },
   },
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
-  tsxStep("copy-hook-metadata", "scripts/copy-hook-metadata.ts"),
   {
     label: "ui:build",
     kind: "pnpm",
@@ -289,6 +294,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "tsdown-ai",
     "tsdown-packages",
     "tsdown-unified",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -296,7 +302,6 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "copy-hook-metadata",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
@@ -304,6 +309,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -311,13 +317,13 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "copy-hook-metadata",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
   ],
   gatewayWatch: [
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
@@ -326,6 +332,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   qaRuntime: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -335,6 +342,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   sourcePerformance: [
     "plugins:assets:build",
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "plugins:assets:copy",
     "runtime-postbuild",
@@ -345,6 +353,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
   cliStartup: [
     "tsdown",
+    "external-plugins:local-dist",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",
@@ -402,7 +411,7 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
   },
 };
 
-export function buildAllUsage() {
+function buildAllUsage() {
   return [
     "Usage: node --import tsx scripts/build-all.mts [profile]",
     "",
@@ -756,11 +765,13 @@ export function resolveBuildAllStepCacheState(
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);
   const cachedOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(outputRoot, stampedOutputs, fsImpl);
+  const cacheHitContractMatches =
+    stampMatches && hasAllFiles(rootDir, step.cache.requiredCacheHitOutputs ?? [], fsImpl);
   const alwaysRestore = step.cache.restore === "always";
   const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
   const restorable =
-    stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
-  const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+    cacheHitContractMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+  const fresh = cacheHitContractMatches && (actualOutputsAcceptable || cachedOutputsPresent);
   return {
     cacheable: true,
     fresh,

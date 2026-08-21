@@ -390,7 +390,10 @@ public struct OpenClawChatWindowShell: View {
                 Task { await self.viewModel.forkSession(key: self.activeSessionKey) }
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(String(localized: "Fork")),
+                    LocalizedStringKey(
+                        self.activeSessionEntry?.hasActiveRun == true
+                            ? String(localized: "Fork from last completed message")
+                            : String(localized: "Fork")),
                     systemImage: "arrow.triangle.branch")
             }
 

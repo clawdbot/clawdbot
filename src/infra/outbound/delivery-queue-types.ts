@@ -3,15 +3,12 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendReconciliationResult,
+  OutboundReplyFacts,
   RenderedMessageBatchPlanItem,
 } from "../../channels/message/types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
-import type {
-  DeliveryQueueFailureRetention,
-  DeliveryQueueTerminalPolicy,
-} from "../delivery-queue-sqlite.types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -49,8 +46,7 @@ export type QueuedDeliveryPayload = {
   payloads?: ReplyPayload[];
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   threadId?: string | number | null;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
+  reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
   identity?: OutboundIdentity;
   bestEffort?: boolean;
@@ -73,6 +69,8 @@ export type QueuedDeliveryPayload = {
 
 type LegacyQueuedDeliveryPayload = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
   payloads: ReplyPayload[];
+  replyToId?: string | null;
+  replyToMode?: ReplyToMode;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
 };
 
@@ -93,6 +91,7 @@ export interface LegacyQueuedDelivery extends LegacyQueuedDeliveryPayload {
 
 export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {
   legacyPreparationState: "claimed" | "modifiers_started";
+  retainOnFailure?: true;
   legacyPreparationOwnerId?: string;
   legacyPreparationLeaseExpiresAt?: number;
 };
@@ -111,6 +110,5 @@ export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payl
   platformSendStartedAt?: number;
   effectiveReplyToId?: string | null;
   recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
-  terminalPolicy?: DeliveryQueueTerminalPolicy;
-  failureRetention?: DeliveryQueueFailureRetention;
+  retainOnFailure?: true;
 };

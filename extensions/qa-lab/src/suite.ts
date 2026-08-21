@@ -28,40 +28,12 @@ import type { QaReportCheck } from "./report.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import {
-  type QaSuiteGatewayHeapSnapshot,
-  type QaSuiteGatewayRssSample,
-  writeQaSuiteArtifacts,
-} from "./suite-artifacts.js";
-import {
-  scenarioRequiresControlUi,
-  shouldUseIsolatedQaSuiteScenarioWorkers,
-  splitModelRef,
-} from "./suite-planning.js";
+import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
+import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
-import {
-  createQaSuiteScenarioStepRunner,
-  runQaSuiteScenarioDefinition,
-  runQaSuiteScenarioSteps,
-} from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
-import {
-  appendNodeOption,
-  buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
-  mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
-} from "./suite-support.js";
-
-function resolveQaSuiteControlUiEnabled(params: {
-  explicit?: boolean;
-  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
-}) {
-  return (
-    params.explicit ?? params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario))
-  );
-}
 
 export type QaSuiteScenarioResult = {
   name: string;
@@ -336,24 +308,26 @@ export function throwQaSuiteCleanupErrors(params: {
   runFailed: boolean;
   runError: unknown;
   result?: QaSuiteResult;
+  scenarios?: readonly QaSuiteScenarioResult[];
   evidenceWritten?: boolean;
 }) {
   if (params.cleanupFailures.length === 0) {
     return;
   }
   const result = params.result;
-  const scenarios = result?.scenarios ?? [];
+  const scenarios = result?.scenarios ?? params.scenarios ?? [];
+  const scenariosCompleted = result !== undefined || params.scenarios !== undefined;
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
   const skipped = scenarios.filter((scenario) => scenario.status === "skip").length;
   const passed = scenarios.length - failed - skipped;
-  const cleanupHeadline = !result
+  const cleanupHeadline = !scenariosCompleted
     ? "QA suite cleanup failed before scenarios completed"
     : failed === 0 && skipped === 0
       ? "QA scenarios passed, but cleanup failed"
       : "QA scenarios completed, but cleanup failed";
   const message = [
     params.runFailed ? "QA suite and cleanup failed" : cleanupHeadline,
-    ...(result
+    ...(scenariosCompleted
       ? [
           `scenario counts: passed=${passed} failed=${failed} skipped=${skipped} total=${scenarios.length}`,
         ]
@@ -594,26 +568,3 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const { runQaFlowSuiteFromRuntime } = await import("./suite-run.runtime.js");
   return await runQaFlowSuiteFromRuntime(params);
 }
-
-export const qaSuiteProgressTesting = {
-  appendNodeOption,
-  buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
-  buildQaSuiteRuntimeMetrics,
-  createQaSuiteTransportAdapter,
-  createScenarioStepRunner: createQaSuiteScenarioStepRunner,
-  formatQaSuiteRunStartProgress,
-  mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
-  runQaFlowSuiteCleanupPlan,
-  runQaSuiteCleanupSteps,
-  throwQaSuiteCleanupErrors,
-  resolveQaSuiteControlUiEnabled,
-  scenarioRequiresControlUi,
-  resolveQaSuiteTransportReadyTimeoutMs,
-  sanitizeQaSuiteProgressValue,
-  shouldRunQaSuiteWithIsolatedScenarioWorkers,
-  shouldLogQaSuiteProgress,
-  waitForQaLabReadyOrStopOwned,
-  writeQaSuiteArtifacts,
-};

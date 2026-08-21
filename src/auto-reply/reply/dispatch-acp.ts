@@ -19,12 +19,15 @@ import {
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -46,12 +49,14 @@ import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
+import { consumeChannelRunAdmission } from "./channel-run-admission.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -471,6 +476,22 @@ export async function tryDispatchAcpReplyCore(params: {
   if (acpResolution.kind === "none") {
     return null;
   }
+  const pendingAnswerText = resolveAcpPromptText(params.ctx);
+  if (
+    pendingAnswerText &&
+    !params.images?.length &&
+    !params.extractedFileImages?.length &&
+    !hasInboundMediaForUnderstanding(params.ctx) &&
+    (await claimPendingAgentQuestionAnswer({
+      sessionKey: acpResolution.sessionKey,
+      text: pendingAnswerText,
+    }))
+  ) {
+    const counts = params.dispatcher.getQueuedCounts();
+    params.recordProcessed("completed", { reason: "acp_question_answer" });
+    params.markIdle("message_completed");
+    return { queuedFinal: false, counts };
+  }
   const canonicalSessionKey = acpResolution.sessionKey;
   const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
   const progressSessionKeys = isDiagnosticsEnabled(params.cfg)
@@ -802,15 +823,38 @@ export async function tryDispatchAcpReplyCore(params: {
     }
 
     turnDispatched = true;
+    const channelAdmission = consumeChannelRunAdmission(
+      readChannelContextAdmissionEvidence(params.ctx),
+    );
     admittedRunContext = await prepareAgentRunAdmission({
       cfg: params.cfg,
       operationalRunInstance: createOperationalRunInstanceRef(requestId),
       facts: {
         runId: requestId,
         agentId: acpAgentId,
-        ingress: { kind: "acp", boundary: "auto-reply.acp", state: "present" },
+        ingress: {
+          kind: "acp",
+          boundary: "auto-reply.acp",
+          state: channelAdmission.ingressState,
+        },
+        ...channelAdmission.facts,
       },
+      onAdmitted: channelAdmission.onAdmitted,
     }).admit("acp");
+    const turnAdmission = admittedRunContext;
+    const elicitationParams = {
+      sourceSessionKey: sessionKey,
+      targetSessionKey: canonicalSessionKey,
+      outerRequestId: requestId,
+      agentId: acpAgentId,
+      runId: auditRunId,
+      delivery,
+      isActive: () =>
+        params.abortSignal?.aborted !== true &&
+        admittedRunContext === turnAdmission &&
+        getAdmittedRunDelegatedAuthority(turnAdmission) !== undefined,
+    };
+    const onElicitation = createLazyAcpElicitationHandler(elicitationParams);
     await acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
@@ -827,6 +871,7 @@ export async function tryDispatchAcpReplyCore(params: {
       mode: "prompt",
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      onElicitation,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({
           runId: auditRunId,

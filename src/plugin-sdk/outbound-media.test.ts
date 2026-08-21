@@ -8,21 +8,16 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "./plugin-state-test-runtime.js";
-
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
-
 type OutboundMediaModule = typeof import("./outbound-media.js");
-
 let createHostedOutboundMediaStore: OutboundMediaModule["createHostedOutboundMediaStore"];
 let loadOutboundMediaFromUrl: OutboundMediaModule["loadOutboundMediaFromUrl"];
-
 beforeAll(async () => {
   const webMedia = await import("./web-media.js");
   vi.spyOn(webMedia, "loadWebMedia").mockImplementation(loadWebMediaMock);
   ({ createHostedOutboundMediaStore, loadOutboundMediaFromUrl } =
     await import("./outbound-media.js"));
 });
-
 afterAll(() => {
   vi.restoreAllMocks();
 });
@@ -39,6 +34,7 @@ describe("loadOutboundMediaFromUrl", () => {
       buffer: Buffer.from("x"),
       kind: "image",
       contentType: "image/png",
+      fileName: "floor-plan.png",
     });
 
     await loadOutboundMediaFromUrl("file:///tmp/image.png", {
@@ -121,24 +117,40 @@ describe("loadOutboundMediaFromUrl", () => {
 });
 
 describe("createHostedOutboundMediaStore", () => {
-  function createStore() {
-    return createHostedOutboundMediaStore({
-      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
-        namespace: "hosted-media",
+  function createStoreFixture(namespace = "hosted-media") {
+    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
+      "fixture-plugin",
+      {
+        namespace,
         maxEntries: 10,
-      }),
-      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
-        namespace: "hosted-media-chunks",
+      },
+    );
+    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
+      "fixture-plugin",
+      {
+        namespace: `${namespace}-chunks`,
         maxEntries: 100,
+      },
+    );
+    return {
+      metadataStore,
+      chunkStore,
+      store: createHostedOutboundMediaStore({
+        metadataStore,
+        chunkStore,
+        ttlMs: 120_000,
+        resolveExpiresAtMs: () => Date.now() + 120_000,
+        createId: () => "abc123abc123abc123abc123",
+        createToken: () => "token123",
+        rawChunkBytes: 4,
+        maxEntries: 10,
+        maxChunkRows: 100,
       }),
-      ttlMs: 120_000,
-      resolveExpiresAtMs: () => Date.now() + 120_000,
-      createId: () => "abc123abc123abc123abc123",
-      createToken: () => "token123",
-      rawChunkBytes: 4,
-      maxEntries: 10,
-      maxChunkRows: 100,
-    });
+    };
+  }
+
+  function createStore(namespace = "hosted-media") {
+    return createStoreFixture(namespace).store;
   }
 
   it("stores hosted media chunks and reads them back", async () => {
@@ -146,6 +158,7 @@ describe("createHostedOutboundMediaStore", () => {
       buffer: Buffer.from("image-bytes"),
       kind: "image",
       contentType: "image/png",
+      fileName: "floor-plan.png",
     });
     const store = createStore();
 
@@ -164,9 +177,123 @@ describe("createHostedOutboundMediaStore", () => {
       routePath: "/hook/media/",
       token: "token123",
       contentType: "image/png",
+      fileName: "floor-plan.png",
       byteLength: Buffer.byteLength("image-bytes"),
     });
     expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
+  });
+
+  it("validates the loaded bytes before persisting a capability", async () => {
+    const media = {
+      buffer: Buffer.from("active-bytes"),
+      kind: undefined,
+      contentType: "text/html",
+      fileName: "active.html",
+    };
+    loadWebMediaMock.mockResolvedValueOnce(media);
+    const store = createStore("hosted-media-validation");
+    const validateBeforePersist = vi.fn(() => {
+      throw new Error("active content rejected");
+    });
+
+    await expect(
+      store.prepareUrl({
+        mediaUrl: "https://example.com/active.html",
+        routePath: "/hook/media/",
+        publicBaseUrl: "https://gateway.example.com",
+        maxBytes: 1024,
+        validateBeforePersist,
+      }),
+    ).rejects.toThrow("active content rejected");
+
+    expect(validateBeforePersist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: media.buffer,
+        contentType: "text/html",
+        fileName: "active.html",
+      }),
+    );
+    await expect(store.readMetadata("abc123abc123abc123abc123")).resolves.toBeNull();
+  });
+
+  it("does not return metadata when deletion starts during lookup", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("image-bytes"),
+      kind: "image",
+      contentType: "image/png",
+    });
+    const { metadataStore, store } = createStoreFixture("pending-metadata-media");
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/photo.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 1024,
+    });
+    const originalLookup = metadataStore.lookup.bind(metadataStore);
+    let markLookupStarted: (() => void) | undefined;
+    let releaseLookup: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    const lookupReleased = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
+      const result = await originalLookup(key);
+      markLookupStarted?.();
+      await lookupReleased;
+      return result;
+    });
+
+    const pendingMetadata = store.readMetadata("abc123abc123abc123abc123");
+    await lookupStarted;
+    await store.delete("abc123abc123abc123abc123");
+    releaseLookup?.();
+
+    await expect(pendingMetadata).resolves.toBeNull();
+  });
+
+  it("lets an admitted complete read finish before deleting its chunks", async () => {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("image-bytes"),
+      kind: "image",
+      contentType: "image/png",
+    });
+    const { chunkStore, metadataStore, store } = createStoreFixture("atomic-reader-media");
+    await store.prepareUrl({
+      mediaUrl: "https://example.com/photo.png",
+      routePath: "/hook/media/",
+      publicBaseUrl: "https://gateway.example.com",
+      maxBytes: 1024,
+    });
+    const originalLookup = metadataStore.lookup.bind(metadataStore);
+    let markLookupStarted: (() => void) | undefined;
+    let releaseLookup: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    const lookupReleased = new Promise<void>((resolve) => {
+      releaseLookup = resolve;
+    });
+    vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
+      const result = await originalLookup(key);
+      markLookupStarted?.();
+      await lookupReleased;
+      return result;
+    });
+
+    const pendingRead = store.read("abc123abc123abc123abc123");
+    await lookupStarted;
+    await store.delete("abc123abc123abc123abc123");
+    expect(await metadataStore.entries()).toHaveLength(1);
+    expect(await chunkStore.entries()).toHaveLength(3);
+    releaseLookup?.();
+
+    await expect(pendingRead).resolves.toMatchObject({
+      buffer: Buffer.from("image-bytes"),
+    });
+    expect(await metadataStore.entries()).toEqual([]);
+    expect(await chunkStore.entries()).toEqual([]);
   });
 
   it("reads hosted metadata without hydrating chunk rows", async () => {
@@ -257,17 +384,11 @@ describe("createHostedOutboundMediaStore", () => {
     });
     const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
       "fixture-plugin",
-      {
-        namespace: "ttl-media",
-        maxEntries: 10,
-      },
+      { namespace: "ttl-media", maxEntries: 10 },
     );
     const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
       "fixture-plugin",
-      {
-        namespace: "ttl-media-chunks",
-        maxEntries: 100,
-      },
+      { namespace: "ttl-media-chunks", maxEntries: 100 },
     );
     const store = createHostedOutboundMediaStore({
       metadataStore,

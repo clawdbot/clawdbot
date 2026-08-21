@@ -73,9 +73,7 @@ async function runNonInteractiveMigrationImport(params: {
       }
       const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
       if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
-        throw new ConfigMutationConflictError("config changed during migration promotion", {
-          currentHash: latest.hash ?? null,
-        });
+        throw new ConfigMutationConflictError("config changed during migration promotion");
       }
       const committed = await replaceConfigFile({
         nextConfig: config,
@@ -87,6 +85,9 @@ async function runNonInteractiveMigrationImport(params: {
       return committed.nextConfig;
     },
   });
+  if (outcome.kind === "back") {
+    throw new Error("Non-interactive migration import cannot navigate back.");
+  }
   await outcome.acknowledgePromotion?.();
 }
 

@@ -13,6 +13,8 @@ Two paths:
 
 ## Easy path (CLI still installed)
 
+The command attempts independent requested cleanup scopes and returns a nonzero status if any scope fails or is blocked. Service teardown remains the safety gate for state and workspace deletion; if that gate fails, those data scopes are preserved while app cleanup is still attempted. Partial cleanup is reported explicitly and is never followed by an unconditional completion result.
+
 Recommended: use the built-in uninstaller:
 
 ```bash

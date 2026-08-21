@@ -37,8 +37,18 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => ({}),
 }));
 
+// Per-run unique + realpath'd state dir: the apply flow writes real report dirs under it and
+// the suite rm -rf's it, so concurrent runs on one machine must never share the root (macOS
+// os.tmpdir() is a /var -> /private/var symlink).
+const testStateDir = await vi.hoisted(async () => {
+  const { mkdtemp, realpath } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  return await realpath(await mkdtemp(join(tmpdir(), "openclaw-migrate-command-test-")));
+});
+
 vi.mock("../config/paths.js", () => ({
-  resolveStateDir: () => "/tmp/openclaw-migrate-command-test",
+  resolveStateDir: () => testStateDir,
 }));
 
 vi.mock("../cli/prompt.js", () => ({
@@ -290,7 +300,7 @@ describe("migrateApplyCommand", () => {
   const originalIsTty = process.stdin.isTTY;
 
   beforeEach(async () => {
-    await fs.rm("/tmp/openclaw-migrate-command-test", { force: true, recursive: true });
+    await fs.rm(testStateDir, { force: true, recursive: true });
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
       value: false,
@@ -317,7 +327,7 @@ describe("migrateApplyCommand", () => {
       configurable: true,
       value: originalIsTty,
     });
-    await fs.rm("/tmp/openclaw-migrate-command-test", { force: true, recursive: true });
+    await fs.rm(testStateDir, { force: true, recursive: true });
     vi.clearAllMocks();
   });
 
@@ -330,7 +340,7 @@ describe("migrateApplyCommand", () => {
 
   it("requires --yes in non-interactive apply mode", async () => {
     await expect(migrateApplyCommand(runtime, { provider: "hermes" })).rejects.toThrow(
-      "requires --yes",
+      "requires --yes in non-interactive mode. Preview first with openclaw migrate plan 'hermes'.",
     );
     expect(mocks.provider.plan).not.toHaveBeenCalled();
   });

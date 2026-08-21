@@ -6,7 +6,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
-import type { CronJob } from "../types.js";
+import type { CronCompletionStatus, CronJob } from "../types.js";
 import { locked } from "./locked.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, supersedeServiceCronRunReceipt } from "./run-receipts.js";
@@ -16,17 +16,14 @@ import { emit, type CronServiceState, type DeferredCronNotifications } from "./s
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import type { CronTriggerEvalOutcome, TimedCronRunOutcome } from "./timer-execution-timeout.js";
-import {
-  applyOutcomeToAuthoritativeJob,
-  applyOutcomeToStoredJob,
-  emitCronOutcomeEventForJob,
-  recordCronOutcomeForJob,
-} from "./timer-outcomes.js";
+import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
+import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
 
 type CronTaskRunFinalizationOutcome = {
   jobId: string;
   taskRunId?: string;
   status: "ok" | "error" | "skipped";
+  completionStatus?: CronCompletionStatus;
   error?: unknown;
   endedAt: number;
   summary?: string;

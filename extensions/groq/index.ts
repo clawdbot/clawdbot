@@ -80,7 +80,6 @@ function wrapGroqOversizedRequestRecovery(
     // retain the caller-visible throw semantics of the underlying transport.
     const initial = underlying(model, context, options);
     const output = createAssistantMessageEventStream();
-    const writable = output as unknown as { push(event: unknown): void; end(): void };
 
     void (async () => {
       try {
@@ -92,17 +91,17 @@ function wrapGroqOversizedRequestRecovery(
             retryWithoutTools = true;
             break;
           }
-          writable.push(event);
+          output.push(event);
           forwarded = true;
         }
         if (retryWithoutTools) {
           const fallback = await Promise.resolve(withoutTools(model, context, options));
           for await (const event of fallback) {
-            writable.push(event);
+            output.push(event);
           }
         }
       } catch (error) {
-        writable.push({
+        output.push({
           type: "error",
           reason: "error",
           error: {
@@ -125,7 +124,7 @@ function wrapGroqOversizedRequestRecovery(
           },
         });
       } finally {
-        writable.end();
+        output.end();
       }
     })();
 

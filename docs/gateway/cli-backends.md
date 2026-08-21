@@ -149,7 +149,7 @@ Under a restrictive policy, Claude asks OpenClaw over stdio before using one of 
 
 Claude Code can drive a Chrome browser through the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome), including [1Password for Claude](/gateway/1password#browser-sign-in-with-1password-for-claude) credential autofill. The bundled backend does not enable it; register a [CLI backend plugin](/plugins/cli-backend-plugins) that appends `--chrome` to the launch args of a `claude-stream-json`-dialect backend. OpenClaw preserves a configured `--chrome` on normal runs and always forces `--no-chrome` on runs with a restricted tool policy, such as side questions. The Chrome window, the extension, and any 1Password approval prompts live on the gateway host, so someone must be at that machine to approve credential use.
 
-The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
+The backend maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. For models that allow fixed thinking budgets, it also launches Claude Code with `MAX_THINKING_TOKENS`: `off=0`, `minimal=1024`, `low=2048`, `medium=8192`, `high`/`xhigh=16384`, and `max=32768`; positive fixed budgets disable adaptive thinking. Models that require adaptive thinking omit the fixed budget and continue to use `--effort`. `adaptive` removes configured effort flags and fixed-budget environment overrides, so Claude Code resolves effective thinking from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to map the selected level before `/think` affects the spawned CLI.
 
 Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
 
@@ -240,6 +240,10 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `systemPromptFileArg`    | `--append-system-prompt-file`                                                                                                                                                                                 |
 | `systemPromptMode`       | `append`                                                                                                                                                                                                      |
 
+On Claude Code 2.1.98 or newer, the bundled backend adds
+`--exclude-dynamic-system-prompt-sections` after its bounded Gateway-startup
+version probe. Older, unknown, or failed probes keep the established argv.
+
 The bundled Google plugin registers for `google-gemini-cli`:
 
 | Key                       | Value                                                                                  |
@@ -285,13 +289,27 @@ For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that ba
 
 Some CLI backends run an agent that compacts its own transcript, so OpenClaw must not run its safeguard summarizer against them — doing so fights the backend's own compaction and can hard-fail the turn.
 
-`claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true` and OpenClaw's compaction path returns the session entry unchanged. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
+`claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
 
 ```typescript
-api.registerCliBackend({ id: "my-cli", ownsNativeCompaction: true /* ... */ });
+api.registerCliBackend({
+  id: "my-cli",
+  ownsNativeCompaction: true,
+  manualCompaction: {
+    buildPrompt: (instructions) => (instructions ? `/compact ${instructions}` : "/compact"),
+    input: "arg",
+    validateOutput: (rawOutput) =>
+      rawOutput.includes('"type":"compaction_complete"')
+        ? { ok: true }
+        : { ok: false, reason: "CLI did not confirm compaction." },
+  },
+  // ...
+});
 ```
 
 Only declare `ownsNativeCompaction` for a backend that genuinely owns compaction: it must reliably bound its own transcript near the context window and persist a resumable session (e.g. `--resume` / `--session-id`), or a deferred session can stay over budget.
+
+Add the atomic `manualCompaction` capability only when its command compacts the resumed session in place. Its `input` selects the transport the backend command actually recognizes, and `validateOutput` must require a positive backend acknowledgement rather than treating a zero exit as success. OpenClaw runs it as an internal control operation: it is not written as a user turn and does not run agent or context-engine turn hooks.
 
 ## Bundle MCP overlays
 

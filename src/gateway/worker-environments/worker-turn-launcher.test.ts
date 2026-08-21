@@ -1,8 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
+  abortAndDrainEmbeddedAgentRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { createChatRunState } from "../server-chat-state.js";
+import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import {
+  ENVIRONMENT_ID,
+  MANIFEST_REF,
+  OWNER_EPOCH,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
@@ -119,57 +134,6 @@ describe("worker turn launcher local placement", () => {
     expect(placements.list()).toEqual([]);
   });
 
-  it("keeps recovery-only admission invisible for sessions without durable placement", async () => {
-    const provider = createWorkerSessionTurnPlacementProvider({
-      admitNewPlacements: false,
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-local" },
-      turn("run-local"),
-      async () => ({ meta: { durationMs: 1 } }),
-    );
-    await provider.executeLocalTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-cli" },
-      async () => ({ kind: "cli" }),
-    );
-
-    expect(placements.list()).toEqual([]);
-  });
-
-  it("still admits an existing local placement in recovery-only mode", async () => {
-    const seedClaim = placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      claimId: "seed-local-placement",
-      runId: "seed-local-placement",
-      owner: { kind: "local" },
-    });
-    placements.releaseTurn(seedClaim);
-    const provider = createWorkerSessionTurnPlacementProvider({
-      admitNewPlacements: false,
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await provider.executeTurn(
-      { sessionId: SESSION_ID, runId: "run-existing-local" },
-      turn("run-existing-local"),
-      async () => {
-        expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
-          owner: "local",
-          runId: "run-existing-local",
-        });
-        return { meta: { durationMs: 1 } };
-      },
-    );
-
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "local", turnClaim: null });
-  });
-
   it("holds a local placement claim around CLI execution", async () => {
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
@@ -257,6 +221,126 @@ describe("worker turn launcher local placement", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
+  it("releases a force-cleared embedded turn for archive without clearing its replacement", async () => {
+    const startedAt = Date.now() - 60_000;
+    setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
+    await upsertSessionEntryCore(sessionTarget, {
+      sessionId: SESSION_ID,
+      startedAt,
+      status: "running",
+      updatedAt: startedAt,
+    });
+    const runningEntry = loadSessionEntry(sessionTarget);
+    expect(runningEntry).toMatchObject({
+      sessionId: SESSION_ID,
+      startedAt,
+      status: "running",
+      updatedAt: expect.any(Number),
+    });
+    if (!runningEntry) {
+      throw new Error("expected running session entry");
+    }
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const oldRunStarted = createDeferred();
+    const finishOldRun = createDeferred();
+    const replacementStarted = createDeferred();
+    const finishReplacement = createDeferred();
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    };
+
+    const oldRun = provider.executeLocalTurn(
+      {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId: "run-force-cleared",
+      },
+      async () => {
+        setActiveEmbeddedRun(SESSION_ID, handle, SESSION_KEY);
+        oldRunStarted.resolve();
+        await finishOldRun.promise;
+      },
+    );
+    await oldRunStarted.promise;
+    const oldClaimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
+    expect(oldClaimId).toBeTruthy();
+
+    await expect(
+      abortAndDrainEmbeddedAgentRun({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        settleMs: 100,
+        forceClear: true,
+        reason: "stuck_recovery",
+      }),
+    ).resolves.toMatchObject({ forceCleared: true });
+    const killedEntry = loadSessionEntry(sessionTarget);
+    expect(killedEntry).toMatchObject({
+      sessionId: SESSION_ID,
+      status: "killed",
+      abortedLastRun: true,
+    });
+    expect(killedEntry?.updatedAt).toBeGreaterThan(runningEntry.updatedAt);
+
+    const context = {
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
+      cancelRunBoundApprovals: vi.fn(),
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      chatRunState: createChatRunState(),
+      dedupe: new Map(),
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+      nodeSendToSession: vi.fn(),
+      removeChatRun: vi.fn(),
+      workerSessionPlacementService: placements,
+    } as unknown as GatewayRequestContext;
+    const archiveDrain = await prepareSessionArchiveLifecycle({
+      context,
+      storePath: sessionTarget.storePath,
+      sessionKeys: [SESSION_KEY],
+      sessionId: SESSION_ID,
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      lifecycleIdentities: [SESSION_KEY, SESSION_ID],
+    });
+    expect(archiveDrain.hasAuthoritativeWork()).toBe(false);
+    archiveDrain.release();
+
+    const replacement = provider.executeLocalTurn(
+      {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId: "run-replacement",
+      },
+      async () => {
+        replacementStarted.resolve();
+        await finishReplacement.promise;
+      },
+    );
+    await replacementStarted.promise;
+    const replacementClaimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
+    expect(replacementClaimId).toBeTruthy();
+    expect(replacementClaimId).not.toBe(oldClaimId);
+
+    finishOldRun.resolve();
+    await oldRun;
+    expect(placements.get(SESSION_ID)?.turnClaim?.claimId).toBe(replacementClaimId);
+
+    finishReplacement.resolve();
+    await replacement;
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
+
   it("rejects local CLI execution after worker activation", async () => {
     seedActivePlacement();
     const environments = unusedEnvironments();
@@ -319,6 +403,131 @@ describe("worker turn launcher local placement", () => {
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     },
   );
+
+  it("runs an active remote-exec placement locally and reconciles before releasing its claim", async () => {
+    seedActivePlacement("remote-exec");
+    const order: string[] = [];
+    const launchTurn = vi.fn();
+    const quiesceWorkspace = vi.fn(async () => {
+      order.push("quiesce");
+      return {
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {
+          order.push("resume");
+        }),
+      };
+    });
+    const reconcileWorkspace = vi.fn(
+      async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+        order.push("reconcile");
+        request.journal.commit(MANIFEST_REF);
+        return {
+          manifestRef: MANIFEST_REF,
+          changed: false,
+          verifyStable: vi.fn(async () => {}),
+          verifyLocalStable: vi.fn(async () => {}),
+        };
+      },
+    );
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      launchTurn,
+      runWorkspaceCommand: vi.fn(),
+      quiesceWorkspace,
+      syncWorkspace: vi.fn(),
+      reconcileWorkspace,
+      stop: vi.fn(async () => {}),
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runLocal = vi.fn(async () => {
+      order.push("local");
+      return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
+    });
+
+    await provider.executeTurn(
+      {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        runId: "run-remote-exec",
+      },
+      turn("run-remote-exec"),
+      runLocal,
+    );
+
+    expect(order).toEqual(["local", "quiesce", "reconcile", "resume"]);
+    expect(launchTurn).not.toHaveBeenCalled();
+    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    const placement = placements.get(SESSION_ID);
+    expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
+  });
+
+  it("records a remote-exec reconciliation failure and releases its local claim", async () => {
+    seedActivePlacement("remote-exec");
+    const reconciliationError = new Error("workspace manifest memo exceeds its entry limit");
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      launchTurn: vi.fn(),
+      runWorkspaceCommand: vi.fn(),
+      quiesceWorkspace: vi.fn(async () => ({
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {}),
+      })),
+      syncWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(async () => {
+        throw reconciliationError;
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
+    const reconcileActivePlacement = vi.fn(async () => {
+      const placement = placements.get(SESSION_ID);
+      if (placement?.state !== "failed" || placement.turnClaim !== null) {
+        throw new Error("expected terminal placement before teardown recovery");
+      }
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement,
+    });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-remote-exec-reconcile-failure",
+        },
+        turn("run-remote-exec-reconcile-failure"),
+        async () => ({ payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow(
+      "Cloud worker finished, but its workspace result could not be reconciled: workspace manifest memo exceeds its entry limit",
+    );
+
+    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      terminalReason: expect.stringContaining("workspace manifest memo exceeds its entry limit"),
+    });
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+  });
 
   it("rejects a reused worker bundle without execution context before launch", async () => {
     seedActivePlacement();

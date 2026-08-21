@@ -7,6 +7,8 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
+import { formatCliJsonFailure } from "./failure-output.js";
+import { runCliWithExitFinalization } from "./one-shot-exit.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,9 +19,10 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [] as string[],
   })),
   renderTerminal: vi.fn(async () => "ASCII-QR"),
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
+    setupId: "setup-123",
   })),
 }));
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -45,13 +48,13 @@ vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
+  issueDevicePairSetupBootstrapToken: mocks.issueDevicePairSetupBootstrapToken,
 }));
 const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
 const renderTerminal = mocks.renderTerminal;
-const issueDeviceBootstrapToken = mocks.issueDeviceBootstrapToken;
+const issueDevicePairSetupBootstrapToken = mocks.issueDevicePairSetupBootstrapToken;
 
 const { registerQrCli } = await import("./qr-cli.js");
 
@@ -215,7 +218,7 @@ describe("registerQrCli", () => {
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
   });
@@ -231,7 +234,7 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only", "--limited"]);
 
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({
         profile: {
           roles: ["node", "operator"],
@@ -258,24 +261,61 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only", "--voice-node"]);
 
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
   });
 
-  it("rejects combining --limited with --voice-node", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+  const conflictingQrOptions = [
+    {
+      name: "access profiles",
+      args: ["--limited", "--voice-node"],
+      message: "Use either --limited or --voice-node, not both.",
+    },
+    {
+      name: "authentication overrides",
+      args: ["--token", "test-token", "--password", "test-password"],
+      message: "Use either --token or --password, not both.",
+    },
+  ];
 
-    await expect(runQr(["--setup-code-only", "--limited", "--voice-node"])).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Error: Use either --limited or --voice-node, not both.",
-    );
+  it.each(conflictingQrOptions)("rejects conflicting $name in human mode", async (testCase) => {
+    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toThrow("exit");
+
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith(testCase.message);
+    expect(runtimeExit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(loadConfig).not.toHaveBeenCalled();
+  });
+
+  it.each(conflictingQrOptions)("renders conflicting $name as canonical JSON", async (testCase) => {
+    const args = ["--json", ...testCase.args];
+    const originalArgv = process.argv;
+    let exitCode: number | undefined;
+    process.argv = ["node", "openclaw", "qr", ...args];
+    try {
+      await runCliWithExitFinalization({
+        runtime,
+        run: async () => await runQr(args),
+        onError: (error) => {
+          runtime.writeJson(formatCliJsonFailure(error));
+          exitCode = 1;
+        },
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    const expected = {
+      ok: false,
+      error: { type: "cli_error", message: testCase.message },
+    };
+    expect(exitCode).toBe(1);
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(runtimeLog).toHaveBeenCalledOnce();
+    expect(JSON.parse(readRuntimeCallText(runtimeLog.mock.calls[0]))).toEqual(expected);
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(runtimeExit).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 
   it("renders ASCII QR by default", async () => {
@@ -332,7 +372,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only"]);
 
     expectLoggedSetupCode("ws://192.168.1.8:18789");
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();
@@ -349,7 +389,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
 
     expectLoggedSetupCode("ws://10.0.2.2:18789");
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();

@@ -143,11 +143,18 @@ export function buildCliMcpGrantContext(params: {
     // Restricted runs get their allowlist stamped into the grant; the
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    ...(params.run.skillWorkshopProposalRevision
+      ? { skillWorkshop: { proposalRevision: params.run.skillWorkshopProposalRevision } }
+      : {}),
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
       : {}),
+    ...(params.run.cronCreatorCallerOrigin
+      ? { cronCreatorCallerOrigin: { ...params.run.cronCreatorCallerOrigin } }
+      : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.run.modelHasVision,
     messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     currentChannelId,
@@ -156,6 +163,7 @@ export function buildCliMcpGrantContext(params: {
       params.run.currentMessageId == null
         ? undefined
         : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
+    replyToMode: params.run.replyToMode,
     currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
     accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
     inboundEventKind: params.run.currentInboundEventKind,

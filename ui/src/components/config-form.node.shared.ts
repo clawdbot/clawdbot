@@ -8,7 +8,8 @@ import { t } from "../i18n/index.ts";
 import "../components/tooltip.ts";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
-import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -82,6 +83,10 @@ export function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+export function formatConfigValueText(value: unknown): string {
+  return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
 export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
@@ -315,7 +320,7 @@ export function renderSchemaDefaultDescription(
     return nothing;
   }
   return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
-    value: formatUnknownText(schema.default),
+    value: formatConfigValueText(schema.default),
   })}`;
 }
 
@@ -384,7 +389,7 @@ export function renderSegmentedControl(params: {
 export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
   const presentsBooleanState = options.includes(true) && options.includes(false);
   if (!presentsBooleanState) {
-    return formatUnknownText(option);
+    return formatConfigValueText(option);
   }
   if (option === true) {
     return t("configForm.enumOn");
@@ -392,7 +397,7 @@ export function configEnumOptionLabel(option: unknown, options: readonly unknown
   if (option === false) {
     return t("configForm.enumOff");
   }
-  return option === "auto" ? t("configForm.enumAuto") : formatUnknownText(option);
+  return option === "auto" ? t("configForm.enumAuto") : formatConfigValueText(option);
 }
 
 export function renderJsonTextareaControl(params: {
@@ -460,7 +465,11 @@ export function renderJsonTextareaControl(params: {
         const previous = jsonTextareaState.get(element);
         if (
           previous &&
-          (!Object.is(previous.sourceValue, params.sourceValue) ||
+          // Content equality for the value: an autosave ack clones the form,
+          // so identity churn with identical bytes must not erase in-progress
+          // (possibly not-yet-valid) JSON the operator is typing.
+          ((!Object.is(previous.sourceValue, params.sourceValue) &&
+            !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
             !Object.is(previous.rowIdentity, params.rowIdentity) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)

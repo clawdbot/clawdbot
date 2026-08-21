@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasAgentRosterProperty,
   listAgentEntries,
+  listAgentEntriesWithSource,
   readAgentRosterProperty,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
@@ -12,8 +13,16 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
+import { containsEnvVarReference } from "./env-substitution.js";
+import { coerceConfig } from "./io.read-helpers.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
+import {
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+  hasUnresolvedConfigPathInSubtree,
+} from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -901,20 +910,29 @@ function assertCanonicalAgentRosterRetainsEntries(params: {
 
 type ProjectedRosterValue = { present: false } | { present: true; value: unknown };
 
-function containsAuthoredRosterReference(value: unknown): boolean {
+function containsAuthoredRosterReference(value: unknown, includeEnvStrings: boolean): boolean {
   if (typeof value === "string") {
-    return value.includes("${");
+    return includeEnvStrings && containsEnvVarReference(value);
   }
   if (Array.isArray(value)) {
-    return value.some(containsAuthoredRosterReference);
+    return value.some((entry) => containsAuthoredRosterReference(entry, includeEnvStrings));
   }
   if (!isRecord(value)) {
     return false;
   }
-  if (typeof value.source === "string" && typeof value.id === "string") {
-    return true;
-  }
-  return Object.values(value).some(containsAuthoredRosterReference);
+  return (
+    isSecretRefShape(value) ||
+    Object.values(value).some((entry) => containsAuthoredRosterReference(entry, includeEnvStrings))
+  );
+}
+
+function indexAgentRosterSourcePaths(config: OpenClawConfig): Map<string, string> {
+  return new Map(
+    listAgentEntriesWithSource(config).map(({ entry, source }) => [
+      normalizeAgentId(entry.id),
+      source.kind === "list" ? `agents.list[${source.index}]` : `agents.entries.${source.key}`,
+    ]),
+  );
 }
 
 function projectAuthoredRosterValue(params: {
@@ -1099,6 +1117,11 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     listAgentEntries(params.nextConfig as OpenClawConfig),
   ) as Record<string, unknown>;
   const explicitRoster = readAgentRosterProperty(params.valueSource);
+  const rosterFactOwner = coerceConfig(
+    params.sourceConfigBeforeMigrations ?? params.rootAuthoredConfig,
+  );
+  const sourcePathsByAgentId = indexAgentRosterSourcePaths(rosterFactOwner);
+  const resolutionEvaluated = getConfigResolutionFacts(rosterFactOwner) !== null;
   const renamedLegacyIndexes = new Set(
     (params.explicitSetPaths ?? []).flatMap((path) => {
       if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
@@ -1133,7 +1156,12 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
         ? explicitRoster.value[index]
         : undefined;
-    if (isRecord(entry) && typeof entry.id === "string" && entry.id.includes("${")) {
+    if (
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      (hasUnresolvedConfigPath(rosterFactOwner, `agents.list[${index}].id`) ||
+        (!resolutionEvaluated && containsEnvVarReference(entry.id)))
+    ) {
       throw new Error(
         "Config write cannot safely resolve an env-backed renamed agent id; set the resolved literal id or rename the authored entry directly.",
       );
@@ -1156,7 +1184,10 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         return resolvedEntry.id;
       }
     }
-    return explicitId.includes("${") ? undefined : explicitId;
+    return hasUnresolvedConfigPath(rosterFactOwner, `agents.list[${index}].id`) ||
+      containsEnvVarReference(explicitId)
+      ? undefined
+      : explicitId;
   };
   if (explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)) {
     const normalizedIds = new Set<string>();
@@ -1300,7 +1331,13 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const ambiguousRemovedIds = removedIds.filter((id) => !claimedPriorIds.has(id));
   if (
     ambiguousAddedIds.length > 0 &&
-    ambiguousRemovedIds.some((id) => containsAuthoredRosterReference(authoredEntries[id]))
+    ambiguousRemovedIds.some((id) => {
+      const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(id));
+      return (
+        containsAuthoredRosterReference(authoredEntries[id], !resolutionEvaluated) ||
+        Boolean(sourcePath && hasUnresolvedConfigPathInSubtree(rosterFactOwner, sourcePath))
+      );
+    })
   ) {
     throw new Error(
       "Config write cannot safely match renamed agent entries with authored references; rename agents one at a time.",
@@ -1326,9 +1363,14 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       const value = projected.present ? projected.value : nextEntry;
       if (isRecord(value) && isRecord(nextEntry)) {
         if (Object.hasOwn(nextEntry, "default")) {
+          const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(priorId));
           const preservesAuthoredReference =
             Object.hasOwn(value, "default") &&
-            containsAuthoredRosterReference(value.default) &&
+            (containsAuthoredRosterReference(value.default, !resolutionEvaluated) ||
+              Boolean(
+                sourcePath &&
+                hasUnresolvedConfigPathInSubtree(rosterFactOwner, `${sourcePath}.default`),
+              )) &&
             ((Object.hasOwn(runtimeEntries, priorId) &&
               isRecord(runtimeEntries[priorId]) &&
               isDeepStrictEqual(runtimeEntries[priorId].default, nextEntry.default)) ||

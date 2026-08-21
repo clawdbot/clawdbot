@@ -178,6 +178,7 @@ export class MemoryDB {
     vector: number[],
     limit = 5,
     minScore = 0.5,
+    executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
@@ -186,7 +187,7 @@ export class MemoryDB {
     const results = await this.table!.vectorSearch(vector)
       .where(memoryAgentPredicate(agentId))
       .limit(limit)
-      .toArray();
+      .toArray(executionOptions);
 
     const mapped = results.map((row) => {
       const distance = row["_distance"] ?? 0;
@@ -256,11 +257,8 @@ export class MemoryDB {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     const predicate = scopedPredicate(agentId, { column: "id", operator: "=", value: id });
-    if ((await this.table!.countRows(predicate)) === 0) {
-      return false;
-    }
-    await this.table!.delete(predicate);
-    return true;
+    const result = await this.table!.delete(predicate);
+    return result.numDeletedRows > 0;
   }
 
   async count(agentId: string): Promise<number> {

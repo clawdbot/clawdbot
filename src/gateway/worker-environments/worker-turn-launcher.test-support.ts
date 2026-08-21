@@ -6,6 +6,7 @@ import {
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { clearRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
@@ -23,6 +24,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export type WorkerTurnLauncherOptions = Parameters<
   typeof createRawWorkerSessionTurnPlacementProvider
@@ -77,6 +79,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
 export async function cleanupWorkerTurnLauncherTest(): Promise<void> {
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
+  clearRuntimeConfigSnapshot();
   closeOpenClawStateDatabaseForTest();
   resetAgentEventsForTest();
   await testState.cleanup();
@@ -92,12 +95,25 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
   return target;
 }
 
+type DefaultedWorkerTurnLauncherOption =
+  | "reconcileActivePlacement"
+  | "redispatchReclaimed"
+  | "resolveWorkspacePath"
+  | "workspaceOperations";
+
 export function createWorkerSessionTurnPlacementProvider(
-  options: Omit<WorkerTurnLauncherOptions, "resolveWorkspacePath"> &
-    Partial<Pick<WorkerTurnLauncherOptions, "resolveWorkspacePath">>,
+  options: Omit<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption> &
+    Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
   return createRawWorkerSessionTurnPlacementProvider({
+    reconcileActivePlacement: async () => {
+      throw new Error("unexpected active placement reconciliation");
+    },
+    redispatchReclaimed: async () => {
+      throw new Error("unexpected reclaimed placement redispatch");
+    },
     resolveWorkspacePath: async () => root,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
 }
@@ -106,11 +122,14 @@ export function openSessionManager(): SessionManager {
   return SessionManager.open(sessionTarget);
 }
 
-export function seedActivePlacement(): void {
+export function seedActivePlacement(
+  executionMode: "worker-turn" | "remote-exec" = "worker-turn",
+): void {
   let placement = placements.startDispatch({
     sessionId: SESSION_ID,
     sessionKey: sessionTarget.sessionKey,
     agentId: sessionTarget.agentId,
+    executionMode,
   });
   placement = placements.transition({
     sessionId: SESSION_ID,
@@ -182,6 +201,8 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     profileId: "development",
     profileSnapshot: { settings: { region: "test" } },
     provisionOperationId: "provision-worker-turn",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
@@ -250,6 +271,9 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpected = () => new Error("unexpected worker environment call");
   return {
     get: vi.fn(() => undefined),
+    resolveSshIdentity: vi.fn(async () => {
+      throw unexpected();
+    }),
     acquireTurnCredential: vi.fn(async () => {
       throw unexpected();
     }),
@@ -301,6 +325,8 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     sessionFile,
     sessionTarget,
     workspaceDir: root,
+    permissionMode: "workspace" as const,
+    sessionRoot: root,
     prompt: "Inspect this workspace",
     timeoutMs: 5_000,
     runId,

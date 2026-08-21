@@ -37,12 +37,24 @@ vi.mock("../plugins/status.js", () => ({
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
-  listTaskFlowRecords: () => mocks.listTaskFlowRecords(),
+vi.mock("../tasks/task-flow-registry.store.sqlite.js", () => ({
+  loadTaskFlowRegistryStateFromSqliteReadOnly: () => ({
+    flows: new Map(
+      mocks.listTaskFlowRecords().map((flow) => [(flow as { flowId: string }).flowId, flow]),
+    ),
+  }),
 }));
 
-vi.mock("../tasks/runtime-internal.js", () => ({
-  listTasksForFlowId: (flowId: string) => mocks.listTasksForFlowId(flowId),
+vi.mock("../tasks/task-registry.store.sqlite.js", () => ({
+  loadTaskRegistryStateFromSqliteReadOnly: () => ({
+    tasks: new Map(
+      mocks
+        .listTaskFlowRecords()
+        .flatMap((flow) => mocks.listTasksForFlowId((flow as { flowId: string }).flowId))
+        .map((task) => [(task as { taskId: string }).taskId, task]),
+    ),
+    deliveryStates: new Map(),
+  }),
 }));
 
 async function runNoteWorkspaceStatusForTest(

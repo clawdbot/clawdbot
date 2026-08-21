@@ -58,6 +58,8 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   /** Force the terminal hatch instead of the guided browser handoff. */
   tui?: boolean;
   workspace?: string;
+  /** Name for the first persisted agent; defaults to `main` in non-interactive setup. */
+  agentName?: string;
   nonInteractive?: boolean;
   /** Required for non-interactive setup; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;
@@ -91,7 +93,6 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
   tailscale?: TailscaleMode;
-  tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
   skipChannels?: boolean;
@@ -105,6 +106,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;
   remoteToken?: string;
+  remotePassword?: string;
   importFrom?: string;
   importSource?: string;
   importSecrets?: boolean;

@@ -12,7 +12,7 @@ export function renderSessionAttentionIcon(attention: SidebarSessionAttention) {
     attention.kind === "question"
       ? icons.hand
       : attention.kind === "approval"
-        ? icons.key
+        ? icons.shieldQuestion
         : attention.kind === "agent"
           ? resolveSessionAttentionIcon(attention.icon)
           : icons.alertTriangle;
@@ -51,14 +51,28 @@ export function renderSessionUnreadState(session: SidebarRecentSession) {
     : nothing;
 }
 
+export function renderSessionRunSpinner(showTitle = true) {
+  return html`<span
+    class="session-run-spinner sidebar-recent-session__state"
+    role="img"
+    aria-label=${t("sessionsView.activeRun")}
+    title=${showTitle ? t("sessionsView.activeRun") : nothing}
+  ></span>`;
+}
+
 export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
   if (session.hasActiveRun) {
-    return html`<span
-      class="session-run-spinner sidebar-recent-session__state"
-      role="img"
-      aria-label=${t("sessionsView.activeRun")}
-      title=${showTitle ? t("sessionsView.activeRun") : nothing}
-    ></span>`;
+    if (session.status === "queued") {
+      const label = t("sessionsView.statusQueued");
+      return html`<span
+        class="sidebar-child-session__status sidebar-child-session__status--queued"
+        role="img"
+        aria-label=${label}
+        title=${showTitle ? label : nothing}
+        >${icons.hourglass}</span
+      >`;
+    }
+    return renderSessionRunSpinner(showTitle);
   }
   if (!session.isChild) {
     return renderSessionUnreadState(session);

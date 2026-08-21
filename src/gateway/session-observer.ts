@@ -1,6 +1,10 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+  isDefinitiveRunLifecycle,
+} from "../agents/agent-run-terminal-outcome.js";
+import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
@@ -20,7 +24,6 @@ import {
   defaultPersistDigest,
   defaultPrepareModel,
   defaultReadSession,
-  isTerminalLifecycleEvent,
   markSessionObserverRunSuperseded,
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
@@ -64,9 +67,14 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const supersededRuns = new Map<string, number>();
   const contextlessTerminalRuns = new Map<string, number>();
   const terminalRuns = new Map<string, number>();
+  const pendingTerminalErrors = new Map<string, ReturnType<typeof setTimeout>>();
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
+  const clearPendingTerminalError = (runId: string) => {
+    clearTimeoutFn(pendingTerminalErrors.get(runId));
+    pendingTerminalErrors.delete(runId);
+  };
   const getCompanionSnapshot = createSessionObserverCompanionSnapshotReader({
     getConfig: deps.getConfig,
     readSession,
@@ -213,8 +221,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   };
 
   const suspendStatesWithoutAudience = () => {
-    // suspendState deletes from `states`; Map iteration tolerates removal of
-    // the entry being visited.
+    // Map iteration tolerates suspendState deleting the current entry.
     for (const state of states.values()) {
       if (!audience.has(state.sessionKey, state.agentId)) {
         suspendState(state);
@@ -333,8 +340,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     state.lastRunAt = now();
     const lastSelectedSequence = selectedNotes.at(-1)?.sequence ?? state.lastDigestNoteSequence;
     const retireSelectedNotes = () => {
-      // Run rollover replaces the state object, and inFlight serializes its slots;
-      // stale work can only retire this run's own notes, monotonically.
+      // Run rollover replaces state; inFlight keeps its note retirement monotonic.
       state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
     };
     const requestGeneration = modelSlots.beginRequest(state);
@@ -515,11 +521,22 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     return state;
   };
 
-  const handleEvent = (event: SessionObserverEvent) => {
+  const handleEvent = (event: SessionObserverEvent, settledError = false) => {
     if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
     }
-    const terminal = isTerminalLifecycleEvent(event);
+    const lifecyclePhase = event.stream === "lifecycle" ? event.data.phase : undefined;
+    const terminal =
+      settledError || isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: event.data });
+    if (lifecyclePhase === "error" && !terminal) {
+      clearPendingTerminalError(event.runId);
+      const timer = setTimeoutFn(() => handleEvent(event, true), AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+      pendingTerminalErrors.set(event.runId, timer);
+      return;
+    }
+    if (terminal || lifecyclePhase === "start") {
+      clearPendingTerminalError(event.runId);
+    }
     if (terminalRuns.has(event.runId)) {
       return;
     }
@@ -589,6 +606,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         revisionFloor = candidate;
       }
       const supersededRunId = state.runId;
+      clearPendingTerminalError(supersededRunId);
       if (isRunStart) {
         markSessionObserverRunSuperseded(supersededRuns, supersededRunId, event.ts);
       }
@@ -618,6 +636,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         }
         for (const run of superseded) {
           markSessionObserverRunSuperseded(supersededRuns, run.runId, event.ts);
+          clearPendingTerminalError(run.runId);
           dormantRuns.delete(run.runId);
         }
       }
@@ -706,6 +725,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getCompanionSnapshot,
     dispose() {
       disposed = true;
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       preamblePublisher.dispose();
       unsubscribeChanges();
       for (const state of states.values()) {

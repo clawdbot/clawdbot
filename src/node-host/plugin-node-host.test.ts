@@ -6,6 +6,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import {
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
+  notifyRegisteredNodeHostCommandDisconnect,
   watchRegisteredNodeHostCommandAvailability,
 } from "./plugin-node-host.js";
 
@@ -239,6 +240,22 @@ describe("plugin node-host registry", () => {
     expect(scopedRegistry).toHaveBeenNthCalledWith(1, registry);
     expect(scopedRegistry).toHaveBeenNthCalledWith(2, registry);
     expect(scopedRegistry).toHaveBeenNthCalledWith(3, registry);
+  });
+
+  it("notifies each shared plugin disconnect owner once", async () => {
+    const onDisconnect = vi.fn(async () => {});
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = ["screen.snapshot", "computer.act"].map((command) => ({
+      pluginId: "computer",
+      pluginName: "Computer",
+      command: { command, onDisconnect, handle: vi.fn(async () => "{}") },
+      source: "test",
+    }));
+    setActivePluginRegistry(registry);
+
+    await notifyRegisteredNodeHostCommandDisconnect();
+
+    expect(onDisconnect).toHaveBeenCalledOnce();
   });
 
   it("dispatches plugin-declared node-host commands", async () => {

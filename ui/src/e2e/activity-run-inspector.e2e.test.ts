@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import {
@@ -182,6 +182,23 @@ async function screenshot(page: Page, name: string) {
   });
 }
 
+async function measureWithinAncestor(element: Locator, ancestorSelector: string) {
+  return element.evaluate((node, selector) => {
+    const ancestor = node.closest<HTMLElement>(selector);
+    if (!ancestor) {
+      throw new Error(`Expected element inside ${selector}`);
+    }
+    const elementBounds = node.getBoundingClientRect();
+    const ancestorBounds = ancestor.getBoundingClientRect();
+    return {
+      ancestorBottom: ancestorBounds.bottom,
+      ancestorTop: ancestorBounds.top,
+      elementBottom: elementBounds.bottom,
+      elementTop: elementBounds.top,
+    };
+  }, ancestorSelector);
+}
+
 describeControlUiE2e("Control UI durable Activity run inspector", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -213,12 +230,13 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
-      const runTab = page.getByRole("tab", { name: "Run inspector" });
-      await expect.poll(() => runTab.getAttribute("aria-selected")).toBe("true");
-      const modePanel = page.getByRole("tabpanel");
-      await expect
-        .poll(() => modePanel.getAttribute("aria-labelledby"))
-        .toBe("activity-mode-tab-run");
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+      const modePanel = page.locator("#activity-mode-panel");
+      expect(await modePanel.getAttribute("role")).toBeNull();
+      expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
+      const backToSessions = page.getByRole("link", { name: "Back to sessions" });
+      await backToSessions.waitFor();
+      expect(await backToSessions.getAttribute("href")).toBe("/activity");
       await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
       for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
         await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
@@ -254,6 +272,10 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
+      await backToSessions.click();
+      await page.getByRole("tab", { name: "Sessions" }).waitFor();
+      expect(await page.getByRole("tab").count()).toBe(2);
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
       const liveTab = page.getByRole("tab", { name: "Live activity" });
       await liveTab.focus();
       await expect
@@ -264,7 +286,11 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
-      expect(new URL(page.url()).search).toBe("");
+      expect(new URL(page.url()).search).toBe("?view=live");
+      await page.goBack();
+      await expect
+        .poll(() => page.getByRole("tab", { name: "Sessions" }).getAttribute("aria-selected"))
+        .toBe("true");
       await page.goBack();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
     } finally {
@@ -278,7 +304,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     const gateway = await installMockGateway(page, { sessionKey: "main" });
 
     try {
-      await page.goto(`${server.baseUrl}activity`);
+      await page.goto(`${server.baseUrl}activity?view=live`);
       await page.getByText("No activity yet.", { exact: true }).waitFor();
 
       for (let index = 0; index < 40; index += 1) {
@@ -404,15 +430,18 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
           ),
         )
         .toBeLessThanOrEqual(1);
-      const finalContentPosition = await Promise.all([
-        inspector.boundingBox(),
-        finalReceiptContent.boundingBox(),
-      ]);
-      expect(finalContentPosition[0]).not.toBeNull();
-      expect(finalContentPosition[1]).not.toBeNull();
-      expect(finalContentPosition[1]!.y).toBeGreaterThanOrEqual(finalContentPosition[0]!.y);
-      expect(finalContentPosition[1]!.y + finalContentPosition[1]!.height).toBeLessThanOrEqual(
-        finalContentPosition[0]!.y + finalContentPosition[0]!.height + 1,
+      const finalContentPosition = await measureWithinAncestor(
+        finalReceiptContent,
+        ".run-inspector",
+      );
+      expect(finalContentPosition.elementTop).toBeGreaterThanOrEqual(
+        finalContentPosition.ancestorTop,
+      );
+      // Bound is 2, not 1: the scroll poll above tolerates a <=1px remainder
+      // (scrollHeight/clientHeight are integer-rounded) and the rects here are
+      // fractional, so sub-pixel rendering can add up to another pixel.
+      expect(finalContentPosition.elementBottom).toBeLessThanOrEqual(
+        finalContentPosition.ancestorBottom + 2,
       );
       await screenshot(page, "14-bounded-run-inspector.png");
 

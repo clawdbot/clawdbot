@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -59,6 +60,8 @@ function resolveBuzzProfileName(params: {
 }
 
 export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  const buildContext = channelRuntime?.inbound.buildContext;
   const account = resolveBuzzAccount({
     cfg: ctx.cfg,
     accountId: ctx.account.accountId,
@@ -103,7 +106,14 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
+          await handleBuzzInbound({
+            account,
+            cfg: ctx.cfg,
+            bus: sessionBus,
+            message,
+            signal,
+            buildContext,
+          });
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);
@@ -164,10 +174,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       }
       cycleError = error instanceof Error ? error : new Error(String(error));
     } finally {
-      await bus?.close();
+      // Retire before fallible async shutdown so new work cannot reacquire this bus.
       if (activeBuses.get(account.accountId) === bus) {
         activeBuses.delete(account.accountId);
       }
+      await bus?.close();
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
