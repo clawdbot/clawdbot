@@ -75,6 +75,11 @@ on:
         required: false
         default: ""
         type: string
+      cleanup_probe:
+        description: Prove an external failed command still releases its Crabbox lease
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -91,6 +96,9 @@ env:
   KOVA_CANONICAL_CONFIG_REF: 81919463ef9620722373c813192c688573f2b533
   KOVA_LEGACY_LIST_CONFIG_REF: 81919463ef9620722373c813192c688573f2b533
   KOVA_TRUSTED_LIVE_REF: 81919463ef9620722373c813192c688573f2b533
+  OPENCLAW_CANONICAL_CONFIG_SINCE: edecdbd05efc98c4f580309ac89e8459462f00c9
+  CRABBOX_COMMIT: 8ba71f913bbe57285ae29af45ef0d8ec6712477d
+  CRABBOX_VERSION: 0.46.0+8ba71f913bbe
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -110,88 +118,70 @@ jobs:
       kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
       secret_eligible: ${{ steps.candidate_trust.outputs.secret_eligible }}
       cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
+      external_required: ${{ steps.candidate_trust.outputs.external_required }}
     steps:
       - name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
 
-      - name: Checkout target metadata
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.target_ref || github.sha }}
-          path: .artifacts/performance-target
-          sparse-checkout: src/config/zod-schema.agent-defaults.ts
-          sparse-checkout-cone-mode: false
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Resolve OpenClaw target ref
         id: resolve
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_REF_INPUT: ${{ inputs.target_ref }}
-          TARGET_CHECKOUT_DIR: ${{ github.workspace }}/.artifacts/performance-target
           KOVA_REF_INPUT: ${{ inputs.kova_ref }}
           KOVA_CONFIG_CONTRACT_INPUT: ${{ inputs.kova_config_contract }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
+          tested_ref="${TARGET_REF_INPUT:-$GITHUB_REF_NAME}"
           requested="${TARGET_REF_INPUT:-}"
-          if [[ "$requested" == *$'\n'* || "$requested" == *$'\r'* ]]; then
-            echo "::error::target_ref must be a single line."
-            exit 1
-          fi
-          resolved_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
-          tested_ref="${requested:-$GITHUB_REF_NAME}"
-          if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
-            exit 1
-          fi
+          [[ "$requested" != *$'\n'* && "$requested" != *$'\r'* ]] ||
+            { echo "::error::target_ref must be a single line."; exit 1; }
+          requested="${requested:-$WORKFLOW_SHA}"
+          encoded_ref="$(jq -rn --arg value "$requested" '$value | @uri')"
+          resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
+          [[ "$resolved_sha" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."; exit 1; }
 
           kova_ref="${KOVA_REF_INPUT:-}"
           kova_config_contract="${KOVA_CONFIG_CONTRACT_INPUT:-}"
-          if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
-            echo "::error::kova_ref must be a single line."
-            exit 1
-          fi
-          if [[ "$kova_config_contract" == *$'\n'* || "$kova_config_contract" == *$'\r'* ]]; then
-            echo "::error::kova_config_contract must be a single line."
-            exit 1
-          fi
-
+          [[ "$kova_ref" != *$'\n'* && "$kova_ref" != *$'\r'* ]] ||
+            { echo "::error::kova_ref must be a single line."; exit 1; }
+          [[ "$kova_config_contract" != *$'\n'* && "$kova_config_contract" != *$'\r'* ]] ||
+            { echo "::error::kova_config_contract must be a single line."; exit 1; }
           if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
-            schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
-            if [[ -f "$schema_path" ]]; then
-              schema_content="$(cat "$schema_path")"
-            elif [[ -z "$kova_ref" ]]; then
-              echo "::error::Unable to inspect the Kova config-fixture contract for target ${resolved_sha}. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
-              exit 1
-            else
-              schema_content=""
-            fi
-            if [[ -n "$schema_content" ]] && grep -Fqx '    mediaModels: z' <<<"$schema_content"; then
-              detected_kova_config_contract="canonical"
-              default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
-            elif [[ -n "$schema_content" ]] && grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then
-              detected_kova_config_contract="legacy-list"
-              default_kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
-            else
-              detected_kova_config_contract=""
-              default_kova_ref=""
-            fi
-            if [[ -n "$detected_kova_config_contract" ]]; then
-              kova_config_contract="${kova_config_contract:-$detected_kova_config_contract}"
-              kova_ref="${kova_ref:-$default_kova_ref}"
-            elif [[ -z "$kova_ref" ]]; then
-              echo "::error::Target ${resolved_sha} has no recognized Kova config-fixture contract. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
-              exit 1
-            fi
+            contract_status="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/compare/${OPENCLAW_CANONICAL_CONFIG_SINCE}...${resolved_sha}" \
+              --jq .status)"
+            case "$contract_status" in
+              ahead | identical)
+                detected_contract=canonical
+                default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
+                ;;
+              behind | diverged)
+                detected_contract=legacy-list
+                default_kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
+                ;;
+              *)
+                echo "::error::Unable to classify the Kova config contract for target ${resolved_sha}."
+                exit 1
+                ;;
+            esac
+            kova_ref="${kova_ref:-$default_kova_ref}"
+            kova_config_contract="${kova_config_contract:-$detected_contract}"
           fi
+          encoded_kova_ref="$(jq -rn --arg value "$kova_ref" '$value | @uri')"
+          kova_sha="$(gh api "repos/${KOVA_REPOSITORY}/commits/${encoded_kova_ref}" --jq .sha)"
+          [[ "$kova_sha" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo "::error::Kova ref resolved to invalid SHA '${kova_sha}'."; exit 1; }
 
           echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
           echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
-          echo "kova_ref=$kova_ref" >> "$GITHUB_OUTPUT"
+          echo "kova_ref=$kova_sha" >> "$GITHUB_OUTPUT"
           echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"
-          if [[ "$kova_ref" == "$KOVA_TRUSTED_LIVE_REF" ]]; then
+          if [[ "$kova_sha" == "$KOVA_TRUSTED_LIVE_REF" ]]; then
             echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"
           else
             echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"
@@ -201,6 +191,7 @@ jobs:
         id: candidate_trust
         env:
           CANDIDATE_SHA: ${{ steps.resolve.outputs.tested_sha }}
+          KOVA_SHA: ${{ steps.resolve.outputs.kova_ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
@@ -209,26 +200,30 @@ jobs:
 
           secret_eligible=false
           cache_write_allowed=false
+          external_required=true
           if [[
             "$GITHUB_EVENT_NAME" == "schedule" ||
             "$GITHUB_EVENT_NAME" == "workflow_dispatch"
           ]] && [[
             "$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}" &&
-            "$CANDIDATE_SHA" == "$WORKFLOW_SHA"
+            "$CANDIDATE_SHA" == "$WORKFLOW_SHA" &&
+            "$KOVA_SHA" == "$KOVA_CANONICAL_CONFIG_REF"
           ]]; then
             secret_eligible=true
             cache_write_allowed=true
+            external_required=false
           fi
 
           {
             echo "secret_eligible=$secret_eligible"
             echo "cache_write_allowed=$cache_write_allowed"
+            echo "external_required=$external_required"
           } >> "$GITHUB_OUTPUT"
 
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    if: ${{ (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.external_required != 'true' }}
     permissions:
       contents: read
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
@@ -728,7 +723,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    if: ${{ (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.external_required != 'true' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 120
     env:
@@ -1061,6 +1056,202 @@ jobs:
           path: .artifacts/openclaw-performance/source
           if-no-files-found: error
           retention-days: 30
+
+  external_performance:
+    name: External ${{ matrix.title }}
+    needs: resolve_target
+    if: ${{ (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.external_required == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: mock-provider
+            title: Kova mock provider performance
+            repeat: input
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
+          - lane: mock-deep-profile
+            title: Kova mock provider deep profile
+            repeat: "1"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
+          - lane: source
+            title: OpenClaw source performance probes
+            repeat: input
+            include_filters: "-"
+            expected_release_entries: "-"
+          - lane: cleanup-probe
+            title: failed-command lease cleanup probe
+            repeat: "1"
+            include_filters: "-"
+            expected_release_entries: "-"
+    env:
+      OPENCLAW_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
+      TESTED_REF: ${{ needs.resolve_target.outputs.tested_ref }}
+      KOVA_SHA: ${{ needs.resolve_target.outputs.kova_ref }}
+      KOVA_CONFIG_CONTRACT: ${{ needs.resolve_target.outputs.kova_config_contract }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      PROFILE: ${{ inputs.profile || 'diagnostic' }}
+      REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
+    steps:
+      - name: Decide external lane
+        id: lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=true
+          if [[ "${{ matrix.lane }}" == "mock-deep-profile" &&
+            "$GITHUB_EVENT_NAME" != "schedule" &&
+            "${{ inputs.deep_profile || 'false' }}" != "true" ]]; then
+            run=false
+          elif [[ "${{ matrix.lane }}" == "cleanup-probe" &&
+            "${{ inputs.cleanup_probe || 'false' }}" != "true" ]]; then
+            run=false
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted performance harness
+        if: steps.lane.outputs.run == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch pinned Crabbox source
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="${RUNNER_TEMP}/crabbox-src"
+          git init -b main "$src"
+          git -C "$src" remote add origin https://github.com/openclaw/crabbox.git
+          git -C "$src" fetch --filter=blob:none --depth=1 origin "$CRABBOX_COMMIT"
+          git -C "$src" checkout --detach FETCH_HEAD
+          [[ "$(git -C "$src" rev-parse HEAD)" == "$CRABBOX_COMMIT" ]]
+          echo "CRABBOX_SOURCE=$src" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        if: steps.lane.outputs.run == 'true'
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: 1.26.5
+          cache: false
+
+      - name: Build pinned Crabbox client
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go -C "$CRABBOX_SOURCE" build -trimpath \
+            -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${CRABBOX_VERSION}" \
+            -o "${RUNNER_TEMP}/crabbox" ./cmd/crabbox
+          [[ "$("${RUNNER_TEMP}/crabbox" version)" == "$CRABBOX_VERSION" ]]
+
+      - name: Attest and run candidate in disposable Crabbox
+        if: steps.lane.outputs.run == 'true'
+        env:
+          CRABBOX_CONFIG: ${{ github.workspace }}/.github/crabbox/openclaw-performance-untrusted.yaml
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          lane="${{ matrix.lane }}"
+          repeat="${{ matrix.repeat }}"
+          [[ "$repeat" != input ]] || repeat="$REQUESTED_REPEAT"
+          [[ "$repeat" =~ ^[1-9][0-9]*$ ]] || { echo "::error::repeat must be positive"; exit 1; }
+          downloads="${RUNNER_TEMP}/performance-${lane}"
+          timing_log="${RUNNER_TEMP}/crabbox-${lane}.stderr" crabbox="${RUNNER_TEMP}/crabbox"
+          mkdir -p "$downloads"
+          unset CRABBOX_AWS_INSTANCE_PROFILE "${!CRABBOX_TAILSCALE@}"
+          export CRABBOX_ENV_ALLOW=CI
+          lease_id="cbx_$(printf '%s' "$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT:$lane" | sha256sum | cut -c1-12)"
+          cleanup_attempted=false cleanup_confirmed=false
+          confirm_cleanup() {
+            cleanup_attempted=true
+            if scripts/openclaw-performance-crabbox.sh confirm-stop "$crabbox" "$lease_id"; then
+              cleanup_confirmed=true
+              return 0
+            fi
+            echo "::error::Crabbox explicit stop did not confirm provider cleanup"
+            return 1
+          }
+          cleanup_on_exit() {
+            local status=$?
+            trap - EXIT
+            [[ "$cleanup_attempted" == true ]] || confirm_cleanup || status=1
+            [[ "$cleanup_confirmed" == true ]] || status=1
+            exit "$status"
+          }
+          trap cleanup_on_exit EXIT
+          "$crabbox" config show --json | jq -e '.aws.instanceProfile == ""' >/dev/null ||
+            { echo "::error::resolved AWS instance profile is not empty"; exit 1; }
+          "$crabbox" warmup \
+            --provider aws --target linux --arch amd64 --class beast --type c7a.24xlarge \
+            --market on-demand --lease-id "$lease_id" --network public --tailscale=false \
+            --tailscale-exit-node= --tailscale-exit-node-allow-lan-access=false \
+            --keep --timing-json
+          "$crabbox" inspect --provider aws --id "$lease_id" --network public --json | jq -e --arg id "$lease_id" \
+            '.id == $id and .provider == "aws" and .network == "public" and .tailscale == null and .providerMetadata.instanceProfileAttached == false' \
+            >/dev/null || { echo "::error::AWS lease failed pre-execution capability attestation"; exit 1; }
+          echo "lease attested provider=aws network=public tailscale_requested=false tailscale_metadata=none instance_profile=absent"
+          args=(
+            run --provider aws --id "$lease_id" --network public
+            --stop-after never --timing-json --no-hydrate --allow-env CI
+            --script scripts/openclaw-performance-crabbox.sh
+          )
+          if [[ "$lane" != cleanup-probe ]]; then
+            remote=".artifacts/performance-crabbox/${lane}"
+            args+=(
+              --require-artifact "${remote}/payload.tar.gz"
+              --require-artifact "${remote}/remote-evidence.json"
+              --require-artifact-schema "${remote}/remote-evidence.json=.github/crabbox/openclaw-performance-evidence.schema.json"
+              --download "${remote}/payload.tar.gz=${downloads}/payload.tar.gz"
+              --download "${remote}/remote-evidence.json=${downloads}/remote-evidence.json"
+            )
+          fi
+          set +e
+          "$crabbox" "${args[@]}" -- remote \
+            "$lane" "$OPENCLAW_SHA" "$KOVA_SHA" "$WORKFLOW_SHA" "$TESTED_REF" \
+            "$PROFILE" "$repeat" "$KOVA_CONFIG_CONTRACT" "${{ matrix.include_filters }}" \
+            "${{ matrix.expected_release_entries }}" "${{ inputs.fail_on_regression || 'false' }}" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$CRABBOX_VERSION" \
+            2>&1 | tee "$timing_log"
+          status=${PIPESTATUS[0]}
+          set -e
+          confirm_cleanup
+          trap - EXIT
+          jq -Rrc --arg id "$lease_id" \
+            'fromjson? | select(.provider == "aws" and .leaseId == $id and
+              (.runId | type == "string") and (.exitCode | type == "number"))' "$timing_log" |
+            tail -n 1 > "$downloads/timing.json"
+          jq -e --arg id "$lease_id" '.leaseId == $id' "$downloads/timing.json" >/dev/null ||
+            { echo "::error::Crabbox timing did not bind the expected lease"; exit 1; }
+          if [[ "$lane" == cleanup-probe ]]; then
+            [[ "$status" == 42 ]] || { echo "::error::cleanup probe did not exit 42"; exit 1; }
+            exit 0
+          fi
+          [[ "$status" == 0 ]] || exit "$status"
+          scripts/openclaw-performance-crabbox.sh verify \
+            "$lane" "$downloads/timing.json" "$lease_id" "$downloads/remote-evidence.json" \
+            "$downloads/payload.tar.gz" ".artifacts/performance-crabbox/evidence/${lane}.json"
+
+      - name: Upload external performance artifacts
+        if: ${{ success() && steps.lane.outputs.run == 'true' && matrix.lane != 'cleanup-probe' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.lane == 'source' && format('openclaw-performance-source-{0}-{1}', github.run_id, github.run_attempt) || format('openclaw-performance-{0}-{1}-{2}', matrix.lane, github.run_id, github.run_attempt) }}
+          path: |
+            .artifacts/kova/reports/${{ matrix.lane }}
+            .artifacts/kova/bundles/${{ matrix.lane }}
+            .artifacts/kova/summaries/${{ matrix.lane }}.md
+            .artifacts/openclaw-performance/source
+            .artifacts/performance-crabbox/evidence/${{ matrix.lane }}.json
+          if-no-files-found: error
+          retention-days: ${{ matrix.lane == 'mock-deep-profile' && 14 || 30 }}
 
   publish:
     name: Publish ${{ matrix.title }} report
@@ -1658,7 +1849,7 @@ jobs:
 
   vitest_pair_guard:
     name: Verify Vitest pair isolation
-    needs: [resolve_target, kova, source_performance, publish, artifact_only_guard, vitest_pair]
+    needs: [resolve_target, kova, source_performance, external_performance, publish, artifact_only_guard, vitest_pair]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1670,6 +1861,7 @@ jobs:
           RESOLVE_RESULT: ${{ needs.resolve_target.result }}
           KOVA_RESULT: ${{ needs.kova.result }}
           SOURCE_RESULT: ${{ needs.source_performance.result }}
+          EXTERNAL_RESULT: ${{ needs.external_performance.result }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           ARTIFACT_ONLY_RESULT: ${{ needs.artifact_only_guard.result }}
           VITEST_PAIR_RESULT: ${{ needs.vitest_pair.result }}
@@ -1680,6 +1872,7 @@ jobs:
             "$RESOLVE_RESULT" \
             "$KOVA_RESULT" \
             "$SOURCE_RESULT" \
+            "$EXTERNAL_RESULT" \
             "$PUBLISH_RESULT" \
             "$ARTIFACT_ONLY_RESULT"; do
             if [[ "$result" != "skipped" ]]; then

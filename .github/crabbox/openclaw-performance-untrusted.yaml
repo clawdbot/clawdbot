@@ -1,0 +1,28 @@
+provider: aws
+target: linux
+architecture: amd64
+class: beast
+serverType: c7a.24xlarge
+capacity:
+  market: on-demand
+lease:
+  idleTimeout: 30m
+  ttl: 240m
+cache:
+  pnpm: false
+  npm: false
+  docker: false
+  git: false
+  maxGB: 1
+  purgeOnRelease: true
+sync:
+  delete: true
+  checksum: true
+  gitSeed: false
+  fingerprint: false
+  include:
+    - .github/crabbox/openclaw-performance-evidence.schema.json
+    - scripts/openclaw-performance-crabbox.sh
+env:
+  allow:
+    - OPENCLAW_PERFORMANCE_NO_ENV
