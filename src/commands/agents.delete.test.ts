@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
@@ -319,6 +320,14 @@ describe("agents delete command", () => {
           "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
         },
       });
+      saveExecApprovals({
+        version: 1,
+        agents: {
+          "*": { security: "deny" },
+          main: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/old" }] },
+          ops: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
+        },
+      });
 
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
 
@@ -326,6 +335,13 @@ describe("agents delete command", () => {
       expect(runtime.exit).not.toHaveBeenCalledWith(1);
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
       expectSessionStore(cfg, {}, "main");
+      expect(readExecApprovalsSnapshot().file.agents).toEqual({
+        "*": { security: "deny" },
+        ops: {
+          security: "allowlist",
+          allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
+        },
+      });
     });
   });
 
@@ -570,6 +586,7 @@ describe("agents delete command", () => {
           "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
         },
       });
+      expect(readExecApprovalsSnapshot().exists).toBe(false);
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
@@ -591,6 +608,7 @@ describe("agents delete command", () => {
       expectSessionStore(cfg, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
+      expect(readExecApprovalsSnapshot().exists).toBe(false);
     });
   });
 
