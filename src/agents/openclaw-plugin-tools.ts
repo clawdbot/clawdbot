@@ -124,10 +124,7 @@ function createPluginToolDelivery(params: {
     agentId,
     workspaceDir: params.context.workspaceDir,
     sessionKey,
-    messageProvider: sessionKey ? undefined : route.channel,
-    accountId: sessionKey
-      ? (bindingAuthorization.requesterAccountId ?? route.accountId)
-      : route.accountId,
+    accountId: bindingAuthorization.requesterAccountId ?? route.accountId,
     requesterSenderId: bindingAuthorization.requesterSenderId,
     requesterSenderName: bindingAuthorization.requesterSenderName,
     requesterSenderUsername: bindingAuthorization.requesterSenderUsername,
