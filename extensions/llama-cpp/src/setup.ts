@@ -252,6 +252,7 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
       chatModelPath,
       contextSize,
       maxTokens: selected.model.maxTokens,
+      embeddingModelIsDefault: true,
       embeddingModelPath,
       port: readConfiguredPort(managedExisting),
     });
