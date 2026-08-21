@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import "./app-host.ts";
@@ -121,7 +122,7 @@ function createPairingShell(params: {
   // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     renderSidebar();
-    return await vi.waitFor(() => {
+    return await waitForFast(() => {
       render(shell.render(), container);
       const dialog = container.querySelector<HTMLElement>(
         '.device-pair-setup:not([aria-busy="true"])',
@@ -302,7 +303,7 @@ describe("application shell pairing access", () => {
 
     button?.click();
 
-    await vi.waitFor(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
+    await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
     expect(button?.getAttribute("aria-label")).toBe("Copy failed");
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
@@ -328,7 +329,7 @@ describe("application shell pairing access", () => {
     });
 
     renderSidebar();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       render(shell.render(), container);
       expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");
     });
