@@ -8,7 +8,6 @@ import type {
   ValidationError,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayApprovalEventKind } from "../../infra/approval-gateway-runtime.types.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
@@ -319,7 +318,7 @@ export async function handlePendingApprovalRequest<
     // Publishing operator-owned system-agent approvals here makes channel subscribers
     // reject the payload and silently drops the operator's binding. Allowlist, so a
     // new kind stays non-routable until deliberately added.
-    const channelApprovalKind: GatewayApprovalEventKind | null =
+    const channelApprovalKind: ChannelApprovalKind | null =
       params.approvalKind === "exec" || params.approvalKind === "plugin"
         ? params.approvalKind
         : null;
