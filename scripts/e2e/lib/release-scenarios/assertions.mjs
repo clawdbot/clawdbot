@@ -1,12 +1,14 @@
 // Assertions for release scenario E2E packages and plugin state.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
+import {
+  assertOpenAiEnvAuthProfileStore,
+  readSharedAuthProfileStoreText,
+} from "../auth-profile-store-assertions.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
@@ -49,39 +51,16 @@ function authProfilesPath() {
   );
 }
 
-function authProfilesDatabasePath() {
-  return path.join(
-    process.env.HOME ?? "",
-    ".openclaw",
-    "agents",
-    "main",
-    "agent",
-    "openclaw-agent.sqlite",
-  );
-}
-
-function readAuthProfileStoreSqliteText() {
-  const dbPath = authProfilesDatabasePath();
-  if (!fs.existsSync(dbPath)) {
-    return "";
-  }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
-      .get("primary");
-    return typeof row?.store_json === "string" ? row.store_json : "";
-  } catch {
-    return "";
-  } finally {
-    db?.close();
-  }
+function stateDir() {
+  return process.env.OPENCLAW_STATE_DIR ?? path.dirname(configPath());
 }
 
 function readStateText() {
   const paths = [configPath(), authProfilesPath()].filter((file) => fs.existsSync(file));
-  return [...paths.map((file) => fs.readFileSync(file, "utf8")), readAuthProfileStoreSqliteText()]
+  return [
+    ...paths.map((file) => fs.readFileSync(file, "utf8")),
+    readSharedAuthProfileStoreText(stateDir()),
+  ]
     .filter(Boolean)
     .join("\n");
 }
@@ -96,7 +75,7 @@ function configureMockOpenAi() {
 function assertOpenAiEnvRef() {
   const rawKey = process.argv[3];
   assert(fs.existsSync(configPath()), "openclaw.json missing");
-  assertOpenAiEnvAuthProfileStore(readAuthProfileStoreSqliteText(), {
+  assertOpenAiEnvAuthProfileStore(readSharedAuthProfileStoreText(stateDir()), {
     missingMessage: "OpenAI env ref was not persisted",
     envRefMessage: "OpenAI env ref was not persisted",
     rawKeyMessage: "raw OpenAI key was persisted",

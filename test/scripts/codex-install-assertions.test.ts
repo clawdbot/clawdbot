@@ -1,7 +1,7 @@
 // Codex Install Assertions tests cover Codex plugin install E2E helpers.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -50,12 +50,13 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeAuthProfileStoreSqlite(agentDir: string) {
-  mkdirSync(agentDir, { recursive: true });
-  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+function writeAuthProfileStoreSqlite(stateDir: string) {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_store (
+      CREATE TABLE IF NOT EXISTS auth_profile_stores (
         store_key TEXT NOT NULL PRIMARY KEY,
         store_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
@@ -63,11 +64,11 @@ function writeAuthProfileStoreSqlite(agentDir: string) {
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
         VALUES (?, ?, ?)
       `,
     ).run(
-      "primary",
+      "shared",
       JSON.stringify({
         version: 1,
         profiles: {
@@ -574,7 +575,7 @@ function createCodexInstallFixture(root: string) {
   writeJson("/tmp/openclaw-plugins-list.json", {
     plugins: [{ id: "codex", enabled: true, status: "loaded" }],
   });
-  writeAuthProfileStoreSqlite(path.join(stateDir, "agents", "main", "agent"));
+  writeAuthProfileStoreSqlite(stateDir);
 }
 
 describe("Codex install helpers", () => {
@@ -692,6 +693,9 @@ describe("Codex install helpers", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+    expect(
+      existsSync(path.join(root, "state", "agents", "main", "agent", "openclaw-agent.sqlite")),
+    ).toBe(false);
   });
 
   it("rejects on-demand fixtures without the canonical SQLite install record", () => {

@@ -1,5 +1,27 @@
 // Shared auth profile store assertions for install/onboard E2E proof.
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../lib/record-shared.mjs";
+
+export function readSharedAuthProfileStoreText(stateDir) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
+      .get("shared");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch {
+    return "";
+  } finally {
+    db?.close();
+  }
+}
 
 function hasExpectedOpenAiEnvRef(profile) {
   if (!isRecord(profile)) {

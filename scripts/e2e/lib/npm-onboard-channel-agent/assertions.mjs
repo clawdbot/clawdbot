@@ -1,12 +1,14 @@
 // Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
+import {
+  assertOpenAiEnvAuthProfileStore,
+  readSharedAuthProfileStoreText,
+} from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   applyMockOpenAiModelConfig,
@@ -75,25 +77,6 @@ function extractStatusSection(text, title) {
     section.push(line);
   }
   return stripAnsi(section.join("\n"));
-}
-
-function readSharedAuthProfileStoreText(stateDir) {
-  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
-  if (!fs.existsSync(dbPath)) {
-    return "";
-  }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
-      .get("shared");
-    return typeof row?.store_json === "string" ? row.store_json : "";
-  } catch {
-    return "";
-  } finally {
-    db?.close();
-  }
 }
 
 function assertOnboardState() {
