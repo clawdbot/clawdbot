@@ -94,9 +94,15 @@ type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
 
+const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+const APP_SIDEBAR_ELEMENT = {
+  tagName: APP_SIDEBAR_TAG,
+  label: APP_SIDEBAR_TAG,
+  loadModule: () => import("../components/app-sidebar.ts"),
+} satisfies OptionalCustomElement;
 
 i18n.setLocaleLoadRecovery({
   isUnrecoverableError: isStaleChunkImportError,
@@ -165,7 +171,7 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
+  readonly navigationSidebar = document.createElement(APP_SIDEBAR_TAG) as AppSidebarElement;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null = null;
@@ -738,7 +744,7 @@ class OpenClawShell
 
   override render() {
     if (this.workspaceChromeVisible) {
-      void import("../components/app-sidebar.ts");
+      this.lazyCustomElements.preload(APP_SIDEBAR_ELEMENT);
     }
     return renderApplicationShell(this);
   }
