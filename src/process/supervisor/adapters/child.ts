@@ -401,9 +401,8 @@ export async function createChildAdapter(params: {
     maybeSettleAfterWindowsExit();
   });
 
-  child.once("error", (error) => {
-    rejectPendingWait(error);
-  });
+  // Worker IPC failures close authority; ordinary post-spawn errors are nonterminal.
+  child.on("error", params.ownedWorker ? rejectPendingWait : () => {});
   child.once("exit", (code, signal) => {
     childExitState = { code, signal };
     scheduleForcedWindowsCloseSettlement();
