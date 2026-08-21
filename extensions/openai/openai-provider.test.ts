@@ -1750,6 +1750,15 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).toContain("max");
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expect.arrayContaining(["xhigh", "max"]));
   });
 
   it("does not invent an unlisted model for authored Platform credentials", () => {
@@ -1770,6 +1779,16 @@ describe("buildOpenAIProvider", () => {
         },
       } as never),
     ).toBeUndefined();
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: "openai-responses",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).not.toContain("max");
   });
 
   it("restores gpt-5.3-codex-spark only through ChatGPT/Codex OAuth routing", () => {

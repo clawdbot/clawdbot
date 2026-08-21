@@ -110,6 +110,12 @@ function buildOpenAIThinkingProfile(params: {
     (agentRuntime === "openclaw" ||
       agentRuntime === "auto" ||
       (agentRuntime === "codex" && codexSupportsUltra));
+  const nativeCodexNeedsAccountEffortValidation =
+    agentRuntime === "codex" &&
+    params.compat?.supportedReasoningEfforts === undefined &&
+    (params.api === undefined || params.api === "openai-chatgpt-responses") &&
+    !matchesExactOrPrefix(params.modelId, params.xhighModelIds) &&
+    !modelId.startsWith("gpt-5.6");
   const defaultLevel = isSol || isTerra || isLuna ? "medium" : undefined;
   const fallbackLevels: ProviderThinkingProfile["levels"] = [
     ...OPENAI_THINKING_BASE_LEVELS,
@@ -118,6 +124,9 @@ function buildOpenAIThinkingProfile(params: {
       : []),
     ...(supportsMax ? [{ id: "max" as const }] : []),
     ...(supportsUltra ? [{ id: "ultra" as const }] : []),
+    ...(nativeCodexNeedsAccountEffortValidation
+      ? [{ id: "xhigh" as const }, { id: "max" as const }]
+      : []),
   ];
   const levels =
     agentRuntime === "codex" && authoritativeCodexEfforts !== undefined
