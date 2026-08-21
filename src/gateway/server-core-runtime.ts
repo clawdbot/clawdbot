@@ -127,8 +127,6 @@ export async function startGatewayCoreRuntime(input: {
     readinessEventLoopHealth,
     workerDispatchAuthority,
     clients,
-    startChannel,
-    stopChannel,
     sharedGatewaySessionGenerationState,
     resolveSharedGatewaySessionGenerationForConfig,
     sessionMessageSubscribers,
@@ -339,8 +337,7 @@ export async function startGatewayCoreRuntime(input: {
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,
         clients,
-        startChannel,
-        stopChannel,
+        channelManager,
         getChannelAutostartSuppression: channelManager.getAutostartSuppression,
         logChannels,
         registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
