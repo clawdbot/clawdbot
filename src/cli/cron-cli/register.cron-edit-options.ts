@@ -24,6 +24,7 @@ const assignIf = (
 export async function resolveCronEditPayloadDeliveryPatch(
   opts: Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
+  webhookUrl: string | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -33,12 +34,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (commandShell && commandArgv) {
     throw new Error("Pass command payload either with --command or --command-argv, not both.");
   }
+  // Raw flag presence owns the set/clear mutex even when normalization omits a blank value.
+  const hasModel = typeof opts.model === "string";
   const model = normalizeOptionalString(opts.model);
-  if (model && opts.clearModel) {
+  if (hasModel && opts.clearModel) {
     throw new Error("Use --model or --clear-model, not both");
   }
+  const hasThinking = typeof opts.thinking === "string";
   const thinking = normalizeOptionalString(opts.thinking);
-  if (thinking && opts.clearThinking) {
+  if (hasThinking && opts.clearThinking) {
     throw new Error("Use --thinking or --clear-thinking, not both");
   }
   const fallbacks = parseCronFallbacks(opts.fallbacks);
@@ -86,7 +90,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Invalid --script-tool-budget (must be a positive integer).");
   }
 
-  const hasWebhookDelivery = typeof opts.webhook === "string";
+  const hasWebhookDelivery = Boolean(webhookUrl);
   const hasDeliveryModeFlag =
     opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
   const threadId = parseCronThreadIdOption(opts.threadId);
@@ -272,8 +276,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
       delivery.channel = channel ? channel : undefined;
     }
     if (hasWebhookDelivery) {
-      const webhook = normalizeOptionalString(opts.webhook) ?? "";
-      delivery.to = webhook ? webhook : undefined;
+      delivery.to = webhookUrl;
     } else if (opts.clearTo) {
       delivery.to = null;
     } else if (typeof opts.to === "string") {

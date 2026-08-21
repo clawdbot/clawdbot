@@ -698,6 +698,18 @@ describe("cron edit command", () => {
     );
   });
 
+  it.each([
+    ["--model", "", "--clear-model"],
+    ["--model", "   ", "--clear-model"],
+    ["--thinking", "", "--clear-thinking"],
+    ["--thinking", "   ", "--clear-thinking"],
+  ])("rejects blank %s %j combined with %s", async (flag, value, clearFlag) => {
+    await expectCronEditRejection(
+      [flag, value, clearFlag],
+      `Use ${flag} or ${clearFlag}, not both`,
+    );
+  });
+
   it("stores an explicit wildcard with --clear-tools", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
@@ -1038,6 +1050,10 @@ describe("cron edit command", () => {
 
     errorSpy.mockRestore();
     exitSpy.mockRestore();
+  });
+
+  it.each(["", "not-a-url"])("rejects invalid --webhook %j before gateway RPC", async (value) => {
+    await expectCronEditRejection(["--webhook", value], "--webhook must be a valid http(s) URL");
   });
 
   it("documents the delivery clear flags alongside the sibling --clear-model", () => {

@@ -17,6 +17,7 @@ import type {
   CronStatus,
   CronDeliveryStatus,
   CronJobsEnabledFilter,
+  CronJobsScheduleKindFilter,
   CronJobsTriggerFilter,
   CronRunsStatusValue,
   CronJobsSortBy,
@@ -51,7 +52,6 @@ import type {
   CronFieldKey,
   CronFormState,
   CronJobsLastStatusFilter,
-  CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
@@ -72,7 +72,6 @@ type CronProps = {
   loading: boolean;
   /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
-  triggersEnabled: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   failingCount: number | null;
@@ -448,6 +447,15 @@ const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = 
   { value: "disabled", labelKey: "cron.tabs.paused" },
 ];
 
+const SCHEDULE_KIND_FILTER_LABELS: Record<CronJobsScheduleKindFilter, string> = {
+  all: "cron.jobs.all",
+  at: "cron.form.at",
+  every: "cron.form.every",
+  cron: "cron.form.cronOption",
+  "on-exit": "cron.form.repeatOnExit",
+  stream: "cron.form.repeatStream",
+};
+
 function renderListView(props: CronProps) {
   const hasAdvancedJobsFilters =
     props.jobsScheduleKindFilter !== "all" ||
@@ -646,12 +654,10 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
           label: t("cron.jobs.schedule"),
           value: props.jobsScheduleKindFilter,
           testId: "cron-jobs-schedule-filter",
-          options: [
-            { value: "all", label: t("cron.jobs.all") },
-            { value: "at", label: t("cron.form.at") },
-            { value: "every", label: t("cron.form.every") },
-            { value: "cron", label: t("cron.form.cronOption") },
-          ],
+          options: Object.entries(SCHEDULE_KIND_FILTER_LABELS).map(([value, labelKey]) => ({
+            value,
+            label: t(labelKey),
+          })),
         })}
         ${renderJobsFilter(props, "cronJobsLastStatusFilter", {
           label: t("cron.jobs.lastRun"),
@@ -1729,7 +1735,10 @@ function renderAdvanced(
 
 function renderTriggerRows(props: CronProps) {
   const scriptPayload = props.form.payloadKind === "script";
-  if (!props.triggersEnabled || scriptPayload) {
+  if (!scriptPayload && props.status === null) {
+    return nothing;
+  }
+  if (props.status?.triggersEnabled !== true || scriptPayload) {
     return renderSettingsRow({
       title: t("cron.form.conditionTrigger"),
       description: scriptPayload

@@ -78,6 +78,9 @@ type HooksReportTarget = {
 
 function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
   const requested = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
   const requestedAgentId = requested ? normalizeAgentId(requested) : undefined;
   if (requestedAgentId) {
     resolveConfiguredAgentId(config, requestedAgentId);
@@ -617,6 +620,9 @@ export function registerHooksCli(program: Command): void {
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
     const parentAgent = hooks.opts<{ agent?: string }>().agent;
+    if (parentAgent !== undefined && !parentAgent.trim()) {
+      throw new Error("--agent must not be blank");
+    }
     if (
       parentAgent &&
       actionCommand !== hooks &&

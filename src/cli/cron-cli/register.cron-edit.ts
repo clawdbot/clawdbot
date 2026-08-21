@@ -7,6 +7,7 @@ import {
 import type { Command } from "commander";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -221,7 +222,14 @@ export function registerCronEditCommand(cron: Command) {
               "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
             );
           }
-          const hasWebhookDelivery = typeof opts.webhook === "string";
+          const webhookUrl =
+            typeof opts.webhook === "string"
+              ? (normalizeHttpWebhookUrl(opts.webhook) ?? undefined)
+              : undefined;
+          if (typeof opts.webhook === "string" && !webhookUrl) {
+            throw new Error("--webhook must be a valid http(s) URL");
+          }
+          const hasWebhookDelivery = Boolean(webhookUrl);
           const deliveryModeFlagCount = [
             Boolean(opts.announce),
             typeof opts.deliver === "boolean",
@@ -413,7 +421,7 @@ export function registerCronEditCommand(cron: Command) {
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob),
+            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob, webhookUrl),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

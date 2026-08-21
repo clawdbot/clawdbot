@@ -372,6 +372,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  triggersEnabled: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */
