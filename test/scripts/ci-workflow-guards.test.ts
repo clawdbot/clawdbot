@@ -5844,8 +5844,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         hosted: true,
       },
       {
-        name: "fork pull request, default backend",
+        // An untrusted fork cannot spend Blacksmith capacity, so runs-on sends it
+        // to a hosted runner; the budget has to follow it there.
+        name: "untrusted fork pull request, default backend",
         context: {
+          authorAssociation: "NONE",
           eventName: "pull_request",
           headRepository: "contributor/openclaw",
           repository: "openclaw/openclaw",
@@ -5854,8 +5857,22 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         hosted: true,
       },
       {
+        // A returning contributor's fork still routes to Blacksmith, so it keeps
+        // the tighter budget: the timeout tracks the runner, not fork-ness.
+        name: "returning-contributor fork pull request, default backend",
+        context: {
+          authorAssociation: "CONTRIBUTOR",
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        hosted: false,
+      },
+      {
         name: "fork pull request, breaker routed to GitHub-hosted",
         context: {
+          authorAssociation: "NONE",
           eventName: "pull_request",
           headRepository: "contributor/openclaw",
           repository: "openclaw/openclaw",
