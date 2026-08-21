@@ -168,6 +168,67 @@ describe("resolveGatewayProbeTarget", () => {
 });
 
 describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
+  it.each([
+    { mode: "token" as const, value: "configured-token", expected: "ambient-token" },
+    { mode: "password" as const, value: "configured-password", expected: "ambient-password" },
+    { mode: "token" as const, value: envSecretRef("PROBE_SECRET"), expected: "resolved-secret" },
+    {
+      mode: "password" as const,
+      value: envSecretRef("PROBE_SECRET"),
+      expected: "resolved-secret",
+    },
+  ])("keeps env-first $mode precedence unless an explicit SecretRef owns it", async (testCase) => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        auth: { mode: testCase.mode, [testCase.mode]: testCase.value },
+      }),
+      mode: "local",
+      localPrecedence: "env-first",
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+        PROBE_SECRET: "resolved-secret",
+      },
+    });
+
+    expect(result.warning).toBeUndefined();
+    expect(result.auth[testCase.mode]).toBe(testCase.expected);
+  });
+
+  it.each(["token", "password"] as const)(
+    "does not replace an unavailable active %s SecretRef with env-first auth",
+    async (mode) => {
+      const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: configWithDefaultEnvProvider({
+          auth: { mode, [mode]: envSecretRef("MISSING_PROBE_SECRET") },
+        }),
+        mode: "local",
+        localPrecedence: "env-first",
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+          OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+        },
+      });
+
+      expect(result.auth).toStrictEqual({});
+      expect(result.warning).toContain(`gateway.auth.${mode}`);
+    },
+  );
+
+  it("does not bypass an implicit password SecretRef with an env-first ambient token", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        auth: { password: envSecretRef("MISSING_IMPLICIT_PASSWORD") },
+      }),
+      mode: "local",
+      localPrecedence: "env-first",
+      env: { OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
+    });
+
+    expect(result.auth).toStrictEqual({});
+    expect(result.warning).toContain("gateway.auth.password");
+  });
+
   it("resolves env SecretRef token via async secret-inputs path", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
       cfg: configWithDefaultEnvProvider({

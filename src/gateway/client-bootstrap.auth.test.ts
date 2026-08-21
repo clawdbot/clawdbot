@@ -151,16 +151,17 @@ describe("resolveGatewayClientBootstrap interactive auth policy", () => {
     );
   });
 
-  it("falls back to OPENCLAW_GATEWAY_TOKEN when the remote token ref is unresolved", async () => {
-    await expectInteractiveAuth(
-      {
-        config: remoteGatewayConfig({
-          token: { source: "env", provider: "default", id: "ABSENT_BOOTSTRAP_REMOTE_TOKEN" },
-        }),
-        env: { OPENCLAW_GATEWAY_TOKEN: "shell-token-value" },
-      },
-      { token: "shell-token-value", password: undefined },
-    );
+  it("reports an unresolved remote token ref instead of substituting ambient auth", async () => {
+    const result = await resolveGatewayClientBootstrap({
+      config: remoteGatewayConfig({
+        token: { source: "env", provider: "default", id: "ABSENT_BOOTSTRAP_REMOTE_TOKEN" },
+      }),
+      env: { OPENCLAW_GATEWAY_TOKEN: "shell-token-value" },
+      authPolicy: "interactive",
+    });
+
+    expect(result.auth).toEqual({ token: undefined, password: undefined });
+    expect(result.authFailureReason).toContain("gateway.remote.token SecretRef is unresolved");
   });
 
   it("never reuses config or env credentials for a CLI URL override", async () => {

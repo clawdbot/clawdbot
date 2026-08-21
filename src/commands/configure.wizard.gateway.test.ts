@@ -562,6 +562,106 @@ describe("runConfigureWizard", () => {
     expect(localProbe?.password).toBe("configured-password");
   });
 
+  it("uses resolved SecretRef auth for local gateway and health probes", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "WIZARD_GATEWAY_TOKEN" },
+        },
+      },
+    });
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: "ambient-token", WIZARD_GATEWAY_TOKEN: "configured-token" },
+      () =>
+        runConfigureWizard(
+          { command: "configure", sections: ["gateway", "health"] },
+          createRuntime(),
+        ),
+    );
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "configured-token", timeoutMs: 300 }),
+    );
+    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "configured-token" }),
+    );
+    expect(mocks.healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "configured-token" }),
+      expect.anything(),
+    );
+  });
+
+  it("visibly skips local probes when a configured SecretRef is unavailable", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_WIZARD_PASSWORD" },
+        },
+      },
+    });
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, () =>
+      runConfigureWizard(
+        { command: "configure", sections: ["gateway", "health"] },
+        createRuntime(),
+      ),
+    );
+
+    expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(mocks.healthCommand).not.toHaveBeenCalled();
+    expect(mocks.clackSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            hint: expect.stringContaining("auth unavailable; probe skipped"),
+          }),
+        ]),
+      }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway: auth unavailable (probe skipped)"),
+      "Control UI",
+    );
+  });
+
+  it("never retries an old password after the newly configured SecretRef fails", async () => {
+    setupBaseWizardState({
+      gateway: { mode: "local", auth: { mode: "password", password: "previous-password" } },
+    });
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+    mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => ({
+      config: {
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "MISSING_WIZARD_PASSWORD" },
+          },
+        },
+      },
+      port: 18789,
+    }));
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, () =>
+      runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime()),
+    );
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway: auth unavailable (probe skipped)"),
+      "Control UI",
+    );
+  });
+
   it("uses the resolved configured port for the local gateway startup hint", async () => {
     setupBaseWizardState({
       gateway: {

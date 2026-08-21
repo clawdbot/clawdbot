@@ -61,6 +61,7 @@ import {
   coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeSecretInputString,
+  resolveSecretInputRef,
 } from "../../config/types.secrets.js";
 import type {
   EmbeddedStateLockHandle,
@@ -238,16 +239,11 @@ function formatMissingCredentialProbeError(reasonCode: AuthProbeReasonCode): str
 function resolveProbeSecretRef(profile: ProfileEntry, cfg: OpenClawConfig) {
   const defaults = cfg.secrets?.defaults;
   if (profile.type === "api_key") {
-    if (normalizeSecretInputString(profile.key) !== undefined) {
-      return null;
-    }
-    return coerceSecretRef(profile.keyRef, defaults);
+    return resolveSecretInputRef({ value: profile.key, refValue: profile.keyRef, defaults }).ref;
   }
   if (profile.type === "token") {
-    if (normalizeSecretInputString(profile.token) !== undefined) {
-      return null;
-    }
-    return coerceSecretRef(profile.tokenRef, defaults);
+    return resolveSecretInputRef({ value: profile.token, refValue: profile.tokenRef, defaults })
+      .ref;
   }
   return null;
 }
@@ -418,6 +414,15 @@ export async function buildProbeTargets(params: {
     });
     const configuredProviderEntry = resolveMergedModelProviderEntry(cfg, providerKey);
     const configuredProvider = configuredProviderEntry?.providerConfig;
+    const hasConfiguredProviderSecretRef = Boolean(
+      configuredProviderEntry &&
+      resolveConfigSecretRef({
+        config: cfg,
+        path: `models.providers.${configuredProviderEntry.providerKey}.apiKey`,
+        value: configuredProvider?.apiKey,
+        defaults: cfg.secrets?.defaults,
+      }),
+    );
     const includeDirectKeys = options.includeDirectKeys === true && profileFilter.size === 0;
     const includeConfigKey =
       includeDirectKeys &&
@@ -469,12 +474,13 @@ export async function buildProbeTargets(params: {
       configuredProvider?.auth === "oauth" || configuredProvider?.auth === "token"
         ? configuredProvider.auth
         : "api_key";
-    const resolvedEnvironmentValue = includeDirectKeys
-      ? resolveEnvApiKey(authProviderKey, process.env, {
-          config: cfg,
-          workspaceDir,
-        })
-      : null;
+    const resolvedEnvironmentValue =
+      includeDirectKeys && !hasConfiguredProviderSecretRef
+        ? resolveEnvApiKey(authProviderKey, process.env, {
+            config: cfg,
+            workspaceDir,
+          })
+        : null;
     const environmentValue =
       resolvedEnvironmentValue?.apiKey === configuredValue ? null : resolvedEnvironmentValue;
     const configuredTargetLabel =
@@ -729,12 +735,13 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const envKey = orderResolution.hasExplicitOrder
-      ? null
-      : resolveEnvApiKey(authProviderKey, process.env, {
-          config: cfg,
-          workspaceDir,
-        });
+    const envKey =
+      orderResolution.hasExplicitOrder || hasConfiguredProviderSecretRef
+        ? null
+        : resolveEnvApiKey(authProviderKey, process.env, {
+            config: cfg,
+            workspaceDir,
+          });
     if (!envKey && !hasUsableModelsJsonKey && !hasSyntheticLocalAuth) {
       continue;
     }
