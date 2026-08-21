@@ -125,6 +125,7 @@ export async function runClaudeCliNodeCommand(params: {
         argv,
         cwd: params.cwd,
         env: params.env,
+        exactEnv: true,
         input: params.request.stdin ?? "",
         secretInput: params.secretInput,
         timeoutMs: params.timeoutMs ?? params.request.timeoutMs,
