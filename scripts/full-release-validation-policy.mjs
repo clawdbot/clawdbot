@@ -8,8 +8,12 @@ const MAX_MESSAGE_LENGTH = 500;
 const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+const HARD_GH_TRANSPORT_PATTERN =
+  /HTTP (?:401|403)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
+const TRANSIENT_GH_TRANSPORT_PATTERN =
+  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
 
-export const RELEASE_DECISION_STATES = Object.freeze([
+const RELEASE_DECISION_STATES = Object.freeze([
   "qualifying",
   "blocked_diagnostics_running",
   "passed",
@@ -69,6 +73,42 @@ const CHILD_SPECS = Object.freeze([
     workflow: "openclaw-performance.yml",
   },
 ]);
+
+function releaseGhTransportErrorText(error) {
+  const values = [error];
+  const seen = new Set();
+  const parts = [];
+  while (values.length > 0) {
+    const value = values.shift();
+    if (value && typeof value === "object") {
+      if (seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      if (value instanceof Error) {
+        parts.push(value.name, value.message);
+      }
+      for (const key of ["stderr", "stdout", "code", "signal", "cause"]) {
+        if (key in value && value[key] !== undefined) {
+          values.push(value[key]);
+        }
+      }
+      continue;
+    }
+    if (value !== undefined && value !== null) {
+      parts.push(String(value));
+    }
+  }
+  return parts.join("\n");
+}
+
+export function classifyReleaseGhTransportError(error) {
+  const text = releaseGhTransportErrorText(error);
+  if (HARD_GH_TRANSPORT_PATTERN.test(text)) {
+    return "hard";
+  }
+  return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "hard";
+}
 
 function stringValue(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
@@ -193,7 +233,7 @@ function normalizedEvidenceReuse(evidenceReuse) {
       evidenceReuse.sourceManifest &&
       typeof evidenceReuse.sourceManifest === "object" &&
       !Array.isArray(evidenceReuse.sourceManifest)
-        ? JSON.parse(JSON.stringify(evidenceReuse.sourceManifest))
+        ? structuredClone(evidenceReuse.sourceManifest)
         : null,
   };
 }
@@ -356,7 +396,7 @@ function normalizeIssues(issues, fallbackKind) {
     .map((issue) => normalizeIssue(issue, fallbackKind));
 }
 
-export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
   if (
     jobName.startsWith("Run QA Lab parity lane (") ||
     jobName === "Run QA Lab parity report" ||
@@ -389,7 +429,7 @@ export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef
   );
 }
 
-export function failedJobsForPolicy(child, releaseProfile, workflowRef) {
+function failedJobsForPolicy(child, releaseProfile, workflowRef) {
   return child.jobs.filter((job) => {
     if (
       job.status !== "completed" ||
@@ -671,7 +711,8 @@ function validatePlan(value) {
   });
 }
 
-export function validateReleaseStateArtifact(payload, expected = {}, expectedMode) {
+export function validateReleaseStateArtifact(payload, expected, expectedMode) {
+  const expectedValues = expected ?? {};
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("release state artifact is invalid");
   }
@@ -688,17 +729,20 @@ export function validateReleaseStateArtifact(payload, expected = {}, expectedMod
     !/^[a-f0-9]{64}$/u.test(String(payload.executionPlanSha256 ?? "")) ||
     positiveInteger(payload.parentRunAttempt) === undefined ||
     positiveInteger(payload.sourceParentRunAttempt) === undefined ||
-    (expected.parentRunId !== undefined &&
-      String(payload.parentRunId) !== String(expected.parentRunId)) ||
-    (expected.parentRunAttempt !== undefined &&
-      Number(payload.parentRunAttempt) !== Number(expected.parentRunAttempt)) ||
-    (expected.maxParentRunAttempt !== undefined &&
-      Number(payload.parentRunAttempt) > Number(expected.maxParentRunAttempt)) ||
-    (expected.workflowRef !== undefined && payload.workflowRef !== expected.workflowRef) ||
-    (expected.workflowSha !== undefined && payload.workflowSha !== expected.workflowSha) ||
-    (expected.targetSha !== undefined && payload.targetSha !== expected.targetSha) ||
-    (expected.releaseProfile !== undefined && payload.releaseProfile !== expected.releaseProfile) ||
-    (expected.rerunGroup !== undefined && payload.rerunGroup !== expected.rerunGroup)
+    (expectedValues.parentRunId !== undefined &&
+      String(payload.parentRunId) !== String(expectedValues.parentRunId)) ||
+    (expectedValues.parentRunAttempt !== undefined &&
+      Number(payload.parentRunAttempt) !== Number(expectedValues.parentRunAttempt)) ||
+    (expectedValues.maxParentRunAttempt !== undefined &&
+      Number(payload.parentRunAttempt) > Number(expectedValues.maxParentRunAttempt)) ||
+    (expectedValues.workflowRef !== undefined &&
+      payload.workflowRef !== expectedValues.workflowRef) ||
+    (expectedValues.workflowSha !== undefined &&
+      payload.workflowSha !== expectedValues.workflowSha) ||
+    (expectedValues.targetSha !== undefined && payload.targetSha !== expectedValues.targetSha) ||
+    (expectedValues.releaseProfile !== undefined &&
+      payload.releaseProfile !== expectedValues.releaseProfile) ||
+    (expectedValues.rerunGroup !== undefined && payload.rerunGroup !== expectedValues.rerunGroup)
   ) {
     throw new Error("release state artifact binding is invalid");
   }
@@ -806,9 +850,7 @@ function verifyStateChildren(state, executionPlan, label) {
     if (snapshot.errors.length > 0) {
       throw new Error(`${label} child contains collector errors: ${child.key}`);
     }
-    return {
-      ...child,
-      ...snapshot,
+    return Object.assign({}, child, snapshot, {
       jobs: snapshot.timing.jobs.map((job) => ({
         conclusion: job.conclusion,
         html_url: job.url,
@@ -816,7 +858,7 @@ function verifyStateChildren(state, executionPlan, label) {
         status: job.status,
         url: job.url,
       })),
-    };
+    });
   });
   const recomputed = classifyReleaseSnapshot({
     children: snapshots,
@@ -929,8 +971,8 @@ function issueSummary(prefix, issue) {
   return `- ${prefix}: ${label}${result}${url}`;
 }
 
-export function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
-  const normalizedMax = Math.max(1, Math.min(Number(maxItems) || MAX_SUMMARY_ISSUES, 10));
+function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
+  const normalizedMax = Math.max(1, Math.min(maxItems || MAX_SUMMARY_ISSUES, 10));
   const lines = [];
   for (const blocker of payload.blockers.slice(0, normalizedMax)) {
     lines.push(issueSummary("Blocker", blocker));

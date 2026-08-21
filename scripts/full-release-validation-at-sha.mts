@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import {
+  classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
   validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
@@ -73,6 +74,13 @@ type CommandOptions = {
   dryRun?: boolean;
   stdio?: "inherit" | ["ignore", "pipe" | "ignore", "pipe" | "inherit" | "ignore"];
   timeoutMs?: number;
+};
+type CommandStatus = {
+  error?: Error;
+  signal?: unknown;
+  status: number | null;
+  stderr: unknown;
+  stdout: unknown;
 };
 type TemporaryRefParams = {
   keepBranch: boolean;
@@ -588,15 +596,20 @@ export function releaseDecisionStopsForeground(state: unknown) {
   ].includes(stringValue(state));
 }
 
-function tryReadReleaseDecision(
+export function tryReadReleaseDecision(
   parentRunId: string,
   parentRunAttempt: number,
   workflowSha: string,
+  runStatusImpl: (
+    command: string,
+    args: string[],
+    options?: CommandOptions,
+  ) => CommandStatus = runStatus,
 ) {
   const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-"));
   try {
-    const result = runStatus(
+    const result = runStatusImpl(
       "gh",
       [
         "run",
@@ -618,10 +631,31 @@ function tryReadReleaseDecision(
       ) {
         return undefined;
       }
+      const downloadError = Object.assign(
+        result.error instanceof Error
+          ? result.error
+          : new Error(
+              `Release Decision artifact download failed${
+                stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""
+              }`,
+            ),
+        {
+          signal: result.signal,
+          status: result.status,
+          stderr,
+        },
+      );
+      if (classifyReleaseGhTransportError(downloadError) === "transient") {
+        console.warn(
+          `Release Decision artifact unavailable this poll; retrying: ${downloadError.message}`,
+        );
+        return undefined;
+      }
       throw new Error(
         `Release Decision artifact download failed${
           stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""
         }`,
+        { cause: downloadError },
       );
     }
     const decisionPath = join(downloadDir, RELEASE_DECISION_FILE);

@@ -1,52 +1,60 @@
-export const RELEASE_DECISION_STATES: readonly string[];
-export function buildReleaseExecutionPlan(input: Record<string, any>): {
-  children: Array<Record<string, any>>;
-  gates: Array<Record<string, any>>;
+export interface ReleaseRecord {
+  [key: string]: unknown;
+}
+export interface ReleaseChild extends ReleaseRecord {
+  key: string;
+  runAttempt: number | null;
+  runId: string;
+}
+export interface ReleaseExecutionPlan extends ReleaseRecord {
+  children: ReleaseChild[];
+  evidenceReuse: ReleaseRecord;
+  gates: ReleaseRecord[];
+}
+export interface ReleaseStateArtifact extends ReleaseRecord {
+  blockers: ReleaseRecord[];
+  children: Record<string, ReleaseRecord>;
+  errors: ReleaseRecord[];
+  parentRunAttempt: number;
+  sourceParentRunAttempt: number;
+  state: string;
+}
+export type ReleaseGhTransportErrorClass = "hard" | "transient";
+export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function buildReleaseExecutionPlan(input: ReleaseRecord): {
+  children: ReleaseChild[];
+  gates: ReleaseRecord[];
 };
-export function buildReleaseExecutionPlanArtifact(input: Record<string, any>): Record<string, any>;
+export function buildReleaseExecutionPlanArtifact(input: ReleaseRecord): ReleaseExecutionPlan;
 export function validateReleaseExecutionPlanArtifact(
   payload: unknown,
   expected?: Record<string, unknown>,
-): Record<string, any>;
-export function releaseExecutionPlanSha256(plan: Record<string, any>): string;
-
-export function isReleaseCheckJobAdvisory(input: {
-  jobName: string;
-  releaseProfile: string;
-  workflowRef: string;
-}): boolean;
-
-export function failedJobsForPolicy(
-  child: Record<string, any>,
-  releaseProfile: string,
-  workflowRef: string,
-): Array<Record<string, any>>;
+): ReleaseExecutionPlan;
+export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
 
 export function terminalPolicyPass(
-  child: Record<string, any>,
+  child: ReleaseRecord,
   releaseProfile: string,
   workflowRef: string,
 ): boolean;
 
-export function classifyReleaseSnapshot(input: Record<string, any>): Record<string, any>;
-export function releasePlanGateFailures(
-  gates: Array<Record<string, any>>,
-): Array<Record<string, any>>;
-export function buildReleaseStateArtifact(input: Record<string, any>): Record<string, any>;
+export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
+export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
+export function buildReleaseStateArtifact(input: ReleaseRecord): ReleaseStateArtifact;
 export function validateReleaseStateArtifact(
   payload: unknown,
   expected?: Record<string, unknown>,
   expectedMode?: string,
-): Record<string, any>;
+): ReleaseStateArtifact;
 export function verifyReleaseStateArtifacts(
   executionPlanPayload: unknown,
   decisionPayload: unknown,
   drainPayload: unknown,
   expected?: Record<string, unknown>,
 ): {
-  decision: Record<string, any>;
-  drain: Record<string, any>;
-  executionPlan: Record<string, any>;
+  decision: ReleaseStateArtifact;
+  drain: ReleaseStateArtifact;
+  executionPlan: ReleaseExecutionPlan;
   sourceAttempts: {
     decision: number;
     drain: number;
@@ -59,19 +67,18 @@ export function selectReleaseStateArtifacts(
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
 ): {
-  decision: Record<string, any>;
-  drain: Record<string, any>;
-  executionPlan: Record<string, any>;
+  decision: ReleaseStateArtifact;
+  drain: ReleaseStateArtifact;
+  executionPlan: ReleaseExecutionPlan;
   sourceAttempts: {
     decision: number;
     drain: number;
     executionPlan: number;
   };
 };
-export function releaseStateDetailLines(payload: Record<string, any>, maxItems?: number): string[];
-export function formatReleaseStateOutcome(payload: Record<string, any>): string;
+export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
 export function affectedActiveRunIds(
-  children: Array<Record<string, any>>,
-  blockers: Array<Record<string, any>>,
+  children: ReleaseRecord[],
+  blockers: ReleaseRecord[],
   cancelledRunIds?: Set<string>,
 ): string[];

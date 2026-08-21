@@ -9,6 +9,7 @@ import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
   buildReleaseStateArtifact,
+  classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
   selectReleaseStateArtifacts,
@@ -146,6 +147,22 @@ function reusedEvidenceChildren() {
 }
 
 describe("full release execution plan", () => {
+  it.each([
+    ["HTTP 429: rate limited", "transient"],
+    ["HTTP 503: Server Error", "transient"],
+    ["spawnSync gh ETIMEDOUT", "transient"],
+    ["read ECONNRESET", "transient"],
+    ["getaddrinfo EAI_AGAIN api.github.com", "transient"],
+    ["unexpected EOF", "transient"],
+    ["HTTP 401: Bad credentials", "hard"],
+    ["HTTP 403: secondary rate limit", "hard"],
+    ["unknown flag: --name\nUsage: gh run download", "hard"],
+  ] as const)("classifies GitHub transport error %s as %s", (message, expected) => {
+    expect(
+      classifyReleaseGhTransportError(Object.assign(new Error(message), { stderr: message })),
+    ).toBe(expected);
+  });
+
   it("keeps required coverage selected when dispatch output is missing", () => {
     const result = plan({
       children: { normalCi: { result: "success", runAttempt: "", runId: "" } },

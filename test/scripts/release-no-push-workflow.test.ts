@@ -300,7 +300,7 @@ describe("release validation no-push transport", () => {
     const release = readWorkflow(RELEASE_CHECKS);
     const umbrellaGroups = full.on?.workflow_dispatch?.inputs?.rerun_group?.options ?? [];
     const releaseGroups = release.on?.workflow_dispatch?.inputs?.rerun_group?.options ?? [];
-    const dispatch = step(job(full, "release_checks"), "Dispatch and monitor release checks");
+    const dispatch = step(job(full, "release_checks"), "Dispatch release checks");
     const capture = step(job(release, "resolve_target"), "Capture selected inputs");
     const parentFilters = step(job(full, "resolve_target"), "Validate suite filters");
 
@@ -337,12 +337,6 @@ describe("release validation no-push transport", () => {
     expect(candidate.if).toContain(
       "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
-    const verify = step(job(full, "summary"), "Verify child workflow results");
-    expect(verify.env?.LIVE_SUITE_FILTER).toBe(
-      "${{ needs.resolve_target.outputs.live_suite_filter }}",
-    );
-    expect(verify.run).toContain('[[ -n "${LIVE_SUITE_FILTER// }" ]] || candidate_required=1');
-
     expect(capture.run).toContain(
       "release_check_groups=(install-smoke cross-os package qa-parity)",
     );
@@ -768,14 +762,14 @@ describe("release validation no-push transport", () => {
     expect(releaseHelper.with?.["persist-credentials"]).toBe(false);
   });
 
-  it("records adopted children before monitoring and cancels only a mismatched workflow SHA", () => {
+  it("records exact adopted child identity without monitoring or cancellation", () => {
     const full = readWorkflow(FULL_RELEASE);
     for (const [jobName, stepName] of [
-      ["normal_ci", "Dispatch and monitor CI"],
-      ["plugin_prerelease", "Dispatch and monitor plugin prerelease"],
-      ["release_checks", "Dispatch and monitor release checks"],
-      ["npm_telegram", "Dispatch and monitor npm Telegram E2E"],
-      ["performance", "Dispatch and monitor OpenClaw Performance"],
+      ["normal_ci", "Dispatch CI"],
+      ["plugin_prerelease", "Dispatch plugin prerelease"],
+      ["release_checks", "Dispatch release checks"],
+      ["npm_telegram", "Dispatch npm Telegram E2E"],
+      ["performance", "Dispatch OpenClaw Performance"],
     ] as const) {
       const dispatch = step(job(full, jobName), stepName);
       const dispatchRun = dispatch.run ?? "";
@@ -789,42 +783,25 @@ describe("release validation no-push transport", () => {
       expect(dispatchRun, jobName).not.toContain("cancel_child_on_failure");
       expect(dispatchRun, jobName).not.toContain("exit_on_parent_signal");
       expect(dispatchRun, jobName).not.toContain("disable_child_cleanup");
+      expect(dispatchRun, jobName).not.toContain("poll_count=0");
+      expect(dispatchRun, jobName).not.toContain("cancel_child");
       expect(
         dispatchRun.indexOf('run_json="$(validate_child_run "$run_id")"'),
         jobName,
       ).toBeLessThan(dispatchRun.indexOf('echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"'));
       expect(
-        dispatchRun.indexOf('echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"'),
-        jobName,
-      ).toBeLessThan(dispatchRun.indexOf("poll_count=0"));
-      expect(
         dispatchRun.indexOf('run_json="$(validate_child_run "$run_id")"'),
         jobName,
       ).toBeLessThan(dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'));
-      const shaMismatch = dispatchRun.slice(
-        dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'),
-        dispatchRun.indexOf("fail_fast_failed_jobs()"),
-      );
-      expect(shaMismatch, jobName).toContain("cancel_child");
-      expect(shaMismatch, jobName).not.toContain("trap");
     }
-
-    const verify = step(job(full, "summary"), "Verify child workflow results");
-    expect(verify.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
-    expect(verify.run).toContain('"$head_sha" != "$PARENT_WORKFLOW_SHA"');
-    expect(verify.run).not.toContain('"$head_sha" != "$TARGET_SHA"');
   });
 
   it("keeps the Release SHA wrapper as the durable evidence identity", () => {
     const full = readWorkflow(FULL_RELEASE);
-    const verify = step(job(full, "summary"), "Verify child workflow results");
+    const verify = step(job(full, "summary"), "Verify exact release state artifacts");
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
-    expect(verify.run).toContain(
-      'echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"',
-    );
-    expect(verify.run).toContain('"ci.yml"');
-    expect(verify.run).toContain('"openclaw-release-checks.yml"');
+    expect(verify.run).toBe("node scripts/full-release-validation-state.mjs verify");
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
     expect(dispatch.run).toContain("--connect-timeout 10");
@@ -849,9 +826,9 @@ describe("release validation no-push transport", () => {
     const packageAcceptance = readWorkflow(PACKAGE_ACCEPTANCE);
     const pluginPrerelease = readWorkflow(PLUGIN_PRERELEASE);
 
-    expect(fullText).toContain("dispatch_and_wait plugin-prerelease.yml");
-    expect(fullText).toContain("dispatch_and_wait openclaw-release-checks.yml");
-    expect(fullText).toContain("dispatch_and_wait openclaw-performance.yml");
+    expect(fullText).toContain("dispatch_child plugin-prerelease.yml");
+    expect(fullText).toContain("dispatch_child openclaw-release-checks.yml");
+    expect(fullText).toContain("dispatch_child openclaw-performance.yml");
     expect(fullText).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
 
     const preparePackage = job(release, "prepare_release_package");

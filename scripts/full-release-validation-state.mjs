@@ -17,6 +17,7 @@ import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
   buildReleaseStateArtifact,
+  classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
@@ -31,8 +32,6 @@ const execFileAsync = promisify(execFile);
 const RELEASE_SUMMARY_PATH =
   process.env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR ??
   fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url));
-const TRANSIENT_GH_PATTERN =
-  /HTTP 5[0-9][0-9]|Server Error|secondary rate limit|API rate limit|HTTP 429|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u;
 const API_ERROR_PATTERN =
   /HTTP [45][0-9][0-9]|API|Bad credentials|rate limit|network|connection|timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
@@ -60,14 +59,19 @@ function positiveInteger(value, label) {
 }
 
 async function abortableSleep(milliseconds, signal) {
-  await new Promise((resolve, reject) => {
+  let abortError;
+  await new Promise((resolve) => {
     const timer = setTimeout(resolve, milliseconds);
     const abort = () => {
       clearTimeout(timer);
-      reject(signal.reason ?? new Error("operation aborted"));
+      abortError = signal?.reason instanceof Error ? signal.reason : new Error("operation aborted");
+      resolve();
     };
     signal?.addEventListener("abort", abort, { once: true });
   });
+  if (abortError instanceof Error) {
+    throw new Error(abortError.message, { cause: abortError });
+  }
 }
 
 async function runGh(args, options = {}) {
@@ -89,8 +93,7 @@ async function runGh(args, options = {}) {
       if (options.signal?.aborted) {
         throw options.signal.reason ?? error;
       }
-      const stderr = stringValue(error?.stderr) || stringValue(error?.message);
-      if (attempt === attempts || !TRANSIENT_GH_PATTERN.test(stderr)) {
+      if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
         throw error;
       }
       await abortableSleep(Math.min(attempt * 10_000, 60_000), options.signal);
@@ -410,6 +413,7 @@ function readArtifact(path, label) {
   } catch (error) {
     throw new Error(
       `${label} artifact is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 }
@@ -915,8 +919,10 @@ async function main() {
 }
 
 if (process.argv[1]?.endsWith("full-release-validation-state.mjs")) {
-  await main().catch((error) => {
+  try {
+    await main();
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);
-  });
+  }
 }

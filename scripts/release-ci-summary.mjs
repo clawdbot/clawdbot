@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  classifyReleaseGhTransportError,
   formatReleaseStateOutcome,
   terminalPolicyPass,
   validateReleaseExecutionPlanArtifact,
@@ -187,7 +188,9 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
       ) {
         return undefined;
       }
-      throw new Error(`release execution plan artifact read failed: ${message}`);
+      throw new Error(`release execution plan artifact read failed: ${message}`, {
+        cause: error,
+      });
     }
     const path = join(downloadDir, "full-release-execution-plan.json");
     if (!statSync(path, { throwIfNoEntry: false })) {
@@ -1365,6 +1368,7 @@ export function validateTrustedProducerIdentity(
         `protected tooling tag is unavailable: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        { cause: error },
       );
     }
     if (liveTag?.object?.sha !== trustedIdentity.sha) {
@@ -1751,12 +1755,11 @@ export function validateReleaseRunEvidence(
         ) {
           throw new Error(`execution plan omits required child: ${child.name}`);
         }
-        return {
-          ...child,
+        return Object.assign({}, child, {
           displayTitle: plannedChild.displayTitle,
           headBranch: plannedChild.workflowRef,
           plannedChild,
-        };
+        });
       })
     : expectedSelectedChildDispatches(
         rootEvidence.manifest.runId,
@@ -1969,12 +1972,17 @@ function terminalParentJobFailures(parent) {
     .map((job) => String(job.name || "unnamed parent job"));
 }
 
-function tryReadReleaseDecisionArtifact(parent, runId, repository) {
+export function tryReadReleaseDecisionArtifact(
+  parent,
+  runId,
+  repository,
+  runReleaseCiGhImpl = runReleaseCiGh,
+) {
   const artifactName = `full-release-decision-${runId}-${parent.attempt}`;
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-watch-"));
   try {
     try {
-      runReleaseCiGh(
+      runReleaseCiGhImpl(
         [
           "run",
           "download",
@@ -1997,7 +2005,11 @@ function tryReadReleaseDecisionArtifact(parent, runId, repository) {
       ) {
         return undefined;
       }
-      throw new Error(`release decision artifact read failed: ${message}`);
+      if (classifyReleaseGhTransportError(error) === "transient") {
+        console.warn(`release decision artifact unavailable this poll; retrying: ${message}`);
+        return undefined;
+      }
+      throw new Error(`release decision artifact read failed: ${message}`, { cause: error });
     }
     const path = join(downloadDir, "full-release-decision.json");
     if (!statSync(path, { throwIfNoEntry: false })) {

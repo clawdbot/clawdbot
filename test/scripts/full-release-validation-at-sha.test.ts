@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   assertTrustedWorkflowHarness,
@@ -15,6 +15,7 @@ import {
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
+  tryReadReleaseDecision,
   validateReleaseDecisionPayload,
   verifyTargetRef,
   verifyTrustedWorkflowRef,
@@ -612,6 +613,35 @@ describe("full-release-validation-at-sha", () => {
         },
       ),
     ).toThrow("binding is invalid");
+  });
+
+  it("treats only transient Release Decision download failures as unavailable this poll", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+          error: undefined,
+          signal: null,
+          status: 1,
+          stderr: "HTTP 503: Server Error",
+          stdout: "",
+        })),
+      ).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Release Decision artifact unavailable this poll"),
+      );
+      expect(() =>
+        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+          error: undefined,
+          signal: null,
+          status: 1,
+          stderr: "HTTP 403: Bad credentials",
+          stdout: "",
+        })),
+      ).toThrow("Release Decision artifact download failed");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {

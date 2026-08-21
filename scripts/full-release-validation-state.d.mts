@@ -7,7 +7,7 @@ export function validateChildBinding(
 export function parsePlanInputs(value: string): Record<string, unknown>;
 export function hydrateReusedPlan(
   plan: Record<string, unknown>[],
-  evidence: Record<string, any>,
+  evidence: Record<string, unknown>,
 ): Record<string, unknown>[];
 export function formatReleaseStateHeartbeat(
   mode: string,
