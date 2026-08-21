@@ -1230,12 +1230,6 @@ export async function drainPendingDeliveriesCore(opts: {
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
 }): Promise<void> {
-  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
-  await migrateLegacyPendingOutboundDeliveries({
-    cfg: opts.cfg,
-    log: opts.log,
-    stateDir: opts.stateDir,
-  });
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
     const matchingEntries = (await loadPendingDeliveries(opts.stateDir)).filter(
@@ -1344,7 +1338,8 @@ export async function drainPendingDeliveriesCore(opts: {
 }
 
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
+ * Scan the canonical delivery queue and retry any pending entries.
+ * The gateway startup owner runs legacy migration before invoking this recovery pass.
  * Uses exponential backoff and moves entries that exhaust their retry budget to failed/.
  */
 export async function recoverPendingDeliveries(opts: {
@@ -1355,12 +1350,6 @@ export async function recoverPendingDeliveries(opts: {
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<DeliveryRecoverySummary> {
-  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
-  await migrateLegacyPendingOutboundDeliveries({
-    cfg: opts.cfg,
-    log: opts.log,
-    stateDir: opts.stateDir,
-  });
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();

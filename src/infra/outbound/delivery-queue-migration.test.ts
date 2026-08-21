@@ -253,7 +253,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 1, skipped: 0 });
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledTimes(1);
     expect(getDeliveryQueueEntryStatus(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBe(
       "completed",
@@ -346,8 +346,12 @@ describe("outbound prepared queue migration", () => {
     });
     releaseHook?.({ content: "first-prepared" });
 
-    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0 });
-    await expect(overlappingMigration).resolves.toEqual({ moved: 1, skipped: 0 });
+    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
+    await expect(overlappingMigration).resolves.toEqual({
+      moved: 1,
+      skipped: 0,
+      remaining: 0,
+    });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toMatchObject({
@@ -385,7 +389,7 @@ describe("outbound prepared queue migration", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       releaseHook?.({ content: "must not replay-prepared" });
 
-      await expect(migration).resolves.toEqual({ moved: 0, skipped: 1 });
+      await expect(migration).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
       expect(
         getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
       ).toBe("failed");
@@ -421,7 +425,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(completionMocks.failDurableDelivery).toHaveBeenCalledWith(
@@ -472,7 +476,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
 
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(completionMocks.failDurableDelivery).not.toHaveBeenCalled();
@@ -501,7 +505,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
@@ -516,7 +520,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 1, skipped: 0 });
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toMatchObject({
       preparedBatch: {
@@ -554,7 +558,7 @@ describe("outbound prepared queue migration", () => {
         log,
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(
@@ -585,7 +589,7 @@ describe("outbound prepared queue migration", () => {
       stateDir: tmpDir(),
     });
     expect({ secondMigration, warnings }).toEqual({
-      secondMigration: { moved: 1, skipped: 0 },
+      secondMigration: { moved: 1, skipped: 0, remaining: 0 },
       warnings: [],
     });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
@@ -640,7 +644,7 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     settleReconciliation?.({ status: "not_sent" });
 
-    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0 });
+    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     const queued = loadDeliveryQueueEntry(
       OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -700,7 +704,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 1, skipped: 0 });
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     const migrated = loadDeliveryQueueEntry(
       OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
@@ -903,6 +907,13 @@ describe("outbound prepared queue migration", () => {
     });
     const sendMatrix = vi.fn();
 
+    await expect(
+      migrateLegacyPendingOutboundDeliveries({
+        cfg: {},
+        log: createRecoveryLog(),
+        stateDir: tmpDir(),
+      }),
+    ).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     await recoverPendingDeliveries({
       cfg: {},
       log: createRecoveryLog(),
@@ -952,7 +963,7 @@ describe("outbound prepared queue migration", () => {
         log: createRecoveryLog(),
         stateDir: tmpDir(),
       }),
-    ).resolves.toEqual({ moved: 0, skipped: 1 });
+    ).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();

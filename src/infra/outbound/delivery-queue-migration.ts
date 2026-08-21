@@ -9,6 +9,7 @@ import {
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
+  countPendingDeliveryQueueEntries,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   terminalizePendingDeliveryQueueEntry,
@@ -508,14 +509,20 @@ async function finalizePreparedMigration(params: {
   }
 }
 
-const activeLegacyMigrations = new Map<string, Promise<{ moved: number; skipped: number }>>();
+type LegacyOutboundDeliveryMigrationResult = {
+  moved: number;
+  skipped: number;
+  remaining: number;
+};
+
+const activeLegacyMigrations = new Map<string, Promise<LegacyOutboundDeliveryMigrationResult>>();
 
 /** Migrates every unchanged pre-D4 pending row before canonical recovery scans. */
 export async function migrateLegacyPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-}): Promise<{ moved: number; skipped: number }> {
+}): Promise<LegacyOutboundDeliveryMigrationResult> {
   const migrationKey = params.stateDir ?? "<default-state>";
   return await getOrCreatePromise(
     activeLegacyMigrations,
@@ -529,7 +536,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-}): Promise<{ moved: number; skipped: number }> {
+}): Promise<LegacyOutboundDeliveryMigrationResult> {
   // Beta rows can exist in either prepared namespace. Canonicalize them before
   // any recovery owner sees the row; interrupted migrations then resume normally.
   migratePreparedReplyFields(OUTBOUND_DELIVERY_QUEUE_NAME, params.stateDir);
@@ -598,5 +605,13 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   if (moved > 0 || skipped > 0) {
     params.log.info(`Legacy delivery migration settled moved=${moved} skipped=${skipped}`);
   }
-  return { moved, skipped };
+  const remaining = countPendingDeliveryQueueEntries(
+    [
+      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+    ],
+    params.stateDir,
+  );
+  return { moved, skipped, remaining };
 }
