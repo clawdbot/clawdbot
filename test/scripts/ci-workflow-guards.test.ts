@@ -25,6 +25,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const CACHE_SAVE_V5 = "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb";
 const SETUP_GO_V6 = "actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
@@ -163,7 +165,7 @@ function runWorkflowShellScript(
     const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script
       .replace(
-        /node (?:--import tsx )?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
+        /node (?:(?:--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
         (_match, _marker: string, body: string) => {
           const modulePath = path.join(
             moduleRoot,
@@ -433,10 +435,42 @@ function runCiManifestFixture(options: {
   }
 }
 
-function runTargetContextValidation(targetContextRef: string, targetRef: string) {
+function runTargetContextValidation(
+  targetContextRef: string,
+  targetRef: string,
+  comparisonStatus = "ahead",
+) {
   const root = tempDirs.make("openclaw-ci-target-context-");
   const outputPath = path.join(root, "github-output");
+  const binPath = path.join(root, "bin");
+  const branchSha = "b".repeat(40);
+  mkdirSync(binPath);
   writeFileSync(outputPath, "", "utf8");
+  writeFileSync(
+    path.join(binPath, "git"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "ls-remote" && "$2" == "--heads" && "$3" == "origin" ]]; then
+  printf '%s\\t%s\\n' "$MOCK_BRANCH_SHA" "$4"
+  exit 0
+fi
+exit 2
+`,
+    "utf8",
+  );
+  writeFileSync(
+    path.join(binPath, "gh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "api" ]]
+[[ "$2" == "repos/openclaw/openclaw/compare/${targetRef}...${branchSha}" ]]
+[[ "$3" == "--jq" && "$4" == ".status" ]]
+printf '%s\\n' "$MOCK_COMPARE_STATUS"
+`,
+    "utf8",
+  );
+  chmodSync(path.join(binPath, "git"), 0o755);
+  chmodSync(path.join(binPath, "gh"), 0o755);
   const step = expectDefined(
     readCiWorkflow().jobs.preflight.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Validate target context",
@@ -450,12 +484,77 @@ function runTargetContextValidation(targetContextRef: string, targetRef: string)
       encoding: "utf8",
       env: {
         ...process.env,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_OUTPUT: outputPath,
+        MOCK_BRANCH_SHA: branchSha,
+        MOCK_COMPARE_STATUS: comparisonStatus,
+        PATH: `${binPath}:${process.env.PATH ?? ""}`,
         TARGET_CONTEXT_REF: targetContextRef,
         TARGET_REF: targetRef,
       },
     },
   );
+  return {
+    output: `${run.stdout}${run.stderr}`,
+    outputs: readWorkflowOutputs(outputPath),
+    status: run.status,
+  };
+}
+
+function runCandidateTrustClassification(options: {
+  checkoutRevision: string;
+  defaultRevision?: string;
+  eventName: "pull_request" | "push" | "workflow_dispatch";
+  historicalTarget?: boolean;
+  ref?: string;
+  releaseCandidateTarget?: boolean;
+  releaseGate?: boolean;
+  targetContextTarget?: boolean;
+  targetRef?: string;
+  workflowRevision?: string;
+}) {
+  const root = tempDirs.make("openclaw-ci-candidate-trust-");
+  const outputPath = path.join(root, "github-output");
+  const binPath = path.join(root, "bin");
+  const defaultRevision = options.defaultRevision ?? "b".repeat(40);
+  mkdirSync(binPath);
+  writeFileSync(outputPath, "", "utf8");
+  writeFileSync(
+    path.join(binPath, "git"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "ls-remote" && "$2" == "origin" && "$3" == "refs/heads/main" ]]
+printf '%s\\trefs/heads/main\\n' "$MOCK_DEFAULT_SHA"
+`,
+    "utf8",
+  );
+  chmodSync(path.join(binPath, "git"), 0o755);
+  const step = expectDefined(
+    readCiWorkflow().jobs.preflight.steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Classify candidate cache trust",
+    ),
+    "candidate cache trust step",
+  );
+  const script = expectDefined(step.run, "candidate cache trust script");
+  const run = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CHECKOUT_REVISION: options.checkoutRevision,
+      DEFAULT_BRANCH: "main",
+      GITHUB_EVENT_NAME: options.eventName,
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_REF: options.ref ?? "",
+      HISTORICAL_TARGET: String(options.historicalTarget ?? false),
+      MOCK_DEFAULT_SHA: defaultRevision,
+      PATH: `${binPath}:${process.env.PATH ?? ""}`,
+      RELEASE_CANDIDATE_TARGET: String(options.releaseCandidateTarget ?? false),
+      RELEASE_GATE: String(options.releaseGate ?? false),
+      TARGET_CONTEXT_TARGET: String(options.targetContextTarget ?? false),
+      TARGET_REF: options.targetRef ?? "",
+      WORKFLOW_REVISION: options.workflowRevision ?? "a".repeat(40),
+    },
+  });
   return {
     output: `${run.stdout}${run.stderr}`,
     outputs: readWorkflowOutputs(outputPath),
@@ -2760,7 +2859,7 @@ NODE
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.strategy).toBeUndefined();
     expect(job.steps[0]).toEqual(jobs["pnpm-store-warmup"].steps[0]);
-    expect(job.steps[1].uses).toBe("./.github/actions/setup-node-env");
+    expect(job.steps[1].uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const run = job.steps[2] as WorkflowStep;
     const parallelism = run.env?.OPENCLAW_DOCKER_ALL_PARALLELISM;
     expect(run).toMatchObject({
@@ -2845,7 +2944,7 @@ NODE
     expect(
       workflow.jobs.android.steps.filter(
         (step: WorkflowStep) =>
-          step.uses === "./.ci-workflow/.github/actions/setup-android-toolchain",
+          step.uses === "./.ci-harness/.github/actions/setup-android-toolchain",
       ),
     ).toHaveLength(1);
     expect(
@@ -2854,9 +2953,17 @@ NODE
       ),
     ).toHaveLength(1);
 
-    const cacheStep = expectDefined(
-      action.runs.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK"),
-      "Android SDK cache step",
+    const sdkRestoreStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Restore Android SDK cache"),
+      "Android SDK cache restore step",
+    );
+    const sdkSaveStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Save Android SDK cache"),
+      "Android SDK cache save step",
+    );
+    const gradleCacheStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Setup Gradle cache"),
+      "Gradle cache setup step",
     );
     const javaStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.name === "Setup Java"),
@@ -2869,21 +2976,32 @@ NODE
 
     expect(javaStep.uses).toBe("actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287");
     expect(javaStep.with).toMatchObject({
-      cache: "gradle",
       distribution: "temurin",
       "java-version": 17,
     });
-    expect(javaStep.with?.["cache-dependency-path"]).toContain(
-      "apps/android/gradle/libs.versions.toml",
-    );
-    expect(cacheStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
+    expect(action.inputs["cache-mode"].default).toBe("off");
+    expect(sdkRestoreStep.if).toBe("inputs.cache-mode != 'off'");
+    expect(sdkRestoreStep.uses).toBe(CACHE_V5);
+    expect(sdkRestoreStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
+    expect(sdkSaveStep.if).toContain("inputs.cache-mode == 'read-write'");
+    expect(sdkSaveStep.uses).toBe(CACHE_SAVE_V5);
+    expect(sdkSaveStep.with?.key).toBe("${{ steps.android-sdk-cache.outputs.cache-primary-key }}");
+    expect(gradleCacheStep).toMatchObject({
+      if: "inputs.cache-mode != 'off'",
+      uses: SETUP_GRADLE_V6,
+      with: {
+        "add-job-summary": "never",
+        "cache-provider": "basic",
+        "cache-read-only": "${{ inputs.cache-mode != 'read-write' }}",
+      },
+    });
     expect(installStep.run).toContain(`"${packageId}"`);
     expect(installStep.run).toContain(
       'yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]',
     );
   });
 
-  it("validates frozen target context without binding it to the live branch head", () => {
+  it("binds frozen target context to the declared live release branch", () => {
     const workflow = readCiWorkflow();
     const input = workflow.on.workflow_dispatch.inputs.target_context_ref;
     const step = expectDefined(
@@ -2902,14 +3020,19 @@ NODE
       type: "string",
     });
     expect(step.if).toBe("inputs.target_context_ref != ''");
-    expect(step.run).not.toContain("ls-remote");
-    expect(step.run).not.toContain("EXPECTED_SHA");
-    expect(step.run).not.toContain("git ");
+    expect(step.run).toContain("git ls-remote --heads origin");
+    expect(step.run).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_REF}...${branch_sha}"',
+    );
+    expect(step.run).toContain('"$comparison_status" != "ahead"');
+    expect(step.run).toContain('"$comparison_status" != "identical"');
 
     for (const contextRef of ["release/2026.8.1", "extended-stable/2026.8.33"]) {
-      const result = runTargetContextValidation(contextRef, targetSha);
-      expect(result.status, `${contextRef}: ${result.output}`).toBe(0);
-      expect(result.outputs.eligible).toBe("true");
+      for (const comparisonStatus of ["ahead", "identical"]) {
+        const result = runTargetContextValidation(contextRef, targetSha, comparisonStatus);
+        expect(result.status, `${contextRef}: ${result.output}`).toBe(0);
+        expect(result.outputs.eligible).toBe("true");
+      }
     }
 
     for (const contextRef of [
@@ -2933,6 +3056,14 @@ NODE
         "target_context_ref requires target_ref to be a full commit SHA.",
       );
     }
+
+    for (const comparisonStatus of ["behind", "diverged"]) {
+      const result = runTargetContextValidation("release/2026.8.1", targetSha, comparisonStatus);
+      expect(result.status, comparisonStatus).toBe(1);
+      expect(result.output).toContain(
+        "target_ref must be the declared release branch head or one of its ancestors.",
+      );
+    }
   });
 
   it("loads Android CI setup from the workflow revision for frozen targets", () => {
@@ -2946,10 +3077,10 @@ NODE
 
     expect(actionCheckout.uses).toBe(CHECKOUT_V6);
     expect(actionCheckout.with).toMatchObject({
-      path: ".ci-workflow",
+      path: ".ci-harness",
       "persist-credentials": false,
       ref: "${{ github.workflow_sha }}",
-      "sparse-checkout": ".github/actions/setup-android-toolchain",
+      "sparse-checkout": ".github/actions",
     });
     expect(checkoutIndex).toBeLessThan(actionCheckoutIndex);
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
@@ -3034,7 +3165,7 @@ NODE
       ":wear-shared:assembleDebug",
       ":wear-shared:lintDebug",
     ]);
-    expect(nativeResourcesSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(nativeResourcesSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     expect(nativeResourcesSetup.if).toBe(
       "needs.preflight.outputs.use_compatible_android_ci != 'true'",
     );
@@ -3326,7 +3457,7 @@ NODE
       expect(evaluateWorkflowExpression(setup.with?.["dependency-cache"], context), jobName).toBe(
         "false",
       );
-      expect(setup.with?.["cache-mode"], jobName).toBe("restore");
+      expect(setup.with?.["cache-mode"], jobName).toBe("${{ needs.preflight.outputs.cache_mode }}");
     }
   });
 
@@ -3491,8 +3622,10 @@ NODE
       const conditionalMode =
         typeof caller.mode === "string" &&
         caller.mode.startsWith("${{") &&
-        caller.mode.includes("'restore'") &&
-        (caller.mode.includes("'off'") || caller.mode.includes("'read-write'"));
+        (caller.mode.includes("needs.preflight.outputs.cache_mode") ||
+          caller.mode.includes("steps.candidate_trust.outputs.cache_mode") ||
+          (caller.mode.includes("'restore'") &&
+            (caller.mode.includes("'off'") || caller.mode.includes("'read-write'"))));
       expect(staticMode || conditionalMode, `${caller.file}: ${caller.step.name}`).toBe(true);
       for (const legacyInput of legacyInputs) {
         expect(caller.step.with, `${caller.file}: ${legacyInput}`).not.toHaveProperty(legacyInput);
@@ -3533,9 +3666,13 @@ NODE
       /(?:^|\n)\s*(?:\.artifacts\/build-all-cache|dist\/|dist-runtime\/|packages\/\*\/dist\/|extensions\/\*\/dist\/|~\/\.cache\/ms-playwright|~\/\.local\/share\/pnpm|~\/\.cache\/pnpm|node_modules)(?:\n|$)/u;
     for (const { file, step } of directCaches) {
       if (step.uses?.startsWith("actions/cache/save@")) {
-        expect(String(step.if), `${file}: ${step.name}`).toContain(
-          ".outputs.cache-mode == 'read-write'",
-        );
+        const condition = String(step.if);
+        expect(
+          condition.includes(".outputs.cache-mode == 'read-write'") ||
+            condition.includes("inputs.cache-mode == 'read-write'") ||
+            condition.includes("needs.preflight.outputs.cache_write_allowed == 'true'"),
+          `${file}: ${step.name}`,
+        ).toBe(true);
       }
       if (step.uses?.startsWith("actions/cache@")) {
         expect(nodeCachePathPattern.test(String(step.with?.path)), `${file}: ${step.name}`).toBe(
@@ -3641,7 +3778,7 @@ NODE
 
     const dependencySetups = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
       ((job as { steps?: WorkflowStep[] }).steps ?? []).flatMap((candidate) =>
-        candidate.uses === "./.github/actions/setup-node-env" &&
+        candidate.uses?.endsWith("/.github/actions/setup-node-env") &&
         candidate.with?.["dependency-cache"] !== undefined
           ? [{ jobName, step: candidate }]
           : [],
@@ -3651,7 +3788,7 @@ NODE
     expect(preflightRestore?.step).toMatchObject({
       if: expect.stringContaining("steps.manifest.outputs.run_node == 'true'"),
       with: {
-        "cache-mode": "restore",
+        "cache-mode": "${{ steps.candidate_trust.outputs.cache_mode }}",
         "dependency-cache": "true",
         "install-bun": "false",
       },
@@ -3692,7 +3829,9 @@ NODE
       expect(Array.isArray(needs) ? needs : [needs], jobName).toContain("preflight");
       expect(consumer.with, jobName).not.toHaveProperty("save-dependency-cache");
       expect(consumer.with?.["dependency-cache"], jobName).toContain("'true' || 'false'");
-      expect(consumer.with?.["cache-mode"], jobName).toBe("restore");
+      expect(consumer.with?.["cache-mode"], jobName).toBe(
+        "${{ needs.preflight.outputs.cache_mode }}",
+      );
       expect(consumer.with?.["dependency-cache"], jobName).toContain(
         "vars.OPENCLAW_CI_RUNNER_BACKEND",
       );
@@ -3711,12 +3850,21 @@ NODE
     }
     for (const { jobName, step: setup } of Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
       ((job as { steps?: WorkflowStep[] }).steps ?? [])
-        .filter((candidate) => candidate.uses === "./.github/actions/setup-node-env")
+        .filter((candidate) => candidate.uses?.endsWith("/.github/actions/setup-node-env"))
         .map((candidate) => ({ jobName, step: candidate })),
     )) {
       expect(setup.with, jobName).not.toHaveProperty("sticky-disk");
       expect(setup.with, jobName).not.toHaveProperty("save-sticky-disk");
-      expect(["off", "restore", "read-write"], jobName).toContain(setup.with?.["cache-mode"]);
+      expect(
+        [
+          "off",
+          "restore",
+          "read-write",
+          "${{ needs.preflight.outputs.cache_mode }}",
+          "${{ steps.candidate_trust.outputs.cache_mode }}",
+        ],
+        jobName,
+      ).toContain(setup.with?.["cache-mode"]);
     }
 
     const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
@@ -4225,7 +4373,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       "${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}";
 
     expect(setupNodeStep.with).toMatchObject({
-      "cache-mode": "restore",
+      "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-compile-cache": "true",
       "node-compile-cache-scope": "test",
       "vitest-fs-cache": "true",
@@ -4284,7 +4432,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE_PORTABLE=1");
     expect(compileConfigureStep.run).toContain("OPENCLAW_NODE_COMPILE_CACHE_WRITER=0");
     expect(buildSetupNodeStep.with).toMatchObject({
-      "cache-mode": "restore",
+      "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-compile-cache": "true",
       "node-compile-cache-scope": "build",
     });
@@ -4563,7 +4711,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     expect(hostedLintCache.if).toBe(
-      "matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))",
+      "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))",
     );
     expect(hostedLintCache.uses).toBe(CACHE_V5);
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
@@ -5240,6 +5388,168 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     expect(finalCheck).toBeGreaterThan(exactFetch);
   });
 
+  it("keeps manual candidates separate from trusted cache authority", () => {
+    const workflow = readCiWorkflow();
+    const preflight = workflow.jobs.preflight;
+    const trustStep = expectDefined(
+      preflight.steps.find((step: WorkflowStep) => step.name === "Classify candidate cache trust"),
+      "candidate cache trust step",
+    );
+    const nativeCheckout = expectDefined(
+      workflow.jobs["native-i18n"].steps.find((step: WorkflowStep) => step.name === "Checkout"),
+      "native i18n checkout",
+    );
+
+    expect(preflight.outputs).toMatchObject({
+      candidate_trust: "${{ steps.candidate_trust.outputs.trust }}",
+      cache_mode: "${{ steps.candidate_trust.outputs.cache_mode }}",
+      cache_write_allowed: "${{ steps.candidate_trust.outputs.cache_write_allowed }}",
+    });
+    expect(trustStep.env).toMatchObject({
+      CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
+      DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}",
+      TARGET_REF: "${{ inputs.target_ref }}",
+      WORKFLOW_REVISION: "${{ github.workflow_sha }}",
+    });
+    expect(trustStep.run).toContain("trust=untrusted");
+    expect(trustStep.run).toContain("cache_mode=off");
+    expect(trustStep.run).toContain("cache_write_allowed=false");
+    expect(trustStep.run).toContain('elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]');
+    expect(trustStep.run).toContain('"$RELEASE_GATE" == "true"');
+    expect(trustStep.run).toContain('"$CHECKOUT_REVISION" == "$default_sha"');
+    expect(trustStep.run).toContain('"$CHECKOUT_REVISION" == "$WORKFLOW_REVISION"');
+    expect(trustStep.run).toContain("cache_write_allowed=true");
+
+    const ciLocalActions = Object.values(workflow.jobs).flatMap(
+      (job) =>
+        (job as { steps?: WorkflowStep[] }).steps?.filter((step) =>
+          step.uses?.includes("/.github/actions/"),
+        ) ?? [],
+    );
+    expect(ciLocalActions.length).toBeGreaterThan(0);
+    for (const step of ciLocalActions) {
+      expect(step.uses, step.name).toContain("./.ci-harness/.github/actions/");
+    }
+
+    expect(nativeCheckout.uses).toBeUndefined();
+    expect(nativeCheckout.env).toMatchObject({
+      CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    expect(nativeCheckout.run).toContain('harness_dir="$workdir/.ci-harness"');
+    expect(nativeCheckout.run).toContain('"+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness"');
+    expect(nativeCheckout.run).toContain("sparse-checkout set .github/actions");
+
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      for (const step of (job as { steps?: WorkflowStep[] }).steps ?? []) {
+        if (step.uses?.startsWith("actions/cache/restore@")) {
+          expect(String(step.if), `${jobName}: ${step.name}`).toContain(
+            "preflight.outputs.cache_mode != 'off'",
+          );
+        }
+        if (step.uses?.startsWith("actions/cache/save@")) {
+          expect(String(step.if), `${jobName}: ${step.name}`).toContain(
+            "preflight.outputs.cache_write_allowed == 'true'",
+          );
+        }
+      }
+    }
+
+    const goSetup = expectDefined(
+      workflow.jobs["checks-node-core-test-nondist-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Setup Go for docs i18n",
+      ),
+      "docs i18n Go setup",
+    );
+    expect(goSetup.with?.cache).toBe(false);
+  });
+
+  it("classifies cache write authority from proven candidate identity", () => {
+    const workflowRevision = "a".repeat(40);
+    const defaultRevision = "b".repeat(40);
+    const arbitraryRevision = "c".repeat(40);
+    const cases = [
+      {
+        expected: { cache_mode: "off", cache_write_allowed: "false", trust: "untrusted" },
+        options: {
+          checkoutRevision: arbitraryRevision,
+          eventName: "workflow_dispatch" as const,
+          targetRef: arbitraryRevision,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "restore", cache_write_allowed: "false", trust: "workflow" },
+        options: {
+          checkoutRevision: workflowRevision,
+          eventName: "workflow_dispatch" as const,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "restore", cache_write_allowed: "true", trust: "main" },
+        options: {
+          checkoutRevision: defaultRevision,
+          defaultRevision,
+          eventName: "workflow_dispatch" as const,
+          targetRef: defaultRevision,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "restore", cache_write_allowed: "true", trust: "release" },
+        options: {
+          checkoutRevision: arbitraryRevision,
+          eventName: "workflow_dispatch" as const,
+          targetContextTarget: true,
+          targetRef: arbitraryRevision,
+          workflowRevision,
+        },
+      },
+      {
+        expected: {
+          cache_mode: "restore",
+          cache_write_allowed: "false",
+          trust: "pull-request",
+        },
+        options: {
+          checkoutRevision: arbitraryRevision,
+          eventName: "workflow_dispatch" as const,
+          releaseGate: true,
+          targetRef: arbitraryRevision,
+          workflowRevision,
+        },
+      },
+      {
+        expected: {
+          cache_mode: "restore",
+          cache_write_allowed: "false",
+          trust: "pull-request",
+        },
+        options: {
+          checkoutRevision: arbitraryRevision,
+          eventName: "pull_request" as const,
+          workflowRevision,
+        },
+      },
+      {
+        expected: { cache_mode: "restore", cache_write_allowed: "true", trust: "main" },
+        options: {
+          checkoutRevision: defaultRevision,
+          eventName: "push" as const,
+          ref: "refs/heads/main",
+          workflowRevision,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = runCandidateTrustClassification(testCase.options);
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs).toMatchObject(testCase.expected);
+    }
+  });
+
   it("uses the maintained checkout across workflow sanity jobs", () => {
     const workflow = readWorkflowSanityWorkflow();
 
@@ -5405,7 +5715,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
     expect(macosNodeSetup.with).toMatchObject({
-      "cache-mode": "restore",
+      "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "install-bun": "false",
     });
   });
@@ -6539,7 +6849,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       JSON.parse(readFileSync("ui/package.json", "utf8")).devDependencies.playwright,
     );
     expect(uiBrowserCache).toMatchObject({
-      if: "needs.preflight.outputs.compatibility_target != 'true'",
+      if: "needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'",
       uses: CACHE_V5,
       with: {
         key: "${{ runner.os }}-playwright-chromium-" + playwrightVersion,
@@ -6619,9 +6929,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
       "Control UI E2E Node setup",
     );
-    expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
+    expect(uiE2eSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
-      "cache-mode": "restore",
+      "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-version": "24.x",
       "install-bun": "false",
       "dependency-cache":
@@ -6775,7 +7085,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           evaluateWorkflowExpression(setup.with?.["dependency-cache"], context),
           assertionName,
         ).toBe(expected.dependencyCache);
-        expect(setup.with?.["cache-mode"], assertionName).toBe("restore");
+        expect(setup.with?.["cache-mode"], assertionName).toBe(
+          "${{ needs.preflight.outputs.cache_mode }}",
+        );
       }
     }
 
@@ -7179,15 +7491,41 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const verifyGoStep = nodeTestJob.steps.find(
       (step: WorkflowStep) => step.name === "Verify docs i18n Go toolchain",
     );
+    const resolveGoCacheStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve docs i18n Go cache",
+    );
+    const restoreGoCacheStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Restore docs i18n Go cache",
+    );
+    const saveGoCacheStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Save docs i18n Go cache",
+    );
     expect(setupGoStep).toMatchObject({
       if: "matrix.requires_go == true",
       uses: SETUP_GO_V6,
       with: {
+        cache: false,
         "go-version": "1.25.12",
-        "cache-dependency-path": "scripts/docs-i18n/go.sum",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
+    expect(resolveGoCacheStep).toMatchObject({
+      if: "matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'",
+      env: {
+        DEPENDENCY_HASH: "${{ hashFiles('scripts/docs-i18n/go.sum') }}",
+      },
+    });
+    expect(resolveGoCacheStep.run).toContain(
+      "key=setup-go-${RUNNER_OS}-${arch}-${image_prefix}go-${version#go}-${DEPENDENCY_HASH}",
+    );
+    expect(restoreGoCacheStep).toMatchObject({
+      if: "matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'",
+      uses: CACHE_V5,
+    });
+    expect(saveGoCacheStep).toMatchObject({
+      if: expect.stringContaining("needs.preflight.outputs.cache_write_allowed == 'true'"),
+      uses: CACHE_SAVE_V5,
+    });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
       run: 'test "$(go env GOVERSION)" = "go1.25.12"',
