@@ -755,6 +755,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
     expect(
+      extensionShard.steps.find((step: WorkflowStep) => step.name === "Checkout").with,
+    ).toEqual({
+      "fetch-depth": 0,
+      "fetch-tags": false,
+      filter: "blob:none",
+      "persist-credentials": false,
+      ref: "${{ needs.preflight.outputs.checkout_revision }}",
+      submodules: false,
+    });
+    expect(
       extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
     ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");

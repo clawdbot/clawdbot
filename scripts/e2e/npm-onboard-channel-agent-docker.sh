@@ -14,6 +14,7 @@ HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
 USE_SOURCE_PLUGIN_PACKAGE="${OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE:-0}"
+AUTH_PROFILE_STORE_CUTOVER_SHA="a8a9f284fb91af6a9d78fe66f9141eb01e009b21"
 JSON_ARTIFACT_MAX_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES 1048576
 )"
@@ -23,6 +24,50 @@ STATUS_TEXT_MAX_BYTES="$(
 run_log=""
 plugin_pack_dir=""
 plugin_package_args=()
+
+resolve_auth_profile_store_layout() {
+  local selected_sha="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}"
+  local source_sha
+  source_sha="$(git -C "$SOURCE_ROOT" rev-parse HEAD)"
+  if [ -z "$selected_sha" ]; then
+    selected_sha="$source_sha"
+  fi
+  if [[ ! "$selected_sha" =~ ^[0-9a-f]{40}$ ]] || [ "$source_sha" != "$selected_sha" ]; then
+    echo "Cannot bind npm onboarding auth layout to candidate $selected_sha at $source_sha." >&2
+    return 1
+  fi
+
+  if [ "$(git -C "$SOURCE_ROOT" rev-parse --is-shallow-repository)" = "true" ]; then
+    git -C "$SOURCE_ROOT" fetch --no-tags --filter=blob:none --deepen=1024 origin \
+      "$selected_sha" "$AUTH_PROFILE_STORE_CUTOVER_SHA"
+  elif ! git -C "$SOURCE_ROOT" cat-file -e "$AUTH_PROFILE_STORE_CUTOVER_SHA^{commit}"; then
+    git -C "$SOURCE_ROOT" fetch --no-tags --filter=blob:none --depth=1024 origin \
+      "$AUTH_PROFILE_STORE_CUTOVER_SHA"
+  fi
+
+  if ! git -C "$SOURCE_ROOT" merge-base "$AUTH_PROFILE_STORE_CUTOVER_SHA" "$selected_sha" \
+    >/dev/null; then
+    echo "Cannot prove candidate $selected_sha auth layout ancestry relative to $AUTH_PROFILE_STORE_CUTOVER_SHA." >&2
+    return 1
+  fi
+  set +e
+  git -C "$SOURCE_ROOT" merge-base --is-ancestor \
+    "$AUTH_PROFILE_STORE_CUTOVER_SHA" "$selected_sha"
+  local ancestry_status=$?
+  set -e
+  if [ "$ancestry_status" -eq 0 ]; then
+    printf '%s\n' "current"
+  elif [ "$ancestry_status" -eq 1 ]; then
+    # Frozen release branches can diverge before the cutover; absence of the
+    # cutover commit is the legacy contract, not a requirement to follow main.
+    printf '%s\n' "legacy"
+  else
+    echo "Cannot determine candidate $selected_sha auth layout ancestry relative to $AUTH_PROFILE_STORE_CUTOVER_SHA." >&2
+    return 1
+  fi
+}
+
+AUTH_PROFILE_STORE_LAYOUT="$(resolve_auth_profile_store_layout)"
 
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
@@ -103,6 +148,7 @@ echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e "OPENCLAW_NPM_ONBOARD_AUTH_LAYOUT=$AUTH_PROFILE_STORE_LAYOUT" \
   -e "OPENCLAW_NPM_ONBOARD_JSON_ARTIFACT_MAX_BYTES=$JSON_ARTIFACT_MAX_BYTES" \
   -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
@@ -208,7 +254,8 @@ openclaw onboard --non-interactive --accept-risk \
   --skip-health \
   --json >/tmp/openclaw-onboard.json
 
-node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
+node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs \
+  assert-onboard-state "$OPENCLAW_NPM_ONBOARD_AUTH_LAYOUT" "$HOME"
 
 openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 

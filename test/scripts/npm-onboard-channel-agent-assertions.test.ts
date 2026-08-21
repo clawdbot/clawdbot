@@ -37,7 +37,7 @@ function writeOnboardConfig(home: string): void {
   );
 }
 
-function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
+function writeCurrentAuthProfileStoreSqlite(home: string, store: unknown): void {
   const stateDir = path.join(home, ".openclaw", "state");
   fs.mkdirSync(stateDir, { recursive: true });
   const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
@@ -60,6 +60,29 @@ function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
   }
 }
 
+function writeLegacyAuthProfileStoreSqlite(home: string, store: unknown): void {
+  const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS auth_profile_store (
+        store_key TEXT NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db.prepare(
+      `
+        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        VALUES (?, ?, ?)
+      `,
+    ).run("primary", JSON.stringify(store), Date.now());
+  } finally {
+    db.close();
+  }
+}
+
 function runAssert(home: string, channel: string, ...tokens: string[]) {
   return spawnSync(
     process.execPath,
@@ -75,8 +98,8 @@ function runAssert(home: string, channel: string, ...tokens: string[]) {
   );
 }
 
-function runOnboardAssert(home: string) {
-  return spawnSync(process.execPath, [assertionsPath, "assert-onboard-state", home], {
+function runOnboardAssert(home: string, layout: "current" | "legacy") {
+  return spawnSync(process.execPath, [assertionsPath, "assert-onboard-state", layout, home], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -218,33 +241,36 @@ describe("npm onboard channel agent assertions", () => {
     }
   });
 
-  it("validates OpenAI env refs from the shared SQLite auth profile store", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
-    const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
+  it.each([
+    ["legacy", writeLegacyAuthProfileStoreSqlite],
+    ["current", writeCurrentAuthProfileStoreSqlite],
+  ] as const)(
+    "validates OpenAI env refs from the %s SQLite auth profile store",
+    (layout, writeStore) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
 
-    try {
-      writeOnboardConfig(tempDir);
-      writeSharedAuthProfileStoreSqlite(tempDir, {
-        version: 1,
-        profiles: {
-          "openai:api-key": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      try {
+        writeOnboardConfig(tempDir);
+        writeStore(tempDir, {
+          version: 1,
+          profiles: {
+            "openai:api-key": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
           },
-        },
-      });
+        });
 
-      const result = runOnboardAssert(tempDir);
+        const result = runOnboardAssert(tempDir, layout);
 
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(fs.existsSync(agentDir)).toBe(false);
-      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe("");
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("rejects auth profile stores without a usable OpenAI env ref", () => {
     const cases: unknown[] = [
@@ -262,9 +288,9 @@ describe("npm onboard channel agent assertions", () => {
 
       try {
         writeOnboardConfig(tempDir);
-        writeSharedAuthProfileStoreSqlite(tempDir, store);
+        writeCurrentAuthProfileStoreSqlite(tempDir, store);
 
-        const result = runOnboardAssert(tempDir);
+        const result = runOnboardAssert(tempDir, "current");
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("auth profile did not persist OPENAI_API_KEY env ref");
@@ -278,7 +304,7 @@ describe("npm onboard channel agent assertions", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     try {
       writeOnboardConfig(tempDir);
-      writeSharedAuthProfileStoreSqlite(tempDir, {
+      writeCurrentAuthProfileStoreSqlite(tempDir, {
         version: 1,
         profiles: {
           "openai:api-key": {
@@ -289,7 +315,7 @@ describe("npm onboard channel agent assertions", () => {
         },
       });
 
-      const result = runOnboardAssert(tempDir);
+      const result = runOnboardAssert(tempDir, "current");
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("auth profile persisted the raw OpenAI test key");
@@ -298,13 +324,75 @@ describe("npm onboard channel agent assertions", () => {
     }
   });
 
-  it("rejects a fresh install that recreates the retired main-agent auth database", () => {
+  it("rejects mixed legacy and current auth profile stores", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+
+    try {
+      writeOnboardConfig(tempDir);
+      const store = {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      };
+      writeLegacyAuthProfileStoreSqlite(tempDir, store);
+      writeCurrentAuthProfileStoreSqlite(tempDir, store);
+
+      const result = runOnboardAssert(tempDir, "current");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "onboard persisted mixed legacy and current auth profile stores",
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    ["current", "legacy", writeCurrentAuthProfileStoreSqlite],
+    ["legacy", "current", writeLegacyAuthProfileStoreSqlite],
+  ] as const)(
+    "rejects the %s layout when the candidate requires %s",
+    (observedLayout, expectedLayout, writeStore) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+
+      try {
+        writeOnboardConfig(tempDir);
+        writeStore(tempDir, {
+          version: 1,
+          profiles: {
+            "openai:api-key": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+        });
+
+        const result = runOnboardAssert(tempDir, expectedLayout);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `onboard persisted ${observedLayout} auth profile store; expected ${expectedLayout}`,
+        );
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("keeps the current-layout ban on the retired main-agent database", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
     const legacyAgentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
 
     try {
       writeOnboardConfig(tempDir);
-      writeSharedAuthProfileStoreSqlite(tempDir, {
+      writeCurrentAuthProfileStoreSqlite(tempDir, {
         version: 1,
         profiles: {
           "openai:api-key": {
@@ -317,10 +405,25 @@ describe("npm onboard channel agent assertions", () => {
       fs.mkdirSync(legacyAgentDir, { recursive: true });
       new DatabaseSync(path.join(legacyAgentDir, "openclaw-agent.sqlite")).close();
 
-      const result = runOnboardAssert(tempDir);
+      const result = runOnboardAssert(tempDir, "current");
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("onboard created the retired main-agent auth database");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a missing auth profile store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+
+    try {
+      writeOnboardConfig(tempDir);
+
+      const result = runOnboardAssert(tempDir, "legacy");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("onboard did not persist auth profile store");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

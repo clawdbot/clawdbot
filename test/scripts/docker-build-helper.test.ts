@@ -2716,6 +2716,21 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain("/tmp/openclaw-channel-add.log");
   });
 
+  it("binds npm onboarding auth layout to the exact candidate ancestry", () => {
+    const script = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(script, [
+      'AUTH_PROFILE_STORE_CUTOVER_SHA="a8a9f284fb91af6a9d78fe66f9141eb01e009b21"',
+      'selected_sha="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}"',
+      "fetch --no-tags --filter=blob:none --deepen=1024 origin",
+      'merge-base "$AUTH_PROFILE_STORE_CUTOVER_SHA" "$selected_sha"',
+      'merge-base --is-ancestor \\\n    "$AUTH_PROFILE_STORE_CUTOVER_SHA" "$selected_sha"',
+      "OPENCLAW_NPM_ONBOARD_AUTH_LAYOUT=$AUTH_PROFILE_STORE_LAYOUT",
+    ]);
+    expect(script).toContain('elif [ "$ancestry_status" -eq 1 ]; then');
+    expect(script).toContain('if ! git -C "$SOURCE_ROOT" merge-base');
+  });
+
   it("keeps real-TTY onboarding drivers aligned with the first-agent prompt", () => {
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',

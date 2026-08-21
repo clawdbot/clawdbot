@@ -77,17 +77,14 @@ function extractStatusSection(text, title) {
   return stripAnsi(section.join("\n"));
 }
 
-function readSharedAuthProfileStoreText(stateDir) {
-  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+function readAuthProfileStoreText(dbPath, query, storeKey) {
   if (!fs.existsSync(dbPath)) {
     return "";
   }
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
-      .get("shared");
+    const row = db.prepare(query).get(storeKey);
     return typeof row?.store_json === "string" ? row.store_json : "";
   } catch {
     return "";
@@ -96,10 +93,50 @@ function readSharedAuthProfileStoreText(stateDir) {
   }
 }
 
+function readCurrentAuthProfileStoreText(stateDir) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  return readAuthProfileStoreText(
+    dbPath,
+    "SELECT store_json FROM auth_profile_stores WHERE store_key = ?",
+    "shared",
+  );
+}
+
+function readLegacyAuthProfileStoreText(stateDir) {
+  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  return readAuthProfileStoreText(
+    dbPath,
+    "SELECT store_json FROM auth_profile_store WHERE store_key = ?",
+    "primary",
+  );
+}
+
 function assertOnboardState() {
-  const home = process.argv[3];
+  const expectedLayout = process.argv[3];
+  const home = process.argv[4];
+  if (expectedLayout !== "legacy" && expectedLayout !== "current") {
+    throw new Error(`unsupported onboard auth profile store layout: ${expectedLayout}`);
+  }
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
+
+  if (!fs.existsSync(configPath)) {
+    throw new Error("onboard did not write openclaw.json");
+  }
+  const legacyAuthStoreText = readLegacyAuthProfileStoreText(stateDir);
+  const currentAuthStoreText = readCurrentAuthProfileStoreText(stateDir);
+  if (legacyAuthStoreText && currentAuthStoreText) {
+    throw new Error("onboard persisted mixed legacy and current auth profile stores");
+  }
+  const observedLayout = legacyAuthStoreText ? "legacy" : currentAuthStoreText ? "current" : "";
+  if (!observedLayout) {
+    throw new Error("onboard did not persist auth profile store");
+  }
+  if (observedLayout !== expectedLayout) {
+    throw new Error(
+      `onboard persisted ${observedLayout} auth profile store; expected ${expectedLayout}`,
+    );
+  }
   const legacyAuthDatabase = path.join(
     stateDir,
     "agents",
@@ -107,14 +144,10 @@ function assertOnboardState() {
     "agent",
     "openclaw-agent.sqlite",
   );
-
-  if (!fs.existsSync(configPath)) {
-    throw new Error("onboard did not write openclaw.json");
-  }
-  if (fs.existsSync(legacyAuthDatabase)) {
+  if (expectedLayout === "current" && fs.existsSync(legacyAuthDatabase)) {
     throw new Error("onboard created the retired main-agent auth database");
   }
-  const authStoreText = readSharedAuthProfileStoreText(stateDir);
+  const authStoreText = expectedLayout === "legacy" ? legacyAuthStoreText : currentAuthStoreText;
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }
