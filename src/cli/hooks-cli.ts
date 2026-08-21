@@ -30,6 +30,7 @@ import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plu
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { summarizeStringEntries } from "../shared/string-sample.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -163,11 +164,19 @@ function resolveHookForToggle(
   const matches =
     nameMatches.length > 0 ? nameMatches : report.hooks.filter((hook) => hook.hookKey === hookName);
   if (matches.length > 1) {
-    throw new Error(`Hook "${hookName}" is ambiguous; use a unique hook name or hook key`);
+    const candidates = summarizeStringEntries({
+      entries: matches.map((hook) => `${hook.name} (${hook.hookKey})`),
+      limit: 5,
+    });
+    throw new Error(
+      `Hook "${hookName}" is ambiguous; matches: ${candidates}. Use a unique hook name or hook key.`,
+    );
   }
   const hook = matches[0];
   if (!hook) {
-    throw new Error(`Hook "${hookName}" not found`);
+    throw new Error(
+      `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+    );
   }
   if (hook.managedByPlugin) {
     throw new Error(
@@ -175,7 +184,16 @@ function resolveHookForToggle(
     );
   }
   if (opts?.requireEligible && !hook.requirementsSatisfied) {
-    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+    const missing = formatHookMissingSummary(hook, 3);
+    const installHint = hook.install.length
+      ? ` Install options: ${summarizeStringEntries({
+          entries: hook.install.map((option) => option.label),
+          limit: 3,
+        })}.`
+      : "";
+    throw new Error(
+      `Hook "${hookName}" is not eligible; missing ${missing}.${installHint} Run \`${formatCliCommand(`openclaw hooks info ${hookName}`)}\` for details.`,
+    );
   }
   return hook;
 }
@@ -241,25 +259,29 @@ function formatHookSource(hook: HookStatusEntry): string {
   return `plugin:${hook.pluginId ?? "unknown"}`;
 }
 
-function formatHookMissingSummary(hook: HookStatusEntry): string {
+function formatHookMissingSummary(hook: HookStatusEntry, itemLimit?: number): string {
+  const formatEntries = (entries: string[]) =>
+    itemLimit === undefined
+      ? entries.join(", ")
+      : summarizeStringEntries({ entries, limit: itemLimit });
   const missing: string[] = [];
   if (hook.enabledByConfig && hook.blockedReason && hook.blockedReason !== "missing requirements") {
     missing.push(hook.blockedReason);
   }
   if (hook.missing.bins.length > 0) {
-    missing.push(`bins: ${hook.missing.bins.join(", ")}`);
+    missing.push(`bins: ${formatEntries(hook.missing.bins)}`);
   }
   if (hook.missing.anyBins.length > 0) {
-    missing.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
+    missing.push(`anyBins: ${formatEntries(hook.missing.anyBins)}`);
   }
   if (hook.missing.env.length > 0) {
-    missing.push(`env: ${hook.missing.env.join(", ")}`);
+    missing.push(`env: ${formatEntries(hook.missing.env)}`);
   }
   if (hook.missing.config.length > 0) {
-    missing.push(`config: ${hook.missing.config.join(", ")}`);
+    missing.push(`config: ${formatEntries(hook.missing.config)}`);
   }
   if (hook.missing.os.length > 0) {
-    missing.push(`os: ${hook.missing.os.join(", ")}`);
+    missing.push(`os: ${formatEntries(hook.missing.os)}`);
   }
   return missing.join("; ");
 }
