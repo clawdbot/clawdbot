@@ -701,6 +701,10 @@ describe("gateway server cron", () => {
     const cronState = await createDirectCronState();
 
     try {
+      await expect(directCronReq(cronState, "cron.status", {})).resolves.toMatchObject({
+        ok: true,
+        payload: { enabled: false, triggersEnabled: false },
+      });
       const response = await directCronReq(cronState, "cron.add", {
         name: "disabled watcher",
         enabled: true,

@@ -565,6 +565,7 @@ export type CronPayload = ProtocolCronJob["payload"];
 
 export type CronStatus = {
   enabled: boolean;
+  triggersEnabled: boolean;
   jobs: number;
   nextWakeAtMs?: number | null;
 };

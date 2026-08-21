@@ -72,7 +72,6 @@ type CronProps = {
   loading: boolean;
   /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
-  triggersEnabled: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   failingCount: number | null;
@@ -1729,7 +1728,10 @@ function renderAdvanced(
 
 function renderTriggerRows(props: CronProps) {
   const scriptPayload = props.form.payloadKind === "script";
-  if (!props.triggersEnabled || scriptPayload) {
+  if (!scriptPayload && props.status === null) {
+    return nothing;
+  }
+  if (props.status?.triggersEnabled !== true || scriptPayload) {
     return renderSettingsRow({
       title: t("cron.form.conditionTrigger"),
       description: scriptPayload
