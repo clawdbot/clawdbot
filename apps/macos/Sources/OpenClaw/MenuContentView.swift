@@ -131,6 +131,11 @@ struct MenuContent: View {
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
+            Button {
+                self.open(tab: .voiceWake)
+            } label: {
+                Label("Voice & Talk Settings…", systemImage: "slider.horizontal.3")
+            }
             Divider()
             Button {
                 AppNavigationActions.openDashboard()

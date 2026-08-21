@@ -8,7 +8,11 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
+import {
+  isTalkGptLiveModel,
+  resolveTalkRealtimeSelection,
+  talkProviderRejectsTransport,
+} from "./talk-schema.ts";
 import {
   renderTalk,
   selectedTalkProviderOption,
@@ -196,11 +200,16 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
-      // GPT-Live is WebRTC-only; a configured relay or provider-websocket
-      // transport would make the just-picked model fail at session create, so
-      // clearing it lets the default client-owned WebRTC path apply.
-      const transport = this.liveSelection().transport;
-      if (isTalkGptLiveModel(model) && transport && transport !== "webrtc") {
+      const selection = this.liveSelection();
+      const transport = selection.transport;
+      const provider = selectedTalkProviderOption(this.catalog, selection);
+      // Preserve configured transports unless the selected provider positively
+      // advertises that it cannot serve them.
+      if (
+        isTalkGptLiveModel(model) &&
+        transport &&
+        talkProviderRejectsTransport(provider?.transports, transport)
+      ) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
       }
       return;
@@ -247,11 +256,10 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   }
 
   /**
-   * Model, voice, and transport picks are provider-coupled (an xAI session
-   * cannot use a gpt-live model, marin, or webrtc), so a provider switch
-   * clears the top-level overrides instead of carrying them across. Each
-   * provider's own `talk.realtime.providers.<id>` entry survives untouched and
-   * supplies that provider's fallback values.
+   * Model and voice picks are provider-coupled, so a provider switch clears
+   * those top-level overrides. Transport survives when the target provider
+   * advertises it; an unavailable catalog is not evidence of incompatibility.
+   * Each provider's own entry survives and supplies its fallback values.
    */
   private changeProvider(providerId: string | null) {
     if (this.mutationDisabled) {
@@ -268,20 +276,25 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       runtimeConfig.removeFormValue(["talk", "realtime", "provider"]);
       return;
     }
-    runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
-    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
-    // A relay-only provider (no client-owned transport) needs the transport
-    // written explicitly: an unset transport routes to talk.client.create,
-    // which such a provider cannot serve.
+    const configuredTransport = this.liveSelection().transport;
     const option =
       this.catalog.kind === "ready"
         ? this.catalog.providers.find((provider) => provider.id === providerId)
         : undefined;
+    if (
+      configuredTransport &&
+      talkProviderRejectsTransport(option?.transports, configuredTransport)
+    ) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+    }
+    runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
+    // A relay-only provider (no client-owned transport) needs the transport
+    // written explicitly when the current selection cannot carry across.
     const relayOnly =
       option !== undefined &&
       option.transports.length > 0 &&
-      !option.transports.some((transport) => TALK_CLIENT_OWNED_TRANSPORTS.has(transport));
-    if (relayOnly) {
+      !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
+    if (relayOnly && configuredTransport !== "gateway-relay") {
       runtimeConfig.patchForm(["talk", "realtime", "transport"], "gateway-relay");
     }
   }

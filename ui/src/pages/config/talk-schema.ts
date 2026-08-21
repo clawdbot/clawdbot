@@ -57,10 +57,20 @@ export function resolveTalkRealtimeSelection(
 }
 
 /**
- * Mirrors the server-side gpt-live prefix contract
- * (extensions/openai/realtime-quicksilver.ts); the UI only uses it to decide
- * whether to show the ChatGPT sign-in hint, never to gate a session.
+ * Mirrors the server-side gpt-live family contract
+ * (extensions/openai/realtime-quicksilver.ts); the UI uses it for the ChatGPT
+ * sign-in hint and to avoid retaining a transport the selected provider
+ * positively rejects. It never gates a session.
  */
 export function isTalkGptLiveModel(model: string | null): boolean {
-  return model !== null && model.toLowerCase().startsWith("gpt-live");
+  const normalized = model?.trim().toLowerCase();
+  return normalized === "gpt-live" || normalized?.startsWith("gpt-live-") === true;
+}
+
+/** An empty or unavailable transport catalog is not evidence of incompatibility. */
+export function talkProviderRejectsTransport(
+  transports: readonly string[] | undefined,
+  transport: string,
+): boolean {
+  return transports !== undefined && transports.length > 0 && !transports.includes(transport);
 }
