@@ -61,7 +61,7 @@ private final class CronGatewayFixture: @unchecked Sendable {
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
 
-    init(recoveryEligible: Bool = false) {
+    init(recoveryEligible: Bool = false, initialRunsFailure: (any Error & Sendable)? = nil) {
         let requests = CronGatewayRequestLog()
         self.requests = requests
         self.session = GatewayTestWebSocketSession(taskFactory: {
@@ -70,7 +70,14 @@ private final class CronGatewayFixture: @unchecked Sendable {
                       let request = Self.decodeRequest(message)
                 else { return }
                 await requests.append(request)
-                guard request.method != "cron.runs" else { return }
+                guard request.method != "cron.runs" else {
+                    if let initialRunsFailure,
+                       await requests.requestCount(method: "cron.runs") == 1
+                    {
+                        throw initialRunsFailure
+                    }
+                    return
+                }
                 let payload: String
                 switch request.method {
                 case "cron.status":
@@ -412,14 +419,8 @@ struct CronJobsStoreTests {
         #expect(store.lastError == nil)
     }
 
-    @Test func `superseded history does not activate recovery on a production Gateway connection`() async throws {
-        let isolatedIdentity = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-autoqa-185-cron-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: isolatedIdentity, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: isolatedIdentity) }
-
-        try await DeviceIdentityStore.withStateDirectory(isolatedIdentity) {
-            let fixture = CronGatewayFixture(recoveryEligible: true)
+    @Test func `superseded history never activates the local Gateway or its launch agent`() async throws {
+        try await self.withLocalGatewayRecovery { fixture in
             let store = CronJobsStore(gateway: fixture.gateway)
             defer { store.stop() }
             store.selectJob("job-a")
@@ -436,7 +437,28 @@ struct CronJobsStoreTests {
             #expect(await fixture.requests.endpointLookupCount() == 2)
             #expect(fixture.session.snapshotMakeCount() == 1)
             #expect(fixture.session.snapshotCancelCount() == 0)
-            await fixture.gateway.shutdown()
+            #expect(GatewayProcessManager.shared.status == .stopped)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
+    @Test func `uncancelled history transport failures activate the Gateway and retry`() async throws {
+        try await self.withLocalGatewayRecovery(initialRunsFailure: URLError(.networkConnectionLost)) { fixture in
+            let store = CronJobsStore(gateway: fixture.gateway)
+            defer { store.stop() }
+
+            store.selectJob("job-a")
+
+            _ = try #require(await fixture.waitForRequest(jobId: "job-a"))
+            let recoveredRequest = try #require(await fixture.waitForRequest(jobId: "job-a", occurrence: 1))
+            #expect(GatewayProcessManager.shared.status != .stopped)
+            try await fixture.respond(to: recoveredRequest, jobId: "job-a", summary: "recovered history")
+            try #require(await self.waitUntil { !store.isLoadingRuns })
+
+            #expect(store.runEntries.map(\.jobId) == ["job-a"])
+            #expect(store.runEntries.first?.summary == "recovered history")
+            #expect(store.lastError == nil)
+            #expect(await fixture.requests.requestCount(method: "cron.runs", jobId: "job-a") == 2)
         }
     }
 
@@ -471,6 +493,62 @@ struct CronJobsStoreTests {
             runAtMs: nil,
             durationMs: nil,
             nextRunAtMs: nil)
+    }
+
+    private func withLocalGatewayRecovery(
+        initialRunsFailure: (any Error & Sendable)? = nil,
+        _ operation: (CronGatewayFixture) async throws -> Void) async throws
+    {
+        let isolatedState = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-autoqa-185-cron-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: isolatedState, withIntermediateDirectories: true)
+        let configURL = isolatedState.appendingPathComponent("openclaw.json")
+        try Data(#"{"gateway":{"mode":"local","port":49185}}"#.utf8).write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: isolatedState) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configURL.path,
+            "OPENCLAW_STATE_DIR": isolatedState.path,
+        ]) {
+            try await DeviceIdentityStore.withStateDirectory(isolatedState) {
+                let fixture = CronGatewayFixture(
+                    recoveryEligible: true,
+                    initialRunsFailure: initialRunsFailure)
+                let manager = GatewayProcessManager.shared
+                let priorMode = AppStateStore.shared.connectionMode
+                AppStateStore.shared.connectionMode = .local
+                manager._testResetGatewayStartTask()
+                manager.setTestingStatus(.stopped)
+                manager.setTestingConnection(fixture.gateway)
+                manager.setTestingSkipControlChannelRefresh(true)
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(
+                    isolatedState.appendingPathComponent("disable-launch-agent"))
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                    #"{"ok":true,"service":{"loaded":false}}"#)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                defer {
+                    manager._testResetGatewayStartTask()
+                    manager.setTestingStatus(.stopped)
+                    manager.setTestingConnection(nil)
+                    manager.setTestingSkipControlChannelRefresh(false)
+                    manager.setTestingDesiredActive(false)
+                    GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                    GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                    GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                    AppStateStore.shared.connectionMode = priorMode
+                }
+
+                do {
+                    try await operation(fixture)
+                    await fixture.gateway.shutdown()
+                } catch {
+                    await fixture.gateway.shutdown()
+                    throw error
+                }
+            }
+        }
     }
 
     private func waitUntil(

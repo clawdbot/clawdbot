@@ -39,11 +39,9 @@ final class CronJobsStore {
     }
 
     func start() {
-        guard !self.isPreview else { return }
-        guard self.eventTask == nil else { return }
+        guard !self.isPreview, self.eventTask == nil else { return }
         self.eventTask = Task { [weak self, gateway] in
-            let stream = await gateway.subscribe()
-            for await push in stream {
+            for await push in await gateway.subscribe() {
                 guard !Task.isCancelled, let self else { return }
                 self.handle(push: push)
             }
@@ -54,13 +52,10 @@ final class CronJobsStore {
     }
 
     func stop() {
-        self.refreshTask?.cancel()
-        self.refreshTask = nil
+        SimpleTaskSupport.stop(task: &self.refreshTask)
         self.invalidateRuns()
-        self.eventTask?.cancel()
-        self.eventTask = nil
-        self.pollTask?.cancel()
-        self.pollTask = nil
+        SimpleTaskSupport.stop(task: &self.eventTask)
+        SimpleTaskSupport.stop(task: &self.pollTask)
     }
 
     func refreshJobs() async {
@@ -95,7 +90,6 @@ final class CronJobsStore {
         if self.selectedJobId != id {
             self.selectedJobId = id
             self.runEntries = []
-            self.lastError = nil
         }
         self.refreshRuns(jobId: id)
     }
@@ -108,28 +102,18 @@ final class CronJobsStore {
         self.isLoadingRuns = true
         self.lastError = nil
         SimpleTaskSupport.schedule(task: &self.runsTask, delay: delay) { [weak self] in
-            guard let self, self.runsGeneration == generation, self.selectedJobId == jobId else { return }
-            defer {
-                if self.runsGeneration == generation, self.selectedJobId == jobId {
-                    self.isLoadingRuns = false
-                    self.runsTask = nil
-                }
-            }
+            guard let self, self.ownsRunsRequest(generation, jobId: jobId) else { return }
             do {
                 let entries = try await self.gateway.cronRuns(jobId: jobId, limit: limit)
-                guard self.runsGeneration == generation,
-                      self.selectedJobId == jobId,
-                      !Task.isCancelled
-                else { return }
+                guard self.ownsRunsRequest(generation, jobId: jobId) else { return }
                 self.runEntries = entries
             } catch {
-                guard self.runsGeneration == generation,
-                      self.selectedJobId == jobId,
-                      !Task.isCancelled
-                else { return }
+                guard self.ownsRunsRequest(generation, jobId: jobId) else { return }
                 self.logger.error("cron.runs failed \(error.localizedDescription, privacy: .public)")
                 self.lastError = error.localizedDescription
             }
+            self.isLoadingRuns = false
+            self.runsTask = nil
         }
     }
 
@@ -210,6 +194,10 @@ final class CronJobsStore {
         self.invalidateRuns()
         self.selectedJobId = nil
         self.runEntries = []
+    }
+
+    private func ownsRunsRequest(_ generation: UInt64, jobId: String) -> Bool {
+        self.runsGeneration == generation && self.selectedJobId == jobId && !Task.isCancelled
     }
 
     private func invalidateRuns() {

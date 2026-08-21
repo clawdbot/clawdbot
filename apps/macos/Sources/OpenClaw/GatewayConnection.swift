@@ -291,6 +291,7 @@ actor GatewayConnection {
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
+            try Task.checkCancellation()
             if allowTLSRepair,
                let tlsError = error as? GatewayTLSValidationError,
                await GatewayTLSRepairCoordinator.shared.repair(
@@ -1570,11 +1571,9 @@ extension GatewayConnection {
     }
 
     func cronRuns(jobId: String, limit: Int = 200) async throws -> [CronRunLogEntry] {
-        // Superseded history requests must not activate shared Gateway recovery.
-        let data = try await self.request(
-            method: Method.cronRuns.rawValue,
-            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)],
-            retryTransportFailures: false)
+        let data = try await requestRaw(
+            method: .cronRuns,
+            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)])
         return try Self.decodeCronRunsResponse(data)
     }
 
