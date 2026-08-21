@@ -282,6 +282,7 @@ export type PluginManifestRecord = {
     PluginManifestMediaUnderstandingProviderMetadata
   >;
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  realtimeVoiceProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   toolMetadata?: Record<string, PluginManifestToolMetadata>;
@@ -638,6 +639,7 @@ function buildRecord(params: {
     ),
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
+    realtimeVoiceProviderMetadata: params.manifest.realtimeVoiceProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,
     toolMetadata: params.manifest.toolMetadata,

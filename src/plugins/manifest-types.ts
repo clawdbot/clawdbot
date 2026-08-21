@@ -437,6 +437,8 @@ export type PluginManifest = {
   >;
   /** Cheap image-generation provider auth metadata without importing plugin runtime. */
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap realtime voice provider metadata without importing plugin runtime. */
+  realtimeVoiceProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap video-generation provider auth metadata without importing plugin runtime. */
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap music-generation provider auth metadata without importing plugin runtime. */

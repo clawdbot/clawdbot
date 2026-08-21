@@ -12,6 +12,7 @@ const manifest = JSON.parse(
     suppressions?: Array<{ provider?: string; model?: string }>;
   };
   mediaUnderstandingProviderMetadata?: Record<string, { defaultModels?: Record<string, string> }>;
+  realtimeVoiceProviderMetadata?: Record<string, { aliases?: string[] }>;
 };
 
 const XAI_MULTI_AGENT_MODELS = [
@@ -72,5 +73,12 @@ describe("xAI plugin manifest", () => {
 
   it("does not advertise a batch STT model selector", () => {
     expect(manifest.mediaUnderstandingProviderMetadata?.xai?.defaultModels).toBeUndefined();
+  });
+
+  it("advertises realtime voice aliases for manifest-driven startup", () => {
+    expect(manifest.realtimeVoiceProviderMetadata?.xai?.aliases).toEqual([
+      "xai-realtime-voice",
+      "grok-voice",
+    ]);
   });
 });

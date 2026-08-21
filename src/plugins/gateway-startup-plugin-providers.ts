@@ -212,14 +212,62 @@ export function collectConfiguredGenerationProviderIds(
   };
 }
 
+function collectRealtimeProviderIdsFromConfigValue(
+  value: unknown,
+  options: { includeConfiguredProvidersForAutomaticSelection?: boolean } = {},
+): ReadonlySet<string> {
+  const realtime = isRecord(value) ? value : undefined;
+  if (!realtime) {
+    return new Set();
+  }
+
+  const explicitProvider = normalizeOptionalLowercaseString(
+    typeof realtime.provider === "string" ? realtime.provider : undefined,
+  );
+  const configuredProviders = isRecord(realtime.providers)
+    ? Object.keys(realtime.providers)
+        .map((providerId) => normalizeOptionalLowercaseString(providerId))
+        .filter((providerId): providerId is string => Boolean(providerId))
+    : [];
+  if (explicitProvider) {
+    return new Set([explicitProvider, ...configuredProviders]);
+  }
+  if (options.includeConfiguredProvidersForAutomaticSelection) {
+    return new Set(configuredProviders);
+  }
+  return configuredProviders.length === 1 ? new Set(configuredProviders) : new Set();
+}
+
+function collectConfiguredRealtimeVoiceProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const voiceCallEntry = isRecord(config.plugins?.entries?.["voice-call"])
+    ? config.plugins.entries["voice-call"]
+    : undefined;
+  const voiceCallConfig = isRecord(voiceCallEntry?.config) ? voiceCallEntry.config : undefined;
+  const voiceCallRealtime = isRecord(voiceCallConfig?.realtime)
+    ? voiceCallConfig.realtime
+    : undefined;
+  return new Set([
+    ...collectRealtimeProviderIdsFromConfigValue(config.talk?.realtime),
+    ...(voiceCallRealtime?.enabled === true
+      ? collectRealtimeProviderIdsFromConfigValue(voiceCallRealtime, {
+          includeConfiguredProvidersForAutomaticSelection: true,
+        })
+      : []),
+  ]);
+}
+
 export function collectConfiguredVoiceProviderIds(
   config: OpenClawConfig,
 ): ConfiguredVoiceProviderIds {
   const providerIds = collectModelProviderIds(config.agents?.defaults?.voiceModel);
+  const realtimeVoiceProviderIds = new Set([
+    ...providerIds,
+    ...collectConfiguredRealtimeVoiceProviderIds(config),
+  ]);
   return {
     speechProviders: providerIds,
     realtimeTranscriptionProviders: providerIds,
-    realtimeVoiceProviders: providerIds,
+    realtimeVoiceProviders: realtimeVoiceProviderIds,
   };
 }
 

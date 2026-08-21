@@ -179,11 +179,22 @@ function manifestOwnsConfiguredContract(
   contractKey: StartupContractKey,
   configuredProviderIds: ReadonlySet<string>,
 ): boolean {
+  const providerAliases =
+    contractKey === "realtimeVoiceProviders" ? manifest?.realtimeVoiceProviderMetadata : undefined;
   return (
     configuredProviderIds.size > 0 &&
     (manifest?.contracts?.[contractKey] ?? []).some((providerId) => {
       const normalized = normalizeOptionalLowercaseString(providerId);
-      return normalized ? configuredProviderIds.has(normalized) : false;
+      if (!normalized) {
+        return false;
+      }
+      if (configuredProviderIds.has(normalized)) {
+        return true;
+      }
+      return (providerAliases?.[normalized]?.aliases ?? []).some((alias) => {
+        const normalizedAlias = normalizeOptionalLowercaseString(alias);
+        return normalizedAlias ? configuredProviderIds.has(normalizedAlias) : false;
+      });
     })
   );
 }

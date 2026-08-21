@@ -2426,6 +2426,11 @@ describe("loadPluginManifestRegistry", () => {
           ],
         },
       },
+      realtimeVoiceProviderMetadata: {
+        openai: {
+          aliases: ["openai-realtime"],
+        },
+      },
       mediaUnderstandingProviderMetadata: {
         openai: {
           capabilities: ["image", "audio", "unknown"],
@@ -2533,6 +2538,11 @@ describe("loadPluginManifestRegistry", () => {
             image: false,
           },
         },
+      },
+    });
+    expect(registry.plugins[0]?.realtimeVoiceProviderMetadata).toEqual({
+      openai: {
+        aliases: ["openai-realtime"],
       },
     });
     expect(registry.plugins[0]?.toolMetadata).toEqual({

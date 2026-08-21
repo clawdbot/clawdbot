@@ -173,6 +173,19 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         musicGenerationProviders: ["google"],
       },
     },
+    {
+      id: "xai",
+      enabledByDefault: true,
+      providers: ["xai"],
+      contracts: {
+        realtimeVoiceProviders: ["xai"],
+      },
+      realtimeVoiceProviderMetadata: {
+        xai: {
+          aliases: ["xai-realtime-voice", "grok-voice"],
+        },
+      },
+    },
     { id: "amazon-bedrock", enabledByDefault: true, providers: ["amazon-bedrock"] },
     { id: "brave", origin: "global", contracts: { webSearchProviders: ["brave"] } },
     { id: "codex", providers: ["codex"], activation: { onAgentHarnesses: ["codex"] } },
@@ -755,6 +768,139 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         },
       } as OpenClawConfig,
       ["browser", "openai", "google", "memory-core"],
+    ],
+    [
+      "includes bundled realtime voice providers configured by Talk realtime provider at startup",
+      {
+        channels: {},
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: {
+              openai: { model: "gpt-live-1-codex" },
+            },
+            mode: "realtime",
+            transport: "webrtc",
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
+      "includes bundled realtime voice providers configured by Talk realtime provider map at startup",
+      {
+        channels: {},
+        talk: {
+          realtime: {
+            provider: "openai",
+            providers: {
+              openai: { model: "gpt-live-1-codex" },
+              google: { model: "gemini-live-2.5-flash-preview" },
+            },
+            mode: "realtime",
+            transport: "webrtc",
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "google", "memory-core"],
+    ],
+    [
+      "includes bundled realtime voice providers configured by single Talk realtime provider block",
+      {
+        channels: {},
+        talk: {
+          realtime: {
+            providers: {
+              google: { model: "gemini-live-2.5-flash-preview" },
+            },
+            mode: "realtime",
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "google", "memory-core"],
+    ],
+    [
+      "includes bundled realtime voice providers configured by Talk realtime alias at startup",
+      {
+        channels: {},
+        talk: {
+          realtime: {
+            provider: "grok-voice",
+            providers: {
+              "grok-voice": { model: "grok-voice" },
+            },
+            mode: "realtime",
+            transport: "webrtc",
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "xai", "memory-core"],
+    ],
+    [
+      "includes bundled realtime voice providers configured by legacy Voice Call realtime at startup",
+      {
+        channels: {},
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: {
+                realtime: {
+                  enabled: true,
+                  provider: "google",
+                  providers: {
+                    google: { model: "gemini-live-2.5-flash-preview" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "google", "memory-core"],
+    ],
+    [
+      "includes legacy Voice Call realtime provider maps for automatic selection at startup",
+      {
+        channels: {},
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: {
+                realtime: {
+                  enabled: true,
+                  providers: {
+                    openai: { model: "gpt-live-1-codex" },
+                    google: { model: "gemini-live-2.5-flash-preview" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "google", "memory-core"],
+    ],
+    [
+      "does not include disabled legacy Voice Call realtime provider maps at startup",
+      {
+        channels: {},
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: {
+                realtime: {
+                  enabled: false,
+                  providers: {
+                    openai: { model: "gpt-live-1-codex" },
+                    google: { model: "gemini-live-2.5-flash-preview" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
     ],
     [
       "honors explicit plugin disablement for configured voice providers",

@@ -173,6 +173,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](#configcontracts-reference).                                                                                                                                                                           |
 | `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`     | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                                                                                                                                                                                         |
 | `imageGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                                                                                                                               |
+| `realtimeVoiceProviderMetadata`      | No       | `Record<string, object>`     | Cheap realtime-voice metadata for provider ids declared in `contracts.realtimeVoiceProviders`, including provider-owned aliases used by startup activation before runtime loads.                                                                                                                                                                                                                 |
 | `videoGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap video-generation auth metadata for provider ids declared in `contracts.videoGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                                                                                                                               |
 | `musicGenerationProviderMetadata`    | No       | `Record<string, object>`     | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                                                                                                                                                                               |
 | `toolMetadata`                       | No       | `Record<string, object>`     | Cheap availability metadata for plugin-owned tools declared in `contracts.tools`. Use it when a tool should not load runtime unless config, env, or auth evidence exists.                                                                                                                                                                                                                        |
@@ -214,6 +215,25 @@ both. One declaration covers the complete config-repair artifact.
 ```
 
 OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
+
+## Realtime voice provider metadata reference
+
+Use `realtimeVoiceProviderMetadata` when a realtime voice provider has aliases that Gateway startup must recognize before plugin runtime loads. Keys must also be declared in `contracts.realtimeVoiceProviders`; aliases are alternate provider ids for the same runtime provider, not separate auth providers or plugin ids.
+
+```json
+{
+  "contracts": {
+    "realtimeVoiceProviders": ["example-realtime"]
+  },
+  "realtimeVoiceProviderMetadata": {
+    "example-realtime": {
+      "aliases": ["example-voice"]
+    }
+  }
+}
+```
+
+OpenClaw uses this metadata only for cheap cold-start ownership matching. Runtime behavior still comes from `api.registerRealtimeVoiceProvider(...)`, and the registered provider should expose the same aliases it declares here.
 
 ## dashboard reference
 

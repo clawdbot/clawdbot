@@ -308,6 +308,9 @@ export function loadPluginManifest(
       imageGenerationProviderMetadata: capabilityNormalizers.normalizeCapabilityProviderMetadata(
         raw.imageGenerationProviderMetadata,
       ),
+      realtimeVoiceProviderMetadata: capabilityNormalizers.normalizeCapabilityProviderMetadata(
+        raw.realtimeVoiceProviderMetadata,
+      ),
       videoGenerationProviderMetadata: capabilityNormalizers.normalizeCapabilityProviderMetadata(
         raw.videoGenerationProviderMetadata,
       ),

@@ -209,6 +209,11 @@
       }
     }
   },
+  "realtimeVoiceProviderMetadata": {
+    "xai": {
+      "aliases": ["xai-realtime-voice", "grok-voice"]
+    }
+  },
   "toolMetadata": {
     "code_execution": {
       "authSignals": [
