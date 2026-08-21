@@ -31,6 +31,7 @@ export type ResolvedWhatsAppAccount = {
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
+  implicitMentions?: WhatsAppAccountConfig["implicitMentions"];
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
@@ -137,6 +138,7 @@ export function resolveWhatsAppAccount(params: {
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: merged.selfChatMode,
+    implicitMentions: merged.implicitMentions,
     dmPolicy: merged.dmPolicy,
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,

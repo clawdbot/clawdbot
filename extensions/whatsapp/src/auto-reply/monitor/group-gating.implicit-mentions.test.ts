@@ -16,7 +16,7 @@ const GROUP_ID = "group@g.us";
 
 // A group message from another member, with no mention text, that quotes/replies to a
 // message whose sender is the bot's own identity (the reply-to-bot / quoted_bot case).
-function makeReplyToSelfMsg(): AdmittedWebInboundMessage {
+function makeReplyToSelfMsg(accountId = "default"): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
     event: { id: "m1", timestamp: 1700000000 },
     payload: { body: "thanks for that" },
@@ -34,7 +34,7 @@ function makeReplyToSelfMsg(): AdmittedWebInboundMessage {
       },
     },
     admission: {
-      accountId: "default",
+      accountId,
       conversation: { kind: "group", id: GROUP_ID },
       sender: { id: OTHER_E164 },
       senderAccess: { reasonCode: "group_policy_allowed" },
@@ -42,17 +42,9 @@ function makeReplyToSelfMsg(): AdmittedWebInboundMessage {
   } as never);
 }
 
-function makeParams(msg: AdmittedWebInboundMessage, implicitMentions?: { quotedBot?: boolean }) {
+function makeParams(msg: AdmittedWebInboundMessage, cfg: unknown) {
   return {
-    cfg: {
-      channels: {
-        whatsapp: {
-          groupPolicy: "open",
-          ...(implicitMentions ? { implicitMentions } : {}),
-        },
-      },
-      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-    },
+    cfg,
     msg,
     groupHistoryKey: `whatsapp:group:${GROUP_ID}`,
     agentId: "main",
@@ -66,14 +58,36 @@ function makeParams(msg: AdmittedWebInboundMessage, implicitMentions?: { quotedB
   } as never;
 }
 
+const MENTION_CFG = { messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } } };
+
+function whatsappCfg(whatsapp: Record<string, unknown>) {
+  return { channels: { whatsapp: { groupPolicy: "open", ...whatsapp } }, ...MENTION_CFG };
+}
+
 describe("applyGroupGating implicit-mention policy", () => {
   it("admits a reply-to-bot message by default (quoted_bot implicit mention)", async () => {
-    const res = await applyGroupGating(makeParams(makeReplyToSelfMsg()));
+    const res = await applyGroupGating(makeParams(makeReplyToSelfMsg(), whatsappCfg({})));
     expect(res.shouldProcess).toBe(true);
   });
 
   it("skips a reply-to-bot message when implicitMentions.quotedBot is false", async () => {
-    const res = await applyGroupGating(makeParams(makeReplyToSelfMsg(), { quotedBot: false }));
+    const res = await applyGroupGating(
+      makeParams(makeReplyToSelfMsg(), whatsappCfg({ implicitMentions: { quotedBot: false } })),
+    );
+    expect(res.shouldProcess).toBe(false);
+  });
+
+  it("inherits accounts.default.implicitMentions for a named account", async () => {
+    // A named account ("work") must inherit accounts.default.implicitMentions the same
+    // way WhatsApp inherits its other account fields.
+    const res = await applyGroupGating(
+      makeParams(
+        makeReplyToSelfMsg("work"),
+        whatsappCfg({
+          accounts: { default: { implicitMentions: { quotedBot: false } }, work: {} },
+        }),
+      ),
+    );
     expect(res.shouldProcess).toBe(false);
   });
 });

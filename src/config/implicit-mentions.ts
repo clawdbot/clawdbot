@@ -22,14 +22,18 @@ export function resolveChannelImplicitMentions(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
+  // Channels that inherit account fields their own way (e.g. WhatsApp merges
+  // accounts.default into named accounts) pass the already-resolved account layer
+  // here; otherwise the generic accounts entry is used.
+  resolvedAccountImplicitMentions?: ChannelImplicitMentionsConfig;
 }): ResolvedChannelImplicitMentions {
   const channelConfig = params.cfg.channels?.[params.channel] as
     | ChannelImplicitMentionsSource
     | undefined;
-  const accountConfig = resolveAccountEntry(
-    channelConfig?.accounts,
-    normalizeAccountId(params.accountId),
-  );
+  const accountConfig =
+    params.resolvedAccountImplicitMentions !== undefined
+      ? { implicitMentions: params.resolvedAccountImplicitMentions }
+      : resolveAccountEntry(channelConfig?.accounts, normalizeAccountId(params.accountId));
   const defaults = params.cfg.channels?.defaults?.implicitMentions;
   return {
     replyToBot:
