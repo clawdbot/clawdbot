@@ -60,7 +60,7 @@ function testSession(): RecorderSession {
     },
     schemaVersion: 1,
     startedAt: "2026-08-15T12:00:00.000Z",
-    window: { height: 1000, width: 650, x: 635, y: 40 },
+    window: { height: 1000, id: "0x04600007", width: 650, x: 635, y: 40 },
     userDriver: ["python3", "driver.py", "--account", "qa shared"],
   };
 }
@@ -152,7 +152,7 @@ describe("Telegram Desktop recorder CLI", () => {
     });
   });
 
-  it("runs agent-authored actions inside the recorded desktop", async () => {
+  it("targets the recorded Telegram window instead of the first matching window", async () => {
     const root = makeTempDir();
     const sessionPath = path.join(root, "recorder.json");
     const actionsPath = path.join(root, "click.json");
@@ -208,6 +208,11 @@ describe("Telegram Desktop recorder CLI", () => {
         timeoutMs: 90_000,
       }),
     );
+    const actionCommand = sshRun.mock.calls[0]?.[0].command;
+    expect(actionCommand).toContain("win='0x04600007'");
+    expect(actionCommand).toContain("tolower($1) == tolower(win)");
+    expect(actionCommand).toContain('[ "$WIDTH" -ne 650 ]');
+    expect(actionCommand).not.toContain("{print $1; exit}");
   });
 
   it("requires start inputs and a -100 private-group chat id", () => {
@@ -540,7 +545,7 @@ describe("Telegram Desktop recorder remote contract", () => {
           throw new Error("first desktop stayed on QR");
         }
         if (command.includes("getwindowgeometry")) {
-          return { stderr: "", stdout: "635 40 650 1000" };
+          return { stderr: "", stdout: "0x04600007 635 40 650 1000" };
         }
         return { stderr: "", stdout: "" };
       }),
@@ -579,7 +584,7 @@ describe("Telegram Desktop recorder remote contract", () => {
         return { stderr: "", stdout: "tg://login?token=open-target-chat" };
       }
       if (command.includes("getwindowgeometry")) {
-        return { stderr: "", stdout: "635 40 650 1000" };
+        return { stderr: "", stdout: "0x04600007 635 40 650 1000" };
       }
       return { stderr: "", stdout: "" };
     });
@@ -860,14 +865,15 @@ describe("Telegram Desktop recorder window geometry", () => {
   });
 
   it("parses the measured window and rejects unusable geometry", () => {
-    expect(parseWindowGeometry(" 636 45 648 995 \n")).toEqual({
+    expect(parseWindowGeometry(" 0x04600007 636 45 648 995 \n")).toEqual({
       height: 995,
+      id: "0x04600007",
       width: 648,
       x: 636,
       y: 45,
     });
-    expect(() => parseWindowGeometry("636 45 648")).toThrow("was not readable");
-    expect(() => parseWindowGeometry("636 45 10 10")).toThrow("too small to crop");
+    expect(() => parseWindowGeometry("0x04600007 636 45 648")).toThrow("was not readable");
+    expect(() => parseWindowGeometry("0x04600007 636 45 10 10")).toThrow("too small to crop");
   });
 
   it("crops the recorded window instead of a fixed rectangle", async () => {
@@ -875,7 +881,7 @@ describe("Telegram Desktop recorder window geometry", () => {
     const sessionPath = path.join(root, "recorder.json");
     writeRecorderSession(sessionPath, {
       ...testSession(),
-      window: { height: 995, width: 648, x: 636, y: 45 },
+      window: { height: 995, id: "0x04600007", width: 648, x: 636, y: 45 },
     });
     const cropped = vi.fn(async () => ({ crop: "", fps: 24, outputWidth: 648 }));
     const sshRun = vi.fn<RecorderOperations["sshRun"]>(async () => ({ stderr: "", stdout: "" }));

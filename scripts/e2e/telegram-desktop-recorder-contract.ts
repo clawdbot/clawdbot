@@ -27,6 +27,7 @@ const recorderSessionBaseSchema = z.object({
   /** Telegram Desktop window as placed on the recorded desktop; the crop uses it. */
   window: z.object({
     height: z.number().int().positive(),
+    id: z.string().regex(/^0x[0-9a-f]+$/iu),
     width: z.number().int().positive(),
     x: z.number().int().nonnegative(),
     y: z.number().int().nonnegative(),
