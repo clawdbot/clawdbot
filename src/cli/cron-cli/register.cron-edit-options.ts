@@ -33,9 +33,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   if (commandShell && commandArgv) {
     throw new Error("Pass command payload either with --command or --command-argv, not both.");
   }
-  // Match delivery clears / fallbacks: presence is typeof string, not truthy
-  // normalized value. Empty Commander strings stay omitted, but still conflict
-  // with --clear-model/--clear-thinking instead of silently applying the clear.
+  // Raw flag presence owns the set/clear mutex even when normalization omits a blank value.
   const hasModel = typeof opts.model === "string";
   const model = normalizeOptionalString(opts.model);
   if (hasModel && opts.clearModel) {

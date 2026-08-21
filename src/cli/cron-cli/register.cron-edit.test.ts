@@ -698,61 +698,16 @@ describe("cron edit command", () => {
     );
   });
 
-  it.each(["", "   "])("omits blank --model %j from the update patch", async (model) => {
-    await createCronProgram().parseAsync(
-      ["edit", "job-1", "--message", "hello", "--model", model],
-      {
-        from: "user",
-      },
+  it.each([
+    ["--model", "", "--clear-model"],
+    ["--model", "   ", "--clear-model"],
+    ["--thinking", "", "--clear-thinking"],
+    ["--thinking", "   ", "--clear-thinking"],
+  ])("rejects blank %s %j combined with %s", async (flag, value, clearFlag) => {
+    await expectCronEditRejection(
+      [flag, value, clearFlag],
+      `Use ${flag} or ${clearFlag}, not both`,
     );
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: {
-        payload: {
-          kind: "agentTurn",
-          message: "hello",
-        },
-      },
-    });
-  });
-
-  it.each(["", "   "])("rejects blank --model %j combined with --clear-model", async (model) => {
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
-
-    try {
-      await createCronProgram().parseAsync(["edit", "job-1", "--model", model, "--clear-model"], {
-        from: "user",
-      });
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Use --model or --clear-model, not both"),
-      );
-      expect(callGatewayFromCli).not.toHaveBeenCalled();
-    } finally {
-      errorSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
-  });
-
-  it("rejects --model combined with --clear-model", async () => {
-    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
-
-    try {
-      await createCronProgram().parseAsync(["edit", "job-1", "--model", "opus", "--clear-model"], {
-        from: "user",
-      });
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Use --model or --clear-model, not both"),
-      );
-      expect(callGatewayFromCli).not.toHaveBeenCalled();
-    } finally {
-      errorSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
   });
 
   it("stores an explicit wildcard with --clear-tools", async () => {
@@ -987,48 +942,6 @@ describe("cron edit command", () => {
     errorSpy.mockRestore();
     exitSpy.mockRestore();
   });
-
-  it.each(["", "   "])("omits blank --thinking %j from the update patch", async (thinking) => {
-    await createCronProgram().parseAsync(
-      ["edit", "job-1", "--message", "hello", "--thinking", thinking],
-      { from: "user" },
-    );
-
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
-      id: "job-1",
-      patch: {
-        payload: {
-          kind: "agentTurn",
-          message: "hello",
-        },
-      },
-    });
-  });
-
-  it.each(["", "   "])(
-    "rejects blank --thinking %j combined with --clear-thinking",
-    async (thinking) => {
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi
-        .spyOn(defaultRuntime, "exit")
-        .mockImplementation((() => undefined) as never);
-
-      try {
-        await createCronProgram().parseAsync(
-          ["edit", "job-1", "--thinking", thinking, "--clear-thinking"],
-          { from: "user" },
-        );
-
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("Use --thinking or --clear-thinking, not both"),
-        );
-        expect(callGatewayFromCli).not.toHaveBeenCalled();
-      } finally {
-        errorSpy.mockRestore();
-        exitSpy.mockRestore();
-      }
-    },
-  );
 
   it("documents the --clear-model flag alongside the sibling --clear-tools", () => {
     const editCommand = createCronProgram().commands.find((command) => command.name() === "edit");
