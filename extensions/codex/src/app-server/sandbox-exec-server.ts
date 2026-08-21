@@ -12,7 +12,10 @@ import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { startCodexNodeExecServerRelay } from "./sandbox-exec-server-node-relay.js";
+import {
+  createCodexNodeExecServerDisconnectError,
+  startCodexNodeExecServerRelay,
+} from "./sandbox-exec-server-node-relay.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { parseRequest } from "./sandbox-exec-server/json-rpc.js";
 import type { SandboxChildOwner } from "./sandbox-exec-server/sandbox-child.js";
@@ -189,6 +192,19 @@ async function acquireOpenClawExecServer(params: {
           onDisconnected: onExecutionDisconnect,
         };
         server.node.leases.set(nodeLease.id, nodeLease);
+        // The approved child can exit before app-server claims its loopback socket.
+        // Observe that lifetime immediately instead of losing its terminal fact.
+        void channel.closed
+          .then(
+            () => handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: false }),
+            (error: unknown) =>
+              handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: true, error }),
+          )
+          .catch((error: unknown) => {
+            embeddedAgentLog.warn("codex paired-device exec-server lease cleanup failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         return { server, nodeLease };
       } catch (error) {
         await releaseOpenClawExecServer(server);
@@ -402,6 +418,30 @@ function closeCodexNodeExecServerLease(
   if (!lease.closed) {
     lease.closed = true;
     lease.channel.close();
+  }
+}
+
+function handleClosedCodexNodeExecServerLease(
+  execServer: OpenClawNodeExecServer,
+  lease: CodexNodeExecServerLease,
+  result: { failed: boolean; error?: unknown },
+): void {
+  if (lease.closed) {
+    return;
+  }
+  if (lease.onChannelClosed) {
+    lease.onChannelClosed(result);
+    return;
+  }
+  try {
+    lease.onDisconnected?.(
+      createCodexNodeExecServerDisconnectError(
+        result.failed ? "execution device failed" : "execution device disconnected",
+        result.error,
+      ),
+    );
+  } finally {
+    closeCodexNodeExecServerLease(execServer, lease);
   }
 }
 

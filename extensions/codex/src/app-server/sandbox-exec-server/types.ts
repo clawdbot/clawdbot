@@ -121,6 +121,7 @@ export type CodexNodeExecServerLease = {
   claimed: boolean;
   closed: boolean;
   onDisconnected?: (error: Error) => void;
+  onChannelClosed?: (result: { failed: boolean; error?: unknown }) => void;
 };
 
 /** Opaque exec-server relay backed by the exact prepared paired-device placement. */

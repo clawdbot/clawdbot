@@ -10,6 +10,20 @@ const CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS = 240;
 const nodeExecServerTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
+/** Produces the bounded, redacted terminal failure shared by pending and claimed node leases. */
+export function createCodexNodeExecServerDisconnectError(reason: string, cause?: unknown): Error {
+  const detail =
+    cause === undefined
+      ? ""
+      : `: ${truncateUtf16Safe(
+          redactSensitiveText(formatErrorMessage(cause), { mode: "tools" }),
+          CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS,
+        )}`;
+  return new Error(
+    `Codex paired execution device disconnected; start a fresh attempt. (${reason}${detail})`,
+  );
+}
+
 /** Relays one authorized, single-use Codex exec-server channel without interpreting its protocol. */
 export async function startCodexNodeExecServerRelay(params: {
   lease: CodexNodeExecServerLease;
@@ -27,6 +41,7 @@ export async function startCodexNodeExecServerRelay(params: {
     }
     closed = true;
     unsubscribe();
+    params.lease.onChannelClosed = undefined;
     if (!params.lease.closed) {
       params.lease.closed = true;
       channel.close();
@@ -39,28 +54,19 @@ export async function startCodexNodeExecServerRelay(params: {
 
   const failUnexpectedly = (code: number, reason: string, cause?: unknown) => {
     if (!closed && !params.lease.closed) {
-      const detail =
-        cause === undefined
-          ? ""
-          : `: ${truncateUtf16Safe(
-              redactSensitiveText(formatErrorMessage(cause), { mode: "tools" }),
-              CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS,
-            )}`;
-      params.lease.onDisconnected?.(
-        new Error(
-          `Codex paired execution device disconnected; start a fresh attempt. (${reason}${detail})`,
-        ),
-      );
+      params.lease.onDisconnected?.(createCodexNodeExecServerDisconnectError(reason, cause));
     }
     closeBoth(code, reason);
   };
 
+  params.lease.onChannelClosed = ({ failed, error }) =>
+    failUnexpectedly(
+      failed ? 1011 : 1001,
+      failed ? "execution device failed" : "execution device disconnected",
+      error,
+    );
   socket.once("close", () => failUnexpectedly(1001, "execution socket closed"));
   socket.once("error", () => failUnexpectedly(1011, "execution socket failed"));
-  void channel.closed.then(
-    () => failUnexpectedly(1001, "execution device disconnected"),
-    (error: unknown) => failUnexpectedly(1011, "execution device failed", error),
-  );
 
   let toNode = Promise.resolve();
   socket.on("message", (data: RawData) => {

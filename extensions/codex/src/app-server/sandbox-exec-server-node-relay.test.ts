@@ -289,6 +289,39 @@ describe("Codex paired-device exec-server relay", () => {
     expect(transport.channel.close).toHaveBeenCalledTimes(1);
   });
 
+  it("fails an unclaimed node channel immediately before its loopback socket connects", async () => {
+    const transport = createNodeChannel();
+    const sandbox = createNodeSandbox();
+    const client = createClient();
+    const attempt = new AbortController();
+    let rejectRegistration: (error: Error) => void = () => {};
+    const registration = new Promise<Record<string, never>>((_resolve, reject) => {
+      rejectRegistration = reject;
+    });
+    client.request.mockImplementation(async () => await registration);
+    const onExecutionDisconnect = vi.fn((error: Error) => {
+      attempt.abort(error);
+      rejectRegistration(error);
+    });
+    const environment = ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+      runtime: createNodeRuntime(async () => transport.channel),
+      signal: attempt.signal,
+      onExecutionDisconnect,
+    });
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
+    const fakeSecret = "sk-1234567890abcdef";
+
+    transport.fail(new Error(`exec-server exited: OPENAI_API_KEY=${fakeSecret}`));
+
+    await expect(environment).rejects.toThrow("exec-server exited");
+    expect(onExecutionDisconnect).toHaveBeenCalledOnce();
+    expect(onExecutionDisconnect.mock.calls[0]?.[0].message).not.toContain(fakeSecret);
+    expect(transport.channel.close).toHaveBeenCalledTimes(1);
+    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
+  });
+
   it("surfaces bounded node-command failures without exposing credentials", async () => {
     const transport = createNodeChannel();
     const sandbox = createNodeSandbox();
