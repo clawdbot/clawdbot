@@ -462,7 +462,9 @@ describe("qa suite runtime flow", () => {
         {
           name: "Complete the observation window",
           run: async () => {
-            await new Promise<void>((resolve) => setTimeout(resolve, 30));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 30);
+            });
           },
         },
       ]);
