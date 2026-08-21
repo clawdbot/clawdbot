@@ -4057,6 +4057,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "preserves a visible answer with malformed supplemental media metadata",
+      response: {
+        result: {
+          payloads: [
+            { text: "The real answer.", mediaUrl: 1, ttsSupplement: { spokenText: "answer" } },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects an explicitly hidden assistant payload",
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
       requireVisibleReply: true,
