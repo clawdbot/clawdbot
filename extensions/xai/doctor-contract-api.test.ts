@@ -115,12 +115,15 @@ describe("xAI doctor contract", () => {
       tools: {
         media: {
           models: [
-            { provider: "xai", model: "grok-4-fast", capability: "image" },
-            { provider: "xai", model: "grok-3", capability: "image" },
-            { provider: "xai", model: "grok-4.3", capability: "image" },
-            { provider: "openai", model: "grok-4-fast", capability: "image" },
+            { provider: "xai", model: "grok-4-fast", capabilities: ["image"] },
+            { provider: "xai", model: "grok-3", capabilities: ["image", "audio"] },
+            { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
+            { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
             { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
-            { provider: "xai", model: "custom-vision" },
+            { provider: "xai", model: "custom-vision", capabilities: ["image"] },
+            { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
+            { provider: "xai", model: "grok-4-fast" },
+            { provider: "xai", model: "grok-4-fast", capability: "image" },
           ],
         },
       },
@@ -136,12 +139,15 @@ describe("xAI doctor contract", () => {
     expect(result.changes[0]).toMatch(/Migrated 2 retired xAI image models/);
     expect(result.config).not.toBe(config);
     expect(result.config.tools?.media?.models).toEqual([
-      { provider: "xai", model: "grok-4.3", capability: "image" },
-      { provider: "xai", model: "grok-4.3", capability: "image" },
-      { provider: "xai", model: "grok-4.3", capability: "image" },
-      { provider: "openai", model: "grok-4-fast", capability: "image" },
+      { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
+      { provider: "xai", model: "grok-4.3", capabilities: ["image", "audio"] },
+      { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
+      { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
       { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
-      { provider: "xai", model: "custom-vision" },
+      { provider: "xai", model: "custom-vision", capabilities: ["image"] },
+      { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
+      { provider: "xai", model: "grok-4-fast" },
+      { provider: "xai", model: "grok-4-fast", capability: "image" },
     ]);
     expect(config.tools?.media?.models?.[0]).toHaveProperty("model", "grok-4-fast");
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
