@@ -1274,6 +1274,31 @@ export interface SubagentRuns {
   workspace_dir: string | null;
 }
 
+export interface SwarmReplayLaunches {
+  agent_id: string | null;
+  archive_at_ms: number | null;
+  authority_json: string;
+  authority_profile_id: string;
+  child_session_key: string | null;
+  created_at: number;
+  cwd: string;
+  expires_at: number | null;
+  failure_error: string | null;
+  launch_identity_digest: string | null;
+  public_run_id: string;
+  replay_key: string;
+  request_fingerprint: string;
+  requester_lifecycle_revision: string | null;
+  requester_session_id: string;
+  requester_session_key: string;
+  status: string;
+  terminal_evidence_json: string | null;
+  updated_at: number;
+  workspace_root: string;
+  worktree_fence_token: string;
+  worktree_ownership_generation: number;
+}
+
 export interface TaskDeliveryState {
   last_notified_event_at: number | null;
   requester_origin_json: string | null;
@@ -1645,6 +1670,7 @@ export interface DB {
   skill_workshop_proposals: SkillWorkshopProposals;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
+  swarm_replay_launches: SwarmReplayLaunches;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;

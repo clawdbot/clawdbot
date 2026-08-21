@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexFactoryNativeStartupProof } from "./factory-native-attestation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
 import type { CodexAppServerBindingStore, CodexAppServerThreadBinding } from "./session-binding.js";
@@ -17,6 +18,7 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
+  factoryNativeStartupProof?: CodexFactoryNativeStartupProof;
 };
 
 type CodexThreadFinalConfigPatchDecision =

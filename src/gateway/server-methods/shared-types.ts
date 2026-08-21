@@ -70,6 +70,10 @@ export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
   clientIp?: string;
+  /** Actual transport peer captured from the WebSocket socket, never forwarded headers. */
+  transportRemoteIp?: string;
+  /** True for shared-secret, trusted-proxy, or generation-bound device/bootstrap auth. */
+  usesSharedGatewayAuth?: boolean;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   authenticatedUserId?: string;

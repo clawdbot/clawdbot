@@ -1,4 +1,5 @@
 import {
+  assertFactoryNativeLaunchAuthority,
   embeddedAgentLog,
   formatErrorMessage,
   isHostScopedAgentToolActive,
@@ -25,6 +26,7 @@ import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timi
 import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 import {
   assertCodexRingZeroHasNoManagedHooks,
+  buildCodexFactoryNativeThreadConfigPatch,
   buildCodexRingZeroThreadConfigPatch,
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
@@ -32,6 +34,9 @@ import {
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
+  const factoryNativeAuthority = params.params.factoryNativeAuthority
+    ? assertFactoryNativeLaunchAuthority(params.params.factoryNativeAuthority.authority)
+    : undefined;
   // Thread lifecycle spans are useful when profiling startup churn, but normal
   // turns should not pay Date.now/span-array overhead while resuming threads.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
@@ -63,7 +68,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
   const userMcpServersConfigPatch =
-    params.userMcpServersEnabled === false
+    factoryNativeAuthority || params.userMcpServersEnabled === false
       ? undefined
       : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
           agentId: params.agentId ?? params.params.agentId,
@@ -76,16 +81,18 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
               error: formatErrorMessage(error),
             }),
         });
-  const nativeSkillIsolation = await lifecycleTiming.measure("native-skill-isolation", () =>
-    resolveCodexNativeSkillIsolation({
-      client: params.client,
-      codexHome: params.appServer.start.env?.CODEX_HOME,
-      cwd: params.cwd,
-      home: params.appServer.start.env?.HOME,
-      signal: params.signal,
-      userProfile: params.appServer.start.env?.USERPROFILE,
-    }),
-  );
+  const nativeSkillIsolation = factoryNativeAuthority
+    ? undefined
+    : await lifecycleTiming.measure("native-skill-isolation", () =>
+        resolveCodexNativeSkillIsolation({
+          client: params.client,
+          codexHome: params.appServer.start.env?.CODEX_HOME,
+          cwd: params.cwd,
+          home: params.appServer.start.env?.HOME,
+          signal: params.signal,
+          userProfile: params.appServer.start.env?.USERPROFILE,
+        }),
+      );
   const nativeSkillIsolationFingerprint = nativeSkillIsolation
     ? fingerprintJsonObject({
         version: 1,
@@ -103,8 +110,12 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const ringZeroActive =
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params.params);
-  const restrictedToolSurface = ringZeroActive || messageOnlySourceReply;
-  if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
+  const restrictedToolSurface =
+    Boolean(factoryNativeAuthority) ||
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.params.pluginHarnessToolPolicyRestricted === true;
+  if (!factoryNativeAuthority && restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
   const ringZeroInheritedMcpServerNames = restrictedToolSurface
@@ -117,22 +128,32 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
       assertCodexRingZeroHasNoManagedHooks(params.client, params.signal),
     );
   }
-  const ringZeroConfigFingerprint = ringZeroActive
+  const ringZeroConfigFingerprint = factoryNativeAuthority
     ? fingerprintJsonObject({
         version: 1,
-        baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS,
-        config: buildCodexRingZeroThreadConfigPatch(
-          params.params,
-          true,
+        config: buildCodexFactoryNativeThreadConfigPatch(
+          factoryNativeAuthority,
           ringZeroInheritedMcpServerNames,
-        )!,
+        ),
       })
-    : undefined;
-  const ringZeroClientInstanceId = ringZeroActive
-    ? getCodexAppServerClientInstanceId(params.client)
-    : undefined;
+    : ringZeroActive
+      ? fingerprintJsonObject({
+          version: 1,
+          baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS,
+          config: buildCodexRingZeroThreadConfigPatch(
+            params.params,
+            true,
+            ringZeroInheritedMcpServerNames,
+          )!,
+        })
+      : undefined;
+  const ringZeroClientInstanceId =
+    ringZeroActive || factoryNativeAuthority
+      ? getCodexAppServerClientInstanceId(params.client)
+      : undefined;
   return {
     contextEngineBinding,
+    factoryNativeActive: Boolean(factoryNativeAuthority),
     dynamicToolsContainDeferred,
     dynamicToolsFingerprint,
     environmentSelectionFingerprint,

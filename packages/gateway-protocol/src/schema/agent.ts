@@ -367,6 +367,61 @@ export const AgentWaitParamsSchema = closedObject({
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
+const FactoryControllerCredentialSchema = Type.String({
+  minLength: 32,
+  maxLength: 512,
+  pattern: "^[A-Za-z0-9_-]{32,512}$",
+});
+
+/** Reads a durable structured collector/direct-run result by exact identity. */
+export const AgentResultGetParamsSchema = closedObject({
+  /** Dedicated factory-controller credential; generic Gateway auth is insufficient. */
+  factoryCredential: FactoryControllerCredentialSchema,
+  runId: NonEmptyString,
+  sessionKey: NonEmptyString,
+  agentId: NonEmptyString,
+  requesterSessionKey: NonEmptyString,
+  requesterSessionId: NonEmptyString,
+  requesterLifecycleRevision: Type.Optional(NonEmptyString),
+  replayKey: Type.String({ minLength: 1, maxLength: 512 }),
+  requestFingerprint: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+  launchIdentityDigest: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+  authorityProfileId: Type.String({ minLength: 1, maxLength: 256 }),
+  worktreeFenceToken: Type.String({ minLength: 1, maxLength: 512 }),
+  worktreeOwnershipGeneration: Type.Integer({ minimum: 1, maximum: 2_147_483_647 }),
+  taskId: Type.Optional(NonEmptyString),
+});
+
+/** Starts one replay-fenced collector from a trusted local factory controller. */
+export const AgentCollectorSpawnParamsSchema = closedObject({
+  /** Dedicated factory-controller credential; generic Gateway auth is insufficient. */
+  factoryCredential: FactoryControllerCredentialSchema,
+  requesterSessionKey: NonEmptyString,
+  task: NonEmptyString,
+  groupId: NonEmptyString,
+  replayKey: Type.String({ minLength: 1, maxLength: 512 }),
+  requestFingerprint: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+  authorityProfileId: Type.String({ minLength: 1, maxLength: 256 }),
+  worktreeFenceToken: Type.String({ minLength: 1, maxLength: 512 }),
+  worktreeOwnershipGeneration: Type.Integer({ minimum: 1, maximum: 2_147_483_647 }),
+  cwd: NonEmptyString,
+  gitMetadataRoot: NonEmptyString,
+  nativeReadRoots: Type.Array(NonEmptyString, { minItems: 2, maxItems: 32 }),
+  /** Ordered toolchain bin directories. The server builds PATH; callers cannot supply PATH. */
+  nativePathEntries: Type.Array(NonEmptyString, { minItems: 1, maxItems: 32 }),
+  nativeEnvironment: Type.Record(
+    Type.String({ pattern: "^[A-Z][A-Z0-9_]{0,63}$" }),
+    Type.String({ minLength: 1, maxLength: 4_096 }),
+  ),
+  agentId: Type.Optional(NonEmptyString),
+  label: Type.Optional(SessionLabelString),
+  model: Type.Optional(NonEmptyString),
+  thinking: Type.Optional(NonEmptyString),
+  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
 /** Wake request from external schedulers or devices into an agent session. */
 export const WakeParamsSchema = Type.Object(
   {
@@ -403,4 +458,6 @@ export type ConversationTurnResult = Static<typeof ConversationTurnResultSchema>
 export type MessageActionParams = Static<typeof MessageActionParamsSchema>;
 export type PollParams = Static<typeof PollParamsSchema>;
 export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
+export type AgentResultGetParams = Static<typeof AgentResultGetParamsSchema>;
+export type AgentCollectorSpawnParams = Static<typeof AgentCollectorSpawnParamsSchema>;
 export type WakeParams = Static<typeof WakeParamsSchema>;

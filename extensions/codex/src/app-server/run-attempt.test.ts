@@ -513,6 +513,15 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     if (method === "thread/start") {
       return threadStartResult();
     }
+    if (method === "config/read") {
+      return { config: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "mcpServerStatus/list") {
+      return { data: [], nextCursor: null };
+    }
     if (method === "app/installed" || method === "app/read") {
       throw new Error("App inventory should not run when runtime toolsAllow is empty.");
     }
@@ -2218,6 +2227,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createRunParams();
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = [];
     params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
@@ -2271,6 +2281,41 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
+  });
+
+  it("keeps policy-filtered dynamic tools while disabling sender-restricted native surfaces", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const params = createRunParams();
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = undefined;
+    params.pluginHarnessToolPolicyRestricted = true;
+    const { request, nativeToolSurfaceEnabled } = await startThreadWithDisabledNativeSurfaceForTest(
+      params,
+      { pluginConfig: { appServer: { mode: "yolo" } } },
+    );
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startRequest?.[1] as
+      | {
+          dynamicTools?: CodexDynamicToolSpec[];
+          environments?: unknown[];
+          config?: Record<string, unknown>;
+        }
+      | undefined;
+
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(startParams?.dynamicTools?.map((tool) => tool.name).toSorted()).toEqual(["message"]);
+    expect(startParams?.environments).toEqual([]);
+    expect(startParams?.config).toMatchObject({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+      "features.hooks": false,
+    });
+    expect(request.mock.calls.map(([method]) => method)).toContain("mcpServerStatus/list");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -4253,6 +4298,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual(["done from response"]);
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
+  });
+
+  it("durably captures the native schema-constrained collector result before completion", async () => {
+    const schema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const onSwarmStructuredOutputState = vi.fn();
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: '{"answer":"yes"}' }],
+          },
+        };
+      }
+      return {};
+    });
+    const params = createRunParams();
+    params.swarmCollector = true;
+    params.swarmOutputSchema = schema;
+    params.onSwarmStructuredOutputState = onSwarmStructuredOutputState;
+
+    const result = await runCodexAppServerAttempt(params);
+
+    expect(harness.requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      outputSchema: schema,
+    });
+    expect(onSwarmStructuredOutputState).toHaveBeenCalledExactlyOnceWith({
+      structured: { answer: "yes" },
+      invalidAttempts: 0,
+    });
+    expect(result.assistantTexts).toEqual(['{"answer":"yes"}']);
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+    });
   });
 
   it("materializes Codex-native image generation into Gateway-owned reply media", async () => {

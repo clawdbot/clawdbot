@@ -73,9 +73,16 @@ const SECRET_VALUE_QUOTE_CHARS = new Set(['"', "'", "`"]);
 const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
-  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|bearer[-_]?token|bearerToken|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
+  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|bearer[-_]?token|bearerToken|token|secret|password|passwd|${AWS_SECRET_ACCESS_KEY_FIELD_KEYS}|credential|factory[-_]?credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
+const STRUCTURED_FULL_SECRET_FIELD_RE = /^factory[-_]?credential$/iu;
+const SERIALIZED_FACTORY_CREDENTIAL_RE =
+  /("factory(?:[-_]?credential)"\s*:\s*")((?:\\[\s\S]|[^"\\])*)(")/giu;
+
+function redactAlwaysOpaqueStructuredSecrets(text: string): string {
+  return text.replace(SERIALIZED_FACTORY_CREDENTIAL_RE, "$1***$3");
+}
 const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
@@ -867,7 +874,9 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
+  const exactRedacted = redactAlwaysOpaqueStructuredSecrets(
+    redactRegisteredSecretValues(text, maskToken),
+  );
   const resolvedOptions = options ?? resolveConfigRedaction();
   if (normalizeMode(resolvedOptions.mode) === "off") {
     return exactRedacted;
@@ -914,7 +923,9 @@ export function redactToolPayloadTextWithConfig(
   if (!text) {
     return text;
   }
-  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
+  const exactRedacted = redactAlwaysOpaqueStructuredSecrets(
+    redactRegisteredSecretValues(text, maskToken),
+  );
   if (isFullContextToolPayloadRedaction(loggingConfig)) {
     const resolved = resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
     return redactText(exactRedacted, resolved.patterns, {
@@ -936,6 +947,9 @@ function redactSensitiveFieldValueWithOptions(
   options: RedactOptions,
   path: readonly string[] = [key],
 ): string {
+  if (STRUCTURED_FULL_SECRET_FIELD_RE.test(key)) {
+    return "***";
+  }
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   const resolved = resolveRedactOptions(options);
   if (resolved.mode === "off") {

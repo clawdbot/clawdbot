@@ -9,6 +9,7 @@ import {
   isSystemAgentOnlyCodexDynamicToolAllowlist,
   shouldDisableCodexToolSearchForModel,
 } from "./dynamic-tool-profile.js";
+import { isCodexNativeStructuredOutputAttempt } from "./native-structured-output.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
@@ -23,12 +24,14 @@ export function buildDeveloperInstructions(
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
   let hasSeenDirectNamespace = false;
+  let structuredOutputToolName: string | undefined;
   let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
+    const namespaceName = spec.type === "namespace" ? spec.name.trim() : undefined;
     const isDirectNamespace =
       spec.type === "namespace" &&
       !hasSeenDirectNamespace &&
-      spec.name.trim() === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE;
+      namespaceName === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE;
     if (isDirectNamespace) {
       hasSeenDirectNamespace = true;
     }
@@ -40,6 +43,9 @@ export function buildDeveloperInstructions(
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
+      if (!structuredOutputToolName && name === "structured_output") {
+        structuredOutputToolName = namespaceName ? `${namespaceName}.${name}` : name;
+      }
       messageToolAvailable ||= name === "message";
     }
   }
@@ -53,6 +59,7 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
+  const nativeStructuredOutput = isCodexNativeStructuredOutputAttempt(params);
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     deferredToolNames.size > 0
@@ -70,6 +77,11 @@ export function buildDeveloperInstructions(
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
       : undefined,
+    nativeStructuredOutput
+      ? "Return the collector result only in your final assistant message. Codex constrains that message with the native JSON schema, and OpenClaw durably captures it after local validation. Do not call `structured_output`."
+      : structuredOutputToolName
+        ? `Before ending this turn, you must call \`${structuredOutputToolName}\` with {"result": <your final result>} and receive an accepted result. A normal final assistant message does not satisfy the collector contract.`
+        : undefined,
     buildVisibleReplyInstruction(params, messageToolAvailable),
     nativeCommandGuidance,
     params.extraSystemPrompt,

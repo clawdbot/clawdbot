@@ -2970,7 +2970,11 @@ describe("subagent registry lifecycle hardening", () => {
     });
 
     await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
-    expect(entry.collectorCompletion).toEqual({ status: "failed", structured });
+    expect(entry.collectorCompletion).toEqual({
+      status: "failed",
+      structured,
+      failure: "provider failed after tool output",
+    });
   });
 
   it("marks a successful collector with invalid structured output failed", async () => {
@@ -2991,6 +2995,51 @@ describe("subagent registry lifecycle hardening", () => {
       status: "failed",
       schemaError: "structured_output was not called",
     });
+  });
+
+  it("preserves the bounded execution failure when startup ends before structured output", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      collect: true,
+      outputSchema: { type: "object" },
+    });
+    const controller = createLifecycleController({ entry });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: "failed to reload config: missing permission selection" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.collectorCompletion).toEqual({
+      status: "failed",
+      schemaError: "structured_output was not called",
+      failure: "failed to reload config: missing permission selection",
+    });
+  });
+
+  it("strips controls and truncates the frozen execution failure", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      collect: true,
+      outputSchema: { type: "object" },
+    });
+    const controller = createLifecycleController({ entry });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: `startup\u0000failure ${"x".repeat(1_100)}` },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: true,
+    });
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.collectorCompletion?.failure).toHaveLength(1_000);
+    expect(entry.collectorCompletion?.failure).toMatch(/^startup failure x+…$/);
   });
 
   it("archives delete-mode sessions when completion messages are disabled", async () => {

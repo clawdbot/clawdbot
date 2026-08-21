@@ -14,13 +14,17 @@ export const FIRST_USE_STATE_INDEXES = ["execution_identity_contexts_run_created
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
   "model_catalog_remote",
+  "swarm_replay_launches",
   "sidebar_sections",
   "skill_workshop_proposal_events",
   "skill_workshop_proposal_origin_runs",
   "skill_workshop_proposal_rollbacks",
   "skill_workshop_proposals",
 ] as const;
-export const LAZY_ADDITIVE_STATE_INDEXES = [...FIRST_USE_STATE_INDEXES] as const;
+export const LAZY_ADDITIVE_STATE_INDEXES = [
+  ...FIRST_USE_STATE_INDEXES,
+  "idx_swarm_replay_launches_expires",
+] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 /** User-facing guide for schema refusals; lives here so error sites avoid import cycles. */

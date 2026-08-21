@@ -21,9 +21,14 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { FactoryNativeRunAuthority } from "../factory-authority-profile.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
+import type {
+  SwarmEffectiveAuthorityProof,
+  SwarmStructuredOutputState,
+} from "../subagent-registry.types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -163,6 +168,10 @@ export type AgentCommandOpts = {
   swarmCollector?: boolean;
   /** Synthetic structured_output input schema for collector children. */
   swarmOutputSchema?: Record<string, unknown>;
+  /** Host-attested authority for a native macOS factory collector. */
+  factoryNativeAuthority?: FactoryNativeRunAuthority;
+  onFactoryNativeAuthorityProof?: (proof: SwarmEffectiveAuthorityProof) => Promise<void> | void;
+  onSwarmStructuredOutputState?: (state: SwarmStructuredOutputState) => Promise<void> | void;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   forceCodeModeTools?: boolean;

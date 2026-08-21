@@ -2,7 +2,9 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AgentCollectorSpawnParamsSchema,
   AgentParamsSchema,
+  AgentResultGetParamsSchema,
   ConversationListParamsSchema,
   ConversationListResultSchema,
   ConversationSendParamsSchema,
@@ -13,6 +15,89 @@ import {
   ConversationTurnResultSchema,
   MessageActionParamsSchema,
 } from "./agent.js";
+
+describe("AgentCollectorSpawnParamsSchema", () => {
+  const valid = {
+    factoryCredential: "factory-controller-test-credential-000001",
+    requesterSessionKey: "agent:main:subagent:factory-owner",
+    task: "implement the scoped change",
+    groupId: "factory:attempt-1",
+    replayKey: "factory:attempt-1:collector-1",
+    requestFingerprint: `sha256:${"a".repeat(64)}`,
+    authorityProfileId: "factory_native_build_v1",
+    worktreeFenceToken: "factory-fence-1",
+    worktreeOwnershipGeneration: 1,
+    cwd: "/tmp/factory-worktree",
+    gitMetadataRoot: "/tmp/factory-repository/.git",
+    nativeReadRoots: ["/Library/Developer/CommandLineTools", "/opt/homebrew"],
+    nativePathEntries: ["/opt/homebrew/opt/node@24/bin"],
+    nativeEnvironment: {},
+  };
+
+  it("accepts the exact closed factory launch contract", () => {
+    expect(Value.Check(AgentCollectorSpawnParamsSchema, valid)).toBe(true);
+    expect(Value.Check(AgentCollectorSpawnParamsSchema, { ...valid, unexpected: true })).toBe(
+      false,
+    );
+  });
+
+  it("rejects malformed replay fingerprints", () => {
+    expect(
+      Value.Check(AgentCollectorSpawnParamsSchema, {
+        ...valid,
+        requestFingerprint: "sha256:not-a-digest",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects factory credentials outside the unpadded base64url alphabet", () => {
+    expect(
+      Value.Check(AgentCollectorSpawnParamsSchema, {
+        ...valid,
+        factoryCredential: `${"a".repeat(32)}\"escaped-tail`,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(AgentCollectorSpawnParamsSchema, {
+        ...valid,
+        factoryCredential: `${"a".repeat(32)}=`,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("AgentResultGetParamsSchema", () => {
+  const valid = {
+    factoryCredential: "factory-controller-test-credential-000001",
+    requesterSessionKey: "agent:main:subagent:factory-owner",
+    requesterSessionId: "factory-owner-session",
+    runId: "swarm-public-1",
+    sessionKey: "agent:worker:subagent:child-1",
+    agentId: "worker",
+    replayKey: "factory:attempt-1:collector-1",
+    requestFingerprint: `sha256:${"a".repeat(64)}`,
+    launchIdentityDigest: `sha256:${"b".repeat(64)}`,
+    authorityProfileId: "factory_native_build_v1",
+    worktreeFenceToken: "factory-fence-1",
+    worktreeOwnershipGeneration: 1,
+  };
+
+  it("requires exact requester identity and rejects unknown fields", () => {
+    expect(Value.Check(AgentResultGetParamsSchema, valid)).toBe(true);
+    const { requesterSessionKey: _requesterSessionKey, ...missingRequester } = valid;
+    expect(Value.Check(AgentResultGetParamsSchema, missingRequester)).toBe(false);
+    expect(Value.Check(AgentResultGetParamsSchema, { ...valid, unexpected: true })).toBe(false);
+  });
+
+  it("rejects an escaped-quote credential before result lookup", () => {
+    expect(
+      Value.Check(AgentResultGetParamsSchema, {
+        ...valid,
+        factoryCredential: `${"a".repeat(32)}\"escaped-tail`,
+      }),
+    ).toBe(false);
+  });
+});
 
 /**
  * Regression coverage for agent-run schema payloads that carry internal

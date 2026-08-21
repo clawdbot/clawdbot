@@ -325,6 +325,162 @@ Collector results remain waitable until their group is archived. After every
 member reaches its retention deadline, OpenClaw archives the group's children
 as a batch so completed swarms do not remain in the live session tree.
 
+### Factory collector RPCs
+
+The native Mac factory controller can start and read collectors without asking
+a model to call `sessions_spawn` indirectly. This is a macOS Codex app-server
+execution path; it does not run OpenClaw, Codex, or the checkout in a VM or
+container.
+
+```text
+agent.collector.spawn({
+  factoryCredential,
+  requesterSessionKey,
+  task,
+  groupId,
+  replayKey,
+  requestFingerprint,
+  authorityProfileId: "factory_native_build_v1",
+  worktreeFenceToken,
+  worktreeOwnershipGeneration,
+  cwd,
+  gitMetadataRoot,
+  nativeReadRoots,
+  nativePathEntries,
+  nativeEnvironment,
+  agentId?,
+  label?,
+  model?,
+  thinking?,
+  fastMode?,
+  outputSchema?,
+  runTimeoutSeconds?
+})
+
+agent.result.get({
+  factoryCredential,
+  requesterSessionKey,
+  requesterSessionId,
+  requesterLifecycleRevision?,
+  runId,
+  sessionKey,
+  agentId,
+  replayKey,
+  requestFingerprint,
+  launchIdentityDigest,
+  authorityProfileId,
+  worktreeFenceToken,
+  worktreeOwnershipGeneration,
+  taskId?
+})
+```
+
+Both methods require an authenticated Gateway WebSocket whose actual transport
+peer is loopback. Gateway bearer, device, or user authentication is only the
+first gate. The caller must also present the opaque, activation-scoped factory
+credential whose digest was injected into the Gateway as
+`OPENCLAW_FACTORY_CONTROLLER_CREDENTIAL_SHA256`. The raw credential is excluded
+from request fingerprints and durable records, and structured logging treats
+`factoryCredential` as secret material. Credentials use 32–512 characters from
+the unpadded base64url alphabet. Spawn requires `operator.write`; result reads
+require `operator.read`.
+
+The requester must be an existing canonical session the caller may mutate at
+launch time. `cwd` must equal the target agent's registered worktree and stay
+bound to that session's `spawnedCwd` or `spawnedWorkspaceDir`. The Gateway also
+resolves the linked worktree's exact common Git metadata root and rejects a
+caller-supplied mismatch. Ownership generation and fence token become part of
+the immutable launch authority.
+
+`requestFingerprint` is `sha256:` plus the SHA-256 hash of stable canonical JSON
+for the normalized launch fields, excluding `replayKey` and
+`requestFingerprint` itself, and excluding the raw `factoryCredential`.
+Canonicalization trims strings, resolves the worktree and Git roots, sorts and
+deduplicates native read roots, preserves the caller's `nativePathEntries`
+order, key-sorts `nativeEnvironment`, and omits absent optional fields. The
+Gateway recomputes the fingerprint before launch. Reusing the same
+requester/replay-key pair with different canonical bytes fails closed.
+
+Before dispatch, the replay ledger durably reserves the public run identity and
+the complete launch authority. Once accepted, the child identity and launch
+digest are immutable. Once terminal, structured result bytes, schema/content
+hashes, outcome, runtime pins, and the effective Codex authority proof are also
+immutable. Gateway restart therefore joins or replays the same launch rather
+than creating a second worker.
+
+An accepted response includes the complete receipt needed for result lookup:
+
+```json
+{
+  "status": "accepted",
+  "runId": "swarm_...",
+  "childSessionKey": "agent:worker:subagent:...",
+  "sessionKey": "agent:worker:subagent:...",
+  "agentId": "worker",
+  "requesterSessionId": "...",
+  "requesterLifecycleRevision": "...",
+  "replayKey": "factory:...",
+  "requestFingerprint": "sha256:...",
+  "launchIdentityDigest": "sha256:...",
+  "authorityProfileId": "factory_native_build_v1",
+  "worktreeFenceToken": "...",
+  "worktreeOwnershipGeneration": 1,
+  "authority": { "backend": "macos-seatbelt" },
+  "replayed": false
+}
+```
+
+Pass every receipt field back unchanged to `agent.result.get`. Result recovery
+does not consult a later-mutated or deleted requester session. Successful reads
+return immutable `structured`, output-schema and content hashes, terminal time,
+runtime pins, launch authority, and an `outcome` that keeps `done`, `failed`,
+`killed`, and `timeout` distinct. `status` is one of `ok`, `result_missing`,
+`not_terminal`, `expired`, or `not_found`. A failed collector can therefore
+return `status: "ok"` when its structured payload was retrieved, with
+`outcome.status: "failed"` describing execution.
+
+#### `factory_native_build_v1` authority
+
+The Gateway constructs a complete named Codex permissions profile and fails
+closed unless the app-server reports that exact profile as active, without an
+`extends` parent, before the first model turn. Thread start and resume requests
+select `permissions: "factory_native_build_v1"` and attest the effective profile.
+Turn requests omit both `permissions` and `sandboxPolicy` so they inherit that
+attested thread profile; approval policy is always `never`. The returned
+effective sandbox must be `workspaceWrite` with exactly the authority's writable
+roots, network disabled, and both `excludeTmpdirEnvVar` and `excludeSlashTmp`
+reported as true.
+Effective cwd, runtime workspace roots, those observed sandbox fields,
+profile/config hashes, app-server identity, runtime artifact, and dynamic tool
+names are frozen in the terminal authority proof.
+
+The profile grants write access only to the exact worktree and an owner-private
+attempt scratch directory under `~/Library/Application Support/OpenClawFactory`.
+Git metadata, `.agents`, and `.codex` remain read-only, while `.env` and secret
+patterns are explicitly denied. `HOME` and `TMPDIR` point inside attempt
+scratch. Caller-selected native toolchain directories retain their exact order
+ahead of a fixed safe macOS fallback; `/usr/local/bin` is not implicitly added.
+Only approved non-secret environment variables cross the boundary.
+
+Network is disabled. Inherited MCP servers, apps, plugins, hooks, web search,
+delegation, and other OpenClaw capability surfaces are disabled. The only
+Factory-native Codex uses the native final-output schema and exposes no
+OpenClaw dynamic result tool; Codex native code mode supplies
+shell/file execution inside the named macOS Seatbelt profile. Generic Swarm
+collectors do not receive that native surface.
+
+Codex's macOS `:minimal` baseline includes shared platform temporary-directory
+read/write access. The authority records that compatibility carveout explicitly
+instead of claiming zero shared-temp access; OpenClaw control-plane state is not
+stored there.
+
+This build profile intentionally cannot reach PostgreSQL over TCP or a local
+Unix socket. Database-backed integration execution would require a separate,
+narrowly reviewed `integration-exec` profile with only the specific socket or
+network authority it needs. A future cloud worker may implement the same
+launch/receipt/authority contract, but that is only a portability seam today;
+the current executor is the native Mac mini.
+
 ## Use Swarm from other harnesses
 
 You can use Swarm without OpenClaw Code Mode. Its core tools are

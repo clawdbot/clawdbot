@@ -152,6 +152,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
   countActiveRunsForSession?: (sessionKey: string) => number;
   listSwarmRunsForGroup?: (groupId: string) => unknown[];
+  getSwarmRunByLaunchReplayKey?: (replayKey: string, requesterSessionKey?: string) => unknown;
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
@@ -387,17 +388,25 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
-  vi.doMock("./subagent-registry.js", () => ({
-    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
-    countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
-    listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
-    registerSubagentRun:
-      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
-    resetSubagentRegistryForTests,
-    settleFailedQueuedSubagentLaunch:
-      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
-    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
-  }));
+  vi.doMock("./subagent-registry.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("./subagent-registry.js")>("./subagent-registry.js");
+    return {
+      ...actual,
+      completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
+      countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
+      listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
+      registerSubagentRun:
+        params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+      resetSubagentRegistryForTests,
+      settleFailedQueuedSubagentLaunch:
+        params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
+      startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
+      ...(params.getSwarmRunByLaunchReplayKey
+        ? { getSwarmRunByLaunchReplayKey: params.getSwarmRunByLaunchReplayKey }
+        : {}),
+    };
+  });
 
   const subagentSpawnModule = await import("./subagent-spawn.js");
   return {

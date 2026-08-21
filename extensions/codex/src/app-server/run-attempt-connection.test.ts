@@ -3,6 +3,7 @@ import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { buildTestFactoryNativeAuthority } from "../../../../src/agents/factory-authority-profile.test-helpers.js";
 import * as appServerPolicy from "./app-server-policy.js";
 import * as bindingConnection from "./binding-connection.js";
 import * as codexConfig from "./config.js";
@@ -146,4 +147,44 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.appServer.approvalPolicy).toBe("untrusted");
     expect(connection.approvalPolicyPromotedForOpenClawToolPolicy).toBe(false);
   });
+
+  it.runIf(process.platform === "darwin")(
+    "revalidates factory connection policy when the current binding is re-resolved",
+    async () => {
+      const root = path.join(tempDir, "factory-current-binding");
+      const authority = buildTestFactoryNativeAuthority(root);
+      const runId = `swarm_${"b".repeat(32)}`;
+      const sessionFile = path.join(tempDir, "factory-current-binding.jsonl");
+      const params = createParams(sessionFile, authority.cwd, { runId });
+      params.cwd = authority.cwd;
+      params.agentDir = path.join(tempDir, "factory-agent");
+      params.factoryNativeAuthority = {
+        runId,
+        launchIdentityDigest: `sha256:${"a".repeat(64)}`,
+        authority,
+      };
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      const resolveConnection = vi.spyOn(
+        bindingConnection,
+        "resolveCodexBindingAppServerConnection",
+      );
+
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: { bindingStore: testCodexAppServerBindingStore },
+      });
+      const initiallyResolved = resolveConnection.mock.results[0]?.value;
+      if (!initiallyResolved) {
+        throw new Error("expected the initial factory connection to resolve");
+      }
+      resolveConnection.mockReturnValue({
+        ...initiallyResolved,
+        appServer: { ...initiallyResolved.appServer, connectionClass: "remote" },
+      });
+
+      expect(() => connection.resolveRuntimeOptionsForCurrentBinding({})).toThrow(
+        "factory native Codex runs require a local stdio app-server without a network proxy",
+      );
+    },
+  );
 });

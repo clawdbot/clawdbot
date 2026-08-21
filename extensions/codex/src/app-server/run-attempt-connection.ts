@@ -1,4 +1,5 @@
 import {
+  assertFactoryNativeLaunchAuthority,
   embeddedAgentLog,
   getBeforeToolCallPolicyDiagnosticState,
   isActiveHarnessContextEngine,
@@ -94,6 +95,21 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
+  const factoryNativeBinding = params.factoryNativeAuthority;
+  const factoryNativeAuthority = factoryNativeBinding
+    ? assertFactoryNativeLaunchAuthority(factoryNativeBinding.authority)
+    : undefined;
+  if (
+    factoryNativeBinding &&
+    (process.platform !== "darwin" ||
+      factoryNativeBinding.runId !== params.runId ||
+      factoryNativeAuthority?.platform !== "darwin")
+  ) {
+    throw new Error("factory native Codex authority is not valid for this macOS run");
+  }
+  if (factoryNativeAuthority && computerUseConfig.enabled) {
+    throw new Error("factory native Codex runs cannot enable Computer Use");
+  }
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -107,11 +123,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const contextSessionKey = params.sessionKey?.trim() || sandboxSessionKey;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    sessionKey: sandboxSessionKey,
-    workspaceDir: resolvedWorkspace,
-  });
+  const sandbox = factoryNativeAuthority
+    ? null
+    : await resolveSandboxContext({
+        config: params.config,
+        sessionKey: sandboxSessionKey,
+        workspaceDir: resolvedWorkspace,
+      });
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     execOverrides: params.execOverrides,
@@ -131,6 +149,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   let activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
+  if (factoryNativeAuthority && activeContextEngine) {
+    throw new Error("factory native Codex runs cannot activate a context-engine plugin");
+  }
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
   // The public runner carries a resolved store target. Its durable row must
@@ -180,6 +201,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   }
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
+  if (factoryNativeAuthority && usesSupervisionConnection) {
+    throw new Error("factory native Codex runs cannot use a supervised user-home connection");
+  }
   if (usesSupervisionConnection) {
     activeContextEngine = undefined;
   }
@@ -188,21 +212,41 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
+  type ResolvedBindingRuntimeOptions = ReturnType<typeof applyStoredBindingPermissions>;
+  const enforceFactoryRuntimeOptions = (
+    resolved: ResolvedBindingRuntimeOptions,
+  ): ResolvedBindingRuntimeOptions => {
+    if (!factoryNativeAuthority) {
+      return resolved;
+    }
+    if (
+      resolved.connectionClass !== "local-loopback" ||
+      resolved.start.transport !== "stdio" ||
+      resolved.networkProxy
+    ) {
+      throw new Error(
+        "factory native Codex runs require a local stdio app-server without a network proxy",
+      );
+    }
+    return { ...resolved, approvalPolicy: "never" as const, codeModeOnly: false };
+  };
   const resolveRuntimeOptionsForBinding = (selection: { modelProvider?: string; model?: string }) =>
-    applyStoredBindingPermissions({
-      appServer: resolveCodexBindingAppServerConnection({
+    enforceFactoryRuntimeOptions(
+      applyStoredBindingPermissions({
+        appServer: resolveCodexBindingAppServerConnection({
+          binding: startupBinding,
+          pluginConfig,
+          execPolicy,
+          modelProvider: selection.modelProvider,
+          model: selection.model,
+          config: params.config,
+          agentDir,
+          openClawSandboxActive: sandbox?.enabled === true,
+        }).appServer,
         binding: startupBinding,
-        pluginConfig,
-        execPolicy,
-        modelProvider: selection.modelProvider,
-        model: selection.model,
-        config: params.config,
-        agentDir,
-        openClawSandboxActive: sandbox?.enabled === true,
-      }).appServer,
-      binding: startupBinding,
-      execPolicyTouched: execPolicy.touched,
-    });
+        execPolicyTouched: execPolicy.touched,
+      }),
+    );
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const preparedAuthRoute = usesSupervisionConnection
@@ -281,13 +325,22 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
+  if (
+    factoryNativeAuthority &&
+    (resolvedWorkspace !== factoryNativeAuthority.workspaceRoot ||
+      effectiveWorkspace !== factoryNativeAuthority.workspaceRoot ||
+      effectiveCwd !== factoryNativeAuthority.cwd)
+  ) {
+    throw new Error("factory native Codex workspace does not match its immutable authority");
+  }
   if (effectiveWorkspace !== resolvedWorkspace) {
     await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   }
   preDynamicStartupStages.mark("effective-workspace");
   const shouldPromoteApprovalPolicy =
-    beforeToolCallPolicy.hasBeforeToolCallHook ||
-    beforeToolCallPolicy.trustedToolPolicies.length > 0;
+    !factoryNativeAuthority &&
+    (beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0);
   const resolvePolicyAppServer = () =>
     resolveCodexAppServerForOpenClawToolPolicy({
       appServer: configuredAppServer,
@@ -310,6 +363,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     env: process.env,
     agentDir,
   });
+  if (
+    factoryNativeAuthority &&
+    (appServer.approvalPolicy !== "never" ||
+      appServer.connectionClass !== "local-loopback" ||
+      appServer.start.transport !== "stdio" ||
+      appServer.networkProxy)
+  ) {
+    throw new Error("factory native Codex runtime policy drifted before app-server startup");
+  }
   let approvalPolicyPromotedForOpenClawToolPolicy =
     configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
   if (approvalPolicyPromotedForOpenClawToolPolicy) {
@@ -392,31 +454,36 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     approvalPolicyPromotedForOpenClawToolPolicy =
       configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
   }
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
+  const nativeHookRelayEvents = factoryNativeAuthority
+    ? []
+    : resolveCodexNativeHookRelayEvents({
+        configuredEvents: options.nativeHookRelay?.events,
+        appServer,
+      });
   const mutable = { startupBinding, pluginAppServer: appServer };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;
   }) =>
-    applyStoredBindingPermissions({
-      appServer: resolveCodexBindingAppServerConnection({
+    enforceFactoryRuntimeOptions(
+      applyStoredBindingPermissions({
+        appServer: resolveCodexBindingAppServerConnection({
+          binding: mutable.startupBinding,
+          pluginConfig,
+          execPolicy,
+          modelProvider: selection.modelProvider,
+          model: selection.model,
+          config: params.config,
+          agentDir,
+          openClawSandboxActive: sandbox?.enabled === true,
+        }).appServer,
         binding: mutable.startupBinding,
-        pluginConfig,
-        execPolicy,
-        modelProvider: selection.modelProvider,
-        model: selection.model,
-        config: params.config,
-        agentDir,
-        openClawSandboxActive: sandbox?.enabled === true,
-      }).appServer,
-      binding: mutable.startupBinding,
-      execPolicyTouched: execPolicy.touched,
-    });
+        execPolicyTouched: execPolicy.touched,
+      }),
+    );
   return {
     params,
+    factoryNativeAuthority,
     options,
     attemptStartedAt,
     profilerEnabled,

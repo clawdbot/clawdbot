@@ -35,6 +35,7 @@ import {
   resolveCodexNativeExecutionPolicy,
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
+import { isCodexNativeStructuredOutputAttempt } from "./native-structured-output.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
@@ -384,7 +385,15 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
   toolBuildStages.mark("vision-filtering");
-  const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
+  // Native Codex collectors return their schema-constrained result in the
+  // final assistant message. Exposing the synthetic result tool as well would
+  // create two independent writers for the same immutable collector result.
+  const collectorFilteredTools = isCodexNativeStructuredOutputAttempt(params)
+    ? visionFilteredTools.filter(
+        (tool) => normalizeCodexDynamicToolName(tool.name) !== "structured_output",
+      )
+    : visionFilteredTools;
+  const webSearchPresent = collectorFilteredTools.some((tool) => tool.name === "web_search");
   const persistentCodexWebSearchSurface =
     params.config?.tools?.web?.search?.enabled !== false &&
     !(input.pluginConfig.codexDynamicToolsExclude ?? []).some(
@@ -427,7 +436,19 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         webSearchPolicy.persistentAllowed),
   );
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  // Factory-native authority owns an exact OpenClaw dynamic-tool list. Codex
+  // native shell/file tools are configured separately by the app-server, so
+  // filtering this list to `[]` does not disable code mode; it prevents
+  // unrelated host tools from leaking into the isolated builder turn. The
+  // later attestation remains a second, fail-closed check that every requested
+  // dynamic tool existed and no extra one survived normalization.
+  const effectiveToolsAllow = params.factoryNativeAuthority
+    ? [...params.factoryNativeAuthority.authority.toolSurface.openClawDynamicTools]
+    : toolsAllow;
+  const filteredTools = filterCodexDynamicToolsForAllowlist(
+    collectorFilteredTools,
+    effectiveToolsAllow,
+  );
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
@@ -492,9 +513,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   }
   return exposedTools;
 }
-/** True when this attempt is a Swarm collector that must expose structured_output. */
+/** True when this attempt needs OpenClaw's synthetic structured_output tool. */
 function isSwarmCollectorStructuredOutputAttempt(params: EmbeddedRunAttemptParams): boolean {
-  return params.swarmCollector === true && params.swarmOutputSchema !== undefined;
+  return (
+    params.swarmCollector === true &&
+    params.swarmOutputSchema !== undefined &&
+    !isCodexNativeStructuredOutputAttempt(params)
+  );
 }
 
 /** Fails closed when a collector child never received its required structured_output tool. */
@@ -550,11 +575,20 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
+  if (params.pluginHarnessToolPolicyRestricted === true) {
+    return false;
+  }
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
   if (params.disableTools) {
     return false;
+  }
+  // A host-attested factory collector deliberately uses Codex's native
+  // code-mode shell/file surface. Its named macOS permission profile is the
+  // authority boundary; generic collectors remain dynamic-tool-only below.
+  if (params.factoryNativeAuthority) {
+    return true;
   }
   // Collector children must not inherit Codex-native Bash/shell/file tools.
   // OpenClaw config allow/deny alone is not a native-harness authority boundary.

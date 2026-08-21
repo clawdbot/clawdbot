@@ -56,6 +56,7 @@ import type {
   SubagentProgressOrigin,
   SubagentRestartRecoveryReceipt,
   SubagentRunRecord,
+  SwarmLaunchAuthority,
   SwarmQueuedLaunch,
 } from "./subagent-registry.types.js";
 import {
@@ -247,6 +248,10 @@ export type RegisterSubagentRunParams = {
   swarmLaunchIdempotencyKey?: string;
   swarmLaunchReplayKey?: string;
   swarmLaunchRequestFingerprint?: string;
+  swarmLaunchIdentityDigest?: `sha256:${string}`;
+  swarmRequesterSessionId?: string;
+  swarmRequesterLifecycleRevision?: string;
+  swarmLaunchAuthority?: SwarmLaunchAuthority;
   groupId?: string;
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
@@ -1206,6 +1211,10 @@ export function createSubagentRunManager(params: {
       swarmLaunchIdempotencyKey: registerParams.swarmLaunchIdempotencyKey,
       swarmLaunchReplayKey: registerParams.swarmLaunchReplayKey,
       swarmLaunchRequestFingerprint: registerParams.swarmLaunchRequestFingerprint,
+      swarmLaunchIdentityDigest: registerParams.swarmLaunchIdentityDigest,
+      swarmRequesterSessionId: registerParams.swarmRequesterSessionId,
+      swarmRequesterLifecycleRevision: registerParams.swarmRequesterLifecycleRevision,
+      swarmLaunchAuthority: registerParams.swarmLaunchAuthority,
       swarmLaunchPending: registerParams.collect === true,
       groupId: registerParams.groupId,
       outputSchema: registerParams.outputSchema,

@@ -46,6 +46,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     updatedAt: number;
   };
   clientIp?: string;
+  /** Actual transport peer captured from the WebSocket socket, never forwarded headers. */
+  transportRemoteIp?: string;
   internal?: {
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;

@@ -276,6 +276,48 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
+  it("filters factory-native OpenClaw dynamic tools to the exact attested authority surface", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.factoryNativeAuthority = {
+      authority: {
+        toolSurface: { openClawDynamicTools: [] },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("agents_wait"),
+      createRuntimeDynamicTool("image_generate"),
+      createRuntimeDynamicTool("pdf"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(tools).toEqual([]);
+  });
+
+  it("keeps only factory-native OpenClaw tools explicitly named by authority", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.factoryNativeAuthority = {
+      authority: {
+        toolSurface: { openClawDynamicTools: ["pdf"] },
+      },
+    } as never;
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("agents_wait"),
+      createRuntimeDynamicTool("pdf"),
+      createRuntimeDynamicTool("tts"),
+    ]);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(tools.map((tool) => tool.name)).toEqual(["pdf"]);
+  });
+
   it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -1731,6 +1773,16 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
+  it("disables Codex native tool surfaces for core-prepared sender restrictions", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = undefined;
+    params.pluginHarnessToolPolicyRestricted = true;
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
   it("disables Codex native tool surfaces for swarm collectors even without toolsAllow", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -1777,6 +1829,28 @@ describe("Codex app-server dynamic tool build", () => {
       disableMessageTool: true,
     });
     expect(tools.map((tool) => tool.name)).toEqual(["structured_output"]);
+  });
+
+  it("removes structured_output when native final-schema capture owns the result", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("structured_output"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.provider = "openai";
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["structured_output"];
+    params.swarmCollector = true;
+    params.swarmOutputSchema = { type: "object" };
+    params.onSwarmStructuredOutputState = async () => {};
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: true,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual([]);
   });
 
   it("fails closed when a swarm collector omits structured_output from dynamic tools", async () => {

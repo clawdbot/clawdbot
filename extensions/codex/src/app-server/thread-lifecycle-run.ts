@@ -61,6 +61,7 @@ export async function startOrResumeThread(
   return await params.bindingStore.withLease(bindingIdentity, async () => {
     const {
       contextEngineBinding,
+      factoryNativeActive,
       dynamicToolsContainDeferred,
       dynamicToolsFingerprint,
       environmentSelectionFingerprint,
@@ -540,7 +541,7 @@ export async function startOrResumeThread(
           );
           await clearCurrentBinding("rotating a stale thread binding");
         }
-      } else if (incognito) {
+      } else if (incognito && !factoryNativeActive) {
         if (binding.clientId && binding.clientId === clientId) {
           // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
           params.buildFinalConfigPatch?.({ action: "resume", binding });
@@ -576,7 +577,7 @@ export async function startOrResumeThread(
               threadId,
               cause,
             }),
-          ringZeroActive,
+          ringZeroActive: ringZeroActive || factoryNativeActive,
           ringZeroInheritedMcpServerNames,
           startModelProvider,
           startModelSelection,

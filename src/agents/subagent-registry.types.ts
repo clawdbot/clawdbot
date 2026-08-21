@@ -103,10 +103,173 @@ export type SubagentCompletionState = {
 
 export type SwarmCollectorStatus = "done" | "failed" | "killed" | "timeout";
 
-type SwarmCollectorCompletion = {
+export type SwarmCollectorCompletion = {
   status: SwarmCollectorStatus;
   structured?: unknown;
   schemaError?: string;
+  failure?: string;
+  usage?: { inputTokens: number; outputTokens: number };
+};
+
+export type FactoryNativePermissionProfileDefinition = {
+  workspace_roots: Record<string, true>;
+  filesystem: Record<string, "read" | "write" | "deny" | Record<string, "read" | "write" | "deny">>;
+  network: { enabled: false };
+};
+
+export type FactoryNativeShellEnvironmentPolicy = {
+  inherit: "none";
+  ignore_default_excludes: false;
+  set: Record<string, string>;
+  include_only: string[];
+};
+
+export type SwarmLaunchAuthority = {
+  contractVersion: 1;
+  authorityProfileId: "factory_native_build_v1";
+  platform: "darwin";
+  executor: "codex-app-server";
+  backend: "macos-seatbelt";
+  approvalPolicy: "never";
+  approvalsReviewer: "auto_review";
+  permissionProfile: {
+    id: "factory_native_build_v1";
+    definition: FactoryNativePermissionProfileDefinition;
+    definitionHash: `sha256:${string}`;
+    platformDefaultTempAccess: "read_write";
+  };
+  filesystem: {
+    platformDefaults: ":minimal";
+    readableRoots: string[];
+    writableRoots: string[];
+    gitMetadataRoot: string;
+    readOnlyWorktreeSubpaths: [".git", ".codex", ".agents"];
+    deniedSecretGlobs: [
+      ".env",
+      "**/.env",
+      ".env.*",
+      "**/.env.*",
+      "*.env",
+      "**/*.env",
+      ".secrets/**",
+      "**/.secrets/**",
+    ];
+    factoryStateRoot: string;
+    scratchRoot: string;
+    sanitizedHome: string;
+    tempDir: string;
+    inheritedTmpdir: false;
+    controlPlaneStateInSharedTemp: false;
+  };
+  network: "none";
+  shellEnvironmentPolicy: {
+    definition: FactoryNativeShellEnvironmentPolicy;
+    definitionHash: `sha256:${string}`;
+    /** Caller-selected, canonical toolchain bins in exact precedence order. */
+    orderedNativePathEntries: string[];
+    /** Exact PATH installed after appending the fixed macOS system fallback. */
+    effectivePath: string;
+    runtimeAddedNames: ["CODEX_THREAD_ID"];
+    containsSecretValues: false;
+  };
+  toolSurface: {
+    codexNativeCodeMode: true;
+    openClawDynamicTools: [];
+    disabledCapabilities: [
+      "openclaw-exec",
+      "openclaw-process",
+      "mcp",
+      "apps",
+      "plugins",
+      "browser",
+      "web-search",
+      "image-generation",
+      "multi-agent",
+      "hooks",
+    ];
+  };
+  worktreeFenceToken: string;
+  worktreeOwnershipGeneration: number;
+  cwd: string;
+  workspaceRoot: string;
+};
+
+export type SwarmEffectiveAuthorityProof = {
+  proofContractVersion: 1;
+  contractHash: `sha256:${string}`;
+  launchIdentityDigest: `sha256:${string}`;
+  runtime: {
+    codexVersion: string;
+    appServerVersion: string;
+    appServerInstanceId: string;
+    appServerPid?: number;
+    appServerBuildIdentity: string;
+    runtimeArtifactId: string;
+    runtimeArtifactFingerprint: string;
+    activePermissionProfile: {
+      id: string;
+      extends?: string | null;
+    };
+    sandbox: {
+      type: "workspaceWrite";
+      writableRoots: string[];
+      networkAccess: false;
+      excludeTmpdirEnvVar: true;
+      excludeSlashTmp: true;
+    };
+    profileDefinitionHash: `sha256:${string}`;
+    threadConfigHash: `sha256:${string}`;
+    shellEnvironmentPolicyHash: `sha256:${string}`;
+    policyHash: `sha256:${string}`;
+    dynamicTools: string[];
+    cwd: string;
+    runtimeWorkspaceRoots: string[];
+    approvalPolicy: "never";
+    approvalsReviewer: "auto_review";
+    permissionSelection: "factory_native_build_v1";
+    threadStartRequestHash: `sha256:${string}`;
+    turnStartRequestHash: `sha256:${string}`;
+  };
+  proofHash: `sha256:${string}`;
+  observedAt: number;
+};
+
+export type SwarmTerminalEvidence = {
+  evidenceContractVersion: 1;
+  launchIdentityDigest: `sha256:${string}`;
+  runId: string;
+  sessionKey: string;
+  agentId: string;
+  requesterSessionKey: string;
+  requesterSessionId: string;
+  requesterLifecycleRevision?: string;
+  taskId?: string;
+  replayKey: string;
+  requestFingerprint: `sha256:${string}`;
+  authority: SwarmLaunchAuthority;
+  schemaContractVersion: "openclaw/agent-structured-result/v1";
+  schemaCanonicalJson: string;
+  schemaHash: `sha256:${string}`;
+  result?: {
+    canonicalJson: string;
+    contentHash: `sha256:${string}`;
+  };
+  outcome: {
+    status: SwarmCollectorStatus;
+    schemaError?: string;
+    failure?: string;
+  };
+  endedAt: number;
+  frozenAt: number;
+  runtime: {
+    openClawVersion: string;
+    openClawBuildIdentity: string;
+    harness?: string;
+    model?: string;
+    reasoning?: string;
+    thinking?: string;
+    authorityProof?: SwarmEffectiveAuthorityProof;
+  };
   usage?: { inputTokens: number; outputTokens: number };
 };
 
@@ -294,6 +457,15 @@ export type SubagentRunRecord = {
   swarmLaunchReplayKey?: string;
   /** Canonical collector request hash paired with a host-reserved launch identity. */
   swarmLaunchRequestFingerprint?: string;
+  /** Immutable digest covering the accepted host launch identity. */
+  swarmLaunchIdentityDigest?: `sha256:${string}`;
+  /** Requester generation frozen into the persisted collector result receipt. */
+  swarmRequesterSessionId?: string;
+  swarmRequesterLifecycleRevision?: string;
+  /** Host-owned authority and worktree fencing facts for this launch. */
+  swarmLaunchAuthority?: SwarmLaunchAuthority;
+  /** App-server-produced effective authority proof, frozen before the first native turn. */
+  swarmEffectiveAuthorityProof?: SwarmEffectiveAuthorityProof;
   /** True only between host reservation and accepted Gateway dispatch. */
   swarmLaunchPending?: boolean;
   groupId?: string;
@@ -305,6 +477,8 @@ export type SubagentRunRecord = {
   /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;
+  /** Producer-frozen terminal evidence; once persisted it is immutable. */
+  swarmTerminalEvidence?: SwarmTerminalEvidence;
 };
 
 /** Minimal registry shape needed by session-list topology and display reads. */

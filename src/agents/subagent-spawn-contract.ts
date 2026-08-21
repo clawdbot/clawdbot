@@ -1,4 +1,5 @@
 import type { FastMode } from "../shared/fast-mode.js";
+import type { SwarmLaunchAuthority } from "./subagent-registry.types.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -20,6 +21,10 @@ export type SpawnSubagentParams = {
   swarmLaunchReplayKey?: string;
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
+  /** Requester generation and host authority facts captured by the trusted RPC boundary. */
+  swarmRequesterSessionId?: string;
+  swarmRequesterLifecycleRevision?: string;
+  swarmLaunchAuthority?: SwarmLaunchAuthority;
   cwd?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
@@ -69,6 +74,9 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  /** True when a durable replay fence returned an existing collector identity. */
+  replayed?: boolean;
+  launchIdentityDigest?: `sha256:${string}`;
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;

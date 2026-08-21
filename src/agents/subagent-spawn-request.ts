@@ -6,7 +6,7 @@ import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routi
 import { listAgentIds } from "./agent-scope-config.js";
 import { reserveChildAdmissionSlot } from "./child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
-import { listSwarmRunsForGroup } from "./subagent-registry.js";
+import { getSwarmRunByLaunchReplayKey, listSwarmRunsForGroup } from "./subagent-registry.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
 import type {
   SpawnSubagentContext,
@@ -21,7 +21,6 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./subagent-s
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
 import { validateStructuredOutputSchema } from "./swarm-output-schema.js";
-import { reserveSwarmRun } from "./swarm-scheduler.js";
 
 type ResolvedSubagentSpawnRequest = {
   request: {
@@ -45,7 +44,6 @@ type ResolvedSubagentSpawnRequest = {
     groupId?: string;
     schedulerGroupKey?: string;
     launchReplayKey?: string;
-    reservationPending: boolean;
   };
   admission: {
     resolve: (pendingChildren?: number) => ReturnType<typeof resolveSpawnAdmission>;
@@ -59,6 +57,7 @@ type ResolvedSubagentSpawnRequest = {
 
 type ResolveSubagentSpawnRequestResult =
   | { ok: false; result: SpawnSubagentResult }
+  | { ok: true; replay: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentSpawnRequest };
 
 function rejectSubagentSpawnRequest(
@@ -158,6 +157,22 @@ export function resolveSubagentSpawnRequest(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
   const swarmConfig = resolveSwarmConfig(cfg, requesterAgentId);
+  const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
+  const swarmLaunchRequestFingerprint = normalizeOptionalString(
+    params.swarmLaunchRequestFingerprint,
+  );
+  if (Boolean(swarmLaunchReplayKey) !== Boolean(swarmLaunchRequestFingerprint)) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "sessions_spawn replay key and request fingerprint must be supplied together.",
+    );
+  }
+  if ((swarmLaunchReplayKey || swarmLaunchRequestFingerprint) && params.collect !== true) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "sessions_spawn replay fields require collect=true.",
+    );
+  }
   const hasSwarmParams =
     params.collect !== undefined ||
     params.outputSchema !== undefined ||
@@ -202,6 +217,29 @@ export function resolveSubagentSpawnRequest(
     ? normalizeAgentId(effectiveRequestedAgentId)
     : requesterAgentId;
   const configuredAgentIds = listAgentIds(cfg);
+  if (swarmLaunchReplayKey && swarmLaunchRequestFingerprint) {
+    const existing = getSwarmRunByLaunchReplayKey(swarmLaunchReplayKey, requesterInternalKey);
+    if (existing) {
+      if (existing.swarmLaunchRequestFingerprint !== swarmLaunchRequestFingerprint) {
+        return rejectSubagentSpawnRequest(
+          "error",
+          "sessions_spawn replay request does not match the persisted collector.",
+        );
+      }
+      return {
+        ok: true,
+        replay: {
+          status: "accepted",
+          runId: existing.swarmRunId ?? existing.runId,
+          childSessionKey: existing.childSessionKey,
+          sessionKey: existing.childSessionKey,
+          mode: existing.spawnMode,
+          taskName,
+          replayed: true,
+        },
+      };
+    }
+  }
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
   const swarmGroupId = params.collect
@@ -258,7 +296,6 @@ export function resolveSubagentSpawnRequest(
   }
   const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
-  const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
   const childIdem = swarmLaunchReplayKey
     ? `swarm_${crypto
@@ -267,26 +304,6 @@ export function resolveSubagentSpawnRequest(
         .digest("hex")
         .slice(0, 32)}`
     : crypto.randomUUID();
-  let reservationPending = false;
-  if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-    const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
-    if (
-      !reserveSwarmRun({
-        groupId: swarmSchedulerGroupKey,
-        runId: childIdem,
-        maxConcurrent: swarmConfig.maxConcurrent,
-        activeRunIds: groupRuns
-          .filter((entry) => entry.execution.status === "running")
-          .map((entry) => entry.schedulerSlotId ?? entry.runId),
-      })
-    ) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        "sessions_spawn could not reserve swarm FIFO order.",
-      );
-    }
-    reservationPending = true;
-  }
   return {
     ok: true,
     resolved: {
@@ -311,7 +328,6 @@ export function resolveSubagentSpawnRequest(
         groupId: swarmGroupId,
         schedulerGroupKey: swarmSchedulerGroupKey,
         launchReplayKey: swarmLaunchReplayKey,
-        reservationPending,
       },
       admission: {
         resolve: resolveAdmission,

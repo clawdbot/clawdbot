@@ -164,6 +164,7 @@ export type CodexTurnEnvironmentParams = JsonObject & {
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   modelProvider?: string | null;
   config?: JsonObject;
@@ -171,6 +172,7 @@ export type CodexThreadStartParams = JsonObject & {
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandbox?: CodexSandboxMode | null;
+  permissions?: string | null;
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
@@ -181,12 +183,15 @@ export type CodexThreadStartParams = JsonObject & {
 
 export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
+  cwd?: string;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   modelProvider?: string | null;
   personality?: CodexPersonality | null;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandbox?: CodexSandboxMode | null;
+  permissions?: string | null;
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
@@ -198,7 +203,21 @@ export type CodexThreadResumeParams = JsonObject & {
   } | null;
 };
 
-export type CodexThreadStartResponse = {
+export type CodexActivePermissionProfile = {
+  id: string;
+  extends?: string | null;
+};
+
+type CodexThreadPermissionAttestation = {
+  activePermissionProfile?: CodexActivePermissionProfile | null;
+  approvalPolicy: CodexApprovalPolicy;
+  approvalsReviewer: CodexApprovalsReviewer;
+  cwd: string;
+  runtimeWorkspaceRoots?: string[];
+  sandbox: CodexSandboxPolicy;
+};
+
+export type CodexThreadStartResponse = CodexThreadPermissionAttestation & {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
@@ -309,7 +328,7 @@ type CodexThreadUnarchiveResponse = {
   thread: CodexThread;
 };
 
-export type CodexThreadResumeResponse = {
+export type CodexThreadResumeResponse = CodexThreadPermissionAttestation & {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
@@ -366,13 +385,16 @@ export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   input: CodexUserInput[];
   cwd?: string;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandboxPolicy?: CodexSandboxPolicy;
+  permissions?: string | null;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
   personality?: CodexPersonality | null;
+  outputSchema?: JsonValue | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: "plan" | "default";

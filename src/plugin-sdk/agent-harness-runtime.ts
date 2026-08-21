@@ -111,6 +111,19 @@ export type {
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
 export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
 export type { EmbeddedRunAttemptResult };
+export {
+  assertFactoryNativeAuthorityProof,
+  assertFactoryNativeLaunchAuthority,
+  buildFactoryNativeProofHash,
+  buildFactoryNativeRuntimePolicyHash,
+  hashFactoryNativeAuthorityValue,
+} from "../agents/factory-authority-profile.js";
+export type { FactoryNativeRunAuthority } from "../agents/factory-authority-profile.js";
+export type {
+  SwarmEffectiveAuthorityProof,
+  SwarmLaunchAuthority,
+  SwarmStructuredOutputState,
+} from "../agents/subagent-registry.types.js";
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,

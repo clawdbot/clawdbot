@@ -49,4 +49,14 @@ describe("resolveCodexDynamicToolDirectNames", () => {
 
     expect(resolveCodexDynamicToolDirectNames(params)).toEqual([]);
   });
+
+  it("does not force structured_output for native final-schema collectors", () => {
+    const params = createParams();
+    params.provider = "openai";
+    params.swarmCollector = true;
+    params.swarmOutputSchema = { type: "object" };
+    params.onSwarmStructuredOutputState = async () => {};
+
+    expect(resolveCodexDynamicToolDirectNames(params)).toEqual([]);
+  });
 });

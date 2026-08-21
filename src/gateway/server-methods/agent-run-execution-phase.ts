@@ -11,6 +11,7 @@ import {
   EXEC_APPROVAL_FOLLOWUP_HANDOFF_MESSAGE,
   type ExecApprovalContinuationPromptRange,
 } from "../../agents/bash-tools.exec-approval-output.js";
+import type { FactoryNativeRunAuthority } from "../../agents/factory-authority-profile.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
@@ -21,6 +22,10 @@ import {
 } from "../../agents/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import {
+  recordSwarmEffectiveAuthorityProof,
+  recordSwarmStructuredOutput,
+} from "../../agents/subagent-registry.js";
 import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
@@ -95,6 +100,7 @@ export function startAgentRunExecution(params: {
   groupId?: string;
   groupChannel?: string;
   groupSpace?: string;
+  factoryNativeAuthority?: FactoryNativeRunAuthority;
   bestEffortDeliver: boolean;
   lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
@@ -419,6 +425,28 @@ export function startAgentRunExecution(params: {
           disableMessageTool: params.request.disableMessageTool,
           swarmCollector: params.request.swarmCollector,
           swarmOutputSchema: params.request.swarmOutputSchema,
+          factoryNativeAuthority: params.factoryNativeAuthority,
+          onFactoryNativeAuthorityProof: params.factoryNativeAuthority
+            ? async (proof) => {
+                recordSwarmEffectiveAuthorityProof({
+                  runId: params.factoryNativeAuthority!.runId,
+                  launchIdentityDigest: params.factoryNativeAuthority!.launchIdentityDigest,
+                  proof,
+                });
+              }
+            : undefined,
+          onSwarmStructuredOutputState:
+            params.request.swarmCollector === true && params.request.swarmOutputSchema
+              ? async (state) => {
+                  recordSwarmStructuredOutput(
+                    {
+                      runId: params.runId,
+                      childSessionKey: params.request.sessionKey,
+                    },
+                    state,
+                  );
+                }
+              : undefined,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           forceCodeModeTools: params.request.forceCodeModeTools,
           executionAttribution: prepared.attribution,

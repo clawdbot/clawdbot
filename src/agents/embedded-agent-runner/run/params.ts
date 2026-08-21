@@ -40,6 +40,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
+import type { FactoryNativeRunAuthority } from "../../factory-authority-profile.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
@@ -48,6 +49,10 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SessionManager } from "../../sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
+import type {
+  SwarmEffectiveAuthorityProof,
+  SwarmStructuredOutputState,
+} from "../../subagent-registry.types.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -155,6 +160,12 @@ export type RunEmbeddedAgentParams = {
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
+  /** Host-attested authority for a native macOS factory collector. */
+  factoryNativeAuthority?: FactoryNativeRunAuthority;
+  /** Freezes the effective Codex runtime proof before native work can continue. */
+  onFactoryNativeAuthorityProof?: (proof: SwarmEffectiveAuthorityProof) => Promise<void> | void;
+  /** Persists a Codex-native schema-constrained collector result before terminal freeze. */
+  onSwarmStructuredOutputState?: (state: SwarmStructuredOutputState) => Promise<void> | void;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Preserve Code Mode controls for a replay-safe restart recovery turn. */

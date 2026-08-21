@@ -1,10 +1,16 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  assertFactoryNativeLaunchAuthority,
+  type EmbeddedRunAttemptParams,
+  type SwarmLaunchAuthority,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import { isCodexNativeStructuredOutputAttempt } from "./native-structured-output.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
+  JsonObject,
 } from "./protocol.js";
 import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import {
@@ -41,14 +47,22 @@ export function buildTurnStartParams(
         agentDir: params.agentDir,
         config: params.config,
       });
-  const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
+  const factoryAuthority = params.factoryNativeAuthority
+    ? assertFactoryNativeLaunchAuthority(params.factoryNativeAuthority.authority)
+    : undefined;
+  // Codex turn-level permission selection reloads config without the thread request's
+  // custom profile catalog, so attested profiles must be inherited from the thread.
+  const preserveThreadPermissionProfile =
+    Boolean(factoryAuthority) || (options.appServer.networkProxy && !options.sandboxPolicy);
   return {
     threadId: options.threadId,
     input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
-    cwd: options.cwd,
-    approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
-    ...(useThreadPermissionProfile
+    cwd: factoryAuthority ? factoryAuthority.cwd : options.cwd,
+    approvalPolicy: factoryAuthority ? "never" : options.appServer.approvalPolicy,
+    approvalsReviewer: factoryAuthority
+      ? factoryAuthority.approvalsReviewer
+      : options.appServer.approvalsReviewer,
+    ...(preserveThreadPermissionProfile
       ? {}
       : {
           sandboxPolicy:
@@ -65,6 +79,9 @@ export function buildTurnStartParams(
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
+    ...(isCodexNativeStructuredOutputAttempt(params)
+      ? { outputSchema: params.swarmOutputSchema as JsonObject }
+      : {}),
     ...(modelSelection
       ? {
           effort: resolveReasoningEffort(
@@ -74,7 +91,9 @@ export function buildTurnStartParams(
           ),
         }
       : {}),
-    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    ...(!factoryAuthority && options.environmentSelection
+      ? { environments: options.environmentSelection }
+      : {}),
     ...(modelSelection
       ? {
           collaborationMode: buildTurnCollaborationMode(params, {
@@ -86,6 +105,24 @@ export function buildTurnStartParams(
         }
       : {}),
   };
+}
+
+export function assertCodexFactoryNativeTurnRequestAuthority(
+  authority: SwarmLaunchAuthority,
+  request: CodexTurnStartParams,
+): void {
+  const checked = assertFactoryNativeLaunchAuthority(authority);
+  if (
+    request.approvalPolicy !== checked.approvalPolicy ||
+    request.approvalsReviewer !== checked.approvalsReviewer ||
+    Object.hasOwn(request, "permissions") ||
+    request.cwd !== checked.cwd ||
+    Object.hasOwn(request, "sandboxPolicy") ||
+    Object.hasOwn(request, "environments") ||
+    Object.hasOwn(request, "runtimeWorkspaceRoots")
+  ) {
+    throw new Error("factory native Codex turn request drifted from its launch authority");
+  }
 }
 
 type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;

@@ -346,6 +346,22 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("amount", "4200")).toBe("4200");
   });
 
+  it("masks the dedicated factory Gateway credential in structured logs", () => {
+    const credential = "factory-controller-secret-1234567890abcdef";
+    expect(redactSensitiveFieldValue("factoryCredential", credential)).toBe("***");
+    expect(redactSensitiveText(JSON.stringify({ factoryCredential: credential }))).toBe(
+      '{"factoryCredential":"***"}',
+    );
+  });
+
+  it("fully masks a serialized factory credential containing escaped quotes", () => {
+    const credential = `factory-controller-${"a".repeat(32)}-\"escaped-secret-tail`;
+    const redacted = redactSensitiveText(JSON.stringify({ factoryCredential: credential }));
+
+    expect(redacted).toBe('{"factoryCredential":"***"}');
+    expect(redacted).not.toContain("escaped-secret-tail");
+  });
+
   it("masks structured uppercase env-style field values by key", () => {
     expect(redactSensitiveFieldValue("GITHUB_TOKEN", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
       "abcdef…7890",

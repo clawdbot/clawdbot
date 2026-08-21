@@ -610,6 +610,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `environments.create` (`{ profileId, idempotencyKey }`) provisions a worker from a configured plugin provider profile; retries with the same key reuse the durable operation. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
+    - `agent.collector.spawn` starts one replay-fenced Swarm collector for the dedicated local factory-controller principal. Generic Gateway authentication is necessary but insufficient: the loopback caller must also present the activation-scoped `factoryCredential` whose SHA-256 digest the Gateway received in `OPENCLAW_FACTORY_CONTROLLER_CREDENTIAL_SHA256`. The request binds the exact macOS worktree, Git metadata root, ordered native toolchain `PATH` entries, read roots, environment, ownership fence, and `factory_native_build_v1` authority profile.
+    - `agent.result.get` (`operator.read`) reads one terminal structured collector result using the exact immutable launch receipt returned by `agent.collector.spawn`. It has the same loopback and dedicated-principal requirement, but deliberately does not depend on mutable requester-session state. Results and effective-authority proof come only from the durable replay ledger.
 
   </Accordion>
 

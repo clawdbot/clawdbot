@@ -194,20 +194,28 @@ export async function startCodexAttemptThread(params: {
         startupClientForAbandonedRequestCleanup = undefined;
       },
       operation: async () => {
+        const factoryNativeActive = Boolean(params.buildAttemptParams().factoryNativeAuthority);
         const threadConfig = mergeCodexThreadConfigs(
-          params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
+          factoryNativeActive
+            ? undefined
+            : (params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined),
         );
-        const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
+        const resolvedPluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
           nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
         });
         const {
-          pluginThreadConfigRequired,
+          pluginThreadConfigRequired: configuredPluginThreadConfigRequired,
           pluginThreadConfigPluginConfig,
-          resolvedPluginPolicy,
-          enabledPluginConfigKeys,
-        } = pluginStartupPolicy;
-        const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
+          resolvedPluginPolicy: configuredPluginPolicy,
+          enabledPluginConfigKeys: configuredPluginConfigKeys,
+        } = resolvedPluginStartupPolicy;
+        const pluginThreadConfigRequired =
+          !factoryNativeActive && configuredPluginThreadConfigRequired;
+        const resolvedPluginPolicy = factoryNativeActive ? undefined : configuredPluginPolicy;
+        const enabledPluginConfigKeys = factoryNativeActive ? [] : configuredPluginConfigKeys;
+        const computerUseMcpElicitationDelegationRequired =
+          !factoryNativeActive && params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
           resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         pluginAppServer = mcpElicitationDelegationRequired

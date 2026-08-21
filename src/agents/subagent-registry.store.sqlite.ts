@@ -15,6 +15,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { syncSwarmReplayRunInTransaction } from "./swarm-replay-ledger.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
@@ -225,6 +226,7 @@ function writeSubagentRunValues(
   values: readonly SubagentRunSqliteInsert[],
   deleteRunIds?: readonly string[],
   retainedRunIds?: readonly string[],
+  replayEntries: readonly SubagentRunRecord[] = [],
 ): void {
   if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
     return;
@@ -234,6 +236,9 @@ function writeSubagentRunValues(
     const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
     for (const row of values) {
       upsertSubagentRunRowInDatabase(database, row);
+    }
+    for (const entry of replayEntries) {
+      syncSwarmReplayRunInTransaction(database, entry);
     }
     if (retainedRunIds !== undefined) {
       const deleteQuery =
@@ -449,6 +454,7 @@ export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord
     values,
     undefined,
     values.map((row) => row.run_id),
+    [...runs.values()],
   );
 }
 
@@ -459,14 +465,16 @@ export function saveSubagentRegistryChangesToSqlite(
 ): void {
   const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
   const values: SubagentRunSqliteInsert[] = [];
+  const replayEntries: SubagentRunRecord[] = [];
   const deleteRunIds: string[] = [];
   for (const runId of runIds) {
     const entry = runs.get(runId);
     if (entry) {
       values.push(bindSubagentRunRecord(entry));
+      replayEntries.push(entry);
     } else {
       deleteRunIds.push(runId);
     }
   }
-  writeSubagentRunValues(values, deleteRunIds);
+  writeSubagentRunValues(values, deleteRunIds, undefined, replayEntries);
 }

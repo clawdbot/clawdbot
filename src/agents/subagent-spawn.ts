@@ -24,6 +24,7 @@ import {
 } from "./subagent-attachments.js";
 import {
   completeCollectorLaunchCleanup,
+  listSwarmRunsForGroup,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "./subagent-registry.js";
@@ -63,7 +64,8 @@ import {
   emitSessionLifecycleEvent,
   mergeDeliveryContext,
 } from "./subagent-spawn.runtime.js";
-import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
+import { buildSwarmLaunchIdentityDigest } from "./swarm-replay-ledger.js";
+import { activateSwarmRun, removeQueuedSwarmRun, reserveSwarmRun } from "./swarm-scheduler.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
@@ -111,6 +113,9 @@ export async function spawnSubagentDirect(
   if (!requestResolution.ok) {
     return requestResolution.result;
   }
+  if ("replay" in requestResolution) {
+    return requestResolution.replay;
+  }
   const {
     request: { taskName, spawnMode, cleanup, expectsCompletionMessage },
     runtime: {
@@ -128,7 +133,6 @@ export async function spawnSubagentDirect(
       groupId: swarmGroupId,
       schedulerGroupKey: swarmSchedulerGroupKey,
       launchReplayKey: swarmLaunchReplayKey,
-      reservationPending,
     },
     admission: {
       resolve: resolveAdmission,
@@ -143,8 +147,27 @@ export async function spawnSubagentDirect(
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
-  let swarmReservationPending = reservationPending;
+  let swarmReservationPending = false;
   try {
+    if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
+      const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
+      if (
+        !reserveSwarmRun({
+          groupId: swarmSchedulerGroupKey,
+          runId: childIdem,
+          maxConcurrent: swarmConfig.maxConcurrent,
+          activeRunIds: groupRuns
+            .filter((entry) => entry.execution.status === "running")
+            .map((entry) => entry.schedulerSlotId ?? entry.runId),
+        })
+      ) {
+        return {
+          status: "error",
+          error: "sessions_spawn could not reserve swarm FIFO order.",
+        };
+      }
+      swarmReservationPending = true;
+    }
     const childPlan = await resolveSubagentChildPlan({
       request: params,
       ctx,
@@ -171,6 +194,26 @@ export async function spawnSubagentDirect(
       launchAuthorization,
       resolvedModelMetadata,
     } = childPlan.resolved;
+    const launchIdentityDigest =
+      params.collect &&
+      swarmLaunchReplayKey &&
+      params.swarmLaunchRequestFingerprint &&
+      params.swarmRequesterSessionId &&
+      params.swarmLaunchAuthority
+        ? buildSwarmLaunchIdentityDigest({
+            runId: childIdem,
+            sessionKey: childSessionKey,
+            agentId: targetAgentId,
+            requesterSessionKey: requesterInternalKey,
+            requesterSessionId: params.swarmRequesterSessionId,
+            ...(params.swarmRequesterLifecycleRevision
+              ? { requesterLifecycleRevision: params.swarmRequesterLifecycleRevision }
+              : {}),
+            replayKey: swarmLaunchReplayKey,
+            requestFingerprint: params.swarmLaunchRequestFingerprint,
+            authority: params.swarmLaunchAuthority,
+          })
+        : undefined;
     let { childSessionOrigin } = childPlan.resolved;
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
@@ -287,7 +330,7 @@ export async function spawnSubagentDirect(
       maxSpawnDepth,
     });
     if (params.outputSchema) {
-      childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
+      childSystemPrompt = `${childSystemPrompt}\n\nBefore ending, submit exactly one result that matches the requested JSON Schema using the completion mechanism named by the active runtime. Follow the runtime's developer instructions for that mechanism. If the runtime rejects the result, correct it and retry at most once; do not submit again after acceptance.`;
     }
 
     let retainOnSessionKeep = false;
@@ -511,6 +554,12 @@ export async function spawnSubagentDirect(
           swarmLaunchRequestFingerprint: params.collect
             ? params.swarmLaunchRequestFingerprint
             : undefined,
+          swarmLaunchIdentityDigest: params.collect ? launchIdentityDigest : undefined,
+          swarmRequesterSessionId: params.collect ? params.swarmRequesterSessionId : undefined,
+          swarmRequesterLifecycleRevision: params.collect
+            ? params.swarmRequesterLifecycleRevision
+            : undefined,
+          swarmLaunchAuthority: params.collect ? params.swarmLaunchAuthority : undefined,
           outputSchema: params.outputSchema,
           groupId: swarmGroupId,
           queuedLaunch,
@@ -623,6 +672,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
+      ...(launchIdentityDigest ? { launchIdentityDigest } : {}),
       mode: spawnMode,
       taskName,
       note: preparedSpawnContext.forkFallbackNote

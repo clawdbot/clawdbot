@@ -63,6 +63,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     isOneShotModelRun,
     isRawModelRun,
     agentDedupeKeys,
+    factoryNativeAuthority,
   } = preflight;
   const idem = runId;
   let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
@@ -522,6 +523,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       runId,
       idempotencyKey: idem,
       agentDedupeKeys,
+      factoryNativeAuthority,
       spawnedBy: spawnedByValue,
       groupId: resolvedGroupId,
       groupChannel: resolvedGroupChannel,

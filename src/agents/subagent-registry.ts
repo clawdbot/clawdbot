@@ -534,6 +534,7 @@ export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
+export const recordSwarmEffectiveAuthorityProof = publicApi.recordSwarmEffectiveAuthorityProof;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;

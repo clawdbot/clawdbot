@@ -721,6 +721,60 @@ describe("Codex app-server native code mode config", () => {
     expect(withWrongNamespace).not.toContain("native `wait_agent`");
   });
 
+  it("names the exact structured-output tool exposed to Codex collectors", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const namespaced = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw_direct",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "structured_output",
+              description: "Record the collector result",
+              inputSchema: { type: "object" },
+            },
+          ],
+        },
+      ],
+    });
+    const root = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "structured_output",
+          description: "Record the collector result",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+    const absent = buildDeveloperInstructions(params, { dynamicTools: [] });
+    const nativeParams = createAttemptParams({ provider: "openai" });
+    nativeParams.swarmCollector = true;
+    nativeParams.swarmOutputSchema = { type: "object" };
+    nativeParams.onSwarmStructuredOutputState = vi.fn();
+    const native = buildDeveloperInstructions(nativeParams, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "structured_output",
+          description: "Record the collector result",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(namespaced).toContain("`openclaw_direct.structured_output`");
+    expect(namespaced).toContain("A normal final assistant message does not satisfy");
+    expect(root).toContain("`structured_output`");
+    expect(absent).not.toContain("collector contract");
+    expect(native).toContain("Codex constrains that message with the native JSON schema");
+    expect(native).toContain("Do not call `structured_output`");
+    expect(native).not.toContain("A normal final assistant message does not satisfy");
+  });
+
   it.each([
     { namespace: "openclaw_direct", exposesNativeYield: true },
     { namespace: "openclaw", exposesNativeYield: false },
@@ -1210,6 +1264,35 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
+  it("sends a collector schema only when the durable native capture owner is present", () => {
+    const schema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const nativeParams = createAttemptParams({ provider: "openai" });
+    nativeParams.swarmCollector = true;
+    nativeParams.swarmOutputSchema = schema;
+    nativeParams.onSwarmStructuredOutputState = vi.fn();
+    const native = buildTurnStartParams(nativeParams, {
+      threadId: "thread-native-collector",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+    const legacyParams = createAttemptParams({ provider: "openai" });
+    legacyParams.swarmCollector = true;
+    legacyParams.swarmOutputSchema = schema;
+    const legacy = buildTurnStartParams(legacyParams, {
+      threadId: "thread-legacy-collector",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(native.outputSchema).toEqual(schema);
+    expect(legacy).not.toHaveProperty("outputSchema");
+  });
+
   it("does not overwrite native supervised turn settings", () => {
     const params = createAttemptParams({ provider: "anthropic" });
     params.thinkLevel = "high";
@@ -1534,7 +1617,7 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
-  it("uses Codex permissions for network-proxy turn/start requests", () => {
+  it("inherits the Codex permission profile for network-proxy turn/start requests", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",

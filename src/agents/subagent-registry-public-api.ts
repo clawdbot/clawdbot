@@ -1,8 +1,10 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "./agent-steering-queue.js";
+import { assertFactoryNativeAuthorityProof } from "./factory-authority-profile.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
@@ -16,7 +18,11 @@ import {
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
-import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
+import type {
+  SubagentRunRecord,
+  SwarmEffectiveAuthorityProof,
+  SwarmStructuredOutputState,
+} from "./subagent-registry.types.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -147,11 +153,57 @@ export function createSubagentRegistryPublicApi(config: {
       throw new Error("collector run is unavailable");
     }
     const previous = entry.structuredOutput;
+    if (previous) {
+      if (stableStringify(previous) === stableStringify(state)) {
+        return;
+      }
+      if (previous.structured !== undefined) {
+        throw new Error("collector structured output is already recorded with different content");
+      }
+    }
     entry.structuredOutput = structuredClone(state);
     try {
       persistOrThrow(entry.runId);
     } catch (error) {
       entry.structuredOutput = previous;
+      throw error;
+    }
+  }
+
+  function recordSwarmEffectiveAuthorityProof(params: {
+    runId: string;
+    launchIdentityDigest: `sha256:${string}`;
+    proof: SwarmEffectiveAuthorityProof;
+  }): void {
+    const entry = findRunById(runs, params.runId.trim());
+    if (
+      !entry?.collect ||
+      !entry.swarmLaunchAuthority ||
+      entry.swarmLaunchIdentityDigest !== params.launchIdentityDigest ||
+      entry.collectorCompletion ||
+      entry.swarmTerminalEvidence
+    ) {
+      throw new Error("factory native collector run is unavailable for authority proof");
+    }
+    const proof = assertFactoryNativeAuthorityProof({
+      binding: {
+        runId: entry.swarmRunId ?? entry.runId,
+        launchIdentityDigest: params.launchIdentityDigest,
+        authority: entry.swarmLaunchAuthority,
+      },
+      proof: params.proof,
+    });
+    if (entry.swarmEffectiveAuthorityProof) {
+      if (stableStringify(entry.swarmEffectiveAuthorityProof) !== stableStringify(proof)) {
+        throw new Error("factory native effective authority proof is immutable");
+      }
+      return;
+    }
+    entry.swarmEffectiveAuthorityProof = proof;
+    try {
+      persistOrThrow(entry.runId);
+    } catch (error) {
+      entry.swarmEffectiveAuthorityProof = undefined;
       throw error;
     }
   }
@@ -249,6 +301,7 @@ export function createSubagentRegistryPublicApi(config: {
     getSubagentRunsByRunIds,
     completeCollectorLaunchCleanup,
     recordSwarmStructuredOutput,
+    recordSwarmEffectiveAuthorityProof,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,
     countActiveRunsForSession,
