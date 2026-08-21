@@ -111,7 +111,10 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params.params);
   const restrictedToolSurface =
-    Boolean(factoryNativeAuthority) || ringZeroActive || messageOnlySourceReply;
+    Boolean(factoryNativeAuthority) ||
+    ringZeroActive ||
+    messageOnlySourceReply ||
+    params.params.pluginHarnessToolPolicyRestricted === true;
   if (!factoryNativeAuthority && restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }

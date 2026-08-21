@@ -33,7 +33,7 @@ import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../to
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
-import { MissingAgentHarnessError } from "./errors.js";
+import { AgentHarnessPreflightError, MissingAgentHarnessError } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
@@ -164,6 +164,7 @@ type ResolvedPluginHarnessToolPolicies = {
   senderScopedGroupPolicy?: PluginHarnessToolPolicy;
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
+  toolPolicyRestricted: boolean;
 };
 
 function listPluginAgentHarnesses(): AgentHarness[] {
@@ -524,8 +525,25 @@ async function runSelectedAgentHarnessAttempt(
     runWithAgentRingZeroTools(ringZeroTools, () => {
       // Resolve plugin policy after entering the host scope. Ring-zero tools are
       // trusted setup authority and must survive ordinary deny-all policy.
-      const attemptParams =
+      const hostOpenClawAuthority =
+        isHostScopedAgentToolActive("openclaw") &&
+        isSystemAgentOnlyAllowlist(pluginParams.toolsAllow);
+      const preparedParams =
         harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+      const attemptParams =
+        hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
+          ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
+          : preparedParams;
+      if (
+        harness.id !== "openclaw" &&
+        attemptParams.pluginHarnessToolPolicyRestricted === true &&
+        harness.conversationToolPolicySupport !== "exact"
+      ) {
+        throw new AgentHarnessPreflightError(
+          `${harness.label} cannot enforce this conversation's tool policy. Use the embedded runtime or ask in the main conversation.`,
+          { scope: "harness" },
+        );
+      }
       return runAgentHarnessLifecycleAttempt(harness, attemptParams);
     }),
   );
@@ -598,18 +616,23 @@ function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedR
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
     : params.resolvedApiKey;
   const model = unwrapModelHeaderSentinelsForProviderEgress(params.model, boundary);
-  if (model === params.model && resolvedApiKey === params.resolvedApiKey) {
-    return applyPluginHarnessDenyAllToolPolicy(params);
-  }
-  return applyPluginHarnessDenyAllToolPolicy({
-    ...params,
-    model,
-    resolvedApiKey,
-  });
+  const preparedParams =
+    model === params.model && resolvedApiKey === params.resolvedApiKey
+      ? params
+      : { ...params, model, resolvedApiKey };
+  const policies = resolvePluginHarnessToolPolicies(preparedParams);
+  return applyPluginHarnessDenyAllToolPolicy(
+    {
+      ...preparedParams,
+      pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
+    },
+    policies,
+  );
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
   params: EmbeddedRunAttemptParams,
+  policies: ResolvedPluginHarnessToolPolicies,
 ): EmbeddedRunAttemptParams {
   if (
     isHostScopedAgentToolActive("openclaw") &&
@@ -618,7 +641,7 @@ function applyPluginHarnessDenyAllToolPolicy(
   ) {
     return params;
   }
-  const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(params);
+  const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(policies);
   if (!prompt) {
     return params;
   }
@@ -641,9 +664,8 @@ export function resolvePluginHarnessPolicyToolsAllow(
 }
 
 function resolvePluginHarnessDenyAllToolPolicyPrompt(
-  params: PluginHarnessToolPolicyContext,
+  policies: ResolvedPluginHarnessToolPolicies,
 ): string | undefined {
-  const policies = resolvePluginHarnessToolPolicies(params);
   if (
     policyDeniesAllTools(policies.senderPolicy) ||
     policyDeniesAllTools(policies.senderScopedGroupPolicy)
@@ -728,6 +750,17 @@ function resolvePluginHarnessToolPolicies(
       policy.subagentPolicy,
       policy.inheritedToolPolicy,
     ],
+    toolPolicyRestricted: [
+      policy.senderPolicy,
+      policy.groupPolicy,
+      policy.globalPolicy,
+      policy.globalProviderPolicy,
+      policy.agentPolicy,
+      policy.agentProviderPolicy,
+      sandboxPolicy,
+      policy.subagentPolicy,
+      policy.inheritedToolPolicy,
+    ].some(policyRestrictsNativeTools),
   };
 }
 

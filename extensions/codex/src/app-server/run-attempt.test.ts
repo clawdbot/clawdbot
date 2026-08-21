@@ -513,6 +513,15 @@ async function startThreadWithDisabledNativeSurfaceForTest(
     if (method === "thread/start") {
       return threadStartResult();
     }
+    if (method === "config/read") {
+      return { config: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "mcpServerStatus/list") {
+      return { data: [], nextCursor: null };
+    }
     if (method === "app/installed" || method === "app/read") {
       throw new Error("App inventory should not run when runtime toolsAllow is empty.");
     }
@@ -2218,6 +2227,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createRunParams();
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = [];
     params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
@@ -2271,6 +2281,41 @@ describe("runCodexAppServerAttempt", () => {
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/installed");
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
+  });
+
+  it("keeps policy-filtered dynamic tools while disabling sender-restricted native surfaces", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const params = createRunParams();
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = undefined;
+    params.pluginHarnessToolPolicyRestricted = true;
+    const { request, nativeToolSurfaceEnabled } = await startThreadWithDisabledNativeSurfaceForTest(
+      params,
+      { pluginConfig: { appServer: { mode: "yolo" } } },
+    );
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startRequest?.[1] as
+      | {
+          dynamicTools?: CodexDynamicToolSpec[];
+          environments?: unknown[];
+          config?: Record<string, unknown>;
+        }
+      | undefined;
+
+    expect(nativeToolSurfaceEnabled).toBe(false);
+    expect(startParams?.dynamicTools?.map((tool) => tool.name).toSorted()).toEqual(["message"]);
+    expect(startParams?.environments).toEqual([]);
+    expect(startParams?.config).toMatchObject({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+      "features.hooks": false,
+    });
+    expect(request.mock.calls.map(([method]) => method)).toContain("mcpServerStatus/list");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {

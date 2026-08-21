@@ -190,7 +190,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
-    if (params.factoryNativeAuthority) {
+    if (params.factoryNativeAuthority || params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
       return {
         configPatch: buildCodexNativeHookRelayDisabledConfig(),
         nativeHookRelayGeneration: undefined,

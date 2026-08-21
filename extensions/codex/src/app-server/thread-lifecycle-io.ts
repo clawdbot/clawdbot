@@ -257,7 +257,8 @@ export async function resumeExistingCodexThread(
     if (
       params.params.factoryNativeAuthority ||
       ringZeroActive ||
-      isMessageOnlyCodexSourceReply(params.params)
+      isMessageOnlyCodexSourceReply(params.params) ||
+      params.params.pluginHarnessToolPolicyRestricted === true
     ) {
       try {
         await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
@@ -564,7 +565,8 @@ export async function startFreshCodexThread(
   if (
     params.params.factoryNativeAuthority ||
     ringZeroActive ||
-    isMessageOnlyCodexSourceReply(params.params)
+    isMessageOnlyCodexSourceReply(params.params) ||
+    params.params.pluginHarnessToolPolicyRestricted === true
   ) {
     try {
       await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>

@@ -404,7 +404,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const messageOnlySourceReply = isMessageOnlyCodexSourceReply(params);
-  const restrictedToolSurface = ringZeroActive || messageOnlySourceReply;
+  const restrictedToolSurface =
+    ringZeroActive || messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true;
   const configMcpServers = config?.mcp_servers;
   if (restrictedToolSurface && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
     throw new Error("Codex ring-zero received invalid thread mcp_servers config");
@@ -440,7 +441,7 @@ export function buildCodexRuntimeThreadConfigForRun(
       params.delegationCapability === "report_only"
         ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
-      messageOnlySourceReply
+      messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
         ? buildCodexRestrictedToolThreadConfigPatch(ringZeroMcpServerNames)
         : buildCodexRingZeroThreadConfigPatch(
             params,

@@ -1773,6 +1773,16 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
+  it("disables Codex native tool surfaces for core-prepared sender restrictions", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = undefined;
+    params.pluginHarnessToolPolicyRestricted = true;
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
   it("disables Codex native tool surfaces for swarm collectors even without toolsAllow", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

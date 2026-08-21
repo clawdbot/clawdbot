@@ -255,6 +255,7 @@ function registerSuccessfulCodexHarness(): void {
     {
       id: "codex",
       label: "Codex",
+      conversationToolPolicySupport: "exact",
       supports: (ctx) =>
         ctx.provider === "codex" || ctx.provider === "openai"
           ? { supported: true, priority: 100 }
@@ -904,7 +905,10 @@ describe("runAgentHarnessAttempt", () => {
 
     const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
-    expect(classifyCall?.[1]).toBe(params);
+    expect(classifyCall?.[1]).toStrictEqual({
+      ...params,
+      pluginHarnessToolPolicyRestricted: false,
+    });
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
   });
@@ -915,6 +919,7 @@ describe("runAgentHarnessAttempt", () => {
       {
         id: "codex",
         label: "Codex",
+        conversationToolPolicySupport: "exact",
         supports: (ctx) =>
           ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
         runAttempt,
@@ -938,12 +943,48 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
   });
 
+  it("marks a partial Slack sender policy for exact plugin-native isolation", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        conversationToolPolicySupport: "exact",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams({
+        tools: {
+          toolsBySender: {
+            "id:U-factory-owner": { deny: ["exec", "write", "git"] },
+          },
+        },
+      } as OpenClawConfig),
+      messageProvider: "slack",
+      senderId: "U-factory-owner",
+    });
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+      messageProvider: "slack",
+      senderId: "U-factory-owner",
+      pluginHarnessToolPolicyRestricted: true,
+    });
+    expect(runAttempt.mock.calls[0]?.[0].toolsAllow).toBeUndefined();
+  });
+
   it("adds chat policy wording for plugin harness group deny-all", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
     registerAgentHarness(
       {
         id: "codex",
         label: "Codex",
+        conversationToolPolicySupport: "exact",
         supports: (ctx) =>
           ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
         runAttempt,
