@@ -46,11 +46,32 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
   },
 ];
 
-/** Above this roster size the chip menu switches to pinned agents + filter. */
-const QUICK_SWITCH_AGENT_LIMIT = 10;
+/** Above this roster size the chip menu adds filtering and scrolls the grid. */
+const QUICK_SWITCH_VISIBLE_AGENT_LIMIT = 6;
 const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
+const sidebarMenuTypeahead = new WeakMap<
+  HTMLElement,
+  { query: string; timeout: ReturnType<typeof setTimeout> }
+>();
+
+function sidebarMenuItems(dropdown: Element | null) {
+  return [
+    ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
+      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+    ) ?? []),
+  ];
+}
+
+function focusSidebarMenuItem(
+  items: Array<HTMLElement & { active: boolean }>,
+  target: HTMLElement,
+) {
+  items.forEach((item) => (item.active = item === target));
+  target.focus({ preventScroll: true });
+  target.scrollIntoView?.({ block: "nearest" });
+}
 
 // Nested overlays bubble lifecycle events through the dropdown. Only the
 // owner's completed hide may remove its menu or consume its Escape state.
@@ -62,15 +83,14 @@ function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: bo
 }
 
 function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    return false;
+  }
+  if (event.target instanceof HTMLInputElement && (event.key === "Home" || event.key === "End")) {
     return false;
   }
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
-  const items = [
-    ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
-      ":scope > wa-dropdown-item:not([disabled])",
-    ) ?? []),
-  ];
+  const items = sidebarMenuItems(dropdown);
   const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
   const controls = [
     ...items,
@@ -83,9 +103,13 @@ function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   }
   const direction = event.key === "ArrowDown" ? 1 : -1;
   const target =
-    index < 0
-      ? items.at(direction === 1 ? 0 : -1)
-      : controls[(index + direction + controls.length) % controls.length];
+    event.key === "Home"
+      ? items[0]
+      : event.key === "End"
+        ? items.at(-1)
+        : index < 0
+          ? items.at(direction === 1 ? 0 : -1)
+          : controls[(index + direction + controls.length) % controls.length];
   if (!target || (footer && !footer.contains(current) && !footer.contains(target))) {
     return false;
   }
@@ -93,9 +117,49 @@ function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   event.stopPropagation();
   // Native footer actions are outside Web Awesome's roving item list; reset
   // its active row on both crossings so reverse navigation cannot skip one.
-  items.forEach((item) => (item.active = item === target));
-  target.focus({ preventScroll: true });
+  focusSidebarMenuItem(items, target);
   return true;
+}
+
+function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
+  if (event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey) {
+    return false;
+  }
+  const dropdown = event.currentTarget;
+  if (!(dropdown instanceof HTMLElement)) {
+    return false;
+  }
+  const previous = sidebarMenuTypeahead.get(dropdown);
+  if (event.key === " " && !previous?.query) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (previous) {
+    clearTimeout(previous.timeout);
+  }
+  const query = `${previous?.query ?? ""}${event.key}`.trim().toLowerCase();
+  const timeout = setTimeout(() => sidebarMenuTypeahead.delete(dropdown), 1_000);
+  sidebarMenuTypeahead.set(dropdown, { query, timeout });
+  const items = sidebarMenuItems(dropdown);
+  const target = items.find((item) =>
+    (item.textContent ?? "").trim().toLowerCase().startsWith(query),
+  );
+  if (target) {
+    focusSidebarMenuItem(items, target);
+  }
+  return true;
+}
+
+function focusActiveAgentMenuItem(dropdown: HTMLElement) {
+  const items = sidebarMenuItems(dropdown);
+  const target =
+    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch--active")) ??
+    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch"));
+  if (!target) {
+    return;
+  }
+  focusSidebarMenuItem(items, target);
 }
 
 type AgentMenuAgent = {
@@ -114,9 +178,13 @@ type SidebarAgentMenuParams = {
   filter: string;
   pinnedAgentIds: readonly string[];
   connected: boolean;
+  openMode: "hover" | "click";
   agentUnreadCount: (agentId: string) => number;
   agentApprovalCount: (agentId: string) => number;
   onFilterChange: (next: string) => void;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+  onAfterShow: () => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
   onTabAway: () => void;
@@ -145,9 +213,8 @@ function isApplePlatform(): boolean {
   return /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? "");
 }
 
-/** Rows for the chip switcher. Small rosters list everything; past
-    QUICK_SWITCH_AGENT_LIMIT the menu shows pinned agents (plus the active
-    one) and the filter searches the full roster. */
+/** Rows for the chip switcher. Small rosters list everything; larger rosters
+    add filtering while keeping every unpinned option reachable by scrolling. */
 function sidebarAgentMenuRows(params: {
   agents: readonly AgentMenuAgent[];
   activeId: string;
@@ -155,7 +222,7 @@ function sidebarAgentMenuRows(params: {
   pinnedAgentIds: readonly string[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
 }) {
-  const { agents, activeId } = params;
+  const { agents } = params;
   const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
   const pinnedIds = new Set(
     params.pinnedAgentIds
@@ -167,7 +234,7 @@ function sidebarAgentMenuRows(params: {
     const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
     return aPinned - bPinned;
   });
-  if (agents.length <= QUICK_SWITCH_AGENT_LIMIT) {
+  if (agents.length <= QUICK_SWITCH_VISIBLE_AGENT_LIMIT) {
     return { rows: sorted, showFilter: false };
   }
   const query = params.filter.trim().toLowerCase();
@@ -181,23 +248,7 @@ function sidebarAgentMenuRows(params: {
     });
     return { rows, showFilter: true };
   }
-  if (pinnedIds.size > 0) {
-    return {
-      rows: sorted.filter((entry) => {
-        const agentId = normalizeAgentId(entry.id);
-        return pinnedIds.has(agentId) || agentId === activeId;
-      }),
-      showFilter: true,
-    };
-  }
-  let rows = sorted.slice(0, QUICK_SWITCH_AGENT_LIMIT);
-  if (!rows.some((entry) => normalizeAgentId(entry.id) === activeId)) {
-    const activeAgent = sorted.find((entry) => normalizeAgentId(entry.id) === activeId);
-    if (activeAgent) {
-      rows = [...rows.slice(0, QUICK_SWITCH_AGENT_LIMIT - 1), activeAgent];
-    }
-  }
-  return { rows, showFilter: true };
+  return { rows: sorted, showFilter: true };
 }
 
 function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
@@ -214,37 +265,38 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${active
+        ? "sidebar-agent-menu__agent-switch--active"
+        : ""}"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
       type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
-      <span slot="icon">${renderAgentSelectAvatar(option, identity)}</span>
-      ${renderAgentSelectCopy(option)}
-      ${approvals > 0
-        ? html`<span
-            slot="details"
-            class="sidebar-agent-approval-count"
-            aria-label=${approvalLabel}
-            title=${approvalLabel}
-            >${approvals}</span
-          >`
-        : nothing}
-      ${active
-        ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-            >${icons.check}</span
-          >`
-        : nothing}
-      ${unread > 0
-        ? html`<span
-            slot="details"
-            class="session-unread-dot"
-            role="img"
-            aria-label=${t("sessionsView.unread")}
-          ></span>`
-        : nothing}
+      <span class="sidebar-agent-menu__agent-tile">
+        <span class="sidebar-agent-menu__agent-avatar">
+          ${renderAgentSelectAvatar(option, identity)}
+        </span>
+        ${renderAgentSelectCopy(option)}
+        <span class="sidebar-agent-menu__agent-status">
+          ${approvals > 0
+            ? html`<span
+                class="sidebar-agent-approval-count"
+                aria-label=${approvalLabel}
+                title=${approvalLabel}
+                >${approvals}</span
+              >`
+            : nothing}
+          ${unread > 0
+            ? html`<span
+                class="session-unread-dot"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
+        </span>
+      </span>
     </wa-dropdown-item>
   `;
 }
@@ -294,6 +346,8 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("agentChip.menuLabel")}
+        @pointerenter=${params.onPointerEnter}
+        @pointerleave=${params.onPointerLeave}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
           event.preventDefault();
           const item = event.detail.item;
@@ -326,14 +380,42 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           }
         }}
         @wa-after-show=${(event: Event) => {
+          if (!(event.currentTarget instanceof HTMLElement)) {
+            return;
+          }
+          params.onAfterShow();
+          if (params.openMode === "hover") {
+            return;
+          }
           if (showFilter) {
-            (event.currentTarget as HTMLElement)
+            event.currentTarget
               .querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input")
               ?.focus();
+          } else {
+            focusActiveAgentMenuItem(event.currentTarget);
           }
         }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, params.onTabAway)}
+        @keydown=${(event: KeyboardEvent) => {
+          if (moveSidebarMenuFocus(event)) {
+            return;
+          }
+          if (typeaheadSidebarMenuFocus(event)) {
+            return;
+          }
+          const item =
+            event.target instanceof HTMLElement
+              ? event.target.closest<HTMLElement>(
+                  ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+                )
+              : null;
+          if ((event.key === "Enter" || event.key === " ") && item) {
+            event.preventDefault();
+            event.stopPropagation();
+            item.click();
+            return;
+          }
+          trackDropdownKeyboardDismissal(event, params.onTabAway);
+        }}
         @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
@@ -371,19 +453,20 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                     </div>
                   `
                 : nothing}
-              ${rows.map((entry) => renderAgentRow(entry, params))}
-              ${rows.length === 0
-                ? html`<div class="sidebar-agent-menu__empty">
-                    ${t("agentChip.noAgentMatches")}
+              ${rows.length > 0
+                ? html`<div class="sidebar-agent-menu__agent-grid">
+                    ${rows.map((entry) => renderAgentRow(entry, params))}
                   </div>`
-                : nothing}
+                : html`<div class="sidebar-agent-menu__empty">
+                    ${t("agentChip.noAgentMatches")}
+                  </div>`}
             `
           : nothing}
+        <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
           <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
         </wa-dropdown-item>
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item
           class="sidebar-customize-menu__item"
           value="command:capabilities"

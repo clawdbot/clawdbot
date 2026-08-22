@@ -3996,7 +3996,7 @@ ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	3
 ui/src/components/agent-select.ts	3
-ui/src/components/app-sidebar-agent-menu.ts	4
+ui/src/components/app-sidebar-agent-menu.ts	3
 ui/src/components/app-sidebar-nav-menus.ts	6
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
@@ -4063,7 +4063,6 @@ ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
-ui/src/components/sidebar-agent-card.ts	1
 ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
 ui/src/components/terminal/terminal-connection.ts	2

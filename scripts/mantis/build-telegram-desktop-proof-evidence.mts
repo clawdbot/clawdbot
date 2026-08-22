@@ -60,7 +60,7 @@ const LANES = [
   },
   {
     altPrefix: "Candidate",
-    label: "This PR",
+    label: "This PR merged onto main",
     lane: "candidate",
   },
 ] satisfies ReadonlyArray<{
