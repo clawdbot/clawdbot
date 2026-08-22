@@ -905,8 +905,6 @@ extension OnboardingAISetupModel {
                 context: context)
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-            let originalLeaseIsCurrent = await self.gateway.isCurrentServerLease(lease)
-            guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             if result.ok {
                 if let failure = await finishSuccessfulActivation(
                     kind: kind,
@@ -915,13 +913,13 @@ extension OnboardingAISetupModel {
                     activationOwner: activationOwner,
                     before: persistedStateBeforeActivation,
                     originalServerLease: lease,
-                    gatewayRestartRequired: result.gatewayRestartRequired == true || !originalLeaseIsCurrent)
+                    gatewayRestartRequired: result.gatewayRestartRequired == true)
                 {
                     self.statuses[kind] = .failed(failure)
                     self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
                 }
             } else {
-                guard originalLeaseIsCurrent else {
+                guard await self.gateway.isCurrentServerLease(lease) else {
                     self.pendingActivationVerification = false
                     self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                     requireFreshDetection(after: Self.transportFailure(
@@ -1074,7 +1072,10 @@ extension OnboardingAISetupModel {
         originalServerLease: GatewayConnection.ServerLease,
         gatewayRestartRequired: Bool) async -> Failure?
     {
-        guard gatewayRestartRequired else {
+        let restartRequired = gatewayRestartRequired ||
+            await !(self.gateway.isCurrentServerLease(originalServerLease))
+        guard self.isCurrentAttempt(context), !Task.isCancelled else { return nil }
+        guard restartRequired else {
             self.finishConnected(kind: kind, activationOwner: activationOwner)
             return nil
         }
@@ -1163,26 +1164,7 @@ extension OnboardingAISetupModel {
 }
 
 extension OnboardingAISetupModel {
-    func startProviderAuth(_ option: AuthOption) {
-        self.startProviderWizard(option, kind: .auth)
-    }
-
-    func startProviderPrepare(_ option: PrepareOption) {
-        self.startProviderWizard(
-            AuthOption(
-                id: option.id,
-                brandId: option.brandId,
-                label: option.label,
-                hint: option.hint,
-                groupLabel: nil,
-                icon: option.icon,
-                website: option.website,
-                kind: "prepare",
-                featured: false),
-            kind: .prepare)
-    }
-
-    private func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
+    func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) {
         guard !self.isBusy, self.activeAuthOption == nil, let serverLease else { return }
         self.activeAuthOption = option
         self.providerWizardKind = kind
@@ -1300,16 +1282,6 @@ extension OnboardingAISetupModel {
                 self.clearProviderAuth()
             }
         }
-    }
-
-    var authWizardOptions: [WizardOption] {
-        parseWizardOptions(self.authStep?.options)
-    }
-
-    var selectedAuthWizardOption: WizardOption? {
-        let options = self.authWizardOptions
-        guard options.indices.contains(self.authSelection) else { return options.first }
-        return options[self.authSelection]
     }
 
     private func advanceProviderAuth(stepID: String?, value: AnyCodable?) {
@@ -1592,25 +1564,6 @@ extension OnboardingAISetupModel {
                 ifCurrentServerLease: lease)
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-            guard await self.gateway.isCurrentServerLease(lease) else {
-                if result.ok,
-                   OnboardingSystemAgentResumeStore.markCompleted(
-                       ifOwnedBy: context.routeIdentity,
-                       activationOwner: activationOwner,
-                       defaults: self.defaults)
-                {
-                    self.pendingActivationVerification = true
-                    self.phase = .detecting
-                    _ = await self.verifyPendingConfiguredInference()
-                } else {
-                    self.pendingActivationVerification = false
-                    self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                    self.requireFreshDetection(after: Self.transportFailure(
-                        "The Gateway connection changed while AI setup was finishing. Check again."))
-                }
-                return
-            }
-            guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             if result.ok {
                 self.manualKey = ""
                 self.manualError = await self.finishSuccessfulActivation(
@@ -1622,6 +1575,13 @@ extension OnboardingAISetupModel {
                     originalServerLease: lease,
                     gatewayRestartRequired: result.gatewayRestartRequired == true)
             } else {
+                guard await self.gateway.isCurrentServerLease(lease) else {
+                    self.pendingActivationVerification = false
+                    self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
+                    self.requireFreshDetection(after: Self.transportFailure(
+                        "The Gateway connection changed while AI setup was finishing. Check again."))
+                    return
+                }
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                 self.manualError = Self.failure(

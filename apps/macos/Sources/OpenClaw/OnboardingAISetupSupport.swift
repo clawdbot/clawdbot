@@ -206,6 +206,16 @@ extension OnboardingAISetupModel {
         self.providerWizardKind == .prepare
     }
 
+    var authWizardOptions: [WizardOption] {
+        parseWizardOptions(self.authStep?.options)
+    }
+
+    var selectedAuthWizardOption: WizardOption? {
+        let options = self.authWizardOptions
+        guard options.indices.contains(self.authSelection) else { return options.first }
+        return options[self.authSelection]
+    }
+
     var connected: Bool {
         self.phase == .connected
     }
@@ -218,6 +228,25 @@ extension OnboardingAISetupModel {
     func canSelectCandidate(kind: String) -> Bool {
         guard !self.connected else { return false }
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
+    }
+
+    func startProviderAuth(_ option: AuthOption) {
+        self.startProviderWizard(option, kind: .auth)
+    }
+
+    func startProviderPrepare(_ option: PrepareOption) {
+        self.startProviderWizard(
+            AuthOption(
+                id: option.id,
+                brandId: option.brandId,
+                label: option.label,
+                hint: option.hint,
+                groupLabel: nil,
+                icon: option.icon,
+                website: option.website,
+                kind: "prepare",
+                featured: false),
+            kind: .prepare)
     }
 
     /// True when setup live-verified an already-configured route instead of
