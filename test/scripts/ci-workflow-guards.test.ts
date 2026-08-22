@@ -1801,6 +1801,15 @@ NODE
     const changedScopeStep = preflightSteps.find(
       (step: WorkflowStep) => step.name === "Detect changed scopes",
     );
+    const pinnedSyncFetchStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Fetch pinned upstream sync ancestry",
+    );
+    expect(pinnedSyncFetchStep.if).toBe(
+      "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository",
+    );
+    expect(pinnedSyncFetchStep.run).toContain(
+      'fetch --no-tags --no-recurse-submodules --depth=64 origin "$HEAD_SHA"',
+    );
     expect(changedScopeStep.if).toContain(
       "github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );

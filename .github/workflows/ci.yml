@@ -484,7 +484,7 @@ jobs:
           fi
           timeout --signal=TERM --kill-after=10s 30s git \
             -c protocol.version=2 \
-            fetch --no-tags --no-recurse-submodules --depth=2 origin "$HEAD_SHA"
+            fetch --no-tags --no-recurse-submodules --depth=64 origin "$HEAD_SHA"
 
       - name: Detect docs-only changes
         id: docs_scope
