@@ -607,6 +607,11 @@ function openOpenClawStateDatabaseWithBusyTimeout(
           busyTimeoutMs,
           lockFailureReporting,
           ensureSchema: (database) => ensureSchema(database, pathname, env, busyTimeoutMs),
+          onWalSplitBrain: () => {
+            if (unpublished) {
+              stateDbCache.evictCachedOpenClawStateDatabase(unpublished);
+            }
+          },
           recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
         }));
       },
