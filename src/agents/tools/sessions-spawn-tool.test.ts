@@ -1785,6 +1785,7 @@ describe("sessions_spawn tool", () => {
 
   it("routes to ACP runtime when runtime=acp", async () => {
     registerAcpBackendForTest();
+    const controller = new AbortController();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       requesterAgentIdOverride: "main",
@@ -1795,6 +1796,7 @@ describe("sessions_spawn tool", () => {
       currentMessagingTarget: "channel:source",
       currentChannelId: "source-native",
       currentMessageId: "message-789",
+      signal: controller.signal,
     });
 
     const result = await tool.execute("call-2", {
@@ -1828,6 +1830,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.currentMessagingTarget).toBe("channel:source");
     expect(spawnContext.currentChannelId).toBe("source-native");
     expect(spawnContext.currentMessageId).toBe("message-789");
+    expect(spawnContext.signal).toBe(controller.signal);
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     // Registration and progress hooks now belong to the shared backend pipeline.
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();

@@ -136,6 +136,7 @@ type SpawnAcpContext = {
   agentGroupSpace?: string | null;
   /** Trusted provider role ids for the requester in this group turn. */
   agentMemberRoleIds?: string[];
+  signal?: AbortSignal;
   sandboxed?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
@@ -490,13 +491,13 @@ export async function spawnAcpDirect(
     deliveryPlan?: AcpSpawnBootstrapDeliveryPlan;
     parentRelay?: AcpSpawnParentRelayHandle;
   };
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
   const adapter: SpawnBackendAdapter<AcpBackendState> = {
     async initialize() {
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
         actor: { type: "agent", id: requesterAgentId },
       });
-      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId });
       const childSessionPatch = admission.childSessionPatch
         ? {
             spawnDepth: admission.childSessionPatch.spawnDepth,
@@ -611,10 +612,10 @@ export async function spawnAcpDirect(
           inheritedToolDenylist: ctx.inheritedToolDenylist,
         },
         parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
-        participantStorePath: resolveSessionStorePathCore(cfg.session?.store, {
-          agentId: targetAgentId,
-        }),
+        participantStorePath: storePath,
       });
+      // Request cancellation can race Gateway dispatch; recheck before registering the child.
+      ctx.signal?.throwIfAborted();
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem && parentSessionKey) {
         state.parentRelay.dispose();

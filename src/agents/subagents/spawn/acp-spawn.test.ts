@@ -3618,6 +3618,43 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("cleans up instead of registering when the requester aborts during ACP dispatch", async () => {
+    const controller = new AbortController();
+    let releaseDispatch!: () => void;
+    const pendingDispatch = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let dispatchStarted = false;
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string };
+      if (args.method === "agent") {
+        dispatchStarted = true;
+        await pendingDispatch;
+        return { runId: "run-after-abort" };
+      }
+      return { ok: true };
+    });
+
+    const spawn = spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(dispatchStarted).toBe(true));
+    controller.abort();
+    releaseDispatch();
+    const result = await spawn;
+
+    expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeCloseHandle: expect.objectContaining({
+          handle: expect.objectContaining({ backend: "acpx" }),
+        }),
+      }),
+    );
+  });
+
   it("preserves the ACP failure code when run registration fails", async () => {
     hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
       throw new Error("registry unavailable");

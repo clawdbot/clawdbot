@@ -541,6 +541,7 @@ export function createSessionsSpawnTool(
               agentGroupId: opts?.agentGroupId ?? undefined,
               agentGroupSpace: opts?.agentGroupSpace,
               agentMemberRoleIds: opts?.agentMemberRoleIds,
+              signal: opts?.signal,
               sandboxed: opts?.sandboxed,
               inheritedToolAllowlist: opts?.inheritedToolAllowlist,
               inheritedToolDenylist: opts?.inheritedToolDenylist,
