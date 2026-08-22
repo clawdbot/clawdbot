@@ -54,4 +54,43 @@ describe("SessionCatalogLiveState", () => {
     }).not.toThrow();
     expect(result!).toBeNull();
   });
+
+  it.each([
+    {
+      metadata: "capabilities",
+      update: (current: SessionCatalog): SessionCatalog => ({
+        ...current,
+        capabilities: {
+          ...current.capabilities,
+          createSession: { model: "openai/gpt-5.6-luna" },
+        },
+      }),
+    },
+    {
+      metadata: "catalog error",
+      update: (current: SessionCatalog): SessionCatalog => ({
+        ...current,
+        error: { code: "unavailable", message: "Catalog temporarily unavailable" },
+      }),
+    },
+  ])("applies $metadata without marking a material change", ({ update }) => {
+    const live = new SessionCatalogLiveState();
+    const { progressId } = live.beginRequest(1);
+    const current = catalog("changed", 1);
+
+    const result = live.applyHost({
+      payload: {
+        progressId,
+        agentId: "main",
+        catalog: { ...update(current), hosts: [current.hosts[0]!] },
+      },
+      agentId: "main",
+      catalogs: [current],
+      pageDepths: new Map(),
+    });
+
+    expect(result?.catalogs[0]).toEqual(update(current));
+    expect(result?.materialChange).toBe(false);
+    expect(live.sawChange).toBe(false);
+  });
 });

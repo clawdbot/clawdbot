@@ -385,7 +385,7 @@ export class SessionCatalogLiveState {
       return null;
     }
     const materialChange =
-      !sameCatalogMetadata ||
+      !currentCatalog ||
       !currentHost ||
       !nextHost ||
       sessionCatalogMaterialSnapshot([{ ...nextCatalog, hosts: [nextHost] }]) !==
