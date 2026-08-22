@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
+import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
@@ -311,12 +312,15 @@ export async function buildDryRunPluginUpdateOutcome(params: {
     };
   }
 
+  const verb = isPackageVersionDowngrade(params.currentVersion, resolvedProbeVersion)
+    ? "Would downgrade"
+    : "Would update";
   return {
     pluginId: params.pluginId,
     status: "updated",
     currentVersion: params.currentVersion,
     nextVersion: resolvedProbeVersion,
-    message: `Would update ${params.pluginId}: ${currentLabel} -> ${nextVersion}.${params.channelFallbackSuffix}`,
+    message: `${verb} ${params.pluginId}: ${currentLabel} -> ${nextVersion}.${params.channelFallbackSuffix}`,
     ...(params.npmChannelFallback ? { channelFallback: params.npmChannelFallback } : {}),
   };
 }
