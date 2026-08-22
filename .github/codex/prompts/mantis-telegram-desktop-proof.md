@@ -8,7 +8,7 @@ continuous event recording, capture, and cleanup.
 
 - No PR mutations, commits, pushes, labels, reviews, or merges.
 - Do not read prepared worktrees. Pass their exact paths only to the lane helper.
-- Write only under `MANTIS_OUTPUT_DIR`.
+- Write only under `MANTIS_OUTPUT_DIR` and the fixture staging directory described below.
 - Never invent a pass, hide an attempt, edit trusted facts/media, or use old chat history.
 - A visible defect is a failure. An unproven comparison is `block`, not a pass.
 
@@ -47,6 +47,16 @@ connect the leased QA user, SUT bot, Telegram proxy, and
 mock OpenAI endpoint; the QA user is the gateway owner, so owner commands such as
 `/send off` work without a patch.
 Optional field: `mockResponseChunkDelayMs`.
+
+For scenarios that need an agent-authored plugin, write a complete plugin package
+under `MANTIS_FIXTURE_PLUGINS_DIR/baseline` and/or
+`MANTIS_FIXTURE_PLUGINS_DIR/candidate` before `start`. The harness copies the
+selected lane directory into that lane's isolated SUT; fixture code never runs on
+the runner host. Add the fixture id through `configPatch.plugins.allow` while
+retaining `telegram` and `openai`, then enable it through its entry or owning slot.
+Do not set `plugins.load.paths`; the harness owns that path. Use the same fixture
+package in both lane directories for a fair comparison unless different fixtures
+are an explicit part of the scenario.
 
 ## Primitive CLI
 

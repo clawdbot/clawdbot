@@ -179,6 +179,7 @@ export function createOpenClawGatewaySpawnSpec(params: {
 
 export function writeSutConfig(params: {
   configPatch?: Record<string, unknown>;
+  fixturePluginsDir?: string;
   gatewayPort: number;
   groupId: string;
   mcpAppFixture?: boolean;
@@ -192,6 +193,13 @@ export function writeSutConfig(params: {
   const workspace = path.join(tempRoot, "workspace");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(workspace, { recursive: true });
+  let fixturePluginsRoot: string | undefined;
+  if (params.fixturePluginsDir) {
+    fixturePluginsRoot = path.join(tempRoot, "fixture-plugins");
+    // Fixture code crosses into the same isolated runtime as candidate code. Copying keeps
+    // agent staging immutable from the SUT while adding no authority outside the container.
+    fs.cpSync(params.fixturePluginsDir, fixturePluginsRoot, { recursive: true });
+  }
   const configPath = path.join(tempRoot, "openclaw.json");
   const baseConfig = {
     agents: {
@@ -287,6 +295,7 @@ export function writeSutConfig(params: {
       allow: ["telegram", "openai"],
       enabled: true,
       entries: { openai: { enabled: true }, telegram: { enabled: true } },
+      ...(fixturePluginsRoot ? { load: { paths: [fixturePluginsRoot] } } : {}),
     },
   };
   const config = mergeConfig(baseConfig, params.configPatch ?? {});
@@ -545,6 +554,7 @@ function cleanupFailureMessage(message: string, cleanupErrors: unknown[]): strin
 
 export async function startMantisSut(params: {
   configPatch?: Record<string, unknown>;
+  fixturePluginsDir?: string;
   gatewayPort: number;
   groupId: string;
   mockPort: number;

@@ -839,6 +839,7 @@ async function startLane(values: Map<string, string>, roots: Roots): Promise<voi
       telegramBotApi(credential.sutToken, "getMe"),
       startMantisSut({
         configPatch: config.configPatch,
+        fixturePluginsDir: path.join(roots.sessionRoot, "fixture-plugins", lane),
         gatewayPort: ports.gateway,
         groupId: credential.groupId,
         mockPort: ports.mock,

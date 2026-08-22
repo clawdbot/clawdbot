@@ -712,6 +712,16 @@ jobs:
             echo "Shared QA Telegram account is busy; retrying in 15s." >&2
             sleep 15
           done
+          keepalive_pid_file="$credential_dir/lease-keepalive.pid"
+          lease_lost_marker="$credential_dir/lease.json.lost"
+          keepalive_log="$credential_dir/lease-keepalive.log"
+          rm -f "$keepalive_pid_file" "$lease_lost_marker" "$keepalive_log"
+          /usr/bin/setsid /usr/local/lib/mantis-toolchain/node --import tsx \
+            scripts/e2e/telegram-user-credential.ts heartbeat-loop \
+            --lease-file "$credential_dir/lease.json" \
+            --credential-role ci \
+            --interval-ms 30000 </dev/null >"$keepalive_log" 2>&1 &
+          printf '%s\n' "$!" >"$keepalive_pid_file"
           chmod 0700 "$credential_dir" "$credential_dir/user-driver"
           sut_credential_dir="/tmp/openclaw-mantis-sut-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           session_root="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -729,6 +739,8 @@ jobs:
             echo "state_dir=$credential_dir/user-driver"
             echo "sut_credential_dir=$sut_credential_dir"
             echo "session_root=$session_root"
+            echo "lease_keepalive_pid_file=$keepalive_pid_file"
+            echo "lease_lost_marker=$lease_lost_marker"
           } >> "$GITHUB_OUTPUT"
 
       - name: Ensure agent key exists
@@ -750,7 +762,7 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_CONTEXT"'
+            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_FIXTURE_PLUGINS_DIR MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_CONTEXT"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_MANTIS_LANE_CMD"'
             printf '%s\n' 'codex ALL=(mantis-sut) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-mantis-lane'
@@ -763,6 +775,16 @@ jobs:
           sudo install -d -m 0770 -o codex -g codex "$codex_home"
           sudo setfacl -m u:runner:rwx,u:codex:rwx "$codex_home"
           sudo setfacl -d -m u:runner:rwx,u:codex:rwx "$codex_home"
+          session_root="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fixture_plugins_root="$session_root/fixture-plugins"
+          sudo setfacl -m u:codex:--x "$session_root"
+          sudo install -d -m 0710 -o root -g mantis-proof "$fixture_plugins_root"
+          sudo setfacl -m u:codex:--x "$fixture_plugins_root"
+          for lane in baseline candidate; do
+            sudo install -d -m 2770 -o codex -g mantis-proof "$fixture_plugins_root/$lane"
+            sudo setfacl -m u:mantis-sut:rwx "$fixture_plugins_root/$lane"
+            sudo setfacl -d -m u:codex:rwx,u:mantis-sut:rwx "$fixture_plugins_root/$lane"
+          done
           workspace_parent="$(dirname "$GITHUB_WORKSPACE")"
           while [ "$workspace_parent" != "/" ]; do
             sudo setfacl -m u:codex:--x,u:mantis-sut:--x "$workspace_parent"
@@ -796,6 +818,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
           MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
+          MANTIS_FIXTURE_PLUGINS_DIR: /tmp/openclaw-mantis-proof-sessions-${{ github.run_id }}-${{ github.run_attempt }}/fixture-plugins
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
           MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
@@ -821,6 +844,46 @@ jobs:
         run: |
           set -euo pipefail
           result=0
+          stop_lease_keepalive() {
+            local keepalive_pid_file="$1"
+            local lease_file="$2"
+            [[ -n "$keepalive_pid_file" && -f "$keepalive_pid_file" ]] || return 0
+            local keepalive_pid
+            keepalive_pid="$(<"$keepalive_pid_file")"
+            [[ "$keepalive_pid" =~ ^[1-9][0-9]*$ ]]
+            if [[ -d "/proc/$keepalive_pid" ]]; then
+              local keepalive_uid keepalive_pgid keepalive_exe keepalive_cwd keepalive_args
+              keepalive_uid="$(stat -c %u "/proc/$keepalive_pid")" || return 0
+              keepalive_pgid="$(ps -o pgid= -p "$keepalive_pid" | tr -d ' ')" || return 0
+              keepalive_exe="$(readlink -f "/proc/$keepalive_pid/exe")" || return 0
+              keepalive_cwd="$(readlink -f "/proc/$keepalive_pid/cwd")" || return 0
+              keepalive_args="$(tr '\0' '\n' <"/proc/$keepalive_pid/cmdline")" || return 0
+              [[ "$keepalive_uid" == "$(id -u)" ]]
+              [[ "$keepalive_pgid" == "$keepalive_pid" ]]
+              [[ "$keepalive_exe" == /usr/local/lib/mantis-toolchain/node ]]
+              [[ "$keepalive_cwd" == "$GITHUB_WORKSPACE" ]]
+              grep -Fxq "scripts/e2e/telegram-user-credential.ts" <<<"$keepalive_args"
+              grep -Fxq "heartbeat-loop" <<<"$keepalive_args"
+              grep -Fxq "$lease_file" <<<"$keepalive_args"
+              kill -TERM "$keepalive_pid" 2>/dev/null || true
+              local deadline=$((SECONDS + 10))
+              while kill -0 "$keepalive_pid" 2>/dev/null && ((SECONDS < deadline)); do
+                sleep 1
+              done
+              if kill -0 "$keepalive_pid" 2>/dev/null; then
+                kill -KILL "$keepalive_pid" 2>/dev/null || true
+              fi
+              deadline=$((SECONDS + 5))
+              while kill -0 "$keepalive_pid" 2>/dev/null && ((SECONDS < deadline)); do
+                sleep 1
+              done
+              ! kill -0 "$keepalive_pid" 2>/dev/null
+            fi
+            rm -f "$keepalive_pid_file"
+          }
+          stop_lease_keepalive \
+            "${{ steps.telegram_credential.outputs.lease_keepalive_pid_file }}" \
+            "${{ steps.telegram_credential.outputs.lease_file }}"
           active_codex_pids() {
             sudo ps -u codex -o pid=,stat= 2>/dev/null | awk '$2 !~ /^Z/ {print $1}' || true
           }
@@ -1162,7 +1225,49 @@ jobs:
         run: |
           set -euo pipefail
           lease_file="${{ steps.telegram_credential.outputs.lease_file }}"
+          stop_lease_keepalive() {
+            local keepalive_pid_file="$1"
+            [[ -n "$keepalive_pid_file" && -f "$keepalive_pid_file" ]] || return 0
+            local keepalive_pid
+            keepalive_pid="$(<"$keepalive_pid_file")"
+            [[ "$keepalive_pid" =~ ^[1-9][0-9]*$ ]]
+            if [[ -d "/proc/$keepalive_pid" ]]; then
+              local keepalive_uid keepalive_pgid keepalive_exe keepalive_cwd keepalive_args
+              keepalive_uid="$(stat -c %u "/proc/$keepalive_pid")" || return 0
+              keepalive_pgid="$(ps -o pgid= -p "$keepalive_pid" | tr -d ' ')" || return 0
+              keepalive_exe="$(readlink -f "/proc/$keepalive_pid/exe")" || return 0
+              keepalive_cwd="$(readlink -f "/proc/$keepalive_pid/cwd")" || return 0
+              keepalive_args="$(tr '\0' '\n' <"/proc/$keepalive_pid/cmdline")" || return 0
+              [[ "$keepalive_uid" == "$(id -u)" ]]
+              [[ "$keepalive_pgid" == "$keepalive_pid" ]]
+              [[ "$keepalive_exe" == /usr/local/lib/mantis-toolchain/node ]]
+              [[ "$keepalive_cwd" == "$GITHUB_WORKSPACE" ]]
+              grep -Fxq "scripts/e2e/telegram-user-credential.ts" <<<"$keepalive_args"
+              grep -Fxq "heartbeat-loop" <<<"$keepalive_args"
+              grep -Fxq "$lease_file" <<<"$keepalive_args"
+              kill -TERM "$keepalive_pid" 2>/dev/null || true
+              local deadline=$((SECONDS + 10))
+              while kill -0 "$keepalive_pid" 2>/dev/null && ((SECONDS < deadline)); do
+                sleep 1
+              done
+              if kill -0 "$keepalive_pid" 2>/dev/null; then
+                kill -KILL "$keepalive_pid" 2>/dev/null || true
+              fi
+              deadline=$((SECONDS + 5))
+              while kill -0 "$keepalive_pid" 2>/dev/null && ((SECONDS < deadline)); do
+                sleep 1
+              done
+              ! kill -0 "$keepalive_pid" 2>/dev/null
+            fi
+            rm -f "$keepalive_pid_file"
+          }
+          stop_lease_keepalive "${{ steps.telegram_credential.outputs.lease_keepalive_pid_file }}"
           if [[ -z "$lease_file" ]] || ! sudo test -f "$lease_file"; then
+            exit 0
+          fi
+          lease_lost_marker="${{ steps.telegram_credential.outputs.lease_lost_marker }}"
+          if [[ -n "$lease_lost_marker" ]] && sudo test -f "$lease_lost_marker"; then
+            echo "::warning::lease lost mid-run; nothing to release"
             exit 0
           fi
           sudo env \

@@ -2,6 +2,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path, { win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
@@ -77,6 +79,31 @@ async function waitForExit(
       resolve({ code, signal });
     });
   });
+}
+
+async function runCredentialCli(args: string[]) {
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "scripts/e2e/telegram-user-credential.ts", ...args],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_QA_CONVEX_SECRET_CI: undefined,
+        OPENCLAW_QA_CONVEX_SITE_URL: undefined,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const exit = await waitForExit(child, PROCESS_WAIT_TIMEOUT_MS);
+  return { ...exit, stderr, stdout };
 }
 
 afterEach(() => {
@@ -286,6 +313,96 @@ describe("telegram user credential IO", () => {
         "-h",
       ]),
     ).toThrow("Usage:");
+  });
+
+  it("heartbeats leases and marks ownership loss without logging secrets", async () => {
+    const dir = tempDirs.make("openclaw-telegram-credential-heartbeat-");
+    const leaseFile = path.join(dir, "lease.json");
+    const envFile = path.join(dir, "broker.env");
+    const leaseToken = "test-lease-token";
+    const brokerSecret = "test-broker-secret";
+    const requests: Array<{ body: Record<string, unknown>; path: string | undefined }> = [];
+    let brokerResponse: Record<string, unknown> = { status: "ok" };
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      requests.push({
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+        path: request.url,
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(brokerResponse));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const siteUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    writeFileSync(
+      leaseFile,
+      JSON.stringify({
+        actorRole: "ci",
+        credentialId: "credential-1",
+        kind: "telegram-user",
+        leaseToken,
+        ownerId: "owner-1",
+        siteUrl,
+      }),
+    );
+    writeFileSync(
+      envFile,
+      `OPENCLAW_QA_CONVEX_SITE_URL=${siteUrl}\nOPENCLAW_QA_CONVEX_SECRET_CI=${brokerSecret}\n`,
+    );
+
+    try {
+      const heartbeat = await runCredentialCli([
+        "heartbeat",
+        "--lease-file",
+        leaseFile,
+        "--env-file",
+        envFile,
+        "--credential-role",
+        "ci",
+      ]);
+      expect(heartbeat).toMatchObject({ code: 0, signal: null });
+      expect(requests).toEqual([
+        {
+          body: {
+            actorRole: "ci",
+            credentialId: "credential-1",
+            kind: "telegram-user",
+            leaseToken,
+            leaseTtlMs: 1_200_000,
+            ownerId: "owner-1",
+          },
+          path: "/qa-credentials/v1/heartbeat",
+        },
+      ]);
+      expect(`${heartbeat.stdout}${heartbeat.stderr}`).not.toContain(leaseToken);
+      expect(`${heartbeat.stdout}${heartbeat.stderr}`).not.toContain(brokerSecret);
+
+      brokerResponse = { status: "error", code: "LEASE_NOT_OWNER" };
+      const lost = await runCredentialCli([
+        "heartbeat-loop",
+        "--lease-file",
+        leaseFile,
+        "--env-file",
+        envFile,
+        "--credential-role",
+        "ci",
+        "--interval-ms",
+        "1",
+      ]);
+      expect(lost).toMatchObject({ code: 0, signal: null });
+      expect(JSON.parse(readFileSync(`${leaseFile}.lost`, "utf8"))).toEqual({
+        code: "LEASE_NOT_OWNER",
+      });
+      expect(`${lost.stdout}${lost.stderr}`).not.toContain(leaseToken);
+      expect(`${lost.stdout}${lost.stderr}`).not.toContain(brokerSecret);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
