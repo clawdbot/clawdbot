@@ -32,6 +32,7 @@ describe("OpenClaw provider tool-result redaction", () => {
     {
       type: "resource" as const,
       source: "if let token = timeObserverToken {",
+      jsonSource: '{"token":"timeObserverToken"}',
       api_key: "provider-secret-value",
     },
   ];
@@ -40,6 +41,7 @@ describe("OpenClaw provider tool-result redaction", () => {
     const text = extractToolResultText(toolResultContent);
 
     expect(text).toContain("if let token = timeObserverToken {");
+    expect(text).toContain(String.raw`\"token\":\"timeObserverToken\"`);
     expect(text).not.toContain("provider-secret-value");
   });
 
@@ -146,6 +148,7 @@ describe("OpenClaw provider tool-result redaction", () => {
     for (const payload of [anthropicPayload, openAiPayload]) {
       const serialized = JSON.stringify(payload);
       expect(serialized).toContain("if let token = timeObserverToken {");
+      expect(serialized).toContain(String.raw`\\\"token\\\":\\\"timeObserverToken\\\"`);
       for (const sourceLine of sourceLines) {
         expect(serialized).toContain(sourceLine);
       }

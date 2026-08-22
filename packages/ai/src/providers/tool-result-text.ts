@@ -54,27 +54,11 @@ function redactInlineDataUris(value: string): string {
   );
 }
 
-function redactStructuredTextValue(value: string): string {
-  const host = getAiTransportHost();
-  const redacted = host.redactModelVisibleSecrets(value);
-  const trimmed = redacted.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return redacted;
-  }
-  try {
-    const redactedWrapper = host.redactModelVisibleSecrets({
-      structuredTextValue: JSON.parse(redacted),
-    });
-    return JSON.stringify(redactedWrapper.structuredTextValue);
-  } catch {
-    return redacted;
-  }
-}
-
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
-    const redactedWrapper = getAiTransportHost().redactModelVisibleSecrets({
+    const host = getAiTransportHost();
+    const redactedWrapper = host.redactModelVisibleSecrets({
       structuredToolResult: block,
     });
     const redactedBlock = redactedWrapper.structuredToolResult;
@@ -94,7 +78,7 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
           return value.toString();
         }
         if (typeof value === "string") {
-          return redactInlineDataUris(redactStructuredTextValue(value));
+          return redactInlineDataUris(host.redactModelVisibleSecrets(value));
         }
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
           return undefined;
