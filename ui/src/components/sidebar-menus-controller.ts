@@ -61,7 +61,6 @@ interface SidebarMenusControllerState {
   catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null;
   agentMenuPosition: { x: number; top: number } | null;
   agentMenuInteractionState: AgentMenuInteractionState;
-  agentMenuFilter: string;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
 
@@ -162,7 +161,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionSortMenuPosition: { x: number; y: number } | null = null;
   catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null = null;
   agentMenuPosition: { x: number; top: number } | null = null;
-  agentMenuFilter = "";
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
 
@@ -528,7 +526,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
         ? document.activeElement
         : null;
     this.updateState("agentMenuInteractionState", interactionState);
-    this.updateState("agentMenuFilter", "");
     // The agent card sits at the top of the sidebar, so the menu drops below it
     // and shares its left edge; anchoring above would cover the card you clicked.
     this.updateState("agentMenuPosition", {
@@ -601,7 +598,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.agentMenuFocusBeforeHover = null;
     this.updateState("agentMenuInteractionState", "closed");
     this.updateState("agentMenuPosition", null);
-    this.updateState("agentMenuFilter", "");
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -631,10 +627,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
     this.agentMenuHoverOpenTimer = null;
     this.agentMenuHoverCloseTimer = null;
-  }
-
-  setAgentMenuFilter(next: string) {
-    this.updateState("agentMenuFilter", next);
   }
 
   toggleIdentityMenu(trigger: HTMLElement) {
