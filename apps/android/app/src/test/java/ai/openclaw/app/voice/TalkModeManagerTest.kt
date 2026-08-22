@@ -34,6 +34,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,12 +72,16 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAudioRecord
 import org.robolectric.shadows.ShadowAudioTrack
 import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowTextToSpeech
 import java.time.Duration
 import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
@@ -1442,6 +1447,102 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun capturingUnderAnUnsupportedWireContractFailsTheSessionInsteadOfStreaming() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(
+        manager,
+        "realtimeWireAudioContract",
+        RealtimeWireAudioContract.Unsupported("inputEncoding=g711_ulaw"),
+      )
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      // Producing PCM16 anyway would put audio on the wire in a format the Gateway never asked
+      // for, so the session ends visibly rather than streaming something unusable.
+      assertTrue(manager.statusText.value.startsWith("Talk failed:"))
+      assertFalse(manager.isEnabled.value)
+      assertNull(readPrivateField(manager, "realtimeCaptureJob"))
+      manager.stopAllCapture()
+    }
+
+  @Test
+  fun capturingWithNoWireContractAtAllFailsTheSession() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+
+      assertTrue(manager.statusText.value.startsWith("Talk failed:"))
+      assertFalse(manager.isEnabled.value)
+      manager.stopAllCapture()
+    }
+
+  /**
+   * Drives the production capture install against a shadowed recorder, on real threads: the
+   * capture loop has no suspension point, so it cannot be stepped on a test dispatcher.
+   */
+  @Test
+  fun realtimeCaptureAsksTheHardwareForThePortableRateFirst() {
+    val requestedRates = CopyOnWriteArrayList<Int>()
+    val recorderWasRead = CountDownLatch(1)
+    ShadowAudioRecord.setSourceProvider { record ->
+      requestedRates += record.sampleRate
+      object : ShadowAudioRecord.AudioRecordSource {
+        override fun readInByteArray(
+          audioData: ByteArray,
+          offsetInBytes: Int,
+          sizeInBytes: Int,
+          isBlocking: Boolean,
+        ): Int {
+          recorderWasRead.countDown()
+          audioData.fill(0x20, offsetInBytes, offsetInBytes + sizeInBytes)
+          return sizeInBytes
+        }
+      }
+    }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val manager = createManager(scope = scope, realtimeCaptureDispatcher = Dispatchers.IO)
+    try {
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeWireAudioContract", RealtimeWireAudioContract.Pcm16(24_000))
+
+      val start = manager.javaClass.getDeclaredMethod("startRealtimeCaptureLocked", String::class.java)
+      start.isAccessible = true
+      val failure = start.invoke(manager, "relay-1") as String?
+
+      assertNull(failure)
+      assertTrue("capture never read the recorder", recorderWasRead.await(10, TimeUnit.SECONDS))
+      // The rate the hardware is asked for is the portable preferred one, not the wire rate the
+      // Gateway declared; the wire rate is only the fallback when that one cannot be delivered.
+      assertEquals(48_000, requestedRates.first())
+    } finally {
+      manager.stopAllCapture()
+      scope.cancel()
+      ShadowAudioRecord.clearSource()
+    }
+  }
+
+  @Test
   fun resumingRealtimeCaptureRestoresListeningState() =
     runTest {
       val manager =
@@ -1454,6 +1555,9 @@ class TalkModeManagerTest {
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "sessionId", "relay-1")
       setPrivateField(manager, "realtimeSessionId", "relay-1")
+      // A live relay session always carries the wire audio contract talk.session.create
+      // declared; capture reads it to decide how to convert what the microphone negotiates.
+      setPrivateField(manager, "realtimeWireAudioContract", RealtimeWireAudioContract.Pcm16(24_000))
       setMutableStateFlow(manager, "_isListening", false)
       setMutableStateFlow(manager, "_statusText", nativeText("Thinking…"))
 
@@ -1487,6 +1591,9 @@ class TalkModeManagerTest {
       setPrivateField(pause, "sessionId", "relay-replacement")
       setPrivateField(pause, "restartRelay", true)
       setPrivateField(manager, "realtimeSessionId", "relay-replacement")
+      // A live relay session always carries the wire audio contract talk.session.create
+      // declared; capture reads it to decide how to convert what the microphone negotiates.
+      setPrivateField(manager, "realtimeWireAudioContract", RealtimeWireAudioContract.Pcm16(24_000))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 

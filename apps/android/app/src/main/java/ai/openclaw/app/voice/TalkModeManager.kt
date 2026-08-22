@@ -214,7 +214,17 @@ class TalkModeManager internal constructor(
 ) {
   companion object {
     private const val tag = "TalkMode"
-    private const val realtimeSampleRateHz = 24_000
+
+    // Realtime playback plays the Gateway's declared wire audio verbatim, so its rate is a
+    // property of that stream. Capture is a separate contract: the microphone negotiates its own
+    // clock and the result is converted to whatever rate the Gateway declared for the uplink.
+    private const val realtimeOutputSampleRateHz = 24_000
+
+    // Preferred, not required. It is the rate Android guarantees most widely for raw capture, and
+    // the one the portable path is built around; the wire rate is tried after it, and the rate the
+    // recorder actually negotiates is what decides whether either candidate is usable.
+    private const val realtimeCapturePortableSampleRateHz = 48_000
+
     private const val realtimeAudioFrameMs = 100
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
@@ -353,6 +363,10 @@ class TalkModeManager internal constructor(
   private val audioInputGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
+
+  // Declared once by talk.session.create and read by every capture install for this session,
+  // including the one push-to-talk performs when it hands the microphone back.
+  @Volatile private var realtimeWireAudioContract: RealtimeWireAudioContract? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
   private val realtimeCapturePauseLock = Any()
@@ -1209,10 +1223,15 @@ class TalkModeManager internal constructor(
       throw CancellationException("realtime talk stopped while connecting")
     }
 
+    val wireAudioContract = parseRealtimeWireAudioContract(root, realtimeOutputSampleRateHz)
+    var captureFailure: String? = null
     val capturePaused =
       synchronized(realtimeCapturePauseLock) {
         // Session publication and capture installation are one transition. PTT
         // therefore either blocks startup or detaches every installed capture job.
+        // The wire contract is published with the session id, not before it: a stop that lands
+        // between the two would otherwise leave a live session with no contract to capture under.
+        realtimeWireAudioContract = wireAudioContract
         realtimeAgentCoordinator.beginSession(
           RealtimeAgentSession(
             relaySessionId = sessionId,
@@ -1229,12 +1248,18 @@ class TalkModeManager internal constructor(
           realtimeOutputSuppressed = false
           _isListening.value = true
           setStatus(nativeText("Listening"))
-          startRealtimeCaptureLocked(sessionId)
+          captureFailure = startRealtimeCaptureLocked(sessionId)
           false
         }
       }
     if (capturePaused) {
       Log.d(tag, "realtime session ready; capture paused for PTT relaySessionId=$sessionId")
+      return
+    }
+    // Reported here rather than inside the lock: failing the relay tears the session down through
+    // the same monitor, and doing that mid-transition would unwind a state change still in flight.
+    captureFailure?.let { reason ->
+      failRealtimeRelay(sessionId, reason)
       return
     }
     Log.d(tag, "realtime session started relaySessionId=$sessionId")
@@ -1306,9 +1331,23 @@ class TalkModeManager internal constructor(
       }
     }
 
-  /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
+  /**
+   * Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs.
+   *
+   * Returns null once capture is installed, or the reason the session must fail. The caller
+   * reports that reason after leaving the lock: teardown re-enters the same monitor.
+   */
   @SuppressLint("MissingPermission")
-  private fun startRealtimeCaptureLocked(sessionId: String) {
+  private fun startRealtimeCaptureLocked(sessionId: String): String? {
+    // The only half of the contract that can be judged before the microphone is open. Whether a
+    // converter exists depends on the rate the recorder negotiates, which is checked per candidate.
+    val wireAudio = realtimeWireAudioContract
+    if (wireAudio !is RealtimeWireAudioContract.Pcm16) {
+      val detail = (wireAudio as? RealtimeWireAudioContract.Unsupported)?.detail ?: "no audio contract"
+      Log.w(tag, "realtime capture rejected: unsupported wire audio contract ($detail)")
+      return "unsupported realtime audio format"
+    }
+    val wireSampleRateHz = wireAudio.sampleRateHz
     realtimeCaptureJob?.cancel()
     realtimeAppendJob?.cancel()
     val inputGeneration = audioInputGeneration.incrementAndGet()
@@ -1350,26 +1389,52 @@ class TalkModeManager internal constructor(
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         var audioInput: AndroidAudioInputSession? = null
         try {
-          val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
-          val openedAudioInput =
-            AndroidAudioInputSession.open(
-              context,
-              realtimeSampleRateHz,
-              frameBytes,
-              preferredAudioInputDevice(),
-              { key ->
-                if (audioInputGeneration.get() == inputGeneration) onAppliedAudioInputChanged(key)
-              },
-            )
+          // Opening a candidate applies its route, and a candidate can still be rejected. Only the
+          // selected session's route describes the microphone actually in use, so route changes are
+          // published from the point the selection settles.
+          val captureRouteSettled = AtomicBoolean(false)
+          val selection =
+            selectRealtimeCaptureSession(
+              candidateRatesHz = realtimeCaptureCandidateRatesHz(realtimeCapturePortableSampleRateHz, wireSampleRateHz),
+              wireRateHz = wireSampleRateHz,
+            ) { candidateRateHz ->
+              AndroidAudioInputSession.open(
+                context,
+                candidateRateHz,
+                candidateRateHz * 2 * realtimeAudioFrameMs / 1000,
+                preferredAudioInputDevice(),
+                { key ->
+                  if (captureRouteSettled.get() && audioInputGeneration.get() == inputGeneration) {
+                    onAppliedAudioInputChanged(key)
+                  }
+                },
+              )
+            }
+          val openedAudioInput = selection.candidate
           audioInput = openedAudioInput
-          val buffer = ByteArray(frameBytes)
+          val resampler = selection.resampler
+          captureRouteSettled.set(true)
+          if (audioInputGeneration.get() == inputGeneration) {
+            onAppliedAudioInputChanged(openedAudioInput.appliedPreferredDeviceKey)
+          }
+          Log.d(
+            tag,
+            "realtime capture opened requested=${selection.requestedSampleRateHz}Hz " +
+              "negotiated=${selection.captureSampleRateHz}Hz wire=${wireSampleRateHz}Hz",
+          )
+          // One read is realtimeAudioFrameMs of audio at the rate the recorder negotiated, so
+          // uplink pacing follows the negotiated clock rather than the requested one.
+          val buffer = ByteArray(selection.captureSampleRateHz * 2 * realtimeAudioFrameMs / 1000)
           audioInput.startRecording()
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, TalkAudioLevel.pcm16Level(buffer, read))
-            if (!shouldAppendRealtimeCapturedFrame(read)) continue
-            audioFrames.trySend(buffer.copyOf(read))
+            // Converted before the forwarding policy is consulted, so the filter sees one
+            // continuous stream rather than one with the suppressed frames punched out of it.
+            val wireFrame = resampler.convert(buffer, read)
+            if (!shouldAppendRealtimeCapturedFrame(wireFrame.size)) continue
+            audioFrames.trySend(wireFrame)
           }
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
@@ -1381,6 +1446,7 @@ class TalkModeManager internal constructor(
           _inputLevel.value = 0f
         }
       }
+    return null
   }
 
   private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = pendingRealtimeOutputClear == null && !isRealtimePlaybackActive() && length > 0
@@ -1655,7 +1721,7 @@ class TalkModeManager internal constructor(
     if (bytes.isEmpty()) return
     val sink =
       realtimeAudioSink ?: realtimeAudioSinkFactory
-        .open(realtimeSampleRateHz, realtimePlaybackBufferMs, bytes.size)
+        .open(realtimeOutputSampleRateHz, realtimePlaybackBufferMs, bytes.size)
         .also { opened ->
           realtimeAudioSink = opened
           realtimeWrittenFrames = 0L
@@ -1668,7 +1734,7 @@ class TalkModeManager internal constructor(
     // buffer is already full, so the budget covers that on top of the stall allowance. It is
     // deliberately never reset by partial progress: a device accepting a couple of bytes per
     // retry is as broken as one accepting none, and resetting would let it grind out the frame.
-    val frameDurationMs = (bytes.size / 2).toLong() * 1000L / realtimeSampleRateHz
+    val frameDurationMs = (bytes.size / 2).toLong() * 1000L / realtimeOutputSampleRateHz
     val stallBudgetMs = realtimePlaybackWriteStallBudgetMs(sink.bufferDurationMs) + frameDurationMs
     var writtenBytes = 0
     var stalledMs = 0L
@@ -1700,7 +1766,7 @@ class TalkModeManager internal constructor(
       TalkAudioLevel.smoothed(_outputLevel.value ?: 0f, TalkAudioLevel.pcm16Level(bytes, writtenBytes))
     setRealtimePlaying(true)
     setStatus(nativeText("Speaking…"))
-    val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
+    val durationMs = ((writtenBytes / 2.0) / realtimeOutputSampleRateHz * 1000.0).toLong()
     realtimeWrittenFrames += writtenBytes / 2L
     val now = SystemClock.elapsedRealtime()
     realtimePlaybackEndsAtMs = maxOf(now, realtimePlaybackEndsAtMs) + durationMs
@@ -1886,6 +1952,7 @@ class TalkModeManager internal constructor(
         val currentSessionId = realtimeSessionId
         val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
         realtimeSessionId = null
+        realtimeWireAudioContract = null
         realtimeCaptureJob = null
         realtimeAppendJob = null
         realtimeCapturePause = null
@@ -1963,6 +2030,8 @@ class TalkModeManager internal constructor(
   private fun isRealtimeCapturePaused(): Boolean = synchronized(realtimeCapturePauseLock) { realtimeCapturePause != null }
 
   internal fun resumeRealtimeCaptureAfterPushToTalk(captureId: String) {
+    var resumeFailure: String? = null
+    var resumeSessionId: String? = null
     val outcome =
       synchronized(realtimeCapturePauseLock) {
         val current = realtimeCapturePause ?: return@synchronized RealtimeCaptureResume.Skipped
@@ -1990,7 +2059,8 @@ class TalkModeManager internal constructor(
         realtimeCapturePause = null
         _isListening.value = true
         setStatus(nativeText("Listening"))
-        startRealtimeCaptureLocked(sessionId)
+        resumeFailure = startRealtimeCaptureLocked(sessionId)
+        resumeSessionId = sessionId
         RealtimeCaptureResume.Resumed
       }
     when (outcome) {
@@ -1999,6 +2069,8 @@ class TalkModeManager internal constructor(
       }
 
       RealtimeCaptureResume.Resumed -> {
+        val reason = resumeFailure ?: return
+        resumeSessionId?.let { failRealtimeRelay(it, reason) }
         return
       }
 

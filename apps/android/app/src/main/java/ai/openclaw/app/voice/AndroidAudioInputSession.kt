@@ -28,7 +28,7 @@ internal class AndroidAudioInputSession private constructor(
   private val preferredInputKey: String?,
   private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
   private val setPreferredDevice: (AudioDeviceInfo?) -> Boolean,
-) : AutoCloseable {
+) : RealtimeCaptureCandidate {
   companion object {
     private const val tag = "AudioInput"
 
@@ -145,6 +145,16 @@ internal class AndroidAudioInputSession private constructor(
 
   internal val appliedPreferredDeviceKey: String?
     get() = synchronized(lock) { appliedPreferredInputKey }
+
+  /**
+   * The rate the recorder negotiated, read back from it rather than assumed from the request.
+   *
+   * This session owns the capture clock; callers converting capture to a wire rate must build that
+   * conversion from this value, because a recorder is free to grant a rate other than the one it
+   * was asked for.
+   */
+  override val actualSampleRateHz: Int
+    get() = audioRecord.sampleRate
 
   fun startRecording() {
     synchronized(lock) {
