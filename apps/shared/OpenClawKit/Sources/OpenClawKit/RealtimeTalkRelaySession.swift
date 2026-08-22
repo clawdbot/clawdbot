@@ -632,10 +632,11 @@ extension RealtimeTalkRelaySession {
 
     private func handleOutputClear(_ payload: [String: AnyCodable]) {
         let clearIdentity = OutputIdentity(payload)
+        var clearsSuppressed = false
         if self.awaitingOutputClear,
            let suppressed = self.suppressedOutputIdentity
         {
-            let clearsSuppressed =
+            clearsSuppressed =
                 clearIdentity.isEmpty()
                 ? suppressed.isEmpty()
                 : suppressed.isEmpty() || suppressed.relation(to: clearIdentity) == .same
@@ -648,7 +649,7 @@ extension RealtimeTalkRelaySession {
             clearIdentity.isEmpty()
             ? self.outputIdentity == nil
             : self.outputIdentity?.relation(to: clearIdentity) == .same
-        guard currentMatches else { return }
+        guard clearsSuppressed || currentMatches else { return }
         let marks = self.takePendingPlaybackMarks()
         // Cancellation already published the stopped state. A later clear with no
         // active output only retires the fence; it must not emit a duplicate callback.
@@ -1213,6 +1214,7 @@ extension RealtimeTalkRelaySession {
                 guard let self, self.isCurrentOutputCancellation(cancellationGeneration) else { return }
                 switch result.status?.stringValue {
                 case "stale", "idle":
+                    self.acknowledgePlaybackMarks(self.takePendingPlaybackMarks())
                     self.retireOutputCancellation()
                 case nil, "applied":
                     guard result.turnid == nil || result.turnid == turnId else {
