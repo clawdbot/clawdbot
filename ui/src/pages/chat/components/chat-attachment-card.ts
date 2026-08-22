@@ -7,10 +7,16 @@ import type { AttachmentItem } from "./chat-message-media.ts";
 
 type AttachmentCardKind = Extract<
   AttachmentItem["attachment"]["kind"],
-  "audio" | "document" | "video"
+  "audio" | "document" | "image" | "video"
 >;
 
-type AttachmentVisualType = "archive" | "code" | "document" | "pdf" | "text";
+type AttachmentVisualType =
+  | "archive"
+  | "code"
+  | "document"
+  | "pdf"
+  | "spreadsheet"
+  | "text";
 
 export type AttachmentCardHeaderOptions = {
   kind: AttachmentCardKind;
@@ -21,6 +27,7 @@ export type AttachmentCardHeaderOptions = {
   downloadHref?: string;
   showDownloadLabel?: boolean;
   showExpandAction?: boolean;
+  compact?: boolean;
   voiceNote?: boolean;
 };
 
@@ -42,12 +49,26 @@ function attachmentVisualType(
     return "archive";
   }
   if (
+    extension === "csv" ||
+    extension === "xls" ||
+    extension === "xlsx" ||
+    normalizedMimeType === "text/csv" ||
+    normalizedMimeType === "application/vnd.ms-excel" ||
+    normalizedMimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  ) {
+    return "spreadsheet";
+  }
+  if (
     extension === "js" ||
     extension === "jsx" ||
     extension === "ts" ||
     extension === "tsx" ||
     extension === "css" ||
     extension === "html" ||
+    extension === "py" ||
+    extension === "xml" ||
+    extension === "yaml" ||
+    extension === "yml" ||
     extension === "json" ||
     normalizedMimeType === "application/json"
   ) {
@@ -57,12 +78,51 @@ function attachmentVisualType(
     extension === "md" ||
     extension === "markdown" ||
     extension === "txt" ||
-    extension === "csv" ||
+    extension === "rtf" ||
     normalizedMimeType?.startsWith("text/")
   ) {
     return "text";
   }
   return "document";
+}
+
+function attachmentFormatLabel(
+  kind: AttachmentCardKind,
+  label: string,
+  mimeType: string | undefined,
+): string {
+  const extension = getMediaFileExtension(label);
+  if (extension) {
+    return extension.toUpperCase();
+  }
+  const normalizedMimeType = mimeType?.trim().toLowerCase();
+  if (normalizedMimeType === "application/pdf") {
+    return "PDF";
+  }
+  if (normalizedMimeType === "application/zip") {
+    return "ZIP";
+  }
+  if (kind === "audio") {
+    return "AUDIO";
+  }
+  if (kind === "video") {
+    return "VIDEO";
+  }
+  return "FILE";
+}
+
+export function attachmentCardGroup(
+  kind: AttachmentCardKind,
+  label: string,
+  mimeType: string | undefined,
+): "archive" | "audio" | "document" | "image" | "video" {
+  if (kind === "image") {
+    return "image";
+  }
+  if (kind === "audio" || kind === "video") {
+    return kind;
+  }
+  return attachmentVisualType(label, mimeType) === "archive" ? "archive" : "document";
 }
 
 function attachmentTypeLabel(
@@ -76,18 +136,10 @@ function attachmentTypeLabel(
   if (kind === "video") {
     return t("chat.attachments.video");
   }
-  switch (attachmentVisualType(label, mimeType)) {
-    case "archive":
-      return t("chat.attachments.archive");
-    case "code":
-      return t("chat.attachments.code");
-    case "pdf":
-      return t("chat.attachments.pdf");
-    case "text":
-      return t("chat.attachments.text");
-    default:
-      return t("chat.attachments.document");
+  if (kind === "image") {
+    return t("chat.attachments.attachedFile");
   }
+  return attachmentFormatLabel(kind, label, mimeType);
 }
 
 function attachmentIcon(
@@ -105,13 +157,47 @@ function attachmentIcon(
     case "archive":
       return icons.archive;
     case "code":
-      return icons.braces;
-    case "text":
+      return icons.fileCode;
     case "pdf":
+    case "spreadsheet":
+    case "text":
       return icons.fileText;
     default:
-      return icons.paperclip;
+      return icons.file;
   }
+}
+
+function attachmentIconClass(
+  kind: AttachmentCardKind,
+  label: string,
+  mimeType: string | undefined,
+): string {
+  const visualType = kind === "audio" || kind === "video" ? kind : attachmentVisualType(label, mimeType);
+  return `chat-assistant-attachment-card__icon--${visualType}`;
+}
+
+function renderAttachmentIcon(options: {
+  kind: AttachmentCardKind;
+  label: string;
+  mimeType?: string;
+  compact?: boolean;
+}): TemplateResult {
+  const icon = attachmentIcon(options.kind, options.label, options.mimeType);
+  const iconClass = attachmentIconClass(options.kind, options.label, options.mimeType);
+  if (!options.compact) {
+    return html`<span class="chat-assistant-attachment-card__icon ${iconClass}" aria-hidden="true"
+      >${icon}</span
+    >`;
+  }
+  return html`<span
+    class="chat-assistant-attachment-card__icon ${iconClass} chat-assistant-attachment-card__icon--tile"
+    aria-hidden="true"
+  >
+    <span class="chat-assistant-attachment-card__icon-glyph">${icon}</span>
+    <span class="chat-assistant-attachment-card__icon-label"
+      >${attachmentFormatLabel(options.kind, options.label, options.mimeType)}</span
+    >
+  </span>`;
 }
 
 export function renderAttachmentCardHeader(
@@ -140,9 +226,7 @@ export function renderAttachmentCardHeader(
   return html`
     <div class="chat-assistant-attachment-card__header">
       <div class="chat-assistant-attachment-card__identity">
-        <span class="chat-assistant-attachment-card__icon" aria-hidden="true"
-          >${attachmentIcon(options.kind, options.label, options.mimeType)}</span
-        >
+        ${renderAttachmentIcon(options)}
         <span class="chat-assistant-attachment-card__details">
           ${title}
           <span class="chat-assistant-attachment-card__meta">${metadata}</span>

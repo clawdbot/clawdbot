@@ -238,6 +238,34 @@ export function resolveAssistantAttachmentAvailability(
   return refreshingAvailability ?? { status: "checking" };
 }
 
+export function retryAssistantAttachmentAvailability(
+  source: string,
+  resourceBasePath: string | undefined,
+  authToken: string | null | undefined,
+  onRequestUpdate: (() => void) | undefined,
+): void {
+  if (!isLocalAssistantAttachmentSource(source)) {
+    onRequestUpdate?.();
+    return;
+  }
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
+    "assistant-attachment",
+    cacheKey,
+    onRequestUpdate,
+    source,
+  );
+  resource.abortController?.abort();
+  resource.abortController = undefined;
+  resource.pending = undefined;
+  resource.value = undefined;
+  resource.retryAttempted = false;
+  scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
+  notifyChatMediaResourceSubscribers(resource);
+  onRequestUpdate?.();
+}
+
 function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,

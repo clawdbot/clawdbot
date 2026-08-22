@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
+import { t } from "../../../i18n/index.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
 
 export function renderAssistantAttachmentStatusCard(params: {
@@ -7,27 +9,29 @@ export function renderAssistantAttachmentStatusCard(params: {
   label: string;
   badge: string;
   reason?: string;
+  onRetry?: () => void;
 }) {
-  const icon =
-    params.kind === "image"
-      ? icons.image
-      : params.kind === "audio"
-        ? icons.mic
-        : params.kind === "video"
-          ? icons.monitor
-          : icons.paperclip;
   return html`
     <div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked">
-      <div class="chat-assistant-attachment-card__header">
-        <span class="chat-assistant-attachment-card__icon">${icon}</span>
-        <span class="chat-assistant-attachment-card__title">${params.label}</span>
-        <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-          >${params.badge}</span
+      ${renderAttachmentCardHeader({
+        kind: params.kind,
+        label: params.label,
+        compact: true,
+      })}
+      <div class="chat-assistant-attachment-card__status-line">
+        <span class="chat-assistant-attachment-card__reason"
+          >${params.reason ?? params.badge}</span
         >
+        ${params.onRetry
+          ? html`<button
+              class="chat-assistant-attachment-card__retry"
+              type="button"
+              @click=${params.onRetry}
+            >
+              ${icons.refresh} ${t("common.retry")}
+            </button>`
+          : nothing}
       </div>
-      ${params.reason
-        ? html`<div class="chat-assistant-attachment-card__reason">${params.reason}</div>`
-        : nothing}
     </div>
   `;
 }

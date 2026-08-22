@@ -3,6 +3,18 @@ export const CHAT_AUDIO_WAVEFORM_SAMPLE_RATE = 16_000;
 const CHAT_AUDIO_WAVEFORM_MAX_DURATION_SECONDS = 5 * 60;
 const CHAT_AUDIO_WAVEFORM_BUCKET_COUNT = 96;
 
+// Keep the player geometry present while optional Web Audio decoding is pending
+// or unavailable; decoded peaks replace this shape when the source permits it.
+export function createChatAudioWaveformPlaceholder(
+  bucketCount = CHAT_AUDIO_WAVEFORM_BUCKET_COUNT,
+): number[] {
+  const count = Math.max(1, Math.floor(bucketCount));
+  return Array.from({ length: count }, (_, index) => {
+    const phase = index / Math.max(1, count - 1);
+    return 0.22 + Math.abs(Math.sin(phase * Math.PI * 5.5)) * 0.54;
+  });
+}
+
 type ChatAudioBufferLike = {
   length: number;
   numberOfChannels: number;

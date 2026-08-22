@@ -18,6 +18,7 @@ import {
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
+  createChatAudioWaveformPlaceholder,
   retainCachedChatAudioBlob,
   shouldFetchChatAudioWaveform,
   type CachedChatAudioBlob,
@@ -98,7 +99,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private buffered = 0;
   @state() private playing = false;
   @state() private volume = 1;
-  @state() private waveformPeaks: readonly number[] | null = null;
+  @state() private waveformPeaks: readonly number[] = createChatAudioWaveformPlaceholder();
 
   private media: HTMLAudioElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
@@ -149,7 +150,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         this.waveformController = null;
         this.releaseWaveformBlob?.();
         this.releaseWaveformBlob = undefined;
-        this.waveformPeaks = null;
+        this.waveformPeaks = createChatAudioWaveformPlaceholder();
         this.waveformAttempted = false;
         this.currentTime = 0;
         this.duration = 0;
@@ -214,7 +215,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = prepared.release;
-    this.waveformPeaks = prepared.value.peaks ?? null;
+    this.waveformPeaks = prepared.value.peaks ?? createChatAudioWaveformPlaceholder();
     if (prepared.value.durationSeconds !== undefined) {
       this.duration = prepared.value.durationSeconds;
     }

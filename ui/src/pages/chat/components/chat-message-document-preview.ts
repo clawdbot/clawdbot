@@ -4,6 +4,7 @@ import {
   observeChatMediaResource,
   type AttachmentItem,
 } from "./chat-message-media.ts";
+import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
 const DOCUMENT_PREVIEW_MAX_BYTES = 256 * 1024;
 const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
@@ -45,6 +46,85 @@ export function isTextyDocumentAttachment(
   }
   const label = attachment.label.trim().toLowerCase();
   return [...TEXTY_DOCUMENT_EXTENSIONS].some((extension) => label.endsWith(extension));
+}
+
+export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
+
+export function resolveDocumentPreviewKind(
+  attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
+): AttachmentDocumentPreviewKind {
+  const extension = getMediaFileExtension(attachment.label);
+  const mimeType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (extension === "html" || extension === "htm" || mimeType === "text/html") {
+    return "html";
+  }
+  if (
+    extension === "csv" ||
+    extension === "tsv" ||
+    extension === "xls" ||
+    extension === "xlsx" ||
+    mimeType === "text/csv" ||
+    mimeType === "application/vnd.ms-excel" ||
+    mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  ) {
+    return "table";
+  }
+  if (
+    extension === "pdf" ||
+    extension === "doc" ||
+    extension === "docx" ||
+    mimeType === "application/pdf" ||
+    mimeType === "application/msword" ||
+    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  ) {
+    return "page";
+  }
+  return null;
+}
+
+export function parseDelimitedPreview(text: string): string[][] {
+  const delimiter = text.includes("\t") && !text.includes(",") ? "\t" : ",";
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length && rows.length < 8; index += 1) {
+    const character = text[index];
+    if (character === '"') {
+      if (quoted && text[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (!quoted && character === delimiter) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    if (!quoted && (character === "\n" || character === "\r")) {
+      if (character === "\r" && text[index + 1] === "\n") {
+        index += 1;
+      }
+      row.push(cell.trim());
+      if (row.some((value) => value.length > 0)) {
+        rows.push(row);
+      }
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += character;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell.trim());
+    if (row.some((value) => value.length > 0) && rows.length < 8) {
+      rows.push(row);
+    }
+  }
+  return rows;
 }
 
 function capPreviewText(text: string): string {
