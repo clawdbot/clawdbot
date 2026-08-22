@@ -75,6 +75,9 @@ function createProofRepo(): {
     name: "@openclaw/proof-plugin",
     version: "2026.8.22",
     type: "module",
+    files: ["dist/**", "README.md"],
+    peerDependencies: { openclaw: ">=2026.8.22" },
+    peerDependenciesMeta: { openclaw: { optional: true } },
     repository: { type: "git", url: "https://github.com/openclaw/openclaw" },
     openclaw: {
       extensions: ["./index.ts"],
@@ -82,6 +85,7 @@ function createProofRepo(): {
       build: { openclawVersion: "2026.8.22" },
       install: { npmSpec: "@openclaw/proof-plugin" },
       release: { publishToClawHub: true },
+      runtimeExtensions: ["./dist/index.js"],
     },
   });
   writeFileSync(join(packageDir, "README.md"), "# Proof plugin\n");
