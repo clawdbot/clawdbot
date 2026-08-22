@@ -3,6 +3,8 @@ import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
+const MESSAGE_COUNT_OVERFLOW_RE =
+  /\b(?:chat\s+)?history\s+exceeds\s+(?:the\s+)?[\d,]+(?:-|\s+)messages?\s+limit\b/i;
 
 /** Detects DS4-style raw token-count context overflow errors. */
 export function isConfiguredContextSizeOverflowError(errorMessage: string): boolean {
@@ -68,6 +70,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /context[_ ]length[_ ]exceeded/i, // Generic fallback
   /too many tokens/i, // Generic fallback
   /token limit exceeded/i, // Generic fallback
+  MESSAGE_COUNT_OVERFLOW_RE, // Provider message-count admission limits
   /^413\s*(?:status code)?\s*\(no body\)/i, // Cerebras: 413 with no body
 ];
 
@@ -95,6 +98,7 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /context_window_exceeded/i,
   // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; this is provider overflow.
   /input length [\d,]+\s+tokens? exceeds the model limit/i,
+  MESSAGE_COUNT_OVERFLOW_RE, // Provider message-count admission limits
   /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
 ];
 
