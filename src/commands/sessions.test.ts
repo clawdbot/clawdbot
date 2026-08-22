@@ -57,7 +57,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       id:abc123",
+      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       visibility:shared id:abc123",
     );
   });
 
@@ -115,7 +115,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
     );
   });
 
@@ -149,7 +149,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
     );
   });
 
@@ -282,6 +282,27 @@ describe("sessionsCommand", () => {
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("defaults missing collaboration visibility to shared in JSON output", async () => {
+    const sessionKey = "agent:main:legacy-shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "legacy-shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+        },
+      },
+      "sessions-default-visibility",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; visibility?: SessionEntry["visibility"] }>;
+    }>(sessionsCommand, store);
+    expect(payload.sessions?.find((entry) => entry.key === sessionKey)).toMatchObject({
+      visibility: "shared",
+    });
   });
 
   it("preserves collaboration metadata in JSON and human output", async () => {

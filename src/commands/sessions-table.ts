@@ -81,7 +81,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     lastInteractionAt: entry?.lastInteractionAt,
     label: entry?.label,
     status: entry?.status,
-    visibility: entry?.visibility,
+    visibility: entry?.visibility ?? "shared",
     createdActor: entry?.createdActor,
     owner: entry?.owner,
     participants: entry?.participants,
