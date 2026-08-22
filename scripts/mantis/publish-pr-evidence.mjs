@@ -451,7 +451,7 @@ export function renderEvidenceComment({
   if (baselineLine) {
     lines.push(baselineLine);
   }
-  const candidateLine = laneLine("Candidate", candidate);
+  const candidateLine = laneLine("Candidate (PR merged onto main)", candidate);
   if (candidateLine) {
     lines.push(candidateLine);
   }

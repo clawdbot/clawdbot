@@ -459,7 +459,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain("dispatcherSources.has(inputs.request_source)");
     expect(workflowText).toContain("allow-bot-users: github-actions[bot]");
     expect(workflowText).not.toContain("allow-bot-users: github-actions[bot],clawsweeper[bot]");
-    expect(workflowText).toContain("inputs.approved_head_sha !== candidateRevision");
+    expect(workflowText).toContain("inputs.approved_head_sha !== headRevision");
+    expect(workflowText).not.toContain("inputs.approved_head_sha !== candidateRevision");
 
     const startedToken = resolver?.steps?.find(
       (step) => step.name === "Create Mantis status token",
@@ -848,8 +849,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("configPatch.plugins.allow");
   });
 
-  it("incrementally refreshes stale baseline builds while preparing both proof lanes in parallel", () => {
+  it("creates a deterministic local merge before preparing both proof lanes in parallel", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
     const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
     const create = workflowStep("Create exact proof worktrees");
     const setup = workflowStep("Setup Node environment");
@@ -867,11 +869,31 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       stepIndex("Install TDLib and restore Telegram QA user"),
     );
 
-    expect(createRun).toContain('git cat-file -e "${BASELINE_SHA}^{commit}"');
-    expect(createRun).toContain('git fetch --no-tags --depth 1 origin "$BASELINE_SHA"');
-    expect(createRun).toContain('git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"');
+    expect(createRun).toContain('for sha in "$BASELINE_SHA" "$HEAD_SHA" "$MERGE_BASE_SHA"');
+    expect(createRun).toContain('git cat-file -e "${sha}^{commit}"');
+    expect(createRun).toContain('git fetch --no-tags --depth 1 origin "$sha"');
+    expect(createRun).toContain(
+      'git merge-tree --write-tree --merge-base="$MERGE_BASE_SHA" "$BASELINE_SHA" "$HEAD_SHA"',
+    );
+    expect(createRun).toContain('git commit-tree "$candidate_tree"');
+    expect(createRun).toContain('-p "$BASELINE_SHA" -p "$HEAD_SHA"');
+    expect(createRun).toContain(
+      "::error::The PR conflicts with current main and needs a rebase or merge before Mantis can prove it.",
+    );
+    expect(createRun).toContain('echo "candidate_revision=$CANDIDATE_SHA"');
+    expect(createRun).not.toContain('git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"');
+    expect(workflowText).not.toContain('origin "pull/');
+    expect(workflowText).not.toContain("needs.resolve_request.outputs.candidate_revision");
+    expect(create.env?.MANTIS_PR_NUMBER).toBeUndefined();
     expect(createRun).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
     expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
+    expect(createRun).toContain("/etc/openclaw-mantis-sut-revisions");
+    expect(
+      createRun.indexOf('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"'),
+    ).toBeLessThan(createRun.indexOf("/etc/openclaw-mantis-sut-revisions"));
+    expect(workflowStep("Install local proof tools").run).not.toContain(
+      "/etc/openclaw-mantis-sut-revisions",
+    );
     expect(restore.uses).toContain("actions/cache/restore@");
     expect(setup.with?.["cache-mode"]).toBe("read-write");
     expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
@@ -991,43 +1013,68 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(run).toContain("-c 'service_tier=\"fast\"'");
   });
 
-  it("derives refs from the PR instead of parsing comment prose", () => {
+  it("derives current main and the PR merge base instead of trusting a cached test merge", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
-    const workflowText = readFileSync(WORKFLOW, "utf8");
-    expect(workflowText).toContain("let baselineRevision = pr.base.sha");
-    expect(workflowText).toContain("const candidateRevision = pr.head.sha");
-    expect(workflowText).toContain("prComparison.data.merge_base_commit?.sha");
-    expect(workflowText).toContain("basehead: `${pr.base.sha}...${candidateRevision}`");
-    expect(workflowText).toContain("The PR comparison did not return an immutable merge base.");
-    expect(workflowText).toContain('setOutput("baseline_ref", baselineRevision)');
-    expect(workflowText).toContain('setOutput("candidate_ref", candidateRevision)');
-    expect(workflowText).toContain('"pr_context"');
-    expect(workflowText).toContain("pr.title.slice(0, 500)");
-    expect(workflowText).toContain('(pr.body ?? "").slice(0, 12000)');
+    const resolveScript = String(
+      jobStep(WORKFLOW, "resolve_request", "Resolve refs and target PR").with?.script ?? "",
+    );
+
+    expect(resolveScript).toContain("let baselineRevision = pr.base.sha");
+    expect(resolveScript).toContain("const headRevision = pr.head.sha;");
+    expect(resolveScript).toContain('let mergeBaseRevision = "";');
+    expect(resolveScript).toContain("github.rest.git.getRef");
+    expect(resolveScript).toContain('ref: "heads/main"');
+    expect(resolveScript).toContain("baselineRevision = mainRef.object.sha");
+    expect(resolveScript).toContain('pr.base.ref !== "main"');
+    expect(resolveScript).toContain("Mantis proves landing on main");
+    expect(resolveScript).toContain('"GET /repos/{owner}/{repo}/compare/{basehead}"');
+    expect(resolveScript).toContain("basehead: `${baselineRevision}...${headRevision}`");
+    expect(resolveScript).toContain("comparison.data.merge_base_commit.sha");
+    expect(resolveScript).toContain("mergeBaseRevision = comparison.data.merge_base_commit.sha");
+    expect(resolveScript.match(/github\.rest\.pulls\.get/gu)).toHaveLength(1);
+    expect(resolveScript).not.toContain("merge_commit_sha");
+    expect(resolveScript).not.toContain("prComparison");
+    expect(resolveScript).toContain('setOutput("baseline_ref", baselineRevision)');
+    expect(resolveScript).toContain('setOutput("head_revision", headRevision)');
+    expect(resolveScript).toContain('setOutput("merge_base_revision", mergeBaseRevision)');
+    expect(resolveScript).toContain('"pr_context"');
+    expect(resolveScript).toContain("pr.title.slice(0, 500)");
+    expect(resolveScript).toContain('(pr.body ?? "").slice(0, 12000)');
     for (const job of Object.values(workflow.jobs ?? {})) {
       for (const step of job.steps ?? []) {
         expect(step.run ?? "").not.toContain("${{ needs.resolve_request.outputs.pr_context }}");
       }
     }
-    expect(workflowText).not.toContain("body.match");
-    expect(workflowText).not.toContain("baselineMatch");
-    expect(workflowText).not.toContain("candidateMatch");
-    expect(workflowText).not.toContain("leaseMatch");
-    expect(workflowText).not.toContain("fork-ok");
-    expect(workflowText).toContain("allow_fork_candidate");
-    expect(workflowText).toContain("Fork PR heads require explicit allow_fork_candidate approval");
+    expect(resolveScript).not.toContain("body.match");
+    expect(resolveScript).not.toContain("baselineMatch");
+    expect(resolveScript).not.toContain("candidateMatch");
+    expect(resolveScript).not.toContain("leaseMatch");
+    expect(resolveScript).not.toContain("fork-ok");
+    expect(resolveScript).toContain("allow_fork_candidate");
+    expect(resolveScript).toContain("Fork PR heads require explicit allow_fork_candidate approval");
   });
 
-  it("trusts the open PR head and marks fork heads for sandboxed handling", () => {
+  it("requires a main-targeting PR and pins fork approval to the exact head", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const workflowText = readFileSync(WORKFLOW, "utf8");
+    const resolveScript = String(
+      jobStep(WORKFLOW, "resolve_request", "Resolve refs and target PR").with?.script ?? "",
+    );
     expect(workflow.jobs?.run_telegram_desktop_proof?.needs).toBe("resolve_request");
-    expect(workflowText).toContain('"GET /repos/{owner}/{repo}/compare/{basehead}"');
-    expect(workflowText).toContain('baselineOnMain.data.status !== "ahead"');
-    expect(workflowText).toContain('baselineOnMain.data.status !== "identical"');
-    expect(workflowText).toContain('pr.state !== "open"');
-    expect(workflowText).toContain("Candidate PR source repository is unavailable.");
-    expect(workflowText).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
+    expect(resolveScript).toContain("const headRevision = pr.head.sha;");
+    expect(resolveScript).toContain('pr.state !== "open"');
+    expect(resolveScript).toContain("PR source repository is unavailable.");
+    expect(resolveScript).toContain('pr.base.ref !== "main"');
+    expect(resolveScript).toContain("Main tip SHA");
+    expect(resolveScript).toContain("Merge base SHA");
+    expect(resolveScript).toContain('"GET /repos/{owner}/{repo}/compare/{basehead}"');
+    expect(resolveScript).not.toContain("pr.mergeable");
+    expect(resolveScript).not.toContain("github.rest.git.getCommit");
+    expect(resolveScript).not.toContain("baselineOnMain");
+    expect(resolveScript).toContain("pr.head.repo.full_name !== `${owner}/${repo}`");
+    expect(resolveScript).toContain("inputs.approved_head_sha !== headRevision");
+    expect(resolveScript).not.toContain("inputs.approved_head_sha !== candidateRevision");
+    expect(workflowText).not.toContain('origin "pull/${MANTIS_PR_NUMBER}/head"');
 
     const agent = workflowStep("Run Codex Mantis Telegram agent");
     expect(agent.env?.MANTIS_CANDIDATE_TRUST).toBeUndefined();

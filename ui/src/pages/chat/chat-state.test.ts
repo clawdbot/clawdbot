@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -1215,6 +1216,72 @@ describe("canonical session message recovery", () => {
 
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("defers branch hydration when a session reconciliation finishes after the pane hides", async () => {
+    const refreshFinished = createDeferred();
+    let presented = true;
+    const listBranches = vi.fn().mockResolvedValue([]);
+    const { request, state } = createSessionEventState({
+      chatRunId: "run-1",
+      chatStream: "Finishing",
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+    state.sessions = {
+      ...state.sessions,
+      listBranches,
+      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+      refresh: vi.fn(async () => {
+        await refreshFinished.promise;
+        state.sessionsResult = {
+          ts: 2,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: state.sessionKey,
+              kind: "direct",
+              hasActiveRun: false,
+              status: "done",
+              updatedAt: 2,
+            },
+          ],
+        };
+      }),
+    };
+
+    handlePageGatewayEvent(
+      state,
+      {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId: "run-1",
+          messageId: "terminal-message",
+          messageSeq: 2,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Finished" }],
+            __openclaw: { id: "terminal-message", seq: 2 },
+          },
+        },
+      },
+      () => presented,
+    );
+    presented = false;
+    refreshFinished.resolve();
+
+    await vi.waitFor(() => expect(state.chatRunId).toBeNull());
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    expect(listBranches).not.toHaveBeenCalled();
   });
 });
 
