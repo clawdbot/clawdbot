@@ -56,13 +56,15 @@ function redactInlineDataUris(value: string): string {
 
 function redactStructuredTextValue(value: string): string {
   const host = getAiTransportHost();
-  const redacted = host.redactToolPayloadText(value);
+  const redacted = host.redactModelVisibleSecrets(value);
   const trimmed = redacted.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
     return redacted;
   }
   try {
-    const redactedWrapper = host.redactSecrets({ structuredTextValue: JSON.parse(redacted) });
+    const redactedWrapper = host.redactModelVisibleSecrets({
+      structuredTextValue: JSON.parse(redacted),
+    });
     return JSON.stringify(redactedWrapper.structuredTextValue);
   } catch {
     return redacted;
@@ -72,7 +74,9 @@ function redactStructuredTextValue(value: string): string {
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
-    const redactedWrapper = getAiTransportHost().redactSecrets({ structuredToolResult: block });
+    const redactedWrapper = getAiTransportHost().redactModelVisibleSecrets({
+      structuredToolResult: block,
+    });
     const redactedBlock = redactedWrapper.structuredToolResult;
     const serialized = JSON.stringify(
       redactedBlock,

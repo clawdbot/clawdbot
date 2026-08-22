@@ -340,7 +340,7 @@ describe("anthropic transport stream", () => {
     configureAiTransportHost({
       ...coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
-      redactSecrets: redactTestSecrets,
+      redactModelVisibleSecrets: redactTestSecrets,
       resolveProviderRequestCapabilities: (input) => {
         const endpointClass = resolveTestEndpointClass(input.baseUrl);
         return {
