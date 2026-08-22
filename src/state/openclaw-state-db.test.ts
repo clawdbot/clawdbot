@@ -2965,7 +2965,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
         ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
       `);
-      markStateDatabaseAsPreviousAppVersion(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
@@ -2997,7 +2996,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
         ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
       `);
-      markStateDatabaseAsPreviousAppVersion(shippedSchema);
     } finally {
       shippedSchema.close();
     }
@@ -3077,7 +3075,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       shippedSchema.exec(`
         ALTER TABLE installed_plugin_index DROP COLUMN workspace_dir;
       `);
-      markStateDatabaseAsPreviousAppVersion(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
@@ -3109,7 +3106,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         DROP TABLE worker_session_tool_operations;
         DROP TABLE worker_turn_tool_authorities;
       `);
-      markStateDatabaseAsPreviousAppVersion(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
@@ -4077,7 +4073,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const currentSchema = new DatabaseSync(databasePath);
     try {
       currentSchema.exec("DROP INDEX idx_operator_approvals_source_run_resolved;");
-      markStateDatabaseAsPreviousAppVersion(currentSchema);
       expect(currentSchema.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });

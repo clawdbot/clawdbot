@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { VERSION } from "../version.js";
@@ -9,6 +10,11 @@ import {
   assertSupportedSchemaVersion,
 } from "./openclaw-state-db-maintenance.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  isOpenClawStateStartupRepairableSchemaIssue,
+  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 
 export function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
   assertCanonicalStateSchemaShape(database, pathname);
@@ -26,6 +32,14 @@ export function isOpenClawStateSchemaFastPathEligible(
     }
     assertSqliteIntegrity(database, pathname);
     assertCurrentStateRuntimeSchema(database, pathname);
+    const startupRepairRequired = collectSqliteSchemaIssues(
+      database,
+      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
+      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    ).some(isOpenClawStateStartupRepairableSchemaIssue);
+    if (startupRepairRequired) {
+      return false;
+    }
     // app_version commits only after this release's repairs; same-build writes are canonical.
     const metadata = database
       .prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
