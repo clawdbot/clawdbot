@@ -16,6 +16,7 @@ import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
+  type CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 import type { IngressRetryPolicyConfig } from "./ingress-retry-policy.js";
@@ -71,6 +72,12 @@ function createMonitor(
         waitForDeliveryIdleOnStop?: boolean;
         retryPolicy?: IngressRetryPolicyConfig;
         runPumpTask?: (work: () => Promise<void>) => Promise<void>;
+        onDurableAdmission?: CreateChannelIngressMonitorOptions<
+          RawEvent,
+          string,
+          StoredEvent,
+          unknown
+        >["onDurableAdmission"];
       },
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
@@ -185,6 +192,22 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
 
       expect(prune).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports the durable enqueue outcome to onDurableAdmission on every admission", async () => {
+    await withQueue(async (queue) => {
+      const outcomes: string[] = [];
+      const monitor = createMonitor(queue, vi.fn(), {
+        onDurableAdmission: (_raw, { queueResult }) => {
+          outcomes.push(queueResult.kind);
+        },
+      });
+
+      await monitor.admit({ id: "event-one", lane: "a", text: "hello" });
+      await monitor.admit({ id: "event-one", lane: "a", text: "hello" });
+      expect(outcomes).toEqual(["accepted", "pending"]);
+      await monitor.stop();
     });
   });
 

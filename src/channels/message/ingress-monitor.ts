@@ -158,7 +158,11 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
   appendRetryDelaysMs?: readonly number[];
   onDurableAdmission?: (
     raw: TRaw,
-    context: { facts: ChannelIngressMonitorFacts; receivedAt: number },
+    context: {
+      facts: ChannelIngressMonitorFacts;
+      receivedAt: number;
+      queueResult: Awaited<ReturnType<ChannelIngressQueue<TStoredPayload, TMetadata>["enqueue"]>>;
+    },
   ) => void | Promise<void>;
   onAdmissionFailure?: (raw: TRaw, error: unknown) => void | Promise<void>;
   /** False lets repeated requests fill drain capacity while earlier claims remain active. */
@@ -633,18 +637,15 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       }
       admitOptions.pruneTask ??= pruneIfDue("admission");
       await admitOptions.pruneTask;
-      const body = options.payload.serialize(raw, { facts, receivedAt: admitOptions.receivedAt });
+      const { receivedAt } = admitOptions;
+      const body = options.payload.serialize(raw, { facts, receivedAt });
       const payload =
         options.payload.storage === "raw-event"
           ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload)
           : options.payload.encode({ version: options.payload.version, body });
-      const queueResult = await admitOnce({
-        facts,
-        payload,
-        receivedAt: admitOptions.receivedAt,
-      });
+      const queueResult = await admitOnce({ facts, payload, receivedAt });
       admitOptions.onDurablyAdmitted();
-      await options.onDurableAdmission?.(raw, { facts, receivedAt: admitOptions.receivedAt });
+      await options.onDurableAdmission?.(raw, { facts, receivedAt, queueResult });
       return { kind: "durable", queueResult } as const;
     } catch (error) {
       await options.onAdmissionFailure?.(raw, error);

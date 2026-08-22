@@ -198,14 +198,15 @@ export async function startSignalIngressMonitor(params: {
     },
     deliver: ([event, parsedPayload], lifecycle) =>
       parsedPayload ? params.dispatch(event, lifecycle, parsedPayload) : undefined,
-    onDurableAdmission: async (_event, { facts }) => {
+    onDurableAdmission: async (_event, { facts, queueResult }) => {
       const { numberAliasEventId } = facts as SignalIngressEventFacts;
       if (!numberAliasEventId) {
         return;
       }
       // signal-cli can learn or forget a UUID between redeliveries; bridge both
       // shipped sender IDs before the monitor releases its admission/claim lock.
-      if (!(await ingressQueue.complete(numberAliasEventId))) {
+      const aliasCompleted = await ingressQueue.complete(numberAliasEventId);
+      if (!aliasCompleted && queueResult.kind === "accepted") {
         await ingressQueue.complete(facts.eventId);
       }
     },

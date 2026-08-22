@@ -449,6 +449,71 @@ describe("Signal durable ingress", () => {
     },
   );
 
+  it("keeps a pending dual-identity message dispatchable when it is redelivered behind a busy lane", async () => {
+    await withQueue(async (queue) => {
+      const sender = {
+        senderNumber: "+15550002222",
+        senderUuid: "123e4567-e89b-12d3-a456-426614174000",
+      };
+      const first = signalEvent({ ...sender, timestamp: 1_700_000_000_001, message: "first" });
+      const second = signalEvent({ ...sender, timestamp: 1_700_000_000_002, message: "second" });
+      let adopt: (() => void | Promise<void>) | undefined;
+      const dispatch = vi.fn<SignalIngressDispatch>((_event, lifecycle, payload) => {
+        if (payload.envelope?.dataMessage?.message === "first") {
+          adopt = lifecycle.onAdopted;
+          lifecycle.onDeferred();
+          return { kind: "deferred" } as const;
+        }
+        return undefined;
+      });
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(first);
+        await started.monitor.receive(second);
+        await started.waitForIdle();
+        expect(await queue.listPending()).toHaveLength(1);
+
+        await started.monitor.receive(second);
+        await started.waitForIdle();
+        expect(await queue.listPending()).toHaveLength(1);
+
+        await adopt?.();
+        await started.waitForIdle();
+        expect(dispatch.mock.calls.map((call) => call[2].envelope?.dataMessage?.message)).toEqual([
+          "first",
+          "second",
+        ]);
+        expect(await queue.listPending()).toHaveLength(0);
+      } finally {
+        await started.monitor.stop();
+      }
+    });
+  });
+
+  it("completes a fresh UUID row for a message already delivered under the phone identity", async () => {
+    await withQueue(async (queue) => {
+      const phoneOnly = signalEvent({ senderNumber: "+15550002222" });
+      const withUuid = signalEvent({
+        senderNumber: "+15550002222",
+        senderUuid: "123e4567-e89b-12d3-a456-426614174000",
+      });
+      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(phoneOnly);
+        await started.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+
+        await started.monitor.receive(withUuid);
+        await started.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(await queue.listPending()).toHaveLength(0);
+      } finally {
+        await started.monitor.stop();
+      }
+    });
+  });
+
   it("keeps identity-alias tombstones scoped to their Signal account", async () => {
     await withQueue(async (queue, stateDir) => {
       const otherQueue = createChannelIngressQueueForTests<SignalIngressPayload>({
