@@ -29,6 +29,7 @@ import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
+  resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
   resolveCodexAppServerUserHomeDir,
@@ -335,7 +336,10 @@ async function resolveCodexAppServerClientStartContext(
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
-  const desktopGeneration = shouldTrackDesktopGeneration(requestedStartOptions)
+  const desktopGeneration = shouldTrackDesktopGeneration(
+    requestedStartOptions,
+    options?.pluginConfig,
+  )
     ? await waitForCodexDesktopGeneration()
     : undefined;
   const preparedAuth = options?.preparedAuth;
@@ -447,11 +451,18 @@ async function resolveCodexAppServerClientStartContext(
   };
 }
 
-function shouldTrackDesktopGeneration(startOptions: CodexAppServerStartOptions): boolean {
+function shouldTrackDesktopGeneration(
+  startOptions: CodexAppServerStartOptions,
+  pluginConfig: unknown,
+): boolean {
+  if (startOptions.transport !== "stdio" || startOptions.commandSource !== "managed") {
+    return false;
+  }
+  // An explicitly package-first process can still publish and load Computer Use
+  // artifacts from a desktop app, so it belongs to that desktop generation too.
   return (
-    startOptions.transport === "stdio" &&
-    startOptions.commandSource === "managed" &&
-    (startOptions.managedCommandOrder ?? "package-first") === "desktop-first"
+    (startOptions.managedCommandOrder ?? "package-first") === "desktop-first" ||
+    resolveCodexComputerUseConfig({ pluginConfig }).enabled
   );
 }
 
