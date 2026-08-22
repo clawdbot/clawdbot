@@ -9,6 +9,7 @@ const MANTIS_LANE_SCRIPT = "scripts/e2e/telegram-mantis-lane.ts";
 const DESKTOP_CRABBOX_SCRIPT = "scripts/e2e/telegram-desktop-crabbox.ts";
 const SUT_CONTAINER_WRAPPER = "scripts/mantis/mantis-sut-container.sh";
 const STOP_LEASE_KEEPALIVE_SCRIPT = "scripts/mantis/stop-lease-keepalive.sh";
+const RUN_WITH_LEASE_FENCE_SCRIPT = "scripts/mantis/run-with-lease-fence.sh";
 const CREDENTIAL_SCRIPT = "scripts/e2e/telegram-user-credential.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
@@ -208,6 +209,22 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(release).toContain("lease lost mid-run; nothing to release");
     expect(release).toContain("steps.telegram_credential.outputs.lease_lost_marker");
     expect(release).not.toMatch(/telegram-user-credential\.ts[^\n]*release[^\n]*\|\| true/u);
+  });
+
+  it("fences the active agent proof when the Telegram lease is lost", () => {
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+    const setup = workflowStep("Prepare Codex action runtime");
+    const fenceScript = readFileSync(RUN_WITH_LEASE_FENCE_SCRIPT, "utf8");
+    const run = agent.run ?? "";
+
+    expect(setup.uses).toContain("openai/codex-action@");
+    expect(run).toContain('scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" --');
+    expect(run).toContain("steps.telegram_credential.outputs.lease_lost_marker");
+    expect(run).toContain('sudo -u codex -- "$codex_bin" "${codex_args[@]}"');
+    expect(fenceScript.indexOf('kill -TERM -- "-$command_pid"')).toBeLessThan(
+      fenceScript.indexOf('kill -KILL -- "-$command_pid"'),
+    );
+    expect(fenceScript).toContain("exit 97");
   });
 
   it("reports an honest blocked proof without failing the workflow", () => {
@@ -930,10 +947,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
   it("runs the Mantis Codex agent in fast high-effort mode", () => {
     const agent = workflowStep("Run Codex Mantis Telegram agent");
+    const setup = workflowStep("Prepare Codex action runtime");
+    const run = agent.run ?? "";
 
-    expect(agent.uses).toContain("openai/codex-action@");
-    expect(agent.with?.effort).toBe("high");
-    expect(agent.with?.["codex-args"]).toBe('["-c","service_tier=\\"fast\\""]');
+    expect(setup.uses).toContain("openai/codex-action@");
+    expect(run).toContain("--config 'model_reasoning_effort=\"high\"'");
+    expect(run).toContain("-c 'service_tier=\"fast\"'");
   });
 
   it("derives refs from the PR instead of parsing comment prose", () => {

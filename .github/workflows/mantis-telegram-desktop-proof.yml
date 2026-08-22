@@ -807,15 +807,27 @@ jobs:
           sudo find "$proof_worktree_root" -xdev ! -type l -perm /222 -exec chmod a-w {} +
           sudo chmod 0700 "$proof_worktree_root"
 
-      - name: Run Codex Mantis Telegram agent
-        # Pin audited 2026-08: runCodexExec rejects a missing codex-user, then
-        # launches the CLI as `sudo -u <codex-user> -- codex exec`.
+      - name: Prepare Codex action runtime
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
+          safety-strategy: unprivileged-user
+          codex-user: codex
+          allow-bot-users: github-actions[bot]
+
+      - name: Run Codex Mantis Telegram agent
+        # Pin audited 2026-08: preserve codex-action's unprivileged launch shape while
+        # making the broker's terminal lease-loss marker fence the complete process group.
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          CODEX_HOME: /tmp/mantis-codex-home-${{ github.run_id }}
+          CODEX_INTERNAL_ORIGINATOR_OVERRIDE: codex_github_action
+          CODEX_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          FORCE_COLOR: "1"
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
           MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
           MANTIS_FIXTURE_PLUGINS_DIR: /tmp/openclaw-mantis-proof-sessions-${{ github.run_id }}-${{ github.run_attempt }}/fixture-plugins
@@ -825,17 +837,30 @@ jobs:
           MANTIS_PR_CONTEXT: ${{ needs.resolve_request.outputs.pr_context }}
           MANTIS_PNPM_BIN: /usr/local/lib/mantis-toolchain/pnpm
           OPENCLAW_TELEGRAM_MANTIS_LANE_CMD: /usr/local/bin/openclaw-telegram-mantis-lane
-        with:
-          openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-          prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
-          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: high
-          sandbox: danger-full-access
-          codex-args: '["-c","service_tier=\"fast\""]'
-          codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
-          safety-strategy: unprivileged-user
-          codex-user: codex
-          allow-bot-users: github-actions[bot]
+        shell: bash
+        run: |
+          set -euo pipefail
+          lease_lost_marker="${{ steps.telegram_credential.outputs.lease_lost_marker }}"
+          codex_bin="$(command -v codex)"
+          output_file="$CODEX_HOME/mantis-final-message-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          trap 'rm -f "$output_file"' EXIT
+          codex_args=(
+            exec
+            --skip-git-repo-check
+            --cd "$GITHUB_WORKSPACE"
+            --output-last-message "$output_file"
+          )
+          if [[ -n "$CODEX_MODEL" ]]; then
+            codex_args+=(--model "$CODEX_MODEL")
+          fi
+          codex_args+=(
+            --config 'model_reasoning_effort="high"'
+            -c 'service_tier="fast"'
+            --sandbox danger-full-access
+          )
+          scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" -- \
+            sudo -u codex -- "$codex_bin" "${codex_args[@]}" \
+              < .github/codex/prompts/mantis-telegram-desktop-proof.md
 
       - name: Clean up abandoned Mantis sessions
         id: abandoned_cleanup
