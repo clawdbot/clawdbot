@@ -691,13 +691,17 @@ case "$command" in
     # `set -e` preserves a failed probe/container status through this EXIT trap.
     # The explicit cleanup below is reached only after the protected command succeeds.
     trap cleanup_build EXIT INT TERM
-    create_bounded_filesystem "${container_name}-fs" 10G >/dev/null
+    # 16G bounds worktree + full pnpm-store copy + build output together; the image
+    # is sparse so unused capacity costs nothing, and the post-build 8 GiB check
+    # below still bounds what leaves the container.
+    create_bounded_filesystem "${container_name}-fs" 16G >/dev/null
     isolated_root="$build_mount/repo"
     mkdir "$isolated_root"
     /bin/cp -a "$candidate_root/." "$isolated_root/"
     store_copy_start=$SECONDS
     mkdir "$isolated_root/.mantis-pnpm-store"
-    # A reflink is copy-on-write, and the fallback is a regular copy. Never bind or
+    # Host disk -> loop image crosses filesystems, so reflink falls back to a full
+    # byte copy on CI; keep --reflink=auto for same-filesystem hosts. Never bind or
     # hard-link the host store: candidate lifecycle scripts may rewrite their store.
     /bin/cp -a --reflink=auto "$host_pnpm_store/." "$isolated_root/.mantis-pnpm-store/"
     test -n "$(find "$isolated_root/.mantis-pnpm-store" -type f -print -quit)"

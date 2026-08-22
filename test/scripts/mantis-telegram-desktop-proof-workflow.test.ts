@@ -1202,7 +1202,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("/usr/sbin/runuser -u mantis-sut --");
     expect(wrapper).toContain('/bin/cp -a --no-dereference "$quarantine/." "$safe_runtime/"');
     expect(wrapper).not.toContain('/bin/cp -a "$runtime_source/." "$safe_runtime/"');
-    expect(wrapper).toContain('create_bounded_filesystem "${container_name}-fs" 10G');
+    expect(wrapper).toContain('create_bounded_filesystem "${container_name}-fs" 16G');
     expect(wrapper).toContain('ln -s "$safe_runtime" "$runtime_source"');
     expect(wrapper.indexOf('ln -s "$safe_runtime" "$runtime_source"')).toBeLessThan(
       wrapper.indexOf(
