@@ -68,7 +68,7 @@ function sanitizeDiagnosticToken(value: string, fallback = "unknown") {
   return sanitized || fallback;
 }
 
-function sanitizeDiagnosticComm(value: string) {
+function classifyDiagnosticComm(value: string) {
   const executable = value.trim().split(/\s+/u)[0] ?? "";
   const basename = path.basename(executable).toLowerCase();
   return SAFE_DIAGNOSTIC_COMMANDS.has(basename) ? basename : "other";
@@ -85,7 +85,7 @@ function parseDiagnosticProcessRows(output: string, processGroupId?: number) {
     }
     return [
       {
-        comm: sanitizeDiagnosticComm(match[9] ?? ""),
+        comm: classifyDiagnosticComm(match[9] ?? ""),
         cpu: sanitizeDiagnosticToken(match[6] ?? "", "0"),
         elapsed: sanitizeDiagnosticToken(match[4] ?? ""),
         pgid: Number(match[3]),
@@ -405,11 +405,7 @@ function parseLinuxProcStat(raw: string, expectedId: number) {
   ) {
     return undefined;
   }
-  const comm = raw
-    .slice(head[0].length, end)
-    .replace(/\p{Cc}+/gu, " ")
-    .trim()
-    .slice(0, 80);
+  const comm = classifyDiagnosticComm(raw.slice(head[0].length, end));
   return { comm, pgid, ppid, state };
 }
 
@@ -517,7 +513,9 @@ export function parseVitestProcessGroupMembers(output: string, processGroupId: n
     if (!match || Number(match[3]) !== processGroupId) {
       return [];
     }
-    return [`pid=${match[1]} ppid=${match[2]} state=${match[4]} comm=${match[5]?.slice(0, 80)}`];
+    return [
+      `pid=${match[1]} ppid=${match[2]} state=${match[4]} comm=${classifyDiagnosticComm(match[5] ?? "")}`,
+    ];
   });
   return members.slice(0, 20).join("; ") || "none";
 }
