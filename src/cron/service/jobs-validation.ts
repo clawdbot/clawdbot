@@ -6,9 +6,22 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
+import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
 import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
+
+function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
+  if (!script.trim()) {
+    throw new Error(`cron ${subject} must not be empty`);
+  }
+  const parsed = parseCodeModeScriptSyntax(script);
+  if (!parsed.ok) {
+    throw new Error(
+      `cron ${subject} has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
+    );
+  }
+}
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
@@ -60,38 +73,34 @@ export function assertScriptPayloadSupport(
   if (job.payload.kind !== "script") {
     return;
   }
-  if (!job.payload.script.trim()) {
-    throw new Error("cron script payload must not be empty");
-  }
   if (opts?.validateSyntax !== false) {
-    const parsed = parseCodeModeScriptSyntax(job.payload.script);
-    if (!parsed.ok) {
-      throw new Error(
-        `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
-      );
-    }
+    assertCronScriptSyntax(job.payload.script, "script payload");
+  } else if (!job.payload.script.trim()) {
+    throw new Error("cron script payload must not be empty");
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one
     // persisted state slot two owners and make the next trigger run ambiguous.
     throw new Error("cron script payloads cannot be combined with a condition trigger");
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
-      "cron script payloads are disabled; set cron.triggers.enabled=true to allow unattended scripts",
+      "cron script payloads are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
     );
   }
 }
 
 export function assertTriggerSupport(
   job: Pick<CronJob, "schedule" | "trigger">,
-  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+  opts?: { cronConfig?: CronConfig; validateAuthoredTrigger?: boolean },
 ) {
   if (!job.trigger) {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
-    throw new Error("cron triggers are disabled; set cron.triggers.enabled=true");
+  if (opts?.validateAuthoredTrigger && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron triggers are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
   if (
     job.schedule.kind !== "every" &&
@@ -103,6 +112,9 @@ export function assertTriggerSupport(
   const minIntervalMs = resolveCronTriggerMinIntervalMs();
   if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {
     throw new Error(`cron trigger every interval must be at least ${minIntervalMs}ms`);
+  }
+  if (opts?.validateAuthoredTrigger) {
+    assertCronScriptSyntax(job.trigger.script, "trigger script");
   }
 }
 
@@ -123,8 +135,10 @@ export function assertStreamScheduleSupport(
   if (job.schedule.kind !== "stream") {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
-    throw new Error("cron stream schedules are disabled; set cron.triggers.enabled=true");
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron stream schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
   const { command, mode = "line", match } = job.schedule;
   if (
@@ -153,16 +167,25 @@ export function assertStreamScheduleSupport(
   }
 }
 
-export function assertCronExpressionSatisfiable(
+export function assertTimeScheduleSatisfiable(
   job: CronJob,
   nowMs: number,
   computeJobNextRunAtMs: (job: CronJob, nowMs: number) => number | undefined,
 ) {
-  if (job.schedule.kind !== "cron") {
+  if (job.schedule.kind === "at") {
+    if (parseAbsoluteTimeMs(job.schedule.at) === null) {
+      throw new Error("cron at schedule must contain a Date-valid absolute timestamp");
+    }
+    return;
+  }
+  if (job.schedule.kind !== "cron" && job.schedule.kind !== "every") {
     return;
   }
   if (computeJobNextRunAtMs({ ...job, enabled: true }, nowMs) !== undefined) {
     return;
+  }
+  if (job.schedule.kind === "every") {
+    throw new Error("cron every schedule has no upcoming run time and would never fire");
   }
   throw new Error(
     `cron expression "${job.schedule.expr}" has no upcoming run time and would never fire`,

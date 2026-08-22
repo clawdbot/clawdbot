@@ -264,8 +264,8 @@ export class ShellNavigationOwner {
     }
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
     if (this.host.routeState.routeId !== "new-session") {
       return "";
     }

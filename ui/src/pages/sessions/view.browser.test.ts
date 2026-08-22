@@ -29,6 +29,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
+    "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/sessions.css",
   ];
@@ -80,9 +81,7 @@ function sessionsTableHtml() {
                               : index === 6
                                 ? "session-actions-col"
                                 : ""
-                      }">${
-                        index === 6 ? `<span class="sessions-sr-only">${header}</span>` : header
-                      }</th>`,
+                      }">${index === 6 ? `<span class="sr-only">${header}</span>` : header}</th>`,
                   )
                   .join("")}
               </tr>

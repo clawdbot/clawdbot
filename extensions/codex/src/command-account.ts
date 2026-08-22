@@ -10,9 +10,12 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
+import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
@@ -278,9 +281,9 @@ function resolveLiveAccountProfileId(params: {
   const account = isJsonObject(params.account.value.account)
     ? params.account.value.account
     : params.account.value;
-  const type = readString(account, "type")?.toLowerCase();
+  const type = normalizeOptionalString(account.type)?.toLowerCase();
   if (type === "chatgpt") {
-    const email = readString(account, "email")?.toLowerCase();
+    const email = normalizeOptionalString(account.email)?.toLowerCase();
     const firstSubscription = params.order.find((profileId) =>
       isChatGptSubscriptionProfile(params.store.profiles[profileId]),
     );
@@ -435,11 +438,6 @@ function formatSubscriptionUsageLine(
 
 function formatUsageLineForDisplay(value: string): string {
   return value.replace(/^weekly\b/u, "Weekly").replace(/\bshort-term\b/u, "Short-term");
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isChatGptSubscriptionProfile(credential: AuthProfileCredential | undefined): boolean {

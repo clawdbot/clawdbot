@@ -58,7 +58,7 @@ export function collectTranscriptText(value: unknown, fragments: string[]): void
 
 export function parseTranscriptLine(
   line: Buffer,
-  optionalString: (value: unknown, maxLength?: number) => string | undefined,
+  optionalString: (value: unknown, maxLength: number) => string | undefined,
 ): ClaudeTranscriptItem | undefined {
   let raw: unknown;
   try {

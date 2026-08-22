@@ -54,7 +54,10 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -63,7 +66,11 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  isFailedOpenAiAgentRun,
+  resolveOpenAiCompatError,
+  validateOpenAiSamplingParams,
+} from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -640,12 +647,6 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const testOnlyOpenAiHttp = {
-  resolveImagesForRequest,
-  resolveOpenAiChatCompletionsLimits,
-  resolveChatCompletionUsage,
-};
-
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
@@ -989,13 +990,27 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
       return true;
     }
     throw err;
+  }
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId,
+    sessionKey,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    return true;
   }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
@@ -1086,8 +1101,11 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (isFailedOpenAiAgentRun(result)) {
+        throw new Error("agent run failed");
+      }
       const usage = resolveChatCompletionUsage(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // `tool_choice` is an HTTP client-tool contract. The provider may still
@@ -1366,6 +1384,12 @@ export async function handleOpenAiHttpRequest(
       resultResolved = true;
 
       if (closed) {
+        return;
+      }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        finishStreamWithError({ message: "internal error", type: "api_error" });
         return;
       }
 

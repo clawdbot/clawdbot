@@ -1,17 +1,18 @@
 // Runtime boundary for resolving provider auth choices from plugins.
 import {
-  resolveProviderPluginChoice as resolveProviderPluginChoiceImpl,
-  runProviderModelSelectedHook as runProviderModelSelectedHookImpl,
+  resolveProviderPluginChoiceCore as resolveProviderPluginChoiceImpl,
+  runProviderModelSelectedHookCore as runProviderModelSelectedHookImpl,
 } from "./provider-wizard.js";
-import { resolvePluginProviders as resolvePluginProvidersImpl } from "./providers.runtime.js";
-import { resolvePluginSetupProvider as resolvePluginSetupProviderImpl } from "./setup-registry.js";
+import { resolvePluginProvidersCore as resolvePluginProvidersImpl } from "./providers.runtime.js";
+import { resolvePluginSetupProviderCore as resolvePluginSetupProviderImpl } from "./setup-registry.js";
 
 type ResolveProviderPluginChoice =
-  typeof import("./provider-wizard.js").resolveProviderPluginChoice;
+  typeof import("./provider-wizard.js").resolveProviderPluginChoiceCore;
 type RunProviderModelSelectedHook =
-  typeof import("./provider-wizard.js").runProviderModelSelectedHook;
-type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
-type ResolvePluginSetupProvider = typeof import("./setup-registry.js").resolvePluginSetupProvider;
+  typeof import("./provider-wizard.js").runProviderModelSelectedHookCore;
+type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+type ResolvePluginSetupProvider =
+  typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 
 /** Runtime wrapper for provider plugin wizard choice resolution. */
 export function resolveProviderPluginChoice(

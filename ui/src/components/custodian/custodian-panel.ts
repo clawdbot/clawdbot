@@ -1,7 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
-import { t } from "../../i18n/index.ts";
 import "../openclaw-mascot.ts";
+import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import {
   custodianSessionStore,
@@ -10,10 +11,7 @@ import {
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
 import { icons } from "../icons.ts";
-import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  type CustodianPanelToggleDetail,
-} from "../panel-toggle-contract.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import "../../pages/custodian/custodian-surface.ts";
 import "../../styles/custodian-panel.css";
 
@@ -50,6 +48,9 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
     this.subscribeToStore();
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.dockLayout.setSuppressed(this.suppressed);
+    if (this.dockLayout.open) {
+      void this.store.refreshTranscriptIfIdle();
+    }
   }
 
   override disconnectedCallback(): void {
@@ -63,23 +64,34 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
   override willUpdate(changed: PropertyValues): void {
     if (changed.has("store")) {
       this.subscribeToStore();
+      if (this.dockLayout.open) {
+        void this.store.refreshTranscriptIfIdle();
+      }
     }
     if (changed.has("suppressed")) {
+      const wasOpen = this.dockLayout.open;
       this.dockLayout.setSuppressed(this.suppressed);
+      if (!wasOpen && this.dockLayout.open) {
+        void this.store.refreshTranscriptIfIdle();
+      }
     }
     if (this.minimizeRequestId > 0 && this.minimizeRequestId !== this.handledMinimizeRequestId) {
       if (this.available) {
         this.handledMinimizeRequestId = this.minimizeRequestId;
       }
       if (this.available && this.store.hasRealUserTurn()) {
-        this.dockLayout.setOpen(true);
+        this.setOpen(true);
       }
     }
     if (changed.has("available")) {
+      const wasOpen = this.dockLayout.open;
       if (!this.available && this.dockLayout.open) {
         this.dockLayout.hideWithoutPersisting();
       } else if (this.available) {
         this.dockLayout.restoreOpenState();
+      }
+      if (!wasOpen && this.dockLayout.open) {
+        void this.store.refreshTranscriptIfIdle();
       }
     }
     this.dockLayout.syncReservation();
@@ -94,41 +106,43 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
     this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
   }
 
+  private setDock(dock: CustodianDock): void {
+    this.dockLayout.setDock(dock);
+  }
+
+  private setOpen(open: boolean): void {
+    this.dockLayout.setOpen(open);
+    if (open) {
+      void this.store.refreshTranscriptIfIdle();
+    }
+  }
+
   toggle(): void {
     if (!this.available || this.suppressed) {
       return;
     }
-    if (this.dockLayout.open) {
-      this.dockLayout.setOpen(false);
-    } else {
-      this.dockLayout.setOpen(true);
-    }
+    this.setOpen(!this.dockLayout.open);
   }
 
   handleToggleRequest(event: Event): void {
-    const detail =
-      event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as CustodianPanelToggleDetail)
-        : null;
-    if (detail?.dock === "right" || detail?.dock === "bottom") {
-      this.dockLayout.setDock(detail.dock, false);
+    const raw: unknown = event instanceof CustomEvent ? event.detail : null;
+    const detail = asNullableRecord(raw);
+    const dock = detail?.dock;
+    if (dock === "right" || dock === "bottom") {
+      this.dockLayout.setDock(dock, false);
     }
     if (detail?.open === false) {
-      this.dockLayout.setOpen(false);
+      this.setOpen(false);
       return;
     }
     if (detail?.open === true) {
       if (!this.available || this.suppressed) {
         return;
       }
-      this.dockLayout.setOpen(true);
+      this.setOpen(true);
       return;
     }
     this.toggle();
-  }
-
-  private setDock(dock: CustodianDock): void {
-    this.dockLayout.setDock(dock);
   }
 
   get custodianPanelOpen(): boolean {
@@ -145,17 +159,17 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
     return html`
       <section class="cp cp--${dock}" style=${style} aria-label=${t("custodian.panel.title")}>
         ${this.dockLayout.renderResizer("cp", t("custodian.panel.resize"))}
-        <header class="cp-header">
+        <header class="rail-header cp-header">
           <div class="cp-title">
             <openclaw-mascot
               .mood=${this.store.sending ? "thinking" : "idle"}
-              .size=${26}
+              .size=${16}
             ></openclaw-mascot>
-            <strong>${t("custodian.panel.title")}</strong>
+            <strong class="rail-header__title">${t("custodian.panel.title")}</strong>
           </div>
-          <div class="cp-actions">
+          <div class="rail-header__actions cp-actions">
             <button
-              class="cp-icon"
+              class="rail-header__action cp-icon"
               type="button"
               aria-label=${dock === "bottom"
                 ? t("custodian.panel.dockRight")
@@ -165,10 +179,10 @@ export class OpenClawCustodianPanel extends OpenClawLightDomElement {
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
             </button>
             <button
-              class="cp-icon"
+              class="rail-header__action cp-icon"
               type="button"
               aria-label=${t("custodian.panel.close")}
-              @click=${() => this.dockLayout.setOpen(false)}
+              @click=${() => this.setOpen(false)}
             >
               ${icons.x}
             </button>

@@ -174,7 +174,7 @@ describe("Gateway lock roles", () => {
           timeoutMs: 15,
         }),
       ).rejects.toThrow(
-        `another openclaw agent --local run is active (pid ${process.pid}); lock timeout after 15ms`,
+        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
       );
     } finally {
       await lock.release();

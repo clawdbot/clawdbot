@@ -341,6 +341,9 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       committedNavigation.resolve({ targetId: "raw-stable", url: committedUrl });
       await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
 
+      expect(controller.activeTargetId).toBeNull();
+      expect(controller.view).toBeNull();
+      expect(controller.urlDraft).toBe("");
       expect(controller.errorText).toBe("Browser request failed: Original navigation rejected");
       expect(controller.loading).toBe(false);
     },

@@ -39,6 +39,16 @@ function createWorkspacePluginFixture(workspaceDir: string, pluginId: string) {
   });
 }
 
+function createGlobalPluginFixture(stateDir: string, pluginId: string) {
+  const rootDir = path.join(stateDir, "extensions", pluginId);
+  fs.mkdirSync(rootDir, { recursive: true });
+  return createColdPluginFixture({
+    rootDir,
+    pluginId,
+    manifest: { id: pluginId, name: `Global ${pluginId}` },
+  });
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -79,6 +89,220 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 describe("buildPluginRegistrySnapshotReport", () => {
+  it("uses the configured system owner for ambient plugin inventory", () => {
+    const tempRoot = makeTempDir();
+    const mainWorkspace = path.join(tempRoot, "main-workspace");
+    const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
+    const main = createWorkspacePluginFixture(mainWorkspace, "main-plugin");
+    const gadget = createWorkspacePluginFixture(gadgetWorkspace, "gadget-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+    };
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "gadget" } },
+        entries: {
+          main: { workspace: mainWorkspace },
+          gadget: { workspace: gadgetWorkspace },
+        },
+      },
+      plugins: {
+        allow: [main.pluginId, gadget.pluginId],
+        entries: {
+          [main.pluginId]: { enabled: true },
+          [gadget.pluginId]: { enabled: true },
+        },
+      },
+    };
+
+    const reports = [
+      buildPluginRegistrySnapshotReport({ config, env }),
+      buildPluginSnapshotReport({ config, env }),
+      buildPluginDiagnosticsReport({ config, env }),
+    ];
+
+    expect(reports.map((report) => report.workspaceDir)).toEqual([
+      gadgetWorkspace,
+      gadgetWorkspace,
+      gadgetWorkspace,
+    ]);
+    for (const report of reports) {
+      expect(report.plugins.map((plugin) => plugin.id)).toContain(gadget.pluginId);
+      expect(report.plugins.map((plugin) => plugin.id)).not.toContain(main.pluginId);
+    }
+    expect(
+      buildPluginRegistrySnapshotReport({
+        config: { agents: { entries: { only: { workspace: mainWorkspace } } } },
+        env,
+      }).workspaceDir,
+    ).toBe(mainWorkspace);
+    expect(
+      buildPluginRegistrySnapshotReport({
+        config: { agents: { defaults: { workspace: mainWorkspace } } },
+        env,
+      }).workspaceDir,
+    ).toBe(mainWorkspace);
+  });
+
+  it("reports shared-only inventory when an explicit roster has no system owner", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const mainWorkspace = path.join(tempRoot, "main-workspace");
+    const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
+    const global = createGlobalPluginFixture(stateDir, "global-plugin");
+    const main = createWorkspacePluginFixture(mainWorkspace, "main-plugin");
+    const gadget = createWorkspacePluginFixture(gadgetWorkspace, "gadget-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const makeConfig = (reverse: boolean) => ({
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { workspace: path.join(tempRoot, "unowned-default-workspace") },
+        entries: reverse
+          ? {
+              gadget: { workspace: gadgetWorkspace },
+              main: { workspace: mainWorkspace },
+            }
+          : {
+              main: { workspace: mainWorkspace },
+              gadget: { workspace: gadgetWorkspace },
+            },
+      },
+      plugins: {
+        allow: [global.pluginId, main.pluginId, gadget.pluginId],
+        entries: {
+          [global.pluginId]: { enabled: true },
+          [main.pluginId]: { enabled: true },
+          [gadget.pluginId]: { enabled: true },
+        },
+      },
+    });
+
+    for (const config of [makeConfig(false), makeConfig(true)]) {
+      const reports = [
+        buildPluginRegistrySnapshotReport({ config, env }),
+        buildPluginSnapshotReport({ config, env }),
+        buildPluginDiagnosticsReport({ config, env }),
+      ];
+      for (const report of reports) {
+        expect(report.workspaceDir).toBeUndefined();
+        expect(report.plugins.map((plugin) => plugin.id)).toContain(global.pluginId);
+        expect(report.plugins.map((plugin) => plugin.id)).not.toContain(main.pluginId);
+        expect(report.plugins.map((plugin) => plugin.id)).not.toContain(gadget.pluginId);
+        expect(report.diagnostics).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            code: "workspace-scope-omitted",
+          }),
+        );
+      }
+    }
+  });
+
+  it("self-heals a shared-only registry after a system owner is configured", async () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const mainWorkspace = path.join(tempRoot, "main-workspace");
+    const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
+    const global = createGlobalPluginFixture(stateDir, "global-plugin");
+    const main = createWorkspacePluginFixture(mainWorkspace, "main-plugin");
+    const gadget = createWorkspacePluginFixture(gadgetWorkspace, "gadget-plugin");
+    const env = {
+      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const ownerlessConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          main: { workspace: mainWorkspace },
+          gadget: { workspace: gadgetWorkspace },
+        },
+      },
+      plugins: {
+        allow: [global.pluginId, main.pluginId, gadget.pluginId],
+        entries: {
+          [global.pluginId]: { enabled: true },
+          [main.pluginId]: { enabled: true },
+          [gadget.pluginId]: { enabled: true },
+        },
+      },
+    };
+
+    const partial = await refreshPluginRegistry({
+      config: ownerlessConfig,
+      env,
+      reason: "manual",
+      stateDir,
+    });
+    expect(partial.plugins.map((plugin) => plugin.pluginId)).toEqual([global.pluginId]);
+    expect(partial.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "workspace-scope-omitted" }),
+    );
+
+    const ownedConfig = {
+      ...ownerlessConfig,
+      agents: {
+        ...ownerlessConfig.agents,
+        defaults: { systemAgent: { agentId: "gadget" } },
+      },
+    };
+    const firstOwned = await refreshPluginRegistry({
+      config: ownedConfig,
+      env,
+      policyPluginIds: [global.pluginId],
+      reason: "policy-changed",
+      stateDir,
+    });
+    const secondOwned = await refreshPluginRegistry({
+      config: ownedConfig,
+      env,
+      policyPluginIds: [global.pluginId],
+      reason: "policy-changed",
+      stateDir,
+    });
+
+    for (const refreshed of [firstOwned, secondOwned]) {
+      expect(refreshed.plugins.map((plugin) => plugin.pluginId).toSorted()).toEqual(
+        [gadget.pluginId, global.pluginId].toSorted(),
+      );
+      expect(refreshed.diagnostics).not.toContainEqual(
+        expect.objectContaining({ code: "workspace-scope-omitted" }),
+      );
+    }
+
+    const mainOwnedConfig = {
+      ...ownerlessConfig,
+      agents: {
+        ...ownerlessConfig.agents,
+        defaults: { systemAgent: { agentId: "main" } },
+      },
+    };
+    const mainReport = buildPluginRegistrySnapshotReport({ config: mainOwnedConfig, env });
+    const explicitMainReport = buildPluginRegistrySnapshotReport({
+      config: ownedConfig,
+      env,
+      workspaceDir: mainWorkspace,
+    });
+    for (const report of [mainReport, explicitMainReport]) {
+      expect(report.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
+        [global.pluginId, main.pluginId].toSorted(),
+      );
+      expect(report.plugins.map((plugin) => plugin.id)).not.toContain(gadget.pluginId);
+    }
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId).toSorted()).toEqual(
+      [gadget.pluginId, global.pluginId].toSorted(),
+    );
+  });
+
   it("does not project package-local dependency health onto bundled plugins", () => {
     const tempRoot = makeTempDir();
     const bundledRoot = path.join(tempRoot, "bundled");

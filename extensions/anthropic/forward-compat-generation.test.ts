@@ -40,11 +40,31 @@ describe("unreleased Claude generations", () => {
     expect(resolveModel("claude-opus-4-8")?.params?.canonicalModelId).toBeUndefined();
   });
 
-  it("leaves pre-4.6 and snapshot-dated ids alone", () => {
+  it("does not mistake snapshot dates for minor versions", () => {
     // claude-opus-4-20250514 is 4.0; a naive parse reads 4.20 and would treat it
     // as newer than every released generation.
     expect(resolveModel("claude-opus-4-20250514")?.params?.canonicalModelId).toBeUndefined();
     expect(supportsClaudeAdaptiveThinking({ id: "claude-haiku-4-5-20251001" })).toBe(false);
+  });
+
+  it("clones released snapshot ids from their dateless manifest template", () => {
+    expect(resolveModel("claude-haiku-4-5-20251001")).toEqual({
+      id: "claude-haiku-4-5-20251001",
+      name: "claude-haiku-4-5-20251001",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+      },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+      compat: { codeMode: "preferred" },
+    });
+    expect(resolveModel("claude-haiku-4-9-20251001")).toBeUndefined();
   });
 
   it("carries manifest catalog compat onto hand-built modern rows", () => {

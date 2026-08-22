@@ -2,6 +2,7 @@ import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { PackageUpdateStepAdvisory } from "./package-update-steps.js";
 import type { UpdateChannel } from "./update-channels.js";
+import type { DevUpdateTarget } from "./update-dev-target.js";
 import type { GlobalInstallManager } from "./update-global.js";
 
 export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
@@ -26,7 +27,7 @@ export type UpdateRunResult = {
   root?: string;
   reason?: string;
   before?: { sha?: string | null; version?: string | null };
-  after?: { sha?: string | null; version?: string | null };
+  after?: { sha?: string | null; version?: string | null; upstreamRef?: string };
   steps: UpdateStepResult[];
   durationMs: number;
   recovery?:
@@ -128,7 +129,7 @@ export type UpdateRunnerOptions = {
   argv1?: string;
   tag?: string;
   channel?: UpdateChannel;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;

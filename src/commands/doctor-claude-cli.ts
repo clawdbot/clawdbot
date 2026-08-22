@@ -11,7 +11,7 @@ import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+} from "../agents/agent-scope-config.js";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";

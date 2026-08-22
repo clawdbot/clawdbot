@@ -250,7 +250,7 @@ describe("skill archive install", () => {
     expect(payload?.request?.mode).toBe("install");
   });
 
-  it("runs the pre-replace guard after the install sink has staged the replacement", async () => {
+  it("restores a skill when backup validation blocks replacement", async () => {
     const root = await tempDirs.make("openclaw-skill-archive-install-");
     const workspaceDir = path.join(root, "workspace");
     const extractedRoot = path.join(root, "extracted");
@@ -268,11 +268,11 @@ describe("skill archive install", () => {
       extractedRoot,
       mode: "update",
       rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
-      onBeforeReplace: async () => {
+      onAfterBackup: async (backupDir) => {
         stageDirsAtGuard = (await fs.readdir(skillsDir)).filter((entry) =>
           entry.startsWith(".openclaw-install-stage-"),
         );
-        await fs.writeFile(path.join(targetDir, "notes.md"), "edited while staging", "utf8");
+        await fs.writeFile(path.join(backupDir, "notes.md"), "edited before backup", "utf8");
         return 'Skill "staged-update" has local file changes.';
       },
     });
@@ -284,12 +284,14 @@ describe("skill archive install", () => {
     });
     expect(stageDirsAtGuard).toHaveLength(1);
     await expect(fs.readFile(path.join(targetDir, "notes.md"), "utf8")).resolves.toBe(
-      "edited while staging",
+      "edited before backup",
     );
     await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain(
       "Installed Skill",
     );
-    await expect(fs.readdir(skillsDir)).resolves.toEqual(["staged-update"]);
+    await expect(
+      fs.readdir(path.join(skillsDir, ".openclaw-install-backups")),
+    ).resolves.toHaveLength(0);
   });
 
   it.each([

@@ -6,7 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type { ExecApprovalDecision, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
@@ -47,6 +47,10 @@ type ApprovalLookup = {
   getSnapshot: (recordId: string) => ExecApprovalRecord | null;
   consumeAllowOnce?: (recordId: string) => boolean;
   consumeAskFallback?: (recordId: string) => boolean;
+  projectDecisionIfActive?: (
+    recordId: string,
+    decision: ExecApprovalDecision | null,
+  ) => ExecApprovalDecision | null;
 };
 
 type ApprovalClient = {
@@ -248,7 +252,11 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   execApprovalManager?: ApprovalLookup;
   nowMs?: number;
 }):
-  | { ok: true; params: unknown }
+  | {
+      ok: true;
+      params: unknown;
+      approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
+    }
   | { ok: false; message: string; details?: Record<string, unknown> } {
   const obj = asNullableRecord(opts.rawParams);
   if (!obj) {
@@ -456,6 +464,16 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }
 
+  const decision = manager.projectDecisionIfActive
+    ? manager.projectDecisionIfActive(runId, snapshot.decision ?? null)
+    : (snapshot.decision ?? null);
+  if (
+    (snapshot.decision === "allow-once" || snapshot.decision === "allow-always") &&
+    decision !== snapshot.decision
+  ) {
+    return systemRunApprovalRequired(runId);
+  }
+
   // Normal path: enforce the decision and provenance recorded by the Gateway.
   if (snapshot.decision === "allow-once") {
     if (approvalSource !== null) {
@@ -481,11 +499,19 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
       // Source is derived only from the consumed server-side record. Never
       // forward caller-supplied explicit flags as auto-review authority.
       next.approvalSource = "auto-review";
-      return { ok: true, params: next };
+      return {
+        ok: true,
+        params: next,
+        approvalAuthority: { recordId: runId, decision: "allow-once" },
+      };
     }
     next.approved = true;
     next.approvalDecision = "allow-once";
-    return { ok: true, params: next };
+    return {
+      ok: true,
+      params: next,
+      approvalAuthority: { recordId: runId, decision: "allow-once" },
+    };
   }
 
   if (snapshot.decision === "allow-always") {
@@ -498,7 +524,11 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     }
     next.approved = true;
     next.approvalDecision = "allow-always";
-    return { ok: true, params: next };
+    return {
+      ok: true,
+      params: next,
+      approvalAuthority: { recordId: runId, decision: "allow-always" },
+    };
   }
 
   // If the approval request timed out (decision=null), allow askFallback-driven
@@ -521,7 +551,11 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
       return systemRunApprovalRequired(runId);
     }
     next.approvalSource = "ask-fallback";
-    return { ok: true, params: next };
+    return {
+      ok: true,
+      params: next,
+      approvalAuthority: { recordId: runId, decision: "allow-once" },
+    };
   }
 
   return systemRunApprovalRequired(runId);

@@ -20,13 +20,6 @@ export type RuntimeMessageListener = (
   sendResponse: (response: unknown) => void,
 ) => boolean;
 
-export type PageCaptureResult = {
-  content: string;
-  selection: string;
-  title: string;
-  url: string;
-};
-
 let configuredSockets: FakeWebSocket[] = [];
 let configuredDeferredClose = false;
 let configuredProtocol: string | undefined;

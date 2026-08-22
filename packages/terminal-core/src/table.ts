@@ -3,6 +3,7 @@
 import { splitAnsiSegments } from "./ansi-sequences.js";
 import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { displayString } from "./display-string.js";
+import { sanitizeTerminalText } from "./safe-text.js";
 
 type Align = "left" | "right" | "center";
 
@@ -54,8 +55,9 @@ function padCell(text: string, width: number, align: Align): string {
   // A single grapheme wider than the cell (e.g. a width-2 CJK/emoji glyph in a
   // width-1 column) survives wrapLine intact, so clamp here to keep every cell
   // exactly `width` columns and preserve the border-alignment invariant.
-  const content = visibleWidth(text) > width ? truncateToVisibleWidth(text, width) : text;
-  const w = visibleWidth(content);
+  const textWidth = visibleWidth(text);
+  const content = textWidth > width ? truncateToVisibleWidth(text, width) : text;
+  const w = content === text ? textWidth : visibleWidth(content);
   if (w >= width) {
     return content;
   }
@@ -365,6 +367,11 @@ function wrapLine(text: string, width: number): string[] {
   if (width <= 0) {
     return [text];
   }
+  // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
+  // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
+  if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {
+    return [text];
+  }
 
   // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
   // Table cells are padded and bordered per physical line, so wrapped lines
@@ -538,6 +545,22 @@ export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): numbe
   return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
 }
 
+/** Render untrusted single-line values without changing renderTable's trusted ANSI contract. */
+export function renderTerminalSafeTable(opts: RenderTableOptions): string {
+  return renderTable({
+    ...opts,
+    columns: opts.columns.map((column) => ({
+      ...column,
+      header: sanitizeTerminalText(column.header),
+    })),
+    rows: opts.rows.map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, sanitizeTerminalText(value)]),
+      ),
+    ),
+  });
+}
+
 export function renderTable(opts: RenderTableOptions): string {
   const rows = opts.rows.map((row) => {
     const next: Record<string, string> = {};
@@ -584,45 +607,37 @@ export function renderTable(opts: RenderTableOptions): string {
   if (maxWidth && total > maxWidth) {
     let over = total - maxWidth;
 
-    const flexOrder = columns
-      .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
-      .filter(({ i }) => Boolean(columns[i]?.flex))
-      .toSorted((a, b) => b.w - a.w)
-      .map((x) => x.i);
+    const flexColumns = columns.flatMap((column, i) => (column.flex ? [i] : []));
+    const nonFlexColumns = columns.flatMap((column, i) => (column.flex ? [] : [i]));
 
-    const nonFlexOrder = columns
-      .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
-      .filter(({ i }) => !columns[i]?.flex)
-      .toSorted((a, b) => b.w - a.w)
-      .map((x) => x.i);
-
-    const shrink = (order: number[], minWidths: number[]) => {
+    const shrink = (indices: number[], minWidths: number[]) => {
       while (over > 0) {
-        let progressed = false;
-        for (const i of order) {
+        let widest: number | undefined;
+        for (const i of indices) {
           if ((widths[i] ?? 0) <= (minWidths[i] ?? 0)) {
             continue;
           }
-          widths[i] = (widths[i] ?? 0) - 1;
-          over -= 1;
-          progressed = true;
-          if (over <= 0) {
-            break;
+          // Water-fill from the widest eligible column. Strict comparison makes
+          // equal-width ties deterministic: the leftmost column shrinks first.
+          if (widest === undefined || (widths[i] ?? 0) > (widths[widest] ?? 0)) {
+            widest = i;
           }
         }
-        if (!progressed) {
+        if (widest === undefined) {
           break;
         }
+        widths[widest] = (widths[widest] ?? 0) - 1;
+        over -= 1;
       }
     };
 
     // Prefer shrinking flex columns; only shrink non-flex if necessary.
     // If required to fit, allow flex columns to shrink below user minWidth
     // down to their absolute minimum (header + padding).
-    shrink(flexOrder, preferredMinWidths);
-    shrink(flexOrder, absoluteMinWidths);
-    shrink(nonFlexOrder, preferredMinWidths);
-    shrink(nonFlexOrder, absoluteMinWidths);
+    shrink(flexColumns, preferredMinWidths);
+    shrink(flexColumns, absoluteMinWidths);
+    shrink(nonFlexColumns, preferredMinWidths);
+    shrink(nonFlexColumns, absoluteMinWidths);
   }
 
   // If we have room and any flex columns, expand them to fill the available width.

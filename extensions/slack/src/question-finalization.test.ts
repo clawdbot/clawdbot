@@ -97,14 +97,22 @@ describe("Slack question finalization", () => {
     ]);
     await slackOutbound.afterDeliverPayload?.({
       cfg: {},
-      target: { channel: "slack", to: "C123", accountId: "default" },
+      target: {
+        channel: "slack",
+        to: "team:T123:channel:C123",
+        accountId: "default",
+      },
       payload: renderedAfterTransport!,
       results: [
-        { channel: "slack", messageId: "44", channelId: "C123" },
+        {
+          channel: "slack",
+          messageId: "44",
+          target: { kind: "channel", id: "C123" },
+        },
         {
           channel: "slack",
           messageId: "55",
-          channelId: "C123",
+          target: { kind: "channel", id: "C123" },
           meta: {
             slackQuestionActionIds: ["openclaw:question_button:1:1"],
             [SLACK_QUESTION_FINALIZATION_BLOCKS]: [],
@@ -117,6 +125,7 @@ describe("Slack question finalization", () => {
     expect(hoisted.update).toHaveBeenCalledWith(
       expect.objectContaining({
         channelId: "C123",
+        teamId: "T123",
         messageTs: "55",
         text: expect.stringContaining("Answered: &lt;!channel&gt;"),
         blocks: expect.arrayContaining([
@@ -164,19 +173,31 @@ describe("Slack question finalization", () => {
       target: { channel: "slack", to: "C123", accountId: "default" },
       payload: jsonRoundTrip(rendered)!,
       results: [
-        { channel: "slack", messageId: "upload", channelId: "C123" },
-        { channel: "slack", messageId: "preface-1", channelId: "C123" },
-        { channel: "slack", messageId: "preface-2", channelId: "C123" },
+        {
+          channel: "slack",
+          messageId: "upload",
+          target: { kind: "channel", id: "C123" },
+        },
+        {
+          channel: "slack",
+          messageId: "preface-1",
+          target: { kind: "channel", id: "C123" },
+        },
+        {
+          channel: "slack",
+          messageId: "preface-2",
+          target: { kind: "channel", id: "C123" },
+        },
         {
           channel: "slack",
           messageId: "another-question",
-          channelId: "C123",
+          target: { kind: "channel", id: "C123" },
           meta: { slackQuestionActionIds: ["openclaw:question_button:9:1"] },
         },
         {
           channel: "slack",
           messageId: "actual-question",
-          channelId: "C123",
+          target: { kind: "channel", id: "C123" },
           meta: {
             slackQuestionActionIds: [questionActionId],
             [SLACK_QUESTION_FINALIZATION_BLOCKS]: [],

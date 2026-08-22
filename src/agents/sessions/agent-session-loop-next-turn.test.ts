@@ -7,7 +7,9 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt.queue-message.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import type { AgentTool } from "../runtime/index.js";
 import {
   createAssistant,
@@ -111,23 +113,190 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   it.each([
     {
       kind: "steering",
-      queue: (session: AgentSession) => session.steer("keep queued steering"),
-      messages: (session: AgentSession) => session.getSteeringMessages(),
-      expected: "keep queued steering",
+      queue: (session: AgentSession, image: { type: "image"; data: string; mimeType: string }) =>
+        session.steer("", [image]),
+      initialQueue: { steering: [""], followUp: [] },
     },
     {
       kind: "follow-up",
-      queue: (session: AgentSession) => session.followUp("keep queued follow-up"),
-      messages: (session: AgentSession) => session.getFollowUpMessages(),
-      expected: "keep queued follow-up",
+      queue: (session: AgentSession, image: { type: "image"; data: string; mimeType: string }) =>
+        session.followUp("", [image]),
+      initialQueue: { steering: [], followUp: [""] },
     },
-  ])("keeps queued $kind dormant after its active run is aborted", async (scenario) => {
+  ])("retires an image-only $kind before terminal finalization", async (scenario) => {
+    const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+    const requests: Context[] = [];
+    let finishInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        finishInitialResponse = () => {
+          const message = createAssistant(activeModel, [{ type: "text", text: "first answer" }]);
+          stream.push({ type: "done", reason: "stop", message });
+          stream.end();
+        };
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "image answer" }]),
+      );
+    });
+    const { session, sessionManager } = await createTestSession();
+    const queueEvents: Array<{
+      type: "queue_update" | "image_message_start";
+      steering: readonly string[];
+      followUp: readonly string[];
+    }> = [];
+    session.subscribe((event) => {
+      if (event.type === "queue_update") {
+        queueEvents.push({
+          type: "queue_update",
+          steering: event.steering,
+          followUp: event.followUp,
+        });
+      } else if (
+        event.type === "message_start" &&
+        event.message.role === "user" &&
+        Array.isArray(event.message.content) &&
+        event.message.content.some((part) => part.type === "image")
+      ) {
+        queueEvents.push({
+          type: "image_message_start",
+          steering: [...session.getSteeringMessages()],
+          followUp: [...session.getFollowUpMessages()],
+        });
+      }
+    });
+    const initialPrompt = session.prompt("describe the next image");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+
+    await scenario.queue(session, image);
+    expect(session.pendingMessageCount).toBe(1);
+    finishInitialResponse?.();
+    await initialPrompt;
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages).toContainEqual(
+      expect.objectContaining({ role: "user", content: [{ type: "text", text: "" }, image] }),
+    );
+    expect(sessionManager.getEntries()).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "" }, image],
+        }),
+      }),
+    );
+    expect(session.pendingMessageCount).toBe(0);
+    expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.getFollowUpMessages()).toEqual([]);
+    expect(queueEvents).toEqual([
+      { type: "queue_update", ...scenario.initialQueue },
+      { type: "queue_update", steering: [], followUp: [] },
+      { type: "image_message_start", steering: [], followUp: [] },
+    ]);
+  });
+
+  it("retires duplicate text by exact occurrence and owning queue once", async () => {
+    const { session } = await createTestSession();
+    await session.steer("same queued text");
+    await session.steer("same queued text");
+    await session.followUp("same queued text");
+    type QueuedMessage = Parameters<AgentSession["agent"]["steer"]>[0];
+    const queues = session.agent as unknown as Record<
+      "steeringQueue" | "followUpQueue",
+      { messages: QueuedMessage[] }
+    >;
+    const [firstSteer, secondSteer] = queues.steeringQueue.messages;
+    const [followUp] = queues.followUpQueue.messages;
+    if (!firstSteer || !secondSteer || !followUp) {
+      throw new Error("expected duplicate queued messages");
+    }
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start";
+      message: QueuedMessage;
+    }) => Promise<void>;
+
+    await handleAgentEvent({ type: "message_start", message: secondSteer });
+    await handleAgentEvent({ type: "message_start", message: secondSteer });
+    expect(session.getSteeringMessages()).toEqual(["same queued text"]);
+    expect(session.getFollowUpMessages()).toEqual(["same queued text"]);
+    expect(session.pendingMessageCount).toBe(2);
+
+    await handleAgentEvent({ type: "message_start", message: followUp });
+    expect(session.getSteeringMessages()).toEqual(["same queued text"]);
+    expect(session.getFollowUpMessages()).toEqual([]);
+    expect(session.pendingMessageCount).toBe(1);
+
+    await handleAgentEvent({ type: "message_start", message: firstSteer });
+    expect(session.pendingMessageCount).toBe(0);
+  });
+
+  it("keeps decorated queue ownership process-local and byte-invisible", async () => {
+    const { session } = await createTestSession();
+    const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "visible transcript prompt" },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    await session.steer(
+      "runtime prompt",
+      [image],
+      recorder,
+      [{ path: "/tmp/image.png", contentType: "image/png" }],
+      undefined,
+      "decorated-message",
+    );
+    type QueuedMessage = Parameters<AgentSession["agent"]["steer"]>[0];
+    const [message] = (session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } })
+      .steeringQueue.messages;
+    if (!message) {
+      throw new Error("expected decorated queued message");
+    }
+    const serialized = JSON.stringify(message);
+    const restored = JSON.parse(serialized) as QueuedMessage;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start";
+      message: QueuedMessage;
+    }) => Promise<void>;
+
+    await handleAgentEvent({ type: "message_start", message: restored });
+    expect(session.getSteeringMessages()).toEqual(["runtime prompt"]);
+    expect(JSON.stringify(message)).toBe(serialized);
+
+    await handleAgentEvent({ type: "message_start", message });
+    await handleAgentEvent({ type: "message_start", message });
+
+    expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.pendingMessageCount).toBe(0);
+  });
+
+  it.each([
+    {
+      kind: "steering",
+      queue: (session: AgentSession, image: { type: "image"; data: string; mimeType: string }) =>
+        session.steer("", [image]),
+      messages: (session: AgentSession) => session.getSteeringMessages(),
+    },
+    {
+      kind: "follow-up",
+      queue: (session: AgentSession, image: { type: "image"; data: string; mimeType: string }) =>
+        session.followUp("", [image]),
+      messages: (session: AgentSession) => session.getFollowUpMessages(),
+    },
+  ])("keeps queued image-only $kind dormant after its active run is aborted", async (scenario) => {
     const { executeTool, requests, tool } = mockAbortableQueuedRun();
     const { session } = await createTestSession({ customTools: [tool] });
     const prompt = session.prompt("wait for operator cancellation");
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
-    await scenario.queue(session);
+    await scenario.queue(session, {
+      type: "image",
+      data: "aW1hZ2U=",
+      mimeType: "image/png",
+    });
     expect(session.agent.hasQueuedMessages()).toBe(true);
 
     await Promise.all([session.abort(), prompt]);
@@ -136,7 +305,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(requests[0]?.signal?.aborted).toBe(true);
     expect(executeTool).not.toHaveBeenCalled();
     expect(session.agent.hasQueuedMessages()).toBe(true);
-    expect(scenario.messages(session)).toEqual([scenario.expected]);
+    expect(scenario.messages(session)).toEqual([""]);
   });
 
   it("cancels only an uncommitted steering confirmation after an aborted turn", async () => {

@@ -390,7 +390,10 @@ public struct OpenClawChatWindowShell: View {
                 Task { await self.viewModel.forkSession(key: self.activeSessionKey) }
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(String(localized: "Fork")),
+                    LocalizedStringKey(
+                        self.activeSessionEntry?.hasActiveRun == true
+                            ? String(localized: "Fork from last completed message")
+                            : String(localized: "Fork")),
                     systemImage: "arrow.triangle.branch")
             }
 
@@ -418,15 +421,17 @@ public struct OpenClawChatWindowShell: View {
                     systemImage: self.activeSessionEntry?.unread == true ? "envelope.open" : "envelope.badge")
             }
 
-            if self.activeSessionEntry?.isArchived == true || self.activeSessionEntry.map({
+            if self.activeSessionEntry.map({
                 ChatSessionSidebarModel.canArchiveSession(
                     $0,
                     mainSessionKey: self.viewModel.resolvedMainSessionKey)
             }) == true {
                 Button {
-                    self.viewModel.setSessionArchived(
-                        key: self.activeSessionKey,
-                        archived: self.activeSessionEntry?.isArchived != true)
+                    if let activeSessionEntry = self.activeSessionEntry {
+                        self.viewModel.setSessionArchived(
+                            activeSessionEntry,
+                            archived: !activeSessionEntry.isArchived)
+                    }
                 } label: {
                     chatWindowActionLabel(
                         LocalizedStringKey(self.activeSessionEntry?.isArchived == true

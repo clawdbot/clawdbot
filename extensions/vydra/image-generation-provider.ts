@@ -1,21 +1,7 @@
 // Vydra provider module implements model/runtime integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
-import {
-  DEFAULT_VYDRA_IMAGE_MODEL,
-  downloadVydraAsset,
-  extractVydraResultUrls,
-  resolveCompletedVydraPayload,
-  resolveVydraResponseJobId,
-  resolveVydraResponseStatus,
-  resolveVydraRequestContext,
-} from "./shared.js";
+import { DEFAULT_VYDRA_IMAGE_MODEL, runVydraGeneration } from "./shared.js";
 
 export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
   return {
@@ -50,72 +36,29 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("Vydra image generation supports at most one image per request.");
       }
 
-      const { fetchFn, baseUrl, requestPolicy } = await resolveVydraRequestContext({
+      const model = req.model?.trim() || DEFAULT_VYDRA_IMAGE_MODEL;
+      const generated = await runVydraGeneration({
         cfg: req.cfg,
         agentDir: req.agentDir,
         authStore: req.authStore,
-        capability: "image",
-        ssrfPolicy: req.ssrfPolicy,
-      });
-
-      const model = req.model?.trim() || DEFAULT_VYDRA_IMAGE_MODEL;
-      const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/models/${model}`,
-        headers: requestPolicy.headers,
+        kind: "image",
+        model,
         body: {
           prompt: req.prompt,
           model: "text-to-image",
         },
         timeoutMs: req.timeoutMs,
-        fetchFn,
-        allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
-        ssrfPolicy: requestPolicy.ssrfPolicy,
-        dispatcherPolicy: requestPolicy.dispatcherPolicy,
+        ssrfPolicy: req.ssrfPolicy,
       });
-
-      try {
-        await assertOkOrThrowHttpError(response, "Vydra image generation failed");
-        const submitted = await readProviderJsonResponse(response, "vydra.image-generation");
-        const completedPayload = await resolveCompletedVydraPayload({
-          submitted,
-          baseUrl,
-          timeoutMs: req.timeoutMs,
-          fetchFn,
-          kind: "image",
-          missingJobIdMessage: "Vydra image generation response missing job id",
-          requestPolicy,
-        });
-        const imageUrl = extractVydraResultUrls(completedPayload, "image")[0];
-        if (!imageUrl) {
-          throw new Error("Vydra image generation completed without an image URL");
-        }
-        const image = await downloadVydraAsset({
-          url: imageUrl,
-          kind: "image",
-          timeoutMs: req.timeoutMs,
-          fetchFn,
-          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-          requestPolicy,
-        });
-        return {
-          images: [
-            {
-              buffer: image.buffer,
-              mimeType: image.mimeType,
-              fileName: image.fileName,
-            },
-          ],
-          model,
-          metadata: {
-            jobId:
-              resolveVydraResponseJobId(completedPayload) ?? resolveVydraResponseJobId(submitted),
-            imageUrl,
-            status: resolveVydraResponseStatus(completedPayload) ?? "completed",
-          },
-        };
-      } finally {
-        await release();
-      }
+      return {
+        images: [generated.asset],
+        model,
+        metadata: {
+          jobId: generated.jobId,
+          imageUrl: generated.resultUrl,
+          status: generated.status,
+        },
+      };
     },
   };
 }

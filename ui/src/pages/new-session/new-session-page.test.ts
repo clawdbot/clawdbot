@@ -1,56 +1,104 @@
-import { render, type TemplateResult } from "lit";
-import { describe, expect, it } from "vitest";
-import type { PendingCloudRecoveryState, SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
-import type { CloudRecoveryRetirement } from "./cloud-submit.ts";
-import "./new-session-page.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { t } from "../../i18n/index.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import "./new-session-page-entry.ts";
 
-type TestNewSessionPage = {
-  pendingCloud: PendingCloudRecoveryState;
-  renderDraftBlock(): TemplateResult;
-  submissionOutcomeUnknown: SubmissionOutcomeReason | null;
-  clearPendingCloudRecoveryFor(
-    gatewayUrl: string,
-    recoveryScope: string,
-    sessionKey: string,
-    retirement: CloudRecoveryRetirement,
-  ): void;
-  showCloudDraftOwnershipLost(): void;
+type NewSessionElement = HTMLElement & {
+  data: NewSessionRouteData | undefined;
+  updateComplete: Promise<boolean>;
 };
 
-describe("new session page outcomes", () => {
-  it("renders the ownership-lost cloud outcome", () => {
-    const page = document.createElement(
-      "openclaw-new-session-page",
-    ) as unknown as TestNewSessionPage;
-    const host = document.createElement("div");
+function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
+  return {
+    agentId,
+    requestedAgentId: agentId,
+    catalogId,
+    model: "",
+    catalogLabel: "",
+    startTerminal: false,
+  };
+}
 
-    page.showCloudDraftOwnershipLost();
-    render(page.renderDraftBlock(), host);
+async function mount(data: NewSessionRouteData): Promise<NewSessionElement> {
+  const page = document.createElement("openclaw-new-session-page") as NewSessionElement;
+  page.data = data;
+  document.body.append(page);
+  await settle(page);
+  return page;
+}
 
-    expect(host.querySelector(".new-session-page__error")?.textContent).toContain(
-      "Another window took over this cloud session. Check recent sessions before starting this task again.",
-    );
+async function settle(page: NewSessionElement) {
+  await page.updateComplete;
+  await page.updateComplete;
+}
+
+async function enterMessage(page: NewSessionElement, value: string) {
+  const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+  expect(textarea).not.toBeNull();
+  if (!textarea) {
+    return;
+  }
+  textarea.value = value;
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+  await settle(page);
+}
+
+function message(page: NewSessionElement): string {
+  return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
+}
+
+afterEach(() => {
+  document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  sessionStorage.clear();
+  window.history.replaceState({}, "", "/");
+});
+
+describe("new session draft route ownership", () => {
+  it("labels the message input independently of its placeholder", async () => {
+    const page = await mount(routeData("research"));
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+
+    expect(textarea?.getAttribute("aria-label")).toBe(t("newSession.messagePlaceholder"));
   });
 
-  it("preserves an interrupted outcome when retiring accepted delivery", () => {
-    const page = document.createElement(
-      "openclaw-new-session-page",
-    ) as unknown as TestNewSessionPage;
-    const host = document.createElement("div");
-    const gatewayUrl = "ws://gateway.example";
-    const recoveryScope = "principal-a";
-    const sessionKey = "agent:cloud:interrupted";
-    page.pendingCloud.gatewayUrl = gatewayUrl;
-    page.pendingCloud.recoveryScope = recoveryScope;
-    page.pendingCloud.sessionKey = sessionKey;
-    page.submissionOutcomeUnknown = "cloud-interrupted";
+  it("clears source draft state when destination data is still pending", async () => {
+    const page = await mount(routeData("research"));
+    window.history.replaceState({}, "", "/new?agent=research");
+    await enterMessage(page, "source draft");
 
-    page.clearPendingCloudRecoveryFor(gatewayUrl, recoveryScope, sessionKey, "interrupted");
-    render(page.renderDraftBlock(), host);
+    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
+    page.data = undefined;
+    await settle(page);
 
-    expect(page.pendingCloud.sessionKey).toBe("");
-    expect(host.querySelector(".new-session-page__error")?.textContent).toContain(
-      "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
-    );
+    expect(message(page)).toBe("");
+  });
+
+  it("keeps destination input through pending data, settlement, and agent resolution", async () => {
+    const page = await mount(routeData("research"));
+
+    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
+    page.data = undefined;
+    await settle(page);
+    await enterMessage(page, "keep this fast draft");
+
+    page.data = { ...routeData("", "claude"), requestedAgentId: "research" };
+    await settle(page);
+    expect(message(page)).toBe("keep this fast draft");
+
+    page.data = routeData("research", "claude");
+    await settle(page);
+    expect(message(page)).toBe("keep this fast draft");
+  });
+
+  it("clears a draft when a different route settles without destination-owned input", async () => {
+    const page = await mount(routeData("research", "claude"));
+    window.history.replaceState({}, "", "/new?agent=research&catalog=claude");
+    await enterMessage(page, "route-owned draft");
+
+    window.history.replaceState({}, "", "/new?agent=main&catalog=codex");
+    page.data = undefined;
+    await settle(page);
+
+    expect(message(page)).toBe("");
   });
 });

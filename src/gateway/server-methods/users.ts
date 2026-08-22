@@ -1,15 +1,19 @@
 // Gateway methods for durable user profile administration.
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   formatValidationErrors,
   validateUsersLinkEmailParams,
   validateUsersListParams,
+  validateUsersPrefsGetParams,
+  validateUsersPrefsSetParams,
   validateUsersSelfParams,
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -22,6 +26,10 @@ import {
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function refreshConnectedProfile(
@@ -67,6 +75,9 @@ function resolveAuthenticatedProfileId(
 ): string | undefined {
   if (client?.authenticatedUserProfile?.profileId) {
     return resolveUserProfileId(client.authenticatedUserProfile.profileId);
+  }
+  if (client?.authenticatedGitHubIdentitySync) {
+    return undefined;
   }
   const authenticatedUserId = client?.authenticatedUserId;
   if (!authenticatedUserId) {
@@ -120,7 +131,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     respond(true, { profiles: listProfiles() });
   },
-  "users.self": ({ client, params, respond }) => {
+  "users.self": async ({ client, params, respond }) => {
     if (!validateUsersSelfParams(params)) {
       respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
       return;
@@ -134,16 +145,112 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (client.authenticatedGitHubIdentitySync) {
+        try {
+          await client.authenticatedGitHubIdentitySync();
+        } catch {
+          // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+        }
+      }
       const profileId = resolveAuthenticatedProfileId(client);
       if (!profileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.prefs.get": ({ client, params, respond }) => {
+    if (!validateUsersPrefsGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.prefs.get", validateUsersPrefsGetParams.errors),
+      );
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      respond(
+        true,
+        { status: "ok", entries: getUserPreferences(canonicalProfileId, params.keys) },
+        undefined,
+      );
+    } catch (error) {
+      respond(false, undefined, profileError(error));
+    }
+  },
+  "users.prefs.set": ({ client, params, respond }) => {
+    if (!validateUsersPrefsSetParams(params)) {
+      respond(
+        false,
+        undefined,
+        invalidParams("users.prefs.set", validateUsersPrefsSetParams.errors),
+      );
+      return;
+    }
+    const profileId = client?.authenticatedUserProfile?.profileId ?? "";
+    if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      respond(true, { status: "no_durable_identity" }, undefined);
+      return;
+    }
+    try {
+      const canonicalProfileId = resolveUserProfileId(profileId);
+      if (!canonicalProfileId) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      const result = setUserPreferences(canonicalProfileId, params.entries);
+      if (!result.ok) {
+        if (result.error.code === "profile-key-limit") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+              {
+                details: {
+                  code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
+                  limit: result.error.limit,
+                  currentCount: result.error.currentCount,
+                },
+              },
+            ),
+          );
+          return;
+        }
+        const key = "key" in result.error ? ` for ${result.error.key}` : "";
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid users.prefs.set entry${key}: ${result.error.code}`,
+          ),
+        );
+        return;
+      }
+      respond(true, { status: "ok" }, undefined);
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

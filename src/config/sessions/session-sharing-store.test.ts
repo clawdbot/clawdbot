@@ -3,11 +3,11 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   addSessionMember,
@@ -21,10 +21,10 @@ afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("session sharing store", () => {
   it("keeps deterministic membership rows", async () => {
-    await withTempDir({ prefix: "openclaw-session-sharing-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-session-sharing-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId: "session-main",
         updatedAt: 1,
         visibility: "shared",
@@ -61,10 +61,10 @@ describe("session sharing store", () => {
   });
 
   it("does not recreate a missing canonical membership table", async () => {
-    await withTempDir({ prefix: "openclaw-session-sharing-missing-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-session-sharing-missing-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntry(scope, { sessionId: "session-main", updatedAt: 1 });
+      await upsertSessionEntryCore(scope, { sessionId: "session-main", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       database.db.exec("DROP TABLE session_members;");
 
@@ -78,10 +78,10 @@ describe("session sharing store", () => {
   });
 
   it("refuses member writes whose expected session instance no longer matches", async () => {
-    await withTempDir({ prefix: "openclaw-session-sharing-instance-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-session-sharing-instance-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 1 });
+      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 1 });
 
       // A write authorized against a now-replaced instance must not mutate the
       // live one under the same key.
@@ -110,10 +110,10 @@ describe("session sharing store", () => {
   });
 
   it("drops members when the session instance is replaced under the same key", async () => {
-    await withTempDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId: "session-a",
         updatedAt: 1,
         visibility: "read-only",
@@ -126,7 +126,7 @@ describe("session sharing store", () => {
       // Reusing the canonical key with a new sessionId is a fresh session; a
       // stale member must not inherit access, and the replacement must start
       // shared even if the recreated entry copied a restricted visibility.
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId: "session-b",
         updatedAt: 3,
         visibility: "read-only",
@@ -141,16 +141,16 @@ describe("session sharing store", () => {
       expect(
         addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 4 }).inserted,
       ).toBe(true);
-      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 5 });
+      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 5 });
       expect(isSessionMember(scope, "guest")).toBe(true);
     });
   });
 
   it("rejects stale member writes after entry-only deletion leaves a placeholder", async () => {
-    await withTempDir({ prefix: "openclaw-session-sharing-placeholder-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-session-sharing-placeholder-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       expect(
         addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
       ).toBe(true);
@@ -178,7 +178,7 @@ describe("session sharing store", () => {
         }),
       ).toThrow(/session changed/);
 
-      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 3 });
+      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 3 });
       expect(listSessionMembers(scope)).toEqual([]);
     });
   });

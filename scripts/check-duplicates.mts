@@ -1,10 +1,10 @@
-#!/usr/bin/env node
-// Runs duplicate-code detection with repo-specific excludes.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
-const jscpdBin = path.join(repoRoot, "node_modules", "jscpd", "bin", "jscpd");
+const jscpdBin = resolveRepoToolBinPath("jscpd", { cwd: repoRoot });
 
 const targets = [
   ".github/actions",
@@ -21,6 +21,7 @@ const targets = [
   "test",
   "skills",
   "config",
+  "node-version.mjs",
   "openclaw.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
@@ -65,8 +66,6 @@ const testIgnores = [
 const commonArgs = [
   "--format",
   "typescript,javascript",
-  "--gitignore",
-  "--noSymlinks",
   "--min-lines",
   "50",
   "--min-tokens",
@@ -173,11 +172,9 @@ if (coverageOnly) {
 }
 for (const scan of scans) {
   console.log(`\n[dup:check] ${scan.name}`);
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--max-old-space-size=8192",
-      jscpdBin,
+  const status = await runManagedCommand({
+    bin: jscpdBin,
+    args: [
       ...scan.targets,
       ...commonArgs,
       "--pattern",
@@ -186,17 +183,12 @@ for (const scan of scans) {
       scan.ignore.join(","),
       ...reportArgs(scan.name),
     ],
-    {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: "inherit",
-    },
-  );
-  if (result.status !== 0) {
-    failed = true;
-  }
-  if (result.error) {
-    console.error(result.error.message);
+    cwd: repoRoot,
+  }).catch((error: unknown) => {
+    console.error(error);
+    return 1;
+  });
+  if (status !== 0) {
     failed = true;
   }
 }

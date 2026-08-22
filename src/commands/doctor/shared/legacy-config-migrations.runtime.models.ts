@@ -100,9 +100,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
     apply: codex.migrateLegacyOpenAICodexProvider,
   }),
   defineLegacyConfigMigration({
-    id: "models.retired-model-refs",
-    describe: "Upgrade retired model refs to current catalog entries",
-    legacyRules: codex.RETIRED_MODEL_REF_RULES,
+    id: "models.canonical-model-refs",
+    describe: "Canonicalize retired and noncanonical model refs",
+    legacyRules: codex.MODEL_REF_CANONICALIZATION_RULES,
     apply: (raw, changes) => {
       const rewritten = refs.rewriteKnownModelRefs(raw, "config", changes);
       const rewrittenRecord = getRecord(rewritten.value);

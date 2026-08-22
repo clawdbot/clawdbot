@@ -6,13 +6,14 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
@@ -48,7 +49,9 @@ type SessionPatchArchiveTarget = {
 };
 
 function archiveChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`);
+  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
+    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+  });
 }
 
 function archiveUnavailableError(key: string, message: "active" | "stopping"): ErrorShape {
@@ -214,7 +217,7 @@ export async function prepareSessionPatchArchive(params: {
       sessionId: fresh.entry?.sessionId,
       sessionKey: freshCanonicalKey,
       agentId: freshResolved.agentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, freshCanonicalKey),
       lifecycleIdentities: target.lifecycleIdentities.filter((identity): identity is string =>
         Boolean(identity),
       ),

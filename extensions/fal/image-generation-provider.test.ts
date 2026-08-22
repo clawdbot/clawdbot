@@ -8,8 +8,12 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
-import { setFalFetchGuardForTesting } from "./test-support.js";
 
 const falApiKey = { apiKey: "fal-test-key", source: "env", mode: "api-key" } as const;
 
@@ -75,14 +79,14 @@ describe("fal image-generation provider", () => {
   }
 
   beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
     vi.clearAllMocks();
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue(falApiKey);
-    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     provider = buildFalImageGenerationProvider();
   });
 
   afterEach(() => {
-    setFalFetchGuardForTesting(null);
+    fetchWithSsrFGuardMock.mockReset();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

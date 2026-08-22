@@ -51,6 +51,24 @@ describe("memoryRuntime", () => {
     });
   });
 
+  it("forwards optional diagnostic source inspection", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await memoryRuntime.getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+  });
+
   it("keeps local-service acquisition scoped to each runtime instance", async () => {
     const cfg = {} as OpenClawConfig;
     const firstAcquire = vi.fn(async () => undefined);
@@ -76,34 +94,6 @@ describe("memoryRuntime", () => {
       cfg,
       agentId: "second",
       acquireLocalService: secondAcquire,
-    });
-  });
-
-  it("keeps SQLite lease coordination scoped to each runtime instance", async () => {
-    const cfg = {} as OpenClawConfig;
-    const firstLease = vi.fn();
-    const secondLease = vi.fn();
-
-    await Promise.all([
-      createMemoryRuntime({ withLease: firstLease }).getMemorySearchManager({
-        cfg,
-        agentId: "first",
-      }),
-      createMemoryRuntime({ withLease: secondLease }).getMemorySearchManager({
-        cfg,
-        agentId: "second",
-      }),
-    ]);
-
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "first",
-      withLease: firstLease,
-    });
-    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
-      cfg,
-      agentId: "second",
-      withLease: secondLease,
     });
   });
 

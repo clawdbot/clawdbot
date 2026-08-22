@@ -40,7 +40,7 @@ export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
   return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
 }
 
-function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: string[] = []) {
+export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: string[] = []) {
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
 

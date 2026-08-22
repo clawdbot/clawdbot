@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   installSessionPlacementAdmissionProvider,
   type LocalTurnPlacementClaim,
@@ -20,6 +21,7 @@ afterEach(() => {
 
 describe("local turn placement admission", () => {
   const turnParams = {
+    admittedRunContext: createTestAdmittedRunContext("run-1"),
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",

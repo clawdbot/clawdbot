@@ -15,7 +15,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolLoopCall = {
   toolName: string;
@@ -36,7 +36,7 @@ async function evaluateToolLoopCall(
   if (!ctx.sessionKey || ctx.loopDetection?.enabled !== true) {
     return undefined;
   }
-  const toolName = normalizeToolName(call.toolName || "tool");
+  const toolName = normalizeToolPolicyName(call.toolName || "tool");
   const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop } =
     await loadBeforeToolCallRuntime();
   const sessionState =
@@ -104,7 +104,7 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
   const { getDiagnosticSessionState, recordToolCall } = await loadBeforeToolCallRuntime();
   recordToolCall(
     getDiagnosticSessionState({ sessionKey: ctx.sessionKey, sessionId: ctx.sessionId }),
-    normalizeToolName(call.toolName || "tool"),
+    normalizeToolPolicyName(call.toolName || "tool"),
     call.params,
     call.toolCallId,
     ctx.loopDetection,
@@ -155,7 +155,7 @@ export async function admitToolCallBatch(
   const recordLoopVeto = (state: SessionState, call: InternalToolBatchCall) => {
     recordToolCall(
       state,
-      normalizeToolName(call.toolCall.name || "tool"),
+      normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
       ctx.loopDetection,
@@ -182,7 +182,7 @@ export async function admitToolCallBatch(
     }
   };
   for (const call of calls) {
-    const toolName = normalizeToolName(call.toolCall.name || "tool");
+    const toolName = normalizeToolPolicyName(call.toolCall.name || "tool");
     const intervention = await evaluateToolLoopCall(
       {
         toolName,
@@ -198,7 +198,7 @@ export async function admitToolCallBatch(
       // threshold. Unrelated skipped actions remain valid recovery choices.
       for (const rejectedCall of calls) {
         const rejectedActionKey = hashToolCall(
-          normalizeToolName(rejectedCall.toolCall.name || "tool"),
+          normalizeToolPolicyName(rejectedCall.toolCall.name || "tool"),
           rejectedCall.args,
         );
         if (rejectedActionKey === intervention.actionKey) {
@@ -216,7 +216,7 @@ export async function admitToolCallBatch(
   const admittedById = new Map(
     calls.map((call) => [
       call.toolCall.id,
-      { toolName: normalizeToolName(call.toolCall.name || "tool") },
+      { toolName: normalizeToolPolicyName(call.toolCall.name || "tool") },
     ]),
   );
   const committedIds = new Set<string>();

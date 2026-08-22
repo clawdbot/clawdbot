@@ -35,6 +35,15 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
     },
   ],
   [
+    "openclaw/plugin-sdk/runtime-doctor",
+    {
+      reason:
+        "the retired package path exists only for shipped plugin artifacts; " +
+        "current source must use openclaw/plugin-sdk/runtime-doctor-migrations",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
     "openclaw/plugin-sdk/ssrf-runtime",
     {
       reason:

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawTargetPackages } from "./application-provenance.js";
 import {
@@ -86,6 +87,21 @@ function comparablePlan(plan: ClawUpdatePlan): unknown {
   };
 }
 
+function unchangedPackagePaths(plan: ClawUpdatePlan, manifest: ClawManifest): Set<string> {
+  const unchangedIds = new Set(
+    plan.actions
+      .filter((action) => action.kind === "package" && action.action === "unchanged")
+      .map((action) => action.id),
+  );
+  const paths = new Set<string>();
+  manifest.packages.forEach((pkg, index) => {
+    if (unchangedIds.has(`${pkg.kind}:${pkg.ref}`)) {
+      paths.add(`$.packages[${index}]`);
+    }
+  });
+  return paths;
+}
+
 export async function applyClawUpdatePlan(
   plan: ClawUpdatePlan,
   params: {
@@ -99,6 +115,7 @@ export async function applyClawUpdatePlan(
     sourceMcpServers: Record<string, Record<string, unknown>>;
     consentPlanIntegrity: string | undefined;
     packagePreflight?: ClawAddPlanContext["packagePreflight"];
+    runtime?: RuntimeEnv;
     commitConfig?: ConfigCommit;
     rebuildPlan?: typeof buildClawUpdatePlan;
     buildAddPlan?: typeof buildClawAddPlan;
@@ -219,9 +236,13 @@ export async function applyClawUpdatePlan(
       },
     },
   });
+  const unchangedPaths = unchangedPackagePaths(fresh, params.targetManifest);
   if (
     targetAddPlan.blockers.some(
-      (blocker) => blocker.code !== "agent_id_collision" && blocker.code !== "workspace_collision",
+      (blocker) =>
+        blocker.code !== "agent_id_collision" &&
+        blocker.code !== "workspace_collision" &&
+        !(blocker.code === "skill_version_conflict" && unchangedPaths.has(blocker.path)),
     )
   ) {
     throw new ClawUpdateMutationError(
@@ -229,10 +250,24 @@ export async function applyClawUpdatePlan(
       "The target Claw cannot be safely materialized for update.",
     );
   }
+  for (const action of fresh.actions.filter(
+    (candidate) => candidate.kind === "package" && candidate.action === "unchanged",
+  )) {
+    const addAction = targetAddPlan.actions.find(
+      (candidate) => candidate.kind === "package" && candidate.id === action.id,
+    );
+    if (!addAction || addAction.details?.expectedState === "absent") {
+      throw new ClawUpdateMutationError(
+        "update_changed",
+        `Package ${JSON.stringify(action.id)} is no longer present; build a new dry-run plan.`,
+      );
+    }
+  }
   const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
   for (const action of fresh.actions.filter(
     (candidate) =>
       candidate.kind === "package" &&
+      candidate.action !== "unchanged" &&
       candidate.action !== "release" &&
       candidate.action !== "remove",
   )) {
@@ -270,7 +305,10 @@ export async function applyClawUpdatePlan(
       targetPackages.get(action.id)?.kind === "plugin",
   );
   const remainingPackageActions = fresh.actions.filter(
-    (action) => action.kind === "package" && !requirementActions.includes(action),
+    (action) =>
+      action.kind === "package" &&
+      action.action !== "unchanged" &&
+      !requirementActions.includes(action),
   );
   const applyPackageActions = async (
     actions: ClawUpdateAction[],
@@ -288,10 +326,7 @@ export async function applyClawUpdatePlan(
     if (error instanceof ClawPackageUpdateError && error.partial) {
       throw partialMutation(error.message);
     }
-    throw new ClawUpdateMutationError(
-      "package_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error));
   }
   const retainedRequirementMutation = requirementExecution.appliedIds.length > 0;
 
@@ -305,13 +340,10 @@ export async function applyClawUpdatePlan(
     }
     if (retainedRequirementMutation) {
       throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; successfully realized shared requirements were retained`,
+        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
       );
     }
-    throw new ClawUpdateMutationError(
-      "workspace_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawUpdateMutationError("workspace_update_failed", coerceErrorMessage(error));
   }
 
   const applyMcp = options.applyMcp ?? applyClawMcpUpdate;
@@ -324,7 +356,7 @@ export async function applyClawUpdatePlan(
       await workspaceExecution.rollback();
     } catch (rollbackError) {
       throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; workspace rollback failed: ${coerceErrorMessage(rollbackError)}`,
       );
     }
     if (partial) {
@@ -332,13 +364,10 @@ export async function applyClawUpdatePlan(
     }
     if (retainedRequirementMutation) {
       throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; successfully realized shared requirements were retained`,
+        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
       );
     }
-    throw new ClawUpdateMutationError(
-      "mcp_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawUpdateMutationError("mcp_update_failed", coerceErrorMessage(error));
   }
 
   let packageExecution: ClawPackageUpdateExecution;
@@ -349,34 +378,25 @@ export async function applyClawUpdatePlan(
     try {
       await mcpExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await workspaceExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     if (error instanceof ClawPackageUpdateError && error.partial) {
       rollbackFailures.unshift("package artifact rollback is unavailable");
     }
     if (rollbackFailures.length > 0) {
-      throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
-      );
+      throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
     }
     if (retainedRequirementMutation) {
       throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; successfully realized shared requirements were retained`,
+        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
       );
     }
-    throw new ClawUpdateMutationError(
-      "package_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error));
   }
 
   const agentAction = fresh.actions.find((action) => action.kind === "agent");
@@ -445,48 +465,35 @@ export async function applyClawUpdatePlan(
       try {
         await rollbackAgent();
       } catch (rollbackError) {
-        rollbackFailures.push(
-          `agent rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-        );
+        rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
       }
       try {
         await packageExecution.rollback();
       } catch (rollbackError) {
-        rollbackFailures.push(
-          `package rollback incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-        );
+        rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
       }
       try {
         await mcpExecution.rollback();
       } catch (rollbackError) {
-        rollbackFailures.push(
-          `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-        );
+        rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
       }
       try {
         await workspaceExecution.rollback();
       } catch (rollbackError) {
-        rollbackFailures.push(
-          `workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-        );
+        rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
       }
       if (rollbackFailures.length > 0) {
-        throw partialMutation(
-          `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
-        );
+        throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
       }
       if (retainedRequirementMutation) {
         throw partialMutation(
-          `${error instanceof Error ? error.message : String(error)}; successfully realized shared requirements were retained`,
+          `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
         );
       }
       if (error instanceof ClawUpdateMutationError) {
         throw error;
       }
-      throw new ClawUpdateMutationError(
-        "agent_update_failed",
-        error instanceof Error ? error.message : String(error),
-      );
+      throw new ClawUpdateMutationError("agent_update_failed", coerceErrorMessage(error));
     }
   }
 
@@ -505,7 +512,7 @@ export async function applyClawUpdatePlan(
         });
       } catch (persistError) {
         throw partialMutation(
-          `${error.message}; cron gateway mutation outcome is uncertain; provenance update failed: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+          `${error.message}; cron gateway mutation outcome is uncertain; provenance update failed: ${coerceErrorMessage(persistError)}`,
         );
       }
       throw partialMutation(`${error.message}; cron gateway mutation outcome is uncertain`);
@@ -514,45 +521,32 @@ export async function applyClawUpdatePlan(
     try {
       await rollbackAgent();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `agent rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await packageExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `package rollback incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await mcpExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await workspaceExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     if (rollbackFailures.length > 0) {
-      throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
-      );
+      throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
     }
     if (retainedRequirementMutation) {
       throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; successfully realized shared requirements were retained`,
+        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
       );
     }
-    throw new ClawUpdateMutationError(
-      "cron_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawUpdateMutationError("cron_update_failed", coerceErrorMessage(error));
   }
 
   let installRecord: PersistedClawInstall;
@@ -566,52 +560,37 @@ export async function applyClawUpdatePlan(
     try {
       await rollbackAgent();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `agent rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await packageExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `package rollback incomplete: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await cronExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `cron rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`cron rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await mcpExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `MCP rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     try {
       await workspaceExecution.rollback();
     } catch (rollbackError) {
-      rollbackFailures.push(
-        `workspace rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
-      );
+      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
     }
     if (rollbackFailures.length > 0) {
-      throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; ${rollbackFailures.join("; ")}`,
-      );
+      throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
     }
     if (retainedRequirementMutation) {
       throw partialMutation(
-        `${error instanceof Error ? error.message : String(error)}; successfully realized shared requirements were retained`,
+        `${coerceErrorMessage(error)}; successfully realized shared requirements were retained`,
       );
     }
-    throw new ClawUpdateMutationError(
-      "provenance_update_failed",
-      error instanceof Error ? error.message : String(error),
-    );
+    throw new ClawUpdateMutationError("provenance_update_failed", coerceErrorMessage(error));
   }
   return {
     schemaVersion: CLAW_UPDATE_RESULT_SCHEMA_VERSION,

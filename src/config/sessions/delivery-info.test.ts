@@ -47,7 +47,7 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, opts?: { agentId?: string }) =>
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 

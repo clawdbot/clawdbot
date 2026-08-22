@@ -14,6 +14,9 @@
       "openclaw/plugin-sdk/runtime-doctor-migrations": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor-migrations.d.ts"
       ],
+      "openclaw/plugin-sdk/runtime-doctor": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
+      ],
       "openclaw/plugin-sdk/approval-reference-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/approval-reference-runtime.d.ts"
       ],
@@ -59,6 +62,9 @@
       "openclaw/plugin-sdk/file-access-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/file-access-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/node-selection-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/node-selection-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/heartbeat-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/heartbeat-runtime.d.ts"
       ],
@@ -92,6 +98,9 @@
       "openclaw/plugin-sdk/media-generation-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/media-generation-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/meeting-page-script-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/meeting-page-script-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/conversation-binding-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/conversation-binding-runtime.d.ts"
       ],
@@ -121,6 +130,9 @@
       ],
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
+      ],
+      "openclaw/plugin-sdk/native-hook-relay-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/native-hook-relay-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/codex-session-transcript-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
@@ -251,6 +263,9 @@
       "openclaw/plugin-sdk/direct-dm-guard-policy": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/direct-dm-guard-policy.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-config-ui-hints": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-config-ui-hints.d.ts"
+      ],
       "openclaw/plugin-sdk/channel-config-writes": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-config-writes.d.ts"
       ],
@@ -343,9 +358,6 @@
       ],
       "openclaw/plugin-sdk/video-generation-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/video-generation-core": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/video-generation-core.d.ts"
       ],
       "openclaw/plugin-sdk/realtime-transcription": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/realtime-transcription.d.ts"
@@ -545,12 +557,6 @@
       "openclaw/plugin-sdk/browser-maintenance": [
         "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts"
       ],
-      "openclaw/plugin-sdk/channel-secret-runtime": [
-        "../../dist/plugin-sdk/channel-secret-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/channel-streaming": [
-        "../../dist/plugin-sdk/channel-streaming.d.ts"
-      ],
       "openclaw/plugin-sdk/error-runtime": [
         "../../dist/plugin-sdk/error-runtime.d.ts"
       ],
@@ -697,6 +703,9 @@
       ],
       "@openclaw/media-core": [
         "../../dist/plugin-sdk/packages/media-core/src/index.d.ts"
+      ],
+      "@openclaw/media-core/attachment-classify": [
+        "../../dist/plugin-sdk/packages/media-core/src/attachment-classify.d.ts"
       ],
       "@openclaw/media-core/base64": [
         "../../dist/plugin-sdk/packages/media-core/src/base64.d.ts"

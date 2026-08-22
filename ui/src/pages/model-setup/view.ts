@@ -9,6 +9,7 @@ import {
 } from "../../components/provider-icon.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
 import {
   failureLabel,
@@ -85,6 +86,7 @@ type ModelSetupViewProps = {
   canVerify: boolean;
   canPrepare: boolean;
   gatewayTooOld: boolean;
+  refreshWarning: string | null;
   actionsDisabled: boolean;
   manualProviderId: string;
   manualApiKey: string;
@@ -159,7 +161,9 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
                   <strong>${candidate.label}</strong>
                   <span class="model-setup__chip">${candidateStatus(candidate)}</span>
                 </div>
-                <div class="muted">${candidate.modelRef} · ${candidate.detail}</div>
+                <div class="muted">
+                  ${candidate.modelRef} · ${formatUiExternalText(candidate.detail)}
+                </div>
                 ${testing
                   ? html`<div class="model-setup__testing" role="status">
                       ${t("modelSetup.candidates.testing", { modelRef: candidate.modelRef })}
@@ -249,8 +253,10 @@ function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupD
               <div class="model-setup__provider-copy">
                 ${renderProviderIcon(props, candidate)}
                 <div>
-                  <div><strong>${candidate.label}</strong> — ${candidate.detail}</div>
-                  <div class="muted">${candidate.reason}</div>
+                  <div>
+                    <strong>${candidate.label}</strong> — ${formatUiExternalText(candidate.detail)}
+                  </div>
+                  <div class="muted">${formatUiExternalText(candidate.reason)}</div>
                 </div>
               </div>
               <div class="model-setup__row-actions">
@@ -546,6 +552,10 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
 }
 
 function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
+  const onContinue =
+    props.firstRun && result.setupComplete && props.activation.phase !== "success"
+      ? props.onOpenChat
+      : undefined;
   const current = result.configuredModel
     ? renderConfiguredModel({
         result,
@@ -553,6 +563,7 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
         canVerify: props.canVerify,
         actionsDisabled: props.actionsDisabled,
         onVerify: props.onVerify,
+        onContinue,
       })
     : nothing;
   if (!props.canAdmin) {
@@ -612,11 +623,15 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
             </button>`
           : nothing}
       </div>
+      ${props.refreshWarning
+        ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+        : nothing}
       ${body}
     </div>
     ${renderModelSetupWizard({
       mode: props.wizardMode,
       state: props.wizard,
+      refreshWarning: props.refreshWarning,
       value: props.wizardValue,
       onValueChange: props.onWizardValueChange,
       onAnswer: props.onWizardAnswer,

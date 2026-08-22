@@ -64,6 +64,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
       const chatType = normalizeChatType(params.ctx.ChatType);
       const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
       const runId = params.opts?.runId ?? `btw-${randomUUID()}`;
+      const authorityRunId = `btw-${randomUUID()}`;
       const currentChannelProvider = normalizeAnyChannelId(params.ctx.Provider);
       const capabilitySessionKey = params.ctx.RuntimePolicySessionKey ?? params.sessionKey;
       const messageActionTurnCapability =
@@ -74,11 +75,14 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
         currentChannelId
           ? mintMessageActionTurnCapability({
               agentId: sessionAgentId,
-              runId,
+              runId: authorityRunId,
               sessionKey: capabilitySessionKey,
               sessionId: targetSessionEntry.sessionId,
               requesterAccountId: params.ctx.AccountId,
               requesterSenderId: params.ctx.SenderId ?? params.command.senderId,
+              requesterSenderName: params.ctx.SenderName,
+              requesterSenderUsername: params.ctx.SenderUsername,
+              requesterSenderE164: params.ctx.SenderE164,
               toolContext: {
                 currentChannelId,
                 currentChatType: chatType,
@@ -148,6 +152,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           ...(params.ctx.SenderE164 ? { senderE164: params.ctx.SenderE164 } : {}),
           senderIsOwner: params.command.senderIsOwner,
           ...(currentChannelId ? { currentChannelId } : {}),
+          authorityRunId,
         });
       } finally {
         revokeMessageActionTurnCapability(messageActionTurnCapability);

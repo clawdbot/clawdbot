@@ -534,13 +534,16 @@ suite.define(() => {
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      const viewMenuTrigger = page.locator(".chat-view-menu-trigger");
+      const viewMenuTrigger = page.locator(".chat-header-session-menu__trigger");
       await viewMenuTrigger.click();
-      const viewMenu = page.locator("wa-dropdown.chat-view-menu");
+      const viewMenu = page.locator("wa-dropdown.chat-header-session-menu");
       await expect
-        .poll(() => viewMenu.locator(".chat-view-menu__provenance").textContent())
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
+      await viewItem.hover();
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
@@ -565,8 +568,9 @@ suite.define(() => {
       await page.reload();
       await viewMenuTrigger.click();
       await expect
-        .poll(() => viewMenu.locator(".chat-view-menu__provenance").textContent())
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      await viewItem.hover();
       await expect
         .poll(() =>
           viewMenu
@@ -594,6 +598,42 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+
+  it("announces a failed custom-theme import", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse({}, "custom-theme-invalid-1"),
+          },
+        });
+        await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
+          await route.fulfill({ status: 503 });
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        await page.locator(".settings-theme-card--custom").click();
+        const importer = page.locator(".settings-theme-import");
+        await importer.locator("input").fill("https://tweakcn.com/themes/network-failure");
+        await importer.locator("button.primary").click();
+
+        await expect
+          .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
+          .toBe("tweakcn import failed (503).");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await captureViewport(page, "07-custom-theme-import-error-announced.png");
+      },
+    );
   });
 
   it("keeps Clear authoritative after a delayed custom-theme replacement", async () => {
@@ -689,6 +729,7 @@ suite.define(() => {
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("removed");
+      await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       const afterDelayedResponse = await readThemeImportRaceState(page);
       expect(beforeReplace).toMatchObject({
         clawSelected: false,
@@ -793,6 +834,7 @@ suite.define(() => {
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("Imported");
+      await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {
       releaseImport();

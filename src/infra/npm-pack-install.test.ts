@@ -1,6 +1,6 @@
 // Covers npm package archive installation helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { packNpmSpecToArchive, withTempDir } from "./install-source-utils.js";
+import { packNpmSpecToArchive, withInstallWorkspace } from "./install-source-utils.js";
 import type { NpmIntegrityDriftPayload } from "./npm-integrity.js";
 import {
   finalizeNpmSpecArchiveInstall,
@@ -13,9 +13,11 @@ vi.mock("./install-source-utils.js", async () => {
   );
   return {
     ...actual,
-    withTempDir: vi.fn(async (_prefix: string, fn: (tmpDir: string) => Promise<unknown>) => {
-      return await fn("/tmp/openclaw-npm-pack-install-test");
-    }),
+    withInstallWorkspace: vi.fn(
+      async (_prefix: string, fn: (tmpDir: string) => Promise<unknown>) => {
+        return await fn("/tmp/openclaw-npm-pack-install-test");
+      },
+    ),
     packNpmSpecToArchive: vi.fn(),
   };
 });
@@ -76,7 +78,7 @@ describe("installFromNpmSpecArchiveWithInstaller", () => {
 
   beforeEach(() => {
     vi.mocked(packNpmSpecToArchive).mockClear();
-    vi.mocked(withTempDir).mockClear();
+    vi.mocked(withInstallWorkspace).mockClear();
   });
 
   it("returns pack errors without invoking installer", async () => {
@@ -87,7 +89,7 @@ describe("installFromNpmSpecArchiveWithInstaller", () => {
 
     expect(result).toEqual({ ok: false, error: "pack failed" });
     expect(installFromArchive).not.toHaveBeenCalled();
-    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
+    expect(withInstallWorkspace).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
   });
 
   it("rejects unsupported npm specs before packing", async () => {

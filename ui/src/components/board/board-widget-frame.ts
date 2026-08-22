@@ -1,9 +1,12 @@
 import { html, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardViewWidget, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
@@ -14,6 +17,8 @@ const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
 const TICKET_REFRESH_RETRY_MS = 1_000;
 const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
+const WIDGET_SANDBOX =
+  "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox";
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -30,7 +35,7 @@ function isLoopbackHostname(hostname: string): boolean {
 // message keeps the authorization fact but adds the deployment hint operators
 // otherwise never find.
 function resolveBoardFrameFailureMessage(
-  widget: Pick<BoardViewWidget, "sandboxOrigin">,
+  widget: Pick<BoardWidget, "sandboxOrigin">,
   resolvedSandboxOrigin: string,
 ): string {
   if (!widget.sandboxOrigin && resolvedSandboxOrigin) {
@@ -56,7 +61,7 @@ type BoardWidgetFrameLifecycleHost = {
   reportContentHeight: (name: string, height: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
-  widget: () => BoardViewWidget | undefined;
+  widget: () => BoardWidget | undefined;
 };
 
 class BoardWidgetTicketRefresh {
@@ -82,7 +87,7 @@ class BoardWidgetTicketRefresh {
     this.scheduledTicket = "";
   }
 
-  schedule(widget: BoardViewWidget | undefined, refresh: FrameRefresh | undefined): void {
+  schedule(widget: BoardWidget | undefined, refresh: FrameRefresh | undefined): void {
     const ticket = widget?.viewTicket;
     const remainingTtlMs = widget ? remainingBoardWidgetTicketTtlMs(widget) : undefined;
     if (!this.canRefresh() || !widget || !refresh || !ticket || remainingTtlMs === undefined) {
@@ -157,6 +162,7 @@ export class BoardWidgetFrameLifecycle {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
       this.visibilityListening = true;
     }
+    installWidgetThemeObserver();
   }
 
   disconnect(): void {
@@ -193,7 +199,7 @@ export class BoardWidgetFrameLifecycle {
     }
   }
 
-  widgetChanged(previous: BoardViewWidget, current: BoardViewWidget | undefined): void {
+  widgetChanged(previous: BoardWidget, current: BoardWidget | undefined): void {
     if (previous.name !== current?.name || previous.revision !== current?.revision) {
       this.resetFailures(false);
       return;
@@ -224,7 +230,7 @@ export class BoardWidgetFrameLifecycle {
     this.sandboxHost?.setActive(true);
   }
 
-  render(widget: BoardViewWidget): TemplateResult {
+  render(widget: BoardWidget): TemplateResult {
     const resolveFrameUrl = this.host.resolveFrameUrl();
     if (!resolveFrameUrl) {
       throw new Error(t("board.widget.frameResolverMissing"));
@@ -236,7 +242,7 @@ export class BoardWidgetFrameLifecycle {
       return html`
         <iframe
           class="board-widget__frame"
-          sandbox="allow-scripts allow-same-origin allow-forms"
+          sandbox=${WIDGET_SANDBOX}
           referrerpolicy="origin"
           loading="eager"
           title=${widget.title || widget.name}
@@ -248,6 +254,7 @@ export class BoardWidgetFrameLifecycle {
               this.refreshFailedFrame(widget);
             }
           }}
+          @load=${(event: Event) => this.postTheme(event)}
         ></iframe>
       `;
     }
@@ -288,7 +295,7 @@ export class BoardWidgetFrameLifecycle {
     this.sandboxHost?.reset();
   }
 
-  private refreshFailedFrame(widget: BoardViewWidget): void {
+  private refreshFailedFrame(widget: BoardWidget): void {
     if (!this.host.active()) {
       return;
     }
@@ -309,14 +316,14 @@ export class BoardWidgetFrameLifecycle {
     }
     this.frameRefreshAttempts += 1;
     void refreshFrame(widget.name).catch((error: unknown) => {
-      this.setError(error instanceof Error ? error.message : String(error));
+      this.setError(formatUiError(error));
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
       this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
     }
   }
 
-  private verifyAuthorization(event: Event, widget: BoardViewWidget): void {
+  private verifyAuthorization(event: Event, widget: BoardWidget): void {
     const frame = event.currentTarget;
     const src = frame instanceof HTMLIFrameElement ? (frame.getAttribute("src") ?? "") : "";
     if (!src.startsWith("/__openclaw__/board/")) {
@@ -352,7 +359,14 @@ export class BoardWidgetFrameLifecycle {
       });
   }
 
-  private resolveSandboxFrameUrl(widget: BoardViewWidget): string | undefined {
+  private postTheme(event: Event): void {
+    const frame = event.currentTarget;
+    if (frame instanceof HTMLIFrameElement) {
+      postWidgetTheme(frame, this.sandboxOrigin || "*");
+    }
+  }
+
+  private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
     const gatewayUrl = this.host.context()?.gateway.connection.gatewayUrl;
     if (
       !widget.sandboxUrl ||
@@ -375,7 +389,7 @@ export class BoardWidgetFrameLifecycle {
 
   private sandboxHostOptions(
     frame: HTMLIFrameElement,
-    widget: BoardViewWidget,
+    widget: BoardWidget,
   ): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] | undefined {
     const resolveFrameUrl = this.host.resolveFrameUrl();
     if (!resolveFrameUrl) {
@@ -390,6 +404,7 @@ export class BoardWidgetFrameLifecycle {
         this.host.context()?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
       ),
+      controlUiBaseUrl: `${window.location.origin}${this.host.context()?.basePath ?? ""}`,
       client: this.host.context()?.gateway.snapshot.client ?? undefined,
       resolveFrameUrl,
       confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
@@ -405,7 +420,7 @@ export class BoardWidgetFrameLifecycle {
         this.setError("");
       },
       onError: (error) => {
-        this.setError(error instanceof Error ? error.message : String(error));
+        this.setError(formatUiError(error));
       },
     };
   }
@@ -487,5 +502,8 @@ export class BoardWidgetFrameLifecycle {
       this.sandboxHost.update(options);
     }
     this.sandboxHost.handleMessage(event);
+    if (event.data?.type === "openclaw:widget-bridge-ready") {
+      postWidgetTheme(frame, this.sandboxOrigin);
+    }
   };
 }

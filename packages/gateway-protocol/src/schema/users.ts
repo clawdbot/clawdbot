@@ -4,13 +4,28 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
+export const USER_PREFS_ENTRY_LIMIT = 32;
+export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
+export const USER_PREFS_VALUE_BYTES = 4 * 1024;
+export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
+
 const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
+const UserPreferenceKeySchema = Type.String({ pattern: "^.{1,256}$" });
+const UserPreferenceEntriesSchema = Type.Record(UserPreferenceKeySchema, Type.Unknown());
+const UserPreferenceSetEntriesSchema = Type.Record(UserPreferenceKeySchema, Type.Unknown(), {
+  maxProperties: USER_PREFS_ENTRY_LIMIT,
+});
 export const UserProfileAvatarMimeSchema = Type.Union([
   Type.Literal("image/png"),
   Type.Literal("image/jpeg"),
   Type.Literal("image/webp"),
 ]);
+export const UserProfileGitHubIdentitySchema = closedObject({
+  login: Type.String({ minLength: 1, maxLength: 39 }),
+  profileUrl: NonEmptyString,
+  avatarUrl: NonEmptyString,
+});
 
 export const UserProfileSchema = closedObject({
   id: UserProfileIdSchema,
@@ -20,6 +35,7 @@ export const UserProfileSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),
   emails: Type.Array(NonEmptyString),
+  githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
 });
 
@@ -51,7 +67,26 @@ export const UsersSetAvatarResultSchema = closedObject({
   avatarRevision: NonEmptyString,
 });
 
+export const UsersPrefsGetParamsSchema = closedObject({
+  keys: Type.Optional(
+    Type.Array(UserPreferenceKeySchema, {
+      maxItems: USER_PREFS_ENTRY_LIMIT,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersPrefsGetResultSchema = Type.Union([
+  closedObject({ status: Type.Literal("ok"), entries: UserPreferenceEntriesSchema }),
+  closedObject({ status: Type.Literal("no_durable_identity") }),
+]);
+export const UsersPrefsSetParamsSchema = closedObject({ entries: UserPreferenceSetEntriesSchema });
+export const UsersPrefsSetResultSchema = Type.Union([
+  closedObject({ status: Type.Literal("ok") }),
+  closedObject({ status: Type.Literal("no_durable_identity") }),
+]);
+
 export type UserProfile = Static<typeof UserProfileSchema>;
+export type UserProfileGitHubIdentity = Static<typeof UserProfileGitHubIdentitySchema>;
 export type UsersListParams = Static<typeof UsersListParamsSchema>;
 export type UsersListResult = Static<typeof UsersListResultSchema>;
 export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
@@ -62,3 +97,7 @@ export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsS
 export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
 export type UsersSetAvatarParams = Static<typeof UsersSetAvatarParamsSchema>;
 export type UsersSetAvatarResult = Static<typeof UsersSetAvatarResultSchema>;
+export type UsersPrefsGetParams = Static<typeof UsersPrefsGetParamsSchema>;
+export type UsersPrefsGetResult = Static<typeof UsersPrefsGetResultSchema>;
+export type UsersPrefsSetParams = Static<typeof UsersPrefsSetParamsSchema>;
+export type UsersPrefsSetResult = Static<typeof UsersPrefsSetResultSchema>;

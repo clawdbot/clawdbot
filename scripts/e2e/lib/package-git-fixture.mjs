@@ -43,9 +43,15 @@ function prepare(root) {
   ensureDependencyIgnores(root);
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
+  packageJson.scripts = {
+    ...packageJson.scripts,
+    openclaw: "node openclaw.mjs",
+  };
+  delete packageJson.scripts.postinstall;
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");
   const aiRuntimePackageJson = path.join(aiRuntimeSource, "package.json");
   if (!fs.existsSync(aiRuntimePackageJson)) {
+    writeJson(packageJsonPath, packageJson);
     return;
   }
 
@@ -53,6 +59,10 @@ function prepare(root) {
   fs.rmSync(aiRuntimeTarget, { force: true, recursive: true });
   fs.mkdirSync(path.dirname(aiRuntimeTarget), { recursive: true });
   fs.renameSync(aiRuntimeSource, aiRuntimeTarget);
+  const relocatedAiRuntimePackageJson = path.join(aiRuntimeTarget, "package.json");
+  const relocatedAiRuntimePackage = readJson(relocatedAiRuntimePackageJson);
+  delete relocatedAiRuntimePackage.devDependencies;
+  writeJson(relocatedAiRuntimePackageJson, relocatedAiRuntimePackage);
 
   packageJson.dependencies ??= {};
   packageJson.dependencies["@openclaw/ai"] = "file:.openclaw-fixture/packages/ai";

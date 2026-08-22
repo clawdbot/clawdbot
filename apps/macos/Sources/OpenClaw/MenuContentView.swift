@@ -24,9 +24,12 @@ struct MenuContent: View {
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
     @State private var browserControlEnabled = true
-    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = Logger.Level.info.rawValue
-    @AppStorage(debugFileLogEnabledKey) private var appFileLoggingEnabled: Bool = false
+    @State private var testNotificationPending = false
+    @AppStorage(cameraEnabledKey, store: AppDefaults.standard) private var cameraEnabled: Bool = false
+    @AppStorage(appLogLevelKey, store: AppDefaults.standard)
+    private var appLogLevelRaw: String = Logger.Level.info.rawValue
+    @AppStorage(debugFileLogEnabledKey, store: AppDefaults.standard)
+    private var appFileLoggingEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
         self._state = Bindable(wrappedValue: state)
@@ -323,10 +326,11 @@ struct MenuContent: View {
                     Label("Send Debug Voice Text", systemImage: "waveform.circle")
                 }
                 Button {
-                    Task { await DebugActions.sendTestNotification() }
+                    Task { await self.sendTestNotification() }
                 } label: {
                     Label("Send Test Notification", systemImage: "bell")
                 }
+                .disabled(self.testNotificationPending)
                 Divider()
                 if self.state.connectionMode == .local {
                     Button {
@@ -387,6 +391,11 @@ struct MenuContent: View {
     }
 
     private var healthStatus: (label: String, color: Color) {
+        if self.state.connectionMode == .local,
+           let failure = GatewayProcessManager.shared.lastFailureReason
+        {
+            return (failure, .red)
+        }
         if self.state.connectionMode == .remote {
             let live = GatewayConnectionPresentation(state: self.controlChannel.state)
             switch live.tone {
@@ -582,6 +591,27 @@ struct MenuContent: View {
             alert.alertStyle = .informational
         case let .failure(error):
             alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+        }
+        alert.runModal()
+    }
+
+    @MainActor
+    private func sendTestNotification() async {
+        guard !self.testNotificationPending else { return }
+        self.testNotificationPending = true
+        let outcome = await DebugActions.sendTestNotification()
+        self.testNotificationPending = false
+        let alert = NSAlert()
+        alert.messageText = "Test Notification"
+        switch outcome {
+        case .pending:
+            return
+        case .sent:
+            alert.informativeText = "The notification request was queued."
+            alert.alertStyle = .informational
+        case let .error(message):
+            alert.informativeText = message
             alert.alertStyle = .warning
         }
         alert.runModal()

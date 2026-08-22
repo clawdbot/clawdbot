@@ -9,26 +9,21 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
   browserConsoleMessages,
   browserDownload,
   browserTabs,
   browserWaitForDownload,
-  getBrowserProfileCapabilities,
-  getRuntimeConfig,
   jsonResult,
+  normalizeBrowserTabsResult,
   normalizeOptionalString,
   readStringParam,
   readStringValue,
-  resolveBrowserConfig,
-  resolveProfile,
+  type BrowserTabsResult,
 } from "./browser-tool.runtime.js";
-import {
-  appendNavigatedPageState,
-  wrapBrowserExternalJson,
-  type BrowserProxyRequest,
-} from "./browser-tool.snapshot.js";
+import { appendNavigatedPageState, wrapBrowserExternalJson } from "./browser-tool.snapshot.js";
 import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
 import type {
   BrowserBatchAbort,
@@ -38,6 +33,7 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
 } from "./browser/constants.js";
+import { formatErrorMessage } from "./infra/errors.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -45,13 +41,32 @@ const browserToolActionDeps = {
   browserDownload,
   browserTabs,
   browserWaitForDownload,
-  getRuntimeConfig,
 };
 
 const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
+
+const ACT_TIMEOUT_KINDS = new Set([
+  "click",
+  "type",
+  "hover",
+  "scrollIntoView",
+  "drag",
+  "select",
+  "fill",
+  "evaluate",
+  "wait",
+]);
+const EXISTING_SESSION_TIMEOUT_REJECTED_KINDS = new Set([
+  "type",
+  "hover",
+  "scrollIntoView",
+  "drag",
+  "select",
+  "fill",
+]);
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return readPositiveIntegerParam({ value }, "value", {
@@ -65,61 +80,18 @@ function normalizeNonNegativeDurationMs(value: unknown): number | undefined {
   });
 }
 
-function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
-  switch (request.kind) {
-    case "click":
-    case "type":
-    case "hover":
-    case "scrollIntoView":
-    case "drag":
-    case "select":
-    case "fill":
-    case "evaluate":
-    case "wait":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
-  switch (request.kind) {
-    case "type":
-    case "hover":
-    case "scrollIntoView":
-    case "drag":
-    case "select":
-    case "fill":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function usesExistingSessionProfile(profileName: string | undefined): boolean {
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, profileName ?? resolved.defaultProfile);
-  return profile ? getBrowserProfileCapabilities(profile).usesChromeMcp : false;
-}
-
-function withConfiguredActTimeout(
+function withLocalActTimeout(
   request: BrowserActRequest,
-  profileName: string | undefined,
+  usesChromeMcp: boolean,
 ): BrowserActRequest {
   const typedRequest = request as BrowserActRequestWithTimeout;
-  if (normalizePositiveTimeoutMs(typedRequest.timeoutMs) !== undefined) {
+  if (
+    normalizePositiveTimeoutMs(typedRequest.timeoutMs) !== undefined ||
+    !ACT_TIMEOUT_KINDS.has(request.kind) ||
+    (usesChromeMcp && EXISTING_SESSION_TIMEOUT_REJECTED_KINDS.has(request.kind))
+  ) {
     return request;
   }
-  if (!supportsBrowserActTimeout(request)) {
-    return request;
-  }
-  if (existingSessionRejectsActTimeout(request) && usesExistingSessionProfile(profileName)) {
-    // Chrome MCP existing-session actions reject per-call timeouts for these
-    // operations, so default timeout injection must stay disabled there.
-    return request;
-  }
-
   return { ...typedRequest, timeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS } as BrowserActRequest;
 }
 
@@ -159,11 +131,14 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
   };
 }
 
-function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
-  const formattedTabs = tabs.map((tab) => formatAgentTab(tab));
+function formatTabsToolResult(result: {
+  running: boolean;
+  tabs: unknown[];
+}): AgentToolResult<unknown> {
+  const formattedTabs = result.tabs.map((tab) => formatAgentTab(tab));
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
-    payload: { tabs: formattedTabs },
+    payload: { running: result.running, tabs: formattedTabs },
     includeWarning: false,
   });
   const content: AgentToolResult<unknown>["content"] = [
@@ -173,7 +148,8 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
     content,
     details: {
       ...wrapped.safeDetails,
-      tabCount: tabs.length,
+      running: result.running,
+      tabCount: formattedTabs.length,
       tabs: formattedTabs,
     },
   };
@@ -219,24 +195,12 @@ function formatConsoleToolResult(result: {
   };
 }
 
-function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
-  if (!profile) {
-    return false;
-  }
+function isChromeStaleTargetError(usesChromeMcp: boolean, err: unknown): boolean {
   const status =
     err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
   const msg = String(err);
   const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
-  if (profile === "user") {
-    return isTabNotFound;
-  }
-  const cfg = browserToolActionDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const browserProfile = resolveProfile(resolved, profile);
-  if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
-    return false;
-  }
-  return isTabNotFound;
+  return usesChromeMcp && isTabNotFound;
 }
 
 function replaceStaleTargetIdInActRequest(
@@ -269,26 +233,29 @@ export async function executeTabsAction(params: {
   timeoutMs?: number;
   proxyRequest: BrowserProxyRequest | null;
   targetId?: string;
+  signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { baseUrl, profile, timeoutMs, proxyRequest } = params;
   if (proxyRequest) {
-    const result = await proxyRequest({
-      method: "GET",
-      path: "/tabs",
-      profile,
-      timeoutMs,
-    });
-    const tabs = ((result as { tabs?: unknown[] }).tabs ?? []).filter(
-      (tab) =>
-        !params.targetId ||
-        readStringValue((tab as { targetId?: unknown } | undefined)?.targetId) === params.targetId,
+    const result = normalizeBrowserTabsResult(
+      await proxyRequest({ method: "GET", path: "/tabs", profile, timeoutMs }),
     );
-    return formatTabsToolResult(tabs);
+    const tabs = result.tabs.filter(
+      (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+    );
+    return formatTabsToolResult({ running: result.running, tabs });
   }
-  const tabs = (await browserToolActionDeps.browserTabs(baseUrl, { profile, timeoutMs })).filter(
-    (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
-  );
-  return formatTabsToolResult(tabs);
+  const result = await browserToolActionDeps.browserTabs(baseUrl, {
+    profile,
+    timeoutMs,
+    signal: params.signal,
+  });
+  const tabs = result.running
+    ? result.tabs.filter(
+        (tab) => !params.targetId || readStringValue(tab.targetId) === params.targetId,
+      )
+    : [];
+  return formatTabsToolResult({ running: result.running, tabs });
 }
 
 /** Validate the /act wire payload's abort summary once for note and page-state decisions. */
@@ -334,6 +301,7 @@ export async function executeConsoleAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
   const level = normalizeOptionalString(input.level);
@@ -354,6 +322,7 @@ export async function executeConsoleAction(params: {
     level,
     targetId,
     profile,
+    signal: params.signal,
   });
   return formatConsoleToolResult(result);
 }
@@ -395,6 +364,7 @@ export async function executeDownloadAction(params: {
   baseUrl?: string;
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
@@ -419,32 +389,46 @@ export async function executeDownloadAction(params: {
           targetId,
           timeoutMs,
           profile,
+          signal: params.signal,
         })
       : await browserToolActionDeps.browserWaitForDownload(baseUrl, {
           path: request.path,
           targetId,
           timeoutMs,
           profile,
+          signal: params.signal,
         });
   params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
-/** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
+/** Execute browser actions with route-owned timeout semantics and stale-tab recovery. */
 export async function executeActAction(params: {
   request: BrowserActRequest;
   baseUrl?: string;
   profile?: string;
+  usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
+  signal?: AbortSignal;
   onTabActivity?: (targetId: string | undefined) => void;
+  onTabClose?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
-  const effectiveRequest = withConfiguredActTimeout(request, profile);
+  if ("timeoutMs" in request && request.timeoutMs !== undefined) {
+    normalizePositiveTimeoutMs(request.timeoutMs);
+  }
+  const effectiveRequest = proxyRequest
+    ? request
+    : withLocalActTimeout(request, params.usesChromeMcp);
   // resolvedTargetId is the id the act actually ran against (retry paths swap
   // it), so page-state capture must use it rather than the original request's.
   const finishActResult = async (result: unknown, resolvedTargetId: string | undefined) => {
-    params.onTabActivity?.(resolvedTargetId);
     const aborted = readBrowserBatchAbort(result);
+    const onTabResult =
+      effectiveRequest.kind === "close" || aborted?.reason === "closed"
+        ? params.onTabClose
+        : params.onTabActivity;
+    onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -457,6 +441,7 @@ export async function executeActAction(params: {
       baseUrl,
       profile,
       proxyRequest,
+      signal: params.signal,
     });
   };
   try {
@@ -465,11 +450,12 @@ export async function executeActAction(params: {
           method: "POST",
           path: "/act",
           profile,
-          body: effectiveRequest,
-          timeoutMs: resolveActProxyTimeoutMs(effectiveRequest),
+          body: request,
+          timeoutMs: resolveActProxyTimeoutMs(request),
         })
       : await browserToolActionDeps.browserAct(baseUrl, effectiveRequest, {
           profile,
+          signal: params.signal,
         });
     return await finishActResult(
       result,
@@ -477,16 +463,30 @@ export async function executeActAction(params: {
         readStringValue(effectiveRequest.targetId),
     );
   } catch (err) {
-    if (isChromeStaleTargetError(profile, err)) {
-      const tabs = proxyRequest
-        ? ((
-            (await proxyRequest({
-              method: "GET",
-              path: "/tabs",
-              profile,
-            })) as { tabs?: unknown[] }
-          ).tabs ?? [])
-        : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
+    const proxyRoute = proxyRequest?.route();
+    const usesChromeMcp = proxyRequest
+      ? proxyRoute?.status === "resolved" && proxyRoute.driver === "existing-session"
+      : params.usesChromeMcp;
+    const recoveryProfile =
+      proxyRoute?.status === "resolved" ? proxyRoute.profile : (profile ?? "default");
+    if (isChromeStaleTargetError(usesChromeMcp, err)) {
+      let tabRefreshError: unknown;
+      const availability = proxyRequest
+        ? await proxyRequest({ method: "GET", path: "/tabs", profile })
+            .then(normalizeBrowserTabsResult)
+            .catch((refreshError: unknown): BrowserTabsResult => {
+              params.signal?.throwIfAborted();
+              tabRefreshError = refreshError;
+              return { running: false, tabs: [] };
+            })
+        : await browserToolActionDeps
+            .browserTabs(baseUrl, { profile, signal: params.signal })
+            .catch((refreshError: unknown): BrowserTabsResult => {
+              params.signal?.throwIfAborted();
+              tabRefreshError = refreshError;
+              return { running: false, tabs: [] };
+            });
+      const tabs = availability.tabs;
       const freshTargetId =
         tabs.length === 1
           ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
@@ -512,6 +512,7 @@ export async function executeActAction(params: {
             })
           : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
               profile,
+              signal: params.signal,
             });
         return await finishActResult(
           retryResult,
@@ -519,14 +520,26 @@ export async function executeActAction(params: {
             readStringValue(retryRequest.targetId),
         );
       }
+      if (tabRefreshError) {
+        throw new Error(
+          `Chrome tab not found for profile="${recoveryProfile}", and refreshing tabs failed: ${formatErrorMessage(tabRefreshError)}. Run action=tabs profile="${recoveryProfile}" and retry with a returned targetId.`,
+          { cause: err },
+        );
+      }
+      if (!availability.running) {
+        throw new Error(
+          `Browser tabs are unavailable for profile="${recoveryProfile}". Reconnect or start that browser profile, then run action=tabs and retry.`,
+          { cause: err },
+        );
+      }
       if (!tabs.length) {
         throw new Error(
-          `No browser tabs found for profile="${profile}". Make sure the configured Chromium-based browser (v144+) is running and has open tabs, then retry.`,
+          `No browser tabs found for profile="${recoveryProfile}". Make sure the configured Chromium-based browser (v144+) is running and has open tabs, then retry.`,
           { cause: err },
         );
       }
       throw new Error(
-        `Chrome tab not found (stale targetId?). Run action=tabs profile="${profile}" and use one of the returned targetIds.`,
+        `Chrome tab not found (stale targetId?). Run action=tabs profile="${recoveryProfile}" and use one of the returned targetIds.`,
         { cause: err },
       );
     }

@@ -6,6 +6,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
+import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
 
 type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
 type AgentExecModule = typeof import("../../commands/agent-exec.js");
@@ -120,6 +121,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);
+        requestExitAfterOneShotOutput(
+          defaultRuntime,
+          typeof process.exitCode === "number" ? process.exitCode : 0,
+        );
       });
     });
 
@@ -197,7 +202,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         const result = await agentExecCommand(message, execOpts, defaultRuntime);
         if (result.exitCode !== 0) {
           defaultRuntime.exit(result.exitCode, { resetStream: process.stderr });
+          return;
         }
+        requestExitAfterOneShotOutput(defaultRuntime, result.exitCode);
       });
     });
 }

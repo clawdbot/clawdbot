@@ -1,5 +1,5 @@
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type { CronRunErrorClassification } from "./types.js";
 
 /** Resolve one cron-owned classification before falling back to provider error inference. */

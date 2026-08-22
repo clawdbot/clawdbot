@@ -154,10 +154,10 @@ final class WebChatManager {
                     AppNavigationActions.openSettings(tab: .gateways)
                     return
                 }
-                let preferredID = UserDefaults.standard.string(forKey: Self.lastGatewayProfileIDKey)
+                let preferredID = AppDefaults.standard.string(forKey: Self.lastGatewayProfileIDKey)
                 switch Self.promptForGatewayProfile(profiles: profiles, preferredID: preferredID) {
                 case let .profile(profile):
-                    UserDefaults.standard.set(profile.id, forKey: Self.lastGatewayProfileIDKey)
+                    AppDefaults.standard.set(profile.id, forKey: Self.lastGatewayProfileIDKey)
                     try await self.show(profile: profile)
                 case .manage:
                     AppNavigationActions.openSettings(tab: .gateways)
@@ -173,7 +173,7 @@ final class WebChatManager {
     func openGatewayWindow(profile: MacGatewayProfile) {
         Task { @MainActor [weak self] in
             do {
-                UserDefaults.standard.set(profile.id, forKey: Self.lastGatewayProfileIDKey)
+                AppDefaults.standard.set(profile.id, forKey: Self.lastGatewayProfileIDKey)
                 try await self?.show(profile: profile)
             } catch {
                 Self.showProfileError(error, message: "Could Not Open Gateway Window")

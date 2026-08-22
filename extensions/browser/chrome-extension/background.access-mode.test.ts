@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadBackground, RELAY_SECRET, sendRuntimeMessage } from "./background.test-harness.js";
+import {
+  cleanupBackgroundHarnesses,
+  loadBackground,
+  TEST_RELAY_KEY,
+  REPLACEMENT_TEST_RELAY_KEY,
+  sendRuntimeMessage,
+} from "./background.test-harness.js";
 
 const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
 
@@ -8,7 +14,8 @@ describe("relay command authorization", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanupBackgroundHarnesses();
     vi.unstubAllGlobals();
   });
 
@@ -47,7 +54,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -84,7 +91,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "selected",
       },
@@ -99,7 +106,7 @@ describe("relay command authorization", () => {
     await expect(
       sendRuntimeMessage(harness, {
         type: "pair",
-        pairingString: `ws://127.0.0.1:18798/extension#${"b".repeat(64)}`,
+        pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
         accessMode: "all",
       }),
     ).resolves.toEqual({ ok: true });
@@ -139,7 +146,7 @@ describe("relay command authorization", () => {
     harness.alarmListener({ name: RELAY_WATCHDOG_ALARM });
     const pairing = sendRuntimeMessage(harness, {
       type: "pair",
-      pairingString: `ws://127.0.0.1:18798/extension#${"b".repeat(64)}`,
+      pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
       accessMode: "all",
     });
     releaseConfigRead();
@@ -160,7 +167,7 @@ describe("relay command authorization", () => {
       deferTabAccessInitialization: true,
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -185,7 +192,7 @@ describe("relay command authorization", () => {
       deferTabAccessInitialization: true,
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -254,7 +261,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode,
       },
@@ -280,7 +287,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -325,7 +332,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -374,7 +381,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -408,16 +415,10 @@ describe("relay command authorization", () => {
   });
 
   it("keeps a Selected barrier ahead of a queued All-mode widening", async () => {
-    let releaseConsent = () => {};
-    const consent = new Promise<void>((resolve) => {
-      releaseConsent = resolve;
-    });
-    const onConsentChanged = vi.fn(async () => await consent);
     const harness = await loadBackground({
-      onConsentChanged,
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "selected",
       },
@@ -437,14 +438,17 @@ describe("relay command authorization", () => {
       type: "setAccessMode",
       accessMode: "selected",
     });
+    const releaseRestrictingStorage = harness.deferNextStorageSet();
     releaseWideningStorage();
-    await vi.waitFor(() => expect(onConsentChanged).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      expect(harness.storageSet).toHaveBeenCalledWith({ accessMode: "selected" });
+    });
 
     await expect(
       sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 206 }),
     ).resolves.toMatchObject({ accessible: false });
 
-    releaseConsent();
+    releaseRestrictingStorage();
     await expect(widening).resolves.toEqual({ ok: true, accessMode: "all" });
     await expect(restricting).resolves.toEqual({ ok: true, accessMode: "selected" });
   });
@@ -453,7 +457,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -505,7 +509,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -548,7 +552,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -660,7 +664,7 @@ describe("relay command authorization", () => {
       const harness = await loadBackground({
         storedConfig: {
           relayUrl: "ws://127.0.0.1:18797/extension",
-          token: RELAY_SECRET,
+          token: TEST_RELAY_KEY,
           authVersion: 2,
           accessMode,
         },
@@ -768,7 +772,7 @@ describe("relay command authorization", () => {
       const harness = await loadBackground({
         storedConfig: {
           relayUrl: "ws://127.0.0.1:18797/extension",
-          token: RELAY_SECRET,
+          token: TEST_RELAY_KEY,
           authVersion: 2,
           accessMode,
         },
@@ -806,7 +810,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "selected",
       },
@@ -914,7 +918,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode: "all",
       },
@@ -965,7 +969,7 @@ describe("relay command authorization", () => {
   it("restores a validated Cancel deny after an MV3 worker restart", async () => {
     const storedConfig = {
       relayUrl: "ws://127.0.0.1:18797/extension",
-      token: RELAY_SECRET,
+      token: TEST_RELAY_KEY,
       authVersion: 2,
       accessMode: "all",
     };
@@ -1001,7 +1005,7 @@ describe("relay command authorization", () => {
       const harness = await loadBackground({
         storedConfig: {
           relayUrl: "ws://127.0.0.1:18797/extension",
-          token: RELAY_SECRET,
+          token: TEST_RELAY_KEY,
           authVersion: 2,
           accessMode,
         },
@@ -1033,7 +1037,7 @@ describe("relay command authorization", () => {
     const harness = await loadBackground({
       storedConfig: {
         relayUrl: "ws://127.0.0.1:18797/extension",
-        token: RELAY_SECRET,
+        token: TEST_RELAY_KEY,
         authVersion: 2,
         accessMode,
       },

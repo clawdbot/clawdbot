@@ -1,5 +1,6 @@
 // Policy plugin ingress evidence.
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
@@ -25,11 +26,11 @@ const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channe
 
 export function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
   const channels = configuredChannels(cfg);
-  const channelDefaults = isRecord(channels.defaults) ? channels.defaults : {};
+  const channelDefaults = asNonArrayRecord(channels.defaults);
   const inheritedChannelDefaults = pickSupportedIngressDefaults(channelDefaults);
   const channelDefaultsSource = "oc://openclaw.config/channels/defaults";
   const entries: PolicyIngressEvidence[] = [];
-  const session = isRecord(cfg.session) ? cfg.session : {};
+  const session = asNonArrayRecord(cfg.session);
   const dmScope = readString(session.dmScope)?.toLowerCase();
   entries.push({
     id: "session-dm-scope",
@@ -44,7 +45,7 @@ export function scanPolicyIngress(cfg: Record<string, unknown>): readonly Policy
       continue;
     }
     const channelSource = `oc://openclaw.config/channels/${ocPathSegment(channel)}`;
-    const accounts = isRecord(value.accounts) ? value.accounts : {};
+    const accounts = asNonArrayRecord(value.accounts);
     const configuredAccounts = Object.entries(accounts).filter(
       (entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]),
     );
@@ -413,7 +414,7 @@ function channelDmPolicy(config: Record<string, unknown>): {
   readonly sourceSuffix?: string;
   readonly disabledByEnabled?: boolean;
 } {
-  const dm = isRecord(config.dm) ? config.dm : {};
+  const dm = asNonArrayRecord(config.dm);
   if (dm.enabled === false) {
     return { value: "disabled", sourceSuffix: "dm/enabled", disabledByEnabled: true };
   }

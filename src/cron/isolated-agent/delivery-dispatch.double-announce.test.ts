@@ -13,6 +13,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
 
 const directCronCompletionRetention = {
@@ -25,6 +26,7 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
+  commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
@@ -38,6 +40,10 @@ const {
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
   }),
+  commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
+    ok: true,
+    messageId: "current-completion-message",
+  }),
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
   ensureOutboundSessionEntryMock: vi.fn().mockResolvedValue(undefined),
@@ -46,6 +52,20 @@ const {
   retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
   resolveOutboundSessionRouteMock: vi.fn().mockResolvedValue(null),
 }));
+const channelTransformMock = vi.hoisted(() => ({
+  current: undefined as ChannelMessagingAdapter["transformReplyPayload"],
+}));
+
+vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>();
+  return {
+    ...actual,
+    getLoadedChannelPluginForRead: (id: string) =>
+      channelTransformMock.current
+        ? { id, meta: {}, messaging: { transformReplyPayload: channelTransformMock.current } }
+        : actual.getLoadedChannelPluginForRead(id),
+  };
+});
 
 vi.mock("../../config/sessions/main-session.js", () => ({
   canonicalizeMainSessionAlias: vi.fn(
@@ -82,7 +102,7 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
 
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 
@@ -114,6 +134,10 @@ vi.mock("../../infra/outbound/outbound-session.js", () => ({
 
 vi.mock("../../config/sessions/transcript.runtime.js", () => ({
   appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+}));
+
+vi.mock("../../sessions/background-session-result.js", () => ({
+  commitBackgroundResultToSession: commitBackgroundResultToSessionMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -153,7 +177,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
 
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 // Import after mocks
-import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
+import { countActiveDescendantRuns } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import { callGateway } from "../../gateway/call.runtime.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
@@ -232,11 +256,15 @@ function makeBaseParams(overrides: {
       id: "test-job",
       name: "Test Job",
       sessionTarget: overrides.sessionTarget ?? "isolated",
+      sessionKey:
+        overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    sourceSessionKey:
+      overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
     runSessionKey: overrides.runSessionKey ?? "agent:main",
     sessionId: "test-session-id",
     lifecycleRevision: "test-lifecycle-revision",
@@ -335,14 +363,20 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       },
       messageId: "mirror-message",
     });
+    commitBackgroundResultToSessionMock.mockResolvedValue({
+      ok: true,
+      messageId: "current-completion-message",
+    });
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",
       lifecycleRevision: "test-lifecycle-revision",
     });
     maybeApplyTtsToPayloadMock.mockReset().mockImplementation(async (params) => params.payload);
+    channelTransformMock.current = undefined;
   });
 
   afterEach(() => {
+    channelTransformMock.current = undefined;
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -402,6 +436,121 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
+  });
+
+  it("records channel transform suppression before TTS, custody, transport, or mirroring", async () => {
+    const transformReplyPayload = vi.fn(() => null);
+    channelTransformMock.current = transformReplyPayload;
+    const params = makeBaseParams({ synthesizedText: "private cron reply" });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(false);
+    expect(state.deliverySuppressionReason).toBe("channel_transform");
+    expect(state.result?.deliverySuppressionReason).toBe("channel_transform");
+    expect(maybeApplyTtsToPayloadMock).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("delivers a later accepted cron payload after an earlier transform veto", async () => {
+    const transformReplyPayload = vi.fn(({ payload }: { payload: { text?: string } }) =>
+      payload.text === "private cron reply" ? null : payload,
+    );
+    channelTransformMock.current = transformReplyPayload;
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "private cron reply" }, { text: "public cron reply" }];
+    params.summary = "public cron reply";
+    params.outputText = "public cron reply";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliverySuppressionReason).toBeUndefined();
+    expectDeliveryCall(0, {
+      payloads: [{ text: "public cron reply" }],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one transformed cron fallback source without duplicating it", async () => {
+    channelTransformMock.current = vi.fn(({ payload }) => ({
+      ...payload,
+      ...(payload.text ? { text: `${payload.text}!` } : {}),
+      ...(payload.fallbackText
+        ? { fallbackText: { ...payload.fallbackText, text: `${payload.fallbackText.text}!` } }
+        : {}),
+    }));
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Cron summary" },
+      { channelData: { telegram: { buttons: [[{ text: "Open", url: "https://example.test" }]] } } },
+    ];
+    params.summary = "Cron summary";
+    params.outputText = "Cron summary";
+
+    await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, {
+      payloads: [
+        { text: "Cron summary!" },
+        {
+          channelData: {
+            telegram: { buttons: [[{ text: "Open", url: "https://example.test" }]] },
+          },
+          fallbackText: { text: "Cron summary!", replacesPayloadIndex: 0 },
+        },
+      ],
+    });
+    expect(channelTransformMock.current).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not regenerate a cron fallback source vetoed by the channel transform", async () => {
+    channelTransformMock.current = vi.fn(({ payload }) => (payload.text ? null : payload));
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Private summary" },
+      { channelData: { telegram: { reaction: { emoji: "👍", replyToId: "123" } } } },
+    ];
+    params.summary = "Private summary";
+    params.outputText = "Private summary";
+
+    await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, {
+      payloads: [{ channelData: { telegram: { reaction: { emoji: "👍", replyToId: "123" } } } }],
+    });
+    expect(channelTransformMock.current).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the channel veto the final fallback-bearing cron payload shape", async () => {
+    channelTransformMock.current = vi.fn(({ payload }) => (payload.fallbackText ? null : payload));
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Public summary" },
+      { channelData: { telegram: { buttons: [[{ text: "Open", url: "https://example.test" }]] } } },
+    ];
+    params.summary = "Public summary";
+    params.outputText = "Public summary";
+
+    await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, { payloads: [{ text: "Public summary" }] });
+    expect(channelTransformMock.current).toHaveBeenCalledWith({
+      payload: expect.objectContaining({
+        fallbackText: { text: "Public summary", replacesPayloadIndex: 0 },
+      }),
+      cfg: {},
+      accountId: undefined,
+    });
   });
 
   it("uses non-empty summary text when structured direct payloads are textless", async () => {
@@ -756,6 +905,50 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:telegram:direct:123456:thread:42",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
+      },
+    );
+  });
+
+  it("defers same-source message-tool awareness until requested", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:webchat:direct:owner",
+      baseSessionKey: "agent:main:webchat:direct:owner",
+      to: "webchat:owner",
+    });
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 1_000 });
+
+    const queueSourceAwareness = await queueCronMessageToolDeliveryAwareness({
+      ...params,
+      deferredTargetSessionKey: params.sourceSessionKey,
+      resolvedDelivery: makeResolvedDelivery({ channel: "webchat", to: "owner" }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "webchat",
+              to: "owner",
+              text: "Current-session completion.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    await queueSourceAwareness?.();
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled automation delivered this message to this channel:\nCurrent-session completion.",
+      {
+        sessionKey: "agent:main:webchat:direct:owner",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:webchat::owner:",
       },
     );
   });
@@ -2195,6 +2388,25 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
+  it("does not retry permanent typed pre-dispatch rejections", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const rejection = new PlatformMessageNotDispatchedError("payload rejected", {
+      cause: new Error("invalid payload"),
+      retryable: false,
+    });
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(rejection);
+
+    const params = makeBaseParams({ synthesizedText: "Reject this once." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectResultFields(state.result, {
+      status: "error",
+      error: "payload rejected | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | invalid payload",
+      deliveryAttempted: true,
+    });
+  });
+
   it.each(["structured", "threaded"] as const)(
     "retries proven-not-sent %s cron delivery without duplicating a message",
     async (deliveryKind) => {
@@ -2237,7 +2449,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: read ECONNRESET after send",
+      error: "read ECONNRESET after send | ECONNRESET",
       deliveryAttempted: true,
     });
   });
@@ -2301,7 +2513,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: String(notDispatchedError),
+      error:
+        "second payload stopped before final dispatch | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | connect ECONNREFUSED | ECONNREFUSED",
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2309,7 +2522,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
-        "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
+        "Check automation history for delivery error details.",
         "One or more scheduled message payloads may already have been delivered.",
       ].join("\n"),
       {
@@ -2650,7 +2863,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: chat not found",
+      error: "chat not found",
       deliveryAttempted: true,
     });
   });
@@ -2676,7 +2889,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expectResultFields(state.result, {
       status: "error",
-      error: String(deliveryError),
+      error: deliveryError.message,
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2684,7 +2897,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456 thread 42",
-        "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+        "Check automation history for delivery error details.",
         "No scheduled message was delivered.",
       ].join("\n"),
       {
@@ -2723,7 +2936,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expectResultFields(state.result, {
       status: "error",
-      error: String(deliveryError),
+      error: deliveryError.message,
       deliveryAttempted: true,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
@@ -2731,7 +2944,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
-        "Delivery error: second payload failed",
+        "Check automation history for delivery error details.",
         "One or more scheduled message payloads may already have been delivered.",
       ].join("\n"),
       {
@@ -2751,7 +2964,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectResultFields(state.result, {
       status: "error",
-      error: "Error: boom",
+      error: "boom",
       deliveryAttempted: true,
     });
   });
@@ -2913,6 +3126,134 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
       payloads: [{ text: "hello from cron" }],
     });
+  });
+
+  it("commits a current-target completion without requiring an outbound adapter", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable WebChat completion",
+      sessionTarget: "current",
+      runStartedAt: 1_000,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "webchat",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("webchat has no outbound adapter"),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:webchat:direct:owner",
+      text: "durable WebChat completion",
+      idempotencyKey: "cron-current-completion:cron:test-job:1000",
+      provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
+      config: params.cfgWithAgentDefaults,
+      signal: undefined,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("requires the current-session commit in addition to one external delivery", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable external completion",
+      sessionTarget: "current",
+      runStartedAt: 2_000,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("commits a safe media projection and still sends the current-target payload once", async () => {
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 2_500 });
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ mediaUrl: "https://example.com/report.png?token=redacted" }];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "report.png" }),
+    );
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
+    });
+  });
+
+  it("does not mark or send a current-target delivery when its session commit fails", async () => {
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    commitBackgroundResultToSessionMock.mockResolvedValueOnce({
+      ok: false,
+      reason: "source session was archived",
+    });
+    const params = makeBaseParams({
+      synthesizedText: "must not escape before commit",
+      sessionTarget: "current",
+    });
+    params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "source session was archived",
+    });
+    expect(queueSourceAwareness).toHaveBeenCalledOnce();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-source awareness unavailable while the durable commit is in flight", async () => {
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(async () => {
+      expect(queueSourceAwareness).not.toHaveBeenCalled();
+      return { ok: true, messageId: "current-completion-message" };
+    });
+    const params = makeBaseParams({
+      synthesizedText: "message-tool completion",
+      sessionTarget: "current",
+    });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: {
+            tool: "message",
+            provider: "webchat",
+            to: "owner",
+            text: "message-tool completion",
+          },
+          verifiedTarget: true,
+        },
+      ],
+      verifiedMessageToolDelivery: true,
+      satisfiesSourceDelivery: true,
+      unverifiedMessageToolDelivery: false,
+    };
+    params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(queueSourceAwareness).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved message-tool delivery out of delivered status", async () => {

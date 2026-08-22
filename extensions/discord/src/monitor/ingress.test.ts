@@ -102,14 +102,38 @@ describe("Discord durable ingress", () => {
       monitor.start();
       try {
         const accepted = monitor.accept(createRawMessage("1001"));
-        await Promise.resolve();
+        await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
 
-        expect(enqueue).toHaveBeenCalledTimes(1);
         expect(dispatch).not.toHaveBeenCalled();
 
         appendGate.resolve();
         await accepted;
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("rejects unstable message identity before durable allocation", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn();
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      monitor.start();
+      try {
+        const missingMessageId = { ...createRawMessage("missing"), id: undefined };
+        const missingChannelId = { ...createRawMessage("missing"), channel_id: undefined };
+
+        await expect(monitor.accept(missingMessageId as never)).rejects.toThrow("snowflake");
+        await expect(monitor.accept(missingChannelId as never)).rejects.toThrow("channel_id");
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(dispatch).not.toHaveBeenCalled();
       } finally {
         await monitor.stop();
       }

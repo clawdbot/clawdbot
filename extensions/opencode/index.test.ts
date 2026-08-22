@@ -13,7 +13,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildOpencodeZenLiveProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeZenLiveProviderConfig,
+  resolveOpencodeZenStarterModel,
+} from "./provider-catalog.js";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
@@ -793,6 +796,27 @@ describe("opencode provider plugin", () => {
     expect(second.models.map((model) => model.id)).toEqual(["gpt-5.6-luna"]);
     expect(secondCached.apiKey).toBe("runtime-c");
     expect(secondCached.models.map((model) => model.id)).toEqual(["gpt-5.6-luna"]);
+  });
+
+  it.each([
+    [["claude-opus-5"], "opencode/claude-opus-5"],
+    [["gpt-5.6-sol"], undefined],
+  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({ data: modelIds.map((id) => ({ id, object: "model" })) }),
+      ),
+      finalUrl: "https://opencode.ai/zen/v1/models",
+      release: vi.fn(async () => undefined),
+    }));
+
+    await expect(
+      resolveOpencodeZenStarterModel({
+        apiKey: "resolved-opencode-key",
+        preferredModelRef: "opencode/claude-opus-5",
+        fetchGuard,
+      }),
+    ).resolves.toBe(expected);
   });
 
   it.each([

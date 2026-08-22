@@ -5,18 +5,18 @@ import type {
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { readProviderBaseUrl } from "./provider-base-url.js";
+import { resolveOllamaApiBase } from "./provider-models.js";
 
 /** Provider config input type — partial config without required `models`. */
 type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
   models?: ModelDefinitionConfig[];
 };
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
-import { readProviderBaseUrl } from "./provider-base-url.js";
-import { resolveOllamaApiBase } from "./provider-models.js";
 
 export const OLLAMA_PROVIDER_ID = "ollama";
-export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
+export { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
 
 export type OllamaPluginConfig = {
   discovery?: {
@@ -40,7 +40,7 @@ type OllamaDiscoveryContext = {
   };
 };
 
-function readStringValue(value: unknown): string | undefined {
+function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -247,7 +247,7 @@ function hasMeaningfulExplicitOllamaConfig(
   if (baseUrl) {
     return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
-  if (readStringValue(providerConfig.apiKey)) {
+  if (readOllamaStringValue(providerConfig.apiKey)) {
     return true;
   }
   if (providerConfig.auth) {
@@ -308,8 +308,8 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKeyRef = coerceSecretRef(explicit?.apiKey);
   const explicitApiKey = explicitApiKeyRef
-    ? readStringValue(ollamaDiscoveryKey)
-    : readStringValue(explicit?.apiKey);
+    ? readOllamaStringValue(ollamaDiscoveryKey)
+    : readOllamaStringValue(explicit?.apiKey);
   // apiKey can be an env-name or managed marker; only discoveryApiKey proves
   // an explicit SecretRef resolved. Never replace its owner with local auth.
   if (explicitApiKeyRef && !explicitApiKey) {

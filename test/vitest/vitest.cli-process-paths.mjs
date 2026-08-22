@@ -3,8 +3,10 @@
 export const cliProcessTestFiles = [
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
+  "src/cli/gateway-cli/shutdown-hard-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",
   "src/cli/hooks-cli.process.test.ts",
+  "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);

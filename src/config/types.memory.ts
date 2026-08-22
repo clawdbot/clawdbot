@@ -1,8 +1,11 @@
+import type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
 /**
  * Memory config types shared by core context-engine paths and memory host/plugin runtimes.
  * Builtin memory stays core-owned.
  */
 import type { SecretInput } from "./types.secrets.js";
+
+export type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
 
 /** Citation rendering mode for memory-injected context. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
@@ -21,8 +24,8 @@ export type MemorySearchConfig = {
   rememberAcrossConversations?: boolean;
   /** Sources to index and search (default: ["memory"]). */
   sources?: Array<"memory" | "sessions">;
-  /** Extra paths to include in memory search (directories or .md files). */
-  extraPaths?: string[];
+  /** Extra paths to include in memory search, optionally filtered by a glob. */
+  extraPaths?: MemoryExtraPath[];
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
     /** Enable image/audio embeddings from extraPaths. */
@@ -62,7 +65,7 @@ export type MemorySearchConfig = {
    * Supported values today are 768, 1536, and 3072.
    */
   outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
+  /** Local embedding settings for the managed llama.cpp server. */
   local?: {
     /** GGUF model path or hf: URI. */
     modelPath?: string;

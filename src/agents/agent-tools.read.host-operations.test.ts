@@ -145,6 +145,24 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     expect((await fs.stat(newDir)).isDirectory()).toBe(true);
   });
 
+  it.runIf(process.platform === "win32")(
+    "keeps host write and edit operations on the same Windows-style home path",
+    async () => {
+      const dir = tempDirs.make("openclaw-tilde-test-win32-", osHome());
+      const testFile = path.join(dir, "same-path.txt");
+      const modelPath = toTildePath(testFile);
+
+      createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
+      await readWriteOps().writeFile(modelPath, "before");
+
+      createHostWorkspaceEditTool(dir, { workspaceOnly: false });
+      expect((await readEditOps().readFile(modelPath)).toString("utf8")).toBe("before");
+      await readEditOps().writeFile(modelPath, "after");
+
+      expect(await fs.readFile(testFile, "utf8")).toBe("after");
+    },
+  );
+
   it("ignores OPENCLAW_HOME for write operations", async () => {
     const openclawHome = tempDirs.make("openclaw-home-override-", os.tmpdir());
     const dir = tempDirs.make("openclaw-tilde-test-write-", osHome());

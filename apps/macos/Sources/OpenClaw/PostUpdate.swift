@@ -61,7 +61,7 @@ enum PostAppUpdateReceiptStore {
     static func record(
         fromVersion: String,
         toVersion: String,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date())
     {
         let from = fromVersion.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -73,7 +73,7 @@ enum PostAppUpdateReceiptStore {
 
     static func pending(
         currentVersion: String?,
-        defaults: UserDefaults = .standard) -> PostAppUpdateReceipt?
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt?
     {
         guard let currentVersion = normalized(currentVersion),
               let data = defaults.data(forKey: postAppUpdateReceiptKey),
@@ -87,7 +87,7 @@ enum PostAppUpdateReceiptStore {
         currentVersion: String?,
         onboardingSeen: Bool,
         allowsUpdateWorkflow: Bool = true,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> PostAppUpdateReceipt?
     {
         guard let currentVersion = normalized(currentVersion) else { return nil }
@@ -116,7 +116,7 @@ enum PostAppUpdateReceiptStore {
         return receipt
     }
 
-    static func clear(defaults: UserDefaults = .standard) {
+    static func clear(defaults: UserDefaults = AppDefaults.standard) {
         defaults.removeObject(forKey: postAppUpdateReceiptKey)
     }
 
@@ -124,7 +124,7 @@ enum PostAppUpdateReceiptStore {
     static func setGatewayUpdateIncomplete(
         _ incomplete: Bool,
         receipt: PostAppUpdateReceipt,
-        defaults: UserDefaults = .standard) -> PostAppUpdateReceipt
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
         let updated = PostAppUpdateReceipt(
             fromVersion: receipt.fromVersion,
@@ -140,7 +140,7 @@ enum PostAppUpdateReceiptStore {
     @discardableResult
     static func recordNotificationFailure(
         receipt: PostAppUpdateReceipt,
-        defaults: UserDefaults = .standard) -> PostAppUpdateReceipt
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
         // One later-launch retry handles restart races. The bound prevents
         // permanent auth/schema errors from reopening this window forever.
@@ -159,7 +159,7 @@ enum PostAppUpdateReceiptStore {
     static func setNotificationInFlight(
         _ inFlight: Bool,
         receipt: PostAppUpdateReceipt,
-        defaults: UserDefaults = .standard) -> PostAppUpdateReceipt
+        defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
         let updated = PostAppUpdateReceipt(
             fromVersion: receipt.fromVersion,
@@ -266,7 +266,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     private var task: Task<Void, Never>?
 
     @discardableResult
-    func startIfNeeded() -> Bool {
+    func startIfNeeded(profile: AppProfile = .current) -> Bool {
+        guard !profile.isActive else { return false }
         guard let receipt = PostAppUpdateReceiptStore.pendingForLaunch(
             currentVersion: GatewayEnvironment.appVersionString(),
             onboardingSeen: AppStateStore.shared.onboardingSeen,
@@ -341,6 +342,10 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     }
 
     private func finishUpdate(receipt: PostAppUpdateReceipt) async {
+        guard !AppProfile.current.isActive else {
+            self.finishSilently()
+            return
+        }
         let connectionMode = AppStateStore.shared.connectionMode
         guard CLIInstallPrompter.shouldManageCLI(connectionMode: connectionMode) else {
             self.finishSilently()
@@ -549,6 +554,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     }
 
     private func verifyRuntime(connectionMode: AppState.ConnectionMode) async -> Bool {
+        guard !AppProfile.current.isActive else { return true }
         guard case .ready = await CLIInstaller.managedStatus() else {
             self.fail(
                 message: String(localized: "Gateway verification failed."),

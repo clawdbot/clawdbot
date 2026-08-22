@@ -608,6 +608,16 @@ export function prepareAnchorAuditDocsDir(sourceDir = DOCS_DIR) {
       fs.rmSync(path.join(tempDir, entry.name), { recursive: true, force: true });
     }
 
+    for (const filePath of walk(tempDir).filter((entry) => /\.mdx?$/iu.test(entry))) {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const normalized = raw.replace(/<!--[\s\S]*?-->/gu, (comment) =>
+        comment.replace(/[^\r\n]/gu, ""),
+      );
+      if (normalized !== raw) {
+        fs.writeFileSync(filePath, normalized, "utf8");
+      }
+    }
+
     const docsJsonPath = path.join(tempDir, "docs.json");
     const docsConfig = JSON.parse(fs.readFileSync(docsJsonPath, "utf8"));
     const sanitized = sanitizeDocsConfigForEnglishOnly(docsConfig);

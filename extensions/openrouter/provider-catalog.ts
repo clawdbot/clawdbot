@@ -19,6 +19,7 @@ import {
 import {
   asOptionalRecord,
   asPositiveSafeInteger,
+  filterStringEntries,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -140,10 +141,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
 }
 
 function readStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
-  const value = record?.[key];
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  return filterStringEntries(record?.[key]);
 }
 
 function readTokenPrice(record: Record<string, unknown> | undefined, key: string): number {

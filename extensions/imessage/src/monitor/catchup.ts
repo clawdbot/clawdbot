@@ -1,6 +1,7 @@
 // Imessage plugin module implements catchup behavior.
 import { createHash } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 
@@ -246,10 +247,7 @@ export type ResolvedCatchupConfig = {
 };
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.floor(value)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 export function resolveCatchupConfig(

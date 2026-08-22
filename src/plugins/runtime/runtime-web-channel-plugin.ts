@@ -1,12 +1,9 @@
 // Runtime web-channel plugin helpers expose web-channel tools through activated plugin runtimes.
-import {
-  getDefaultLocalRoots as getDefaultLocalRootsImpl,
-  loadWebMedia as loadWebMediaImpl,
-  loadWebMediaRaw as loadWebMediaRawImpl,
-  optimizeImageToJpeg as optimizeImageToJpegImpl,
-} from "../../media/web-media.js";
+import path from "node:path";
+import { getDefaultLocalRootsCore } from "../../media/web-media.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   createPluginModuleLoaderCache,
   type PluginModuleLoaderCache,
 } from "../plugin-module-loader-cache.js";
@@ -69,19 +66,31 @@ const webChannelRuntimeModuleCache = new Map<
 >();
 
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const moduleRoots = new Map<string, string>();
+// Light and heavy modules belong to one metadata generation; resolving their
+// shared record separately repeats full manifest discovery.
+let webChannelPluginRecord: WebChannelPluginRecord | undefined;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
+  webChannelPluginRecord = undefined;
   webChannelRuntimeModuleCache.clear();
-  moduleLoaders.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
 });
 
 /** Resolves the active web-channel plugin record that provides runtime APIs. */
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
-  return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {
-    throw new Error(
-      "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
-    );
-  }) as WebChannelPluginRecord;
+  if (webChannelPluginRecord) {
+    return webChannelPluginRecord;
+  }
+  webChannelPluginRecord = resolvePluginRuntimeRecordByEntryBaseNames(
+    ["light-runtime-api", "runtime-api"],
+    () => {
+      throw new Error(
+        "web channel plugin runtime is unavailable: missing plugin that provides light-runtime-api and runtime-api",
+      );
+    },
+  ) as WebChannelPluginRecord;
+  return webChannelPluginRecord;
 }
 
 function resolveWebChannelRuntimeModulePath(
@@ -94,6 +103,7 @@ function resolveWebChannelRuntimeModulePath(
   if (!modulePath) {
     throw new Error(`web channel plugin runtime is unavailable: missing ${entryBaseName}`);
   }
+  moduleRoots.set(modulePath, record.rootDir ?? path.dirname(record.source));
   return modulePath;
 }
 
@@ -236,20 +246,6 @@ export function resolveWebChannelAuthDir(): ReturnType<
   throw new Error("web channel plugin runtime is missing export 'resolveDefaultWebAuthDir'");
 }
 
-/** Loads web media through the core media helper. */
-export async function loadWebMedia(
-  ...args: Parameters<typeof loadWebMediaImpl>
-): ReturnType<typeof loadWebMediaImpl> {
-  return await loadWebMediaImpl(...args);
-}
-
-/** Loads raw web media through the core media helper. */
-export async function loadWebMediaRaw(
-  ...args: Parameters<typeof loadWebMediaRawImpl>
-): ReturnType<typeof loadWebMediaRawImpl> {
-  return await loadWebMediaRawImpl(...args);
-}
-
 /** Starts web-channel monitoring through the heavy runtime API. */
 export function monitorWebChannel(
   ...args: Parameters<WebChannelHeavyRuntimeModule["monitorWebChannel"]>
@@ -262,13 +258,6 @@ export async function monitorWebInbox(
   ...args: Parameters<WebChannelHeavyRuntimeModule["monitorWebInbox"]>
 ): ReturnType<WebChannelHeavyRuntimeModule["monitorWebInbox"]> {
   return (await getHeavyExport("monitorWebInbox"))(...args);
-}
-
-/** Optimizes an image to JPEG through the core media helper. */
-export async function optimizeImageToJpeg(
-  ...args: Parameters<typeof optimizeImageToJpegImpl>
-): ReturnType<typeof optimizeImageToJpegImpl> {
-  return await optimizeImageToJpegImpl(...args);
 }
 
 /** Starts QR login through the heavy runtime API. */
@@ -291,7 +280,7 @@ export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["ex
 
 /** Returns default local media roots through the core media helper. */
 export function getDefaultLocalRoots(
-  ...args: Parameters<typeof getDefaultLocalRootsImpl>
-): ReturnType<typeof getDefaultLocalRootsImpl> {
-  return getDefaultLocalRootsImpl(...args);
+  ...args: Parameters<typeof getDefaultLocalRootsCore>
+): ReturnType<typeof getDefaultLocalRootsCore> {
+  return getDefaultLocalRootsCore(...args);
 }

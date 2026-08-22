@@ -2,6 +2,7 @@
  * Resolves MCP transport command, environment, and timeout configuration.
  */
 import {
+  asPositiveFiniteNumber,
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -15,6 +16,7 @@ import {
   resolveHttpMcpServerLaunchConfig,
   type HttpMcpTransportType,
 } from "./mcp-http.js";
+import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
   describeStdioMcpServerLaunchConfig,
   resolveStdioMcpServerLaunchConfig,
@@ -39,13 +41,18 @@ type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   cwd?: string;
 };
 
+type ResolvedMcpOAuthConfig = McpOAuthConfig & {
+  identity?: "shared" | "per-requester";
+  authProfileId?: unknown;
+};
+
 type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   kind: "http";
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
   auth?: "oauth";
-  oauth?: Record<string, unknown>;
+  oauth?: ResolvedMcpOAuthConfig;
   sslVerify?: boolean;
   clientCert?: string;
   clientKey?: string;
@@ -62,8 +69,8 @@ function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number 
   }
   const record = rawServer as Record<string, unknown>;
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    const value = asPositiveFiniteNumber(record[key]);
+    if (value !== undefined) {
       return value;
     }
   }
@@ -174,7 +181,7 @@ function resolveHttpTransportConfig(
     (rawServer as { oauth?: unknown }).oauth &&
     typeof (rawServer as { oauth?: unknown }).oauth === "object" &&
     !Array.isArray((rawServer as { oauth?: unknown }).oauth)
-      ? { oauth: (rawServer as { oauth: Record<string, unknown> }).oauth }
+      ? { oauth: (rawServer as { oauth: ResolvedMcpOAuthConfig }).oauth }
       : {}),
     ...(getBooleanField(rawServer, ["sslVerify"]) !== undefined
       ? { sslVerify: getBooleanField(rawServer, ["sslVerify"]) }

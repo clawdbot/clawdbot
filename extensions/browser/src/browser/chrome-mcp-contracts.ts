@@ -169,14 +169,20 @@ export const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--experimental-page-id-routing",
 ];
 export const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
-export const CHROME_MCP_CONNECTION_FLAGS = new Set([
-  "--autoConnect",
-  "--auto-connect",
+export const CHROME_MCP_ENDPOINT_FLAGS = new Set([
   "--browserUrl",
   "--browser-url",
+  "-u",
+  "--u",
   "--wsEndpoint",
   "--ws-endpoint",
   "-w",
+  "--w",
+]);
+export const CHROME_MCP_CONNECTION_FLAGS = new Set([
+  "--autoConnect",
+  "--auto-connect",
+  ...CHROME_MCP_ENDPOINT_FLAGS,
 ]);
 export const CHROME_MCP_USER_DATA_DIR_FLAGS = new Set(["--userDataDir", "--user-data-dir"]);
 export const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;

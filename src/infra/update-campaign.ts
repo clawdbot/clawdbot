@@ -163,26 +163,19 @@ export class UpdateCampaignController {
       return;
     }
 
-    let idle = false;
-    try {
-      idle = createGatewayActiveWorkSnapshot(announcement.inspect).idle;
-    } catch {
-      // Inspection failure must not erase the hard deadline or force an unsafe early apply.
-    }
-    if (!idle) {
-      this.transition({
-        id: campaign.id,
-        state: "waiting-for-idle",
-        announcedAtMs: campaign.announcedAtMs,
-        ...(campaign.holdUntilMs === undefined ? {} : { holdUntilMs: campaign.holdUntilMs }),
-        forceAtMs: campaign.forceAtMs,
-        updatedAtMs: now,
-      });
-      this.scheduleNext();
-      return;
-    }
-
     if (campaign.state === "waiting-for-idle") {
+      let idle = false;
+      try {
+        idle = createGatewayActiveWorkSnapshot(announcement.inspect, {
+          ignoreTerminalSessions: true,
+        }).idle;
+      } catch {
+        // Inspection failure must not erase the hard deadline or force an unsafe early apply.
+      }
+      if (!idle) {
+        this.scheduleNext();
+        return;
+      }
       this.transition({
         id: campaign.id,
         state: "countdown",

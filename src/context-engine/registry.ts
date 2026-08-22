@@ -2,7 +2,6 @@
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { getPluginCompatRecord } from "../plugins/compat/registry.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -55,20 +54,11 @@ type ResolvedContextEngineMetadata = {
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
-const legacyHostParamDefaultRemoveAfter = getPluginCompatRecord(
-  "context-engine-legacy-host-param-default",
-).removeAfter;
-
 function projectContextEngineHostParams(
   engine: ContextEngine,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
-  // Removal(2026-08-12): undeclared engines get full params.
-  // Contract: context-engine-legacy-host-param-default.
-  const useLegacyDefault =
-    legacyHostParamDefaultRemoveAfter !== undefined &&
-    new Date().toISOString().slice(0, 10) <= legacyHostParamDefaultRemoveAfter;
-  const accepted = engine.info.acceptedHostParams ?? (useLegacyDefault ? [] : undefined);
+  const accepted = engine.info.acceptedHostParams;
   if (!accepted) {
     return params;
   }
@@ -361,6 +351,76 @@ export function registerContextEngineInRegistry(
   return { ok: true };
 }
 
+function canAdoptRuntimeContextEngineFromRoot(params: {
+  pluginId: string | undefined;
+  targetRegistry: PluginRegistry;
+  runtimeRegistry: PluginRegistry;
+}): boolean {
+  if (!params.pluginId) {
+    return false;
+  }
+  const targetPlugin = params.targetRegistry.plugins.find(
+    (plugin) => plugin.id === params.pluginId,
+  );
+  const runtimePlugin = params.runtimeRegistry.plugins.find(
+    (plugin) => plugin.id === params.pluginId,
+  );
+  // Same ids can come from workspace shadows. Only carry a factory across registry generations
+  // when both registrations came from the exact same trusted plugin source.
+  return Boolean(
+    targetPlugin &&
+    runtimePlugin &&
+    targetPlugin.status === "loaded" &&
+    runtimePlugin.status === "loaded" &&
+    targetPlugin.source === runtimePlugin.source,
+  );
+}
+
+/**
+ * Scoped production handles stay in discovery mode so full-only plugins cannot
+ * mutate process-global backends. Runtime context engines are adopted from the
+ * composition-root registry instead of re-running `registrationMode: "full"`.
+ */
+export function adoptRuntimeContextEngineRegistrations(
+  targetRegistry: PluginRegistry,
+  runtimeRegistry: PluginRegistry,
+): PluginRegistry {
+  let adopted: Map<string, ContextEngineRegistration> | undefined;
+  const takeAdopted = () => {
+    adopted ??= new Map(targetRegistry.contextEngines);
+    return adopted;
+  };
+
+  for (const [id, runtime] of runtimeRegistry.contextEngines) {
+    if (runtime.lifecycle !== "runtime") {
+      continue;
+    }
+    const target = targetRegistry.contextEngines.get(id);
+    if (target?.lifecycle === "runtime") {
+      continue;
+    }
+    if (target && target.owner !== runtime.owner) {
+      continue;
+    }
+    if (
+      !canAdoptRuntimeContextEngineFromRoot({
+        pluginId: pluginIdFromContextEngineOwner(runtime.owner),
+        targetRegistry,
+        runtimeRegistry,
+      })
+    ) {
+      continue;
+    }
+    takeAdopted().set(id, runtime);
+  }
+
+  if (!adopted) {
+    return targetRegistry;
+  }
+  // Copy-on-write so cached discovery snapshots are not mutated into runtime handles.
+  return { ...targetRegistry, contextEngines: adopted };
+}
+
 /** Clear runtime quarantine only after a complete builder-local registry becomes active. */
 export function activateContextEngineRegistrations(pluginRegistry: PluginRegistry): void {
   for (const [id, registration] of pluginRegistry.contextEngines) {
@@ -403,11 +463,14 @@ export function resolveContextEngineOwnerPluginId(
   // Downgraded work belongs to its core-owned fallback, never the disabled plugin.
   const owner =
     metadata && !getContextEngineQuarantine(metadata.engineId) ? metadata.owner : undefined;
-  if (!owner?.startsWith("plugin:")) {
+  return owner ? pluginIdFromContextEngineOwner(owner) : undefined;
+}
+
+function pluginIdFromContextEngineOwner(owner: string): string | undefined {
+  if (!owner.startsWith("plugin:")) {
     return undefined;
   }
-  const pluginId = owner.slice("plugin:".length).trim();
-  return pluginId || undefined;
+  return owner.slice("plugin:".length).trim() || undefined;
 }
 
 function describeResolvedContextEngineContractError(
@@ -537,9 +600,7 @@ function resolvedContextEngineRef(params: {
   registeredId: string;
   owner: string;
 }): ResolvedContextEngineRef {
-  const pluginId = params.owner.startsWith("plugin:")
-    ? params.owner.slice("plugin:".length).trim()
-    : "";
+  const pluginId = pluginIdFromContextEngineOwner(params.owner);
   return Object.freeze({
     engine: params.engine,
     registeredId: params.registeredId,

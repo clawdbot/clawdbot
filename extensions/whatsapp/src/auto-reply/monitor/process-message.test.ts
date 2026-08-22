@@ -278,10 +278,6 @@ function callProcessMessage(
     replyResolver: (async () => undefined) as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
-    rememberSentText: () => {},
-    echoHas: () => false,
-    echoForget: () => {},
-    buildCombinedEchoKey: ({ sessionKey }) => sessionKey,
   });
 }
 

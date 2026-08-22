@@ -1,4 +1,5 @@
 // Imessage test support covers sanitize outbound plugin behavior.
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
 import {
   protectIMessageFencedRoleMarkers,
@@ -95,6 +96,14 @@ describe("sanitizeOutboundText", () => {
     ]) {
       expect(sanitizeIMessageFinalOutboundText(source).text).toBe(source);
     }
+  });
+
+  it("strips colon-qualified tags before the final security projection", () => {
+    const text = sanitizeForPlainText("<vendor:note>visible</vendor:note>", {
+      style: "markdown",
+    });
+
+    expect(sanitizeIMessageFinalOutboundText(text).text).toBe("visible");
   });
 
   it.each([

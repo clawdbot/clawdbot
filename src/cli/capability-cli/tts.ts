@@ -95,16 +95,20 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       });
     });
 
-  for (const [name, description, run] of [
-    ["providers", "List speech providers", runTtsProviders],
-    ["personas", "List TTS personas", runTtsPersonas],
-  ] as const) {
-    registerTransportTtsCommand(
-      tts.command(name).description(description),
-      "local",
-      (_, transport) => run(transport),
-    );
-  }
+  registerTransportTtsCommand(
+    tts
+      .command("providers")
+      .description("List speech providers")
+      .option("--agent <id>", "Agent whose provider state should be inspected"),
+    "local",
+    (opts, transport) => runTtsProviders(transport, opts.agent as string | undefined),
+  );
+
+  registerTransportTtsCommand(
+    tts.command("personas").description("List TTS personas"),
+    "local",
+    (_, transport) => runTtsPersonas(transport),
+  );
 
   tts
     .command("status")

@@ -129,6 +129,7 @@ function isConfiguredProfileCompatibleWithAuthProvider(params: {
 
 function listProfilesCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
   provider: string;
   providerAuthKey: string;
@@ -140,6 +141,7 @@ function listProfilesCompatibleWithAuthProvider(params: {
     .filter(([, credential]) =>
       isCredentialProviderCompatibleWithAuthProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey: params.providerAuthKey,
         credential,
       }),
@@ -263,6 +265,8 @@ type ResolveAuthProfileOrderParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
+  /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   preferredProfile?: string;
   /** Model that will consume the profile, for model-scoped cooldowns. */
   forModel?: string;
@@ -282,7 +286,10 @@ export function resolveAuthProfileOrderWithMetadata(
 ): AuthProfileOrderResolution {
   const { cfg, store, provider, preferredProfile, forModel } = params;
   const providerKey = normalizeProviderId(provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  const providerAuthKey = resolveProviderIdForAuth(provider, {
+    config: cfg,
+    ...params.authAliasLookupParams,
+  });
   const now = Date.now();
 
   // Clear any cooldowns that have expired since the last check so profiles
@@ -316,6 +323,7 @@ export function resolveAuthProfileOrderWithMetadata(
         .filter(([profileId, profile]) =>
           isConfiguredProfileCompatibleWithAuthProvider({
             cfg,
+            authAliasLookupParams: params.authAliasLookupParams,
             providerAuthKey,
             provider: profile.provider,
             mode: profile.mode,
@@ -326,6 +334,7 @@ export function resolveAuthProfileOrderWithMetadata(
     : [];
   const storeProfiles = listProfilesCompatibleWithAuthProvider({
     cfg,
+    authAliasLookupParams: params.authAliasLookupParams,
     store,
     provider,
     providerAuthKey,
@@ -335,6 +344,7 @@ export function resolveAuthProfileOrderWithMetadata(
       ? storeProfiles.filter((profileId) =>
           isNativeCredentialProviderCompatibleWithAuthProvider({
             cfg,
+            authAliasLookupParams: params.authAliasLookupParams,
             providerAuthKey,
             credential: store.profiles[profileId],
           }),
@@ -357,6 +367,7 @@ export function resolveAuthProfileOrderWithMetadata(
   const isValidProfile = (profileId: string): boolean => {
     const eligibility = resolveAuthProfileEligibility({
       cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       store,
       provider,
       profileId,
@@ -445,6 +456,7 @@ function resolveAuthOrder(
 
 function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   providerAuthKey: string;
   credential: AuthProfileCredential | undefined;
 }): boolean {
@@ -452,8 +464,10 @@ function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
     return false;
   }
   return (
-    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
-    params.providerAuthKey
+    resolveProviderIdForAuth(params.credential.provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    }) === params.providerAuthKey
   );
 }
 

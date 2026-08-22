@@ -32,6 +32,19 @@ const mocks = vi.hoisted(() => {
     plugins: [],
     diagnostics: [],
   };
+  const knownModelProviderOwners = new Map(
+    [
+      "anthropic",
+      "azure-openai-responses",
+      "codex",
+      "google",
+      "moonshot",
+      "openai",
+      "opencode-go",
+      "xiaomi",
+      "z.ai",
+    ].map((providerId) => [providerId, ["test-provider-plugin"]]),
+  );
   const emptyPluginMetadataSnapshot = {
     policyHash: "models-list-command-forward-compat-test",
     configFingerprint: "models-list-command-forward-compat-test",
@@ -45,7 +58,7 @@ const mocks = vi.hoisted(() => {
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
-      providers: new Map(),
+      providers: knownModelProviderOwners,
       modelCatalogProviders: new Map(),
       cliBackends: new Map(),
       setupProviders: new Map(),
@@ -89,6 +102,7 @@ const mocks = vi.hoisted(() => {
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
     resolveDefaultAgentDir: vi.fn(),
+    resolveModelsTargetAgent: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
@@ -112,6 +126,10 @@ function resetMocks() {
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
   mocks.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveModelsTargetAgent.mockReturnValue({
+    agentId: "main",
+    agentDir: "/tmp/openclaw-agent",
+  });
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -145,7 +163,7 @@ function resetMocks() {
 }
 
 function createRuntime() {
-  return { log: vi.fn(), error: vi.fn() };
+  return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
 function primeModelRegistry(
@@ -217,7 +235,7 @@ function installModelsListCommandForwardCompatMocks() {
     id === "gpt-5.3-codex-spark";
 
   vi.doMock("../../agents/model-suppression.js", () => ({
-    shouldSuppressBuiltInModel: suppressOpenAiSpark,
+    shouldSuppressBuiltInModelCore: suppressOpenAiSpark,
     shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
     createManifestBuiltInModelSuppressor: vi.fn(
       () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),
@@ -230,6 +248,11 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("./list.configured.js", () => ({
     resolveConfiguredEntries: mocks.resolveConfiguredEntries,
+  }));
+
+  vi.doMock("./shared.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./shared.js")>()),
+    resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
   }));
 
   vi.doMock("./list.table.js", () => ({
@@ -394,6 +417,37 @@ beforeEach(() => {
 });
 
 describe("modelsListCommand forward-compat", () => {
+  it("uses the explicitly selected agent for auth and catalog discovery", async () => {
+    mocks.resolveModelsTargetAgent.mockReturnValueOnce({
+      agentId: "research",
+      agentDir: "/tmp/openclaw-agent-research",
+    });
+
+    await modelsListCommand({ agent: "research", json: true }, createRuntime() as never);
+
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research", {
+      kind: "read",
+    });
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
+  });
+
+  it("rejects unknown provider filters before loading the model registry", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      modelsListCommand({ provider: "autoqa-no-such-provider", json: true }, runtime as never),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+      machineOutput: expect.stringContaining('Unknown provider filter "autoqa-no-such-provider"'),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+    expect(mocks.printModelTable).not.toHaveBeenCalled();
+  });
+
   describe("empty model lists", () => {
     it.each([
       { name: "JSON", options: { json: true } },
@@ -401,7 +455,7 @@ describe("modelsListCommand forward-compat", () => {
     ])("renders empty $name output through the canonical model table", async ({ options }) => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       const runtime = createRuntime();
-      const opts = { ...options, provider: "autoqa-no-such-provider" };
+      const opts = { ...options, provider: "openai" };
 
       await modelsListCommand(opts, runtime as never);
 
@@ -416,7 +470,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.startPromotionsFeedRefresh.mockReturnValueOnce(refreshToken);
       const runtime = createRuntime();
 
-      await modelsListCommand({ provider: "autoqa-no-such-provider" }, runtime as never);
+      await modelsListCommand({ provider: "openai" }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("No models found.");
       expect(mocks.printModelTable).not.toHaveBeenCalled();
@@ -442,9 +496,14 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadModelRegistry.mockRejectedValueOnce(new Error("registry failed"));
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true }, runtime as never);
+      await expect(modelsListCommand({ all: true }, runtime as never)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: "Model registry unavailable: registry failed",
+        humanOutput: expect.stringContaining("Model registry unavailable:\nError: registry failed"),
+        machineOutput: "Model registry unavailable: registry failed",
+      });
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("registry failed"));
+      expect(runtime.error).not.toHaveBeenCalled();
       expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
       expect(mocks.printAvailablePromotionsSection).not.toHaveBeenCalled();
     });
@@ -769,13 +828,23 @@ describe("modelsListCommand forward-compat", () => {
       });
     });
 
-    it("includes configured provider and auth-backed catalog rows in configured-mode lists", async () => {
+    it.each([
+      {
+        mode: "merge" as const,
+        expectedKeys: ["xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5", "google/gemini-3.1-flash-lite"],
+      },
+      {
+        mode: "replace" as const,
+        expectedKeys: ["xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5"],
+      },
+    ])("honors $mode mode in configured lists", async ({ mode, expectedKeys }) => {
       const config = {
         agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5-pro" } } },
         models: {
+          mode,
           providers: {
             xiaomi: {
-              api: "openai-completions",
+              ...(mode === "merge" ? { api: "openai-completions" as const } : {}),
               apiKey: "tp-fixture",
               baseUrl: "https://api.xiaomi.example/v1",
               models: [
@@ -815,6 +884,22 @@ describe("modelsListCommand forward-compat", () => {
             tags: new Set(["default"]),
             aliases: [],
           },
+          ...(mode === "replace"
+            ? [
+                {
+                  key: "google/gemini-stale",
+                  ref: { provider: "google", model: "gemini-stale" },
+                  tags: new Set(["fallback#1"]),
+                  aliases: [],
+                },
+                {
+                  key: "openai/gpt-stale",
+                  ref: { provider: "openai", model: "gpt-stale" },
+                  tags: new Set(["configured"]),
+                  aliases: [],
+                },
+              ]
+            : []),
         ],
       });
       mocks.loadModelCatalog.mockResolvedValueOnce([
@@ -831,25 +916,76 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true }, runtime as never);
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providerDiscoveryProviderIds: ["google", "openai", "xiaomi"],
-          providerRuntimeDiscoveryProviderIds: [],
-          providerManifestFallbackProviderIds: ["google", "openai"],
-        }),
-      );
+      if (mode === "merge") {
+        expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerDiscoveryProviderIds: ["google", "openai", "xiaomi"],
+            providerRuntimeDiscoveryProviderIds: [],
+            providerManifestFallbackProviderIds: ["google", "openai"],
+          }),
+        );
+      } else {
+        expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+      }
       const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
-      expectRowKeys(rows, [
-        "xiaomi/mimo-v2.5-pro",
-        "xiaomi/mimo-v2.5",
-        "google/gemini-3.1-flash-lite",
-      ]);
+      expectRowKeys(rows, expectedKeys);
       expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
       expectRowFields(rows, "xiaomi/mimo-v2.5", { name: "MiMo V2.5" });
-      expectRowFields(rows, "google/gemini-3.1-flash-lite", {
-        name: "Gemini 3.1 Flash Lite",
-        available: true,
+      if (mode === "merge") {
+        expectRowFields(rows, "google/gemini-3.1-flash-lite", {
+          name: "Gemini 3.1 Flash Lite",
+          available: true,
+        });
+      }
+    });
+
+    it.each([
+      { name: "--all", options: { all: true } },
+      { name: "--provider", options: { provider: "google" } },
+    ])("keeps explicit $name browsing in replace mode", async ({ options }) => {
+      const config = {
+        agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5-pro" } } },
+        models: {
+          mode: "replace" as const,
+          providers: {
+            xiaomi: {
+              baseUrl: "https://api.xiaomi.example/v1",
+              models: [{ id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", input: ["text"] }],
+            },
+          },
+        },
+      };
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: config,
+        resolvedConfig: config,
+        diagnostics: [],
       });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "xiaomi/mimo-v2.5-pro",
+            ref: { provider: "xiaomi", model: "mimo-v2.5-pro" },
+            tags: new Set(["default"]),
+            aliases: [],
+          },
+        ],
+      });
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "google",
+          id: "gemini-3.1-flash-lite",
+          name: "Gemini 3.1 Flash Lite",
+          input: ["text"],
+          contextWindow: 1_000_000,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ ...options, json: true }, runtime as never);
+
+      expect(lastPrintedRows<{ key: string }>().map((row) => row.key)).toContain(
+        "google/gemini-3.1-flash-lite",
+      );
     });
 
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun } from "./execute.js";
 import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
@@ -61,6 +62,7 @@ function createRunContext(params: {
 
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(params.runId),
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:main",

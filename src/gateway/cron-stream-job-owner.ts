@@ -1,5 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { errorBackoffMs } from "../cron/service/jobs.js";
+import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -573,7 +573,8 @@ export class CronStreamJobOwner {
       reason === "trust-disabled"
         ? {
             streamStatus: "disabled",
-            streamError: "stream sources require cron.triggers.enabled=true",
+            streamError:
+              "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
           }
         : reason === "cron-disabled"
           ? { streamStatus: "disabled", streamError: "cron is disabled" }

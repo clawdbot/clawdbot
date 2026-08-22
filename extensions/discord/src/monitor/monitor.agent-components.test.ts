@@ -1,15 +1,24 @@
 // Discord tests cover monitor.agent components plugin behavior.
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, ComponentType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+} from "openclaw/plugin-sdk/system-event-runtime";
 import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
+import {
   ButtonInteraction,
-  ComponentData,
+  createInteraction,
   StringSelectMenuInteraction,
+  type ComponentData,
 } from "../internal/discord.js";
+import {
+  createInternalComponentInteractionPayload,
+  createInternalTestClient,
+} from "../internal/test-builders.test-support.js";
 import {
   enqueueSystemEventMock,
   readAllowFromStoreMock,
@@ -37,37 +46,53 @@ describe("agent components", () => {
   });
 
   const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
-  const createBaseDmInteraction = (overrides: Record<string, unknown> = {}) => {
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const defer = vi.fn().mockResolvedValue(undefined);
-    const interaction = {
-      rawData: { channel_id: "dm-channel" },
-      user: { id: "123456789", username: "Alice", discriminator: "1234" },
-      defer,
-      reply,
-      ...overrides,
-    };
-    return { interaction, defer, reply };
-  };
-
-  const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
-    const { interaction, defer, reply } = createBaseDmInteraction(
-      overrides as Record<string, unknown>,
+  const createDmInteraction = (params: { interactionId: string; data?: Record<string, unknown> }) =>
+    createInteraction(
+      createInternalTestClient(),
+      createInternalComponentInteractionPayload({
+        id: params.interactionId,
+        token: `token-${params.interactionId}`,
+        channel_id: "dm-channel",
+        user: {
+          id: "123456789",
+          username: "Alice",
+          discriminator: "1234",
+          global_name: null,
+          avatar: null,
+        },
+        data: params.data,
+      }),
     );
+
+  const createDmButtonInteraction = (interactionId = "interaction-1") => {
+    const interaction = createDmInteraction({ interactionId });
+    if (!(interaction instanceof ButtonInteraction)) {
+      throw new Error("expected a Discord button interaction");
+    }
+    const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
+    const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
     return {
-      interaction: interaction as unknown as ButtonInteraction,
+      interaction,
       defer,
       reply,
     };
   };
 
-  const createDmSelectInteraction = (overrides: Partial<StringSelectMenuInteraction> = {}) => {
-    const { interaction, defer, reply } = createBaseDmInteraction({
-      values: ["alpha"],
-      ...(overrides as Record<string, unknown>),
+  const createDmSelectInteraction = (interactionId = "interaction-1") => {
+    const interaction = createDmInteraction({
+      interactionId,
+      data: {
+        component_type: ComponentType.StringSelect,
+        values: ["alpha"],
+      },
     });
+    if (!(interaction instanceof StringSelectMenuInteraction)) {
+      throw new Error("expected a Discord string select interaction");
+    }
+    const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
+    const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
     return {
-      interaction: interaction as unknown as StringSelectMenuInteraction,
+      interaction,
       defer,
       reply,
     };
@@ -89,30 +114,34 @@ describe("agent components", () => {
     return content;
   };
 
-  const createBaseGroupDmInteraction = (overrides: Record<string, unknown> = {}) => {
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const defer = vi.fn().mockResolvedValue(undefined);
-    const interaction = {
-      rawData: { channel_id: "group-dm-channel" },
-      channel: {
-        id: "group-dm-channel",
-        type: ChannelType.GroupDM,
-        name: "incident-room",
-      },
-      user: { id: "123456789", username: "Alice", discriminator: "1234" },
-      defer,
-      reply,
-      ...overrides,
-    };
-    return { interaction, defer, reply };
-  };
-
-  const createGroupDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
-    const { interaction, defer, reply } = createBaseGroupDmInteraction(
-      overrides as Record<string, unknown>,
+  const createGroupDmButtonInteraction = (interactionId = "interaction-1") => {
+    const interaction = createInteraction(
+      createInternalTestClient(),
+      createInternalComponentInteractionPayload({
+        id: interactionId,
+        token: `token-${interactionId}`,
+        channel_id: "group-dm-channel",
+        channel: {
+          id: "group-dm-channel",
+          type: ChannelType.GroupDM,
+          name: "incident-room",
+        },
+        user: {
+          id: "123456789",
+          username: "Alice",
+          discriminator: "1234",
+          global_name: null,
+          avatar: null,
+        },
+      }),
     );
+    if (!(interaction instanceof ButtonInteraction)) {
+      throw new Error("expected a Discord button interaction");
+    }
+    const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
+    const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
     return {
-      interaction: interaction as unknown as ButtonInteraction,
+      interaction,
       defer,
       reply,
     };
@@ -139,7 +168,7 @@ describe("agent components", () => {
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
       {
         sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-button:dm-channel:hello:123456789",
+        contextKey: "discord:agent-button:dm-channel:hello:123456789:interaction-1",
       },
     );
     if (params.expectPairingStoreRead) {
@@ -205,7 +234,7 @@ describe("agent components", () => {
     });
 
     expect(defer).not.toHaveBeenCalled();
-    expect(ctx).toEqual({
+    expect(ctx).toMatchObject({
       channelId: "group-dm-channel",
       user: { id: "123456789", username: "Alice", discriminator: "1234" },
       username: "Alice#1234",
@@ -266,7 +295,7 @@ describe("agent components", () => {
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
       {
         sessionKey: defaultGroupDmSessionKey,
-        contextKey: "discord:agent-button:group-dm-channel:hello:123456789",
+        contextKey: "discord:agent-button:group-dm-channel:hello:123456789:interaction-1",
       },
     );
     expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
@@ -329,7 +358,7 @@ describe("agent components", () => {
       "[Discord select menu: hello interacted by Alice#1234 (123456789) (selected: alpha)]",
       {
         sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-select:dm-channel:hello:123456789",
+        contextKey: "discord:agent-select:dm-channel:hello:123456789:interaction-1",
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -352,7 +381,7 @@ describe("agent components", () => {
       "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
       {
         sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-button:dm-channel:hello_cid:123456789",
+        contextKey: "discord:agent-button:dm-channel:hello_cid:123456789:interaction-1",
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -375,9 +404,68 @@ describe("agent components", () => {
       "[Discord component: hello%2G clicked by Alice#1234 (123456789)]",
       {
         sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-button:dm-channel:hello%2G:123456789",
+        contextKey: "discord:agent-button:dm-channel:hello%2G:123456789:interaction-1",
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
+
+  it.each(["button", "select"] as const)(
+    "queues distinct %s occurrences while deduplicating replayed occurrences",
+    async (kind) => {
+      const context = {
+        cfg: createCfg(),
+        accountId: "default",
+        dmPolicy: "allowlist" as const,
+        allowFrom: ["123456789"],
+      };
+      const control =
+        kind === "button" ? createAgentComponentButton(context) : createAgentSelectMenu(context);
+      const createInteractionForKind =
+        kind === "button" ? createDmButtonInteraction : createDmSelectInteraction;
+      const first = createInteractionForKind("interaction-1");
+      const second = createInteractionForKind("interaction-2");
+      const replay = createInteractionForKind("interaction-1");
+
+      await enqueueSystemEventMock.withImplementation(
+        (...args) => enqueueSystemEvent(...(args as Parameters<typeof enqueueSystemEvent>)),
+        async () => {
+          await control.run(first.interaction, { componentId: "hello" } as ComponentData);
+          enqueueSystemEvent("An unrelated event occurred", {
+            sessionKey: defaultDmSessionKey,
+            contextKey: "discord:test:intervening",
+          });
+          await control.run(second.interaction, { componentId: "hello" } as ComponentData);
+          await control.run(replay.interaction, { componentId: "hello" } as ComponentData);
+
+          expect(enqueueSystemEventMock.mock.results.map(({ value }) => value)).toEqual([
+            true,
+            true,
+            false,
+          ]);
+          const eventText =
+            kind === "button"
+              ? "[Discord component: hello clicked by Alice#1234 (123456789)]"
+              : "[Discord select menu: hello interacted by Alice#1234 (123456789) (selected: alpha)]";
+          expect(peekSystemEventEntries(defaultDmSessionKey)).toMatchObject([
+            {
+              text: eventText,
+              contextKey: `discord:agent-${kind}:dm-channel:hello:123456789:interaction-1`,
+            },
+            {
+              text: "An unrelated event occurred",
+              contextKey: "discord:test:intervening",
+            },
+            {
+              text: eventText,
+              contextKey: `discord:agent-${kind}:dm-channel:hello:123456789:interaction-2`,
+            },
+          ]);
+          for (const { reply } of [first, second, replay]) {
+            expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+          }
+        },
+      );
+    },
+  );
 });

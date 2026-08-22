@@ -12,7 +12,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   beginRestartRecoveryTerminalDelivery,
   cancelRestartRecoveryTerminalDelivery,
@@ -42,6 +42,28 @@ type SourceReplyTranscriptMirrorParams = {
   deliveredPayload?: unknown;
   replyToIsExplicit?: boolean;
 };
+
+type TerminalSourceReplyDeliveryStart =
+  | TerminalSourceReplyDeliveryReceipt
+  | {
+      outcome: "already_delivered" | "delivery_ambiguous";
+      result: { status: string; delivered: false; message: string };
+    }
+  | undefined;
+
+function buildTerminalSourceReplyNoSendResult(outcome: "already_delivered" | "delivery_ambiguous") {
+  return {
+    outcome,
+    result: {
+      status: outcome,
+      delivered: false as const,
+      message:
+        outcome === "already_delivered"
+          ? "The completed reply was already delivered. Do not retry it."
+          : "The completed reply may already have been delivered. Do not retry it.",
+    },
+  };
+}
 
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
   sessionKey: string;
@@ -212,7 +234,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sourceTurnId,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
     toolCallId,
   };
 }
@@ -220,7 +242,7 @@ function resolveTerminalSourceReplyDeliveryReceipt(
 /** Arms the fail-closed state before a terminal source reply can reach a provider. */
 export async function beginTerminalSourceReplyDelivery(
   params: SourceReplyTranscriptMirrorParams,
-): Promise<TerminalSourceReplyDeliveryReceipt | undefined> {
+): Promise<TerminalSourceReplyDeliveryStart> {
   const receipt = resolveTerminalSourceReplyDeliveryReceipt(params);
   if (!receipt) {
     return undefined;
@@ -229,11 +251,11 @@ export async function beginTerminalSourceReplyDelivery(
   if (result === "not-applicable") {
     return undefined;
   }
-  if (result === "blocked") {
-    throw new Error("terminal source reply already has a durable delivery outcome");
+  if (result === "already-delivered") {
+    return buildTerminalSourceReplyNoSendResult("already_delivered");
   }
-  if (result === "stale") {
-    throw new Error("terminal source reply lost restart recovery ownership");
+  if (result === "delivery-ambiguous" || result === "stale") {
+    return buildTerminalSourceReplyNoSendResult("delivery_ambiguous");
   }
   return receipt;
 }

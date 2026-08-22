@@ -17,7 +17,10 @@ export function createGatewayMaintenanceStateForTest(params?: {
     getHealthVersion: () => params?.healthVersion ?? 1,
     refreshGatewayHealthSnapshot: async () =>
       params?.healthSummary ?? ({ ok: true } as HealthSummary),
-    logHealth: { error: () => {} },
+    logHealth: { info: () => {}, error: () => {} },
+    restartRunningChannels: async () => {},
+    refreshPresence: () => {},
+    resetEventLoopHealth: () => {},
     dedupe: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),

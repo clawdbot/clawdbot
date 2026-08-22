@@ -228,7 +228,7 @@ export function findFailureOutboundMessage(
     (message) =>
       message.direction === "outbound" &&
       (!options?.accountId || message.accountId === options.accountId) &&
-      Boolean(extractQaFailureReplyText(message.text)),
+      Boolean(extractQaFailureReplyText(message)),
   );
 }
 
@@ -238,7 +238,7 @@ function assertNoFailureReplies(
 ) {
   const failureMessage = findFailureOutboundMessage(state, options);
   if (failureMessage) {
-    throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+    throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
   }
 }
 
@@ -564,9 +564,7 @@ export async function waitForQaTransportOutboundSequence(params: {
       // Failures belong to the account, even when a different conversation has a matching final.
       for (const { kind, message } of ownedEvents) {
         const failureReply =
-          kind === "deleted" || message.deleted
-            ? undefined
-            : extractQaFailureReplyText(message.text);
+          kind === "deleted" || message.deleted ? undefined : extractQaFailureReplyText(message);
         if (failureReply) {
           throw new Error(failureReply);
         }

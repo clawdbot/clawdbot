@@ -6,46 +6,25 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
-import { pathToFileURL } from "node:url";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import type { JsonValue } from "./protocol.js";
+import {
+  createCodexNodeExecServerDisconnectError,
+  startCodexNodeExecServerRelay,
+} from "./sandbox-exec-server-node-relay.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
-import {
-  closeAllFileReads,
-  closeFile,
-  type CodexSandboxFileReadHandles,
-  createDirectory,
-  copyPath,
-  getMetadata,
-  openFile,
-  readDirectory,
-  readFile,
-  readFileBlock,
-  removePath,
-  writeFile,
-} from "./sandbox-exec-server/filesystem.js";
-import { httpRequest } from "./sandbox-exec-server/http.js";
-import {
-  JSON_RPC_METHOD_NOT_FOUND,
-  JsonRpcProtocolError,
-  parseRequest,
-  sendError,
-  sendResult,
-} from "./sandbox-exec-server/json-rpc.js";
-import {
-  readProcess,
-  startProcess,
-  terminateProcess,
-  writeProcess,
-} from "./sandbox-exec-server/processes.js";
+import { parseRequest } from "./sandbox-exec-server/json-rpc.js";
+import type { SandboxChildOwner } from "./sandbox-exec-server/sandbox-child.js";
+import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
 import type {
-  JsonRpcRequest,
-  ManagedProcess,
+  CodexNodeExecServerLease,
   OpenClawExecServer,
+  OpenClawLeasedExecServer,
+  OpenClawNodeExecServer,
 } from "./sandbox-exec-server/types.js";
 
 /** Codex environment metadata registered for one sandbox exec-server lease. */
@@ -55,52 +34,77 @@ export type CodexSandboxExecEnvironment = {
 };
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
+const CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
+const codexNodeExecServerLeases = new WeakMap<
+  CodexSandboxExecEnvironment,
+  CodexNodeExecServerLease
+>();
 
 /** Starts or reuses a sandbox exec-server and registers it with Codex app-server. */
 export async function ensureCodexSandboxExecServerEnvironment(params: {
   client: CodexAppServerClient;
   sandbox: SandboxContext | null;
+  runtime?: PluginRuntime;
   appServerStartOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   signal?: AbortSignal;
+  onExecutionDisconnect?: (error: Error) => void;
 }): Promise<CodexSandboxExecEnvironment | undefined> {
-  if (!params.sandbox?.enabled || !params.sandbox.backend) {
+  if (!params.sandbox?.enabled) {
     return undefined;
+  }
+  const placementNodeId = readCodexPlacementNodeId(params.sandbox);
+  if (!params.sandbox.backend && !placementNodeId) {
+    return undefined;
+  }
+  if (placementNodeId && !params.runtime) {
+    throw new Error("Codex paired-device execution requires its active plugin runtime.");
   }
   if (!canExposeLocalExecServerToAppServer(params.appServerStartOptions)) {
     throw new Error(
       "OpenClaw Codex exec-server uses a local loopback URL and cannot be registered with a remote Codex app-server.",
     );
   }
-  const execServer = await acquireOpenClawExecServer(params.sandbox);
+  const { server: execServer, nodeLease } = await acquireOpenClawExecServer({
+    sandbox: params.sandbox,
+    runtime: params.runtime,
+    signal: params.signal,
+    onExecutionDisconnect: params.onExecutionDisconnect,
+  });
+  // Codex retains a thread's environment instance when its id and cwd stay equal.
+  // A single-use paired-node channel therefore needs a fresh selected identity.
+  const environmentId = nodeLease ? `openclaw-node-${nodeLease.id}` : execServer.environmentId;
   try {
+    const execServerUrl = nodeLease ? `${execServer.url}?lease=${nodeLease.id}` : execServer.url;
     await params.client.request(
       "environment/add",
       {
-        environmentId: execServer.environmentId,
-        execServerUrl: execServer.url,
+        environmentId,
+        execServerUrl,
       },
       { timeoutMs: params.timeoutMs, signal: params.signal },
     );
   } catch (error) {
-    await releaseOpenClawExecServer(execServer);
-    if (isEnvironmentAddUnsupported(error)) {
-      embeddedAgentLog.warn("codex app-server does not support remote environments yet", {
-        environmentId: execServer.environmentId,
-      });
-      return undefined;
+    if (nodeLease && "node" in execServer) {
+      closeCodexNodeExecServerLease(execServer, nodeLease);
     }
+    await releaseOpenClawExecServer(execServer);
     throw error;
   }
-  return {
-    environmentId: execServer.environmentId,
+  const environment = {
+    environmentId,
     cwd: params.sandbox.containerWorkdir,
   };
+  if (nodeLease) {
+    codexNodeExecServerLeases.set(environment, nodeLease);
+  }
+  return environment;
 }
 
 /** Releases the sandbox exec-server lease associated with a sandbox runtime. */
 export async function releaseCodexSandboxExecServerEnvironment(
   sandbox: SandboxContext | null | undefined,
+  environment?: CodexSandboxExecEnvironment,
 ): Promise<void> {
   if (!sandbox?.enabled) {
     return;
@@ -109,18 +113,13 @@ export async function releaseCodexSandboxExecServerEnvironment(
     .get(sandbox.runtimeId)
     ?.catch(() => undefined);
   if (server) {
+    const nodeLease = environment && codexNodeExecServerLeases.get(environment);
+    if (nodeLease && "node" in server) {
+      codexNodeExecServerLeases.delete(environment);
+      closeCodexNodeExecServerLease(server, nodeLease);
+    }
     await releaseOpenClawExecServer(server);
   }
-}
-
-function isEnvironmentAddUnsupported(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    error.message.includes("environment/add") &&
-    (error.message.includes("unknown variant") || error.message.includes("Method not found"))
-  );
 }
 
 function canExposeLocalExecServerToAppServer(
@@ -144,7 +143,13 @@ function canExposeLocalExecServerToAppServer(
   }
 }
 
-async function acquireOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
+async function acquireOpenClawExecServer(params: {
+  sandbox: SandboxContext;
+  runtime?: PluginRuntime;
+  signal?: AbortSignal;
+  onExecutionDisconnect?: (error: Error) => void;
+}): Promise<{ server: OpenClawLeasedExecServer; nodeLease?: CodexNodeExecServerLease }> {
+  const { sandbox, runtime, signal, onExecutionDisconnect } = params;
   const key = sandbox.runtimeId;
   while (true) {
     const existing = sandboxExecServerRegistry.servers.get(key);
@@ -152,12 +157,67 @@ async function acquireOpenClawExecServer(sandbox: SandboxContext): Promise<OpenC
     const server = await promise;
     if (!server.closed && sandboxExecServerRegistry.servers.get(key) === promise) {
       server.refCount += 1;
-      return server;
+      if (!("node" in server)) {
+        return { server };
+      }
+      if (!runtime || !signal) {
+        await releaseOpenClawExecServer(server);
+        throw new Error("Codex paired-device execution requires an active runtime and attempt.");
+      }
+      try {
+        const placementIdentity = readCodexPlacementWorkspaceIdentity(sandbox);
+        // Capture the admitted caller's exact async scope before a detached WebSocket event.
+        const channel = await runtime.nodes.openDuplex({
+          nodeId: server.node.id,
+          command: "codex.exec-server.stdio.v1",
+          params: { cwd: sandbox.containerWorkdir, ...placementIdentity },
+          sessionKey: sandbox.sessionKey,
+          timeoutMs: 0,
+          maxMessageBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES,
+          maxOutstandingDeliveryBytes: CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES + 2 * 1024 * 1024,
+          signal,
+        });
+        if (
+          signal.aborted ||
+          server.closed ||
+          sandboxExecServerRegistry.servers.get(key) !== promise
+        ) {
+          channel.close();
+          throw new Error("Codex paired-device execution retired before its channel was ready.");
+        }
+        const nodeLease = {
+          id: randomUUID(),
+          channel,
+          claimed: false,
+          closed: false,
+          onDisconnected: onExecutionDisconnect,
+        };
+        server.node.leases.set(nodeLease.id, nodeLease);
+        // The approved child can exit before app-server claims its loopback socket.
+        // Observe that lifetime immediately instead of losing its terminal fact.
+        void channel.closed
+          .then(
+            () => handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: false }),
+            (error: unknown) =>
+              handleClosedCodexNodeExecServerLease(server, nodeLease, { failed: true, error }),
+          )
+          .catch((error: unknown) => {
+            embeddedAgentLog.warn("codex paired-device exec-server lease cleanup failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        return { server, nodeLease };
+      } catch (error) {
+        await releaseOpenClawExecServer(server);
+        throw error;
+      }
     }
   }
 }
 
-function startAndRememberOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
+function startAndRememberOpenClawExecServer(
+  sandbox: SandboxContext,
+): Promise<OpenClawLeasedExecServer> {
   const created = startOpenClawExecServer(sandbox);
   const key = sandbox.runtimeId;
   sandboxExecServerRegistry.servers.set(key, created);
@@ -169,13 +229,37 @@ function startAndRememberOpenClawExecServer(sandbox: SandboxContext): Promise<Op
   return created;
 }
 
-async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
+async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawLeasedExecServer> {
+  const backend = sandbox.backend;
+  const fsBridge = sandbox.fsBridge;
+  const placementNodeId = readCodexPlacementNodeId(sandbox);
+  let connection:
+    | { kind: "node"; id: string }
+    | {
+        kind: "sandbox";
+        backend: NonNullable<SandboxContext["backend"]>;
+        fsBridge: NonNullable<SandboxContext["fsBridge"]>;
+      };
+  if (placementNodeId) {
+    connection = { kind: "node", id: placementNodeId };
+  } else {
+    if (!backend) {
+      throw new Error("OpenClaw sandbox backend is unavailable.");
+    }
+    if (!fsBridge) {
+      throw new Error("Sandbox filesystem bridge is unavailable.");
+    }
+    connection = { kind: "sandbox", backend, fsBridge };
+  }
   const server = new WebSocketServer({
     host: "127.0.0.1",
     port: 0,
     // Match ws' historical default: Codex fs/writeFile sends one base64 JSON-RPC
     // frame, while the socket error handler below makes oversize frames nonfatal.
-    maxPayload: CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
+    maxPayload:
+      connection.kind === "node"
+        ? CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES
+        : CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
   });
   await once(server, "listening");
   const address = server.address();
@@ -185,7 +269,7 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   const environmentId = buildEnvironmentId(sandbox);
   const authPath = `/openclaw-${randomUUID()}`;
   const url = `ws://127.0.0.1:${(address as AddressInfo).port}${authPath}`;
-  const execServer: OpenClawExecServer = {
+  const common = {
     authPath,
     closed: false,
     environmentId,
@@ -193,12 +277,22 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
     url,
     sandbox,
     server,
+    children: new Set<SandboxChildOwner>(),
+    cleanupTasks: new Set<Promise<void>>(),
   };
+  const execServer: OpenClawLeasedExecServer =
+    connection.kind === "node"
+      ? { ...common, node: { id: connection.id, leases: new Map() } }
+      : { ...common, backend: connection.backend, fsBridge: connection.fsBridge };
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
     socket.on("error", handleExecServerSocketError);
     if (!isAuthorizedExecServerRequest(execServer, request)) {
       socket.close(1008, "unauthorized");
+      return;
+    }
+    if ("node" in execServer) {
+      handleNodeConnection(execServer, socket, request);
       return;
     }
     handleConnection(execServer, socket);
@@ -211,7 +305,7 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   return execServer;
 }
 
-async function releaseOpenClawExecServer(execServer: OpenClawExecServer): Promise<void> {
+async function releaseOpenClawExecServer(execServer: OpenClawLeasedExecServer): Promise<void> {
   if (execServer.closed) {
     return;
   }
@@ -228,20 +322,7 @@ async function releaseOpenClawExecServer(execServer: OpenClawExecServer): Promis
   if (current === execServer) {
     sandboxExecServerRegistry.servers.delete(execServer.sandbox.runtimeId);
   }
-  await closeOpenClawExecServer(execServer);
-}
-
-async function closeOpenClawExecServer(execServer: OpenClawExecServer): Promise<void> {
-  if (execServer.closed) {
-    return;
-  }
-  execServer.closed = true;
-  for (const client of execServer.server.clients) {
-    client.close(1001, "shutdown");
-  }
-  await new Promise<void>((resolve) => {
-    execServer.server.close(() => resolve());
-  });
+  await sandboxExecServerRegistry.close(execServer);
 }
 
 function buildEnvironmentId(sandbox: SandboxContext): string {
@@ -250,26 +331,144 @@ function buildEnvironmentId(sandbox: SandboxContext): string {
 }
 
 function isAuthorizedExecServerRequest(
-  execServer: OpenClawExecServer,
+  execServer: OpenClawLeasedExecServer,
   request: IncomingMessage,
 ): boolean {
   const url = new URL(request.url ?? "", "ws://127.0.0.1");
   return url.pathname === execServer.authPath;
 }
 
+function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
+  if (
+    !("placementExecutionMode" in sandbox) ||
+    sandbox.placementExecutionMode !== "remote-exec" ||
+    !("placementNodeId" in sandbox) ||
+    typeof sandbox.placementNodeId !== "string" ||
+    !sandbox.placementNodeId
+  ) {
+    return undefined;
+  }
+  return sandbox.placementNodeId;
+}
+
+function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
+  sessionKey: string;
+} {
+  if (
+    !("placementEnvironmentId" in sandbox) ||
+    typeof sandbox.placementEnvironmentId !== "string" ||
+    !sandbox.placementEnvironmentId ||
+    sandbox.placementEnvironmentId.trim() !== sandbox.placementEnvironmentId ||
+    !("placementSessionId" in sandbox) ||
+    typeof sandbox.placementSessionId !== "string" ||
+    !sandbox.placementSessionId ||
+    sandbox.placementSessionId.trim() !== sandbox.placementSessionId ||
+    !("placementOwnerEpoch" in sandbox) ||
+    typeof sandbox.placementOwnerEpoch !== "number" ||
+    !Number.isSafeInteger(sandbox.placementOwnerEpoch) ||
+    sandbox.placementOwnerEpoch < 1 ||
+    !sandbox.sessionKey ||
+    sandbox.sessionKey.trim() !== sandbox.sessionKey
+  ) {
+    throw new Error(
+      "Codex paired-device execution requires its exact placement workspace identity.",
+    );
+  }
+  return {
+    environmentId: sandbox.placementEnvironmentId,
+    sessionId: sandbox.placementSessionId,
+    ownerEpoch: sandbox.placementOwnerEpoch,
+    sessionKey: sandbox.sessionKey,
+  };
+}
+
+function handleNodeConnection(
+  execServer: OpenClawNodeExecServer,
+  socket: WebSocket,
+  request: IncomingMessage,
+): void {
+  const leaseId = new URL(request.url ?? "", "ws://127.0.0.1").searchParams.get("lease");
+  const lease = leaseId ? execServer.node.leases.get(leaseId) : undefined;
+  if (!lease || lease.claimed || lease.closed) {
+    socket.close(1008, "execution channel unavailable");
+    return;
+  }
+  // stdio has exactly one connection; a fresh attempt always owns a fresh channel.
+  lease.claimed = true;
+  const cleanup = startCodexNodeExecServerRelay({ lease, socket });
+  execServer.cleanupTasks.add(cleanup);
+  void cleanup.then(
+    () => execServer.cleanupTasks.delete(cleanup),
+    (error: unknown) => {
+      execServer.cleanupTasks.delete(cleanup);
+      embeddedAgentLog.warn("codex paired-device exec-server relay failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
+}
+
+function closeCodexNodeExecServerLease(
+  execServer: OpenClawNodeExecServer,
+  lease: CodexNodeExecServerLease,
+): void {
+  execServer.node.leases.delete(lease.id);
+  if (!lease.closed) {
+    lease.closed = true;
+    lease.closeRelay?.();
+    lease.channel.close();
+  }
+}
+
+function handleClosedCodexNodeExecServerLease(
+  execServer: OpenClawNodeExecServer,
+  lease: CodexNodeExecServerLease,
+  result: { failed: boolean; error?: unknown },
+): void {
+  if (lease.closed) {
+    return;
+  }
+  if (lease.onChannelClosed) {
+    lease.onChannelClosed(result);
+    return;
+  }
+  try {
+    lease.onDisconnected?.(
+      createCodexNodeExecServerDisconnectError(
+        result.failed ? "execution device failed" : "execution device disconnected",
+        result.error,
+      ),
+    );
+  } finally {
+    closeCodexNodeExecServerLease(execServer, lease);
+  }
+}
+
 function handleConnection(execServer: OpenClawExecServer, socket: WebSocket): void {
-  const processes = new Map<string, ManagedProcess>();
-  const fileReads: CodexSandboxFileReadHandles = new Map();
+  const session = new CodexSandboxExecSession(execServer, {
+    isOpen: () => socket.readyState === socket.OPEN,
+    send: (message) => socket.send(JSON.stringify(message)),
+  });
   socket.on("message", (data) => {
-    void handleMessage(execServer, processes, fileReads, socket, data).catch((error: unknown) => {
+    void handleMessage(session, data).catch((error: unknown) => {
       embeddedAgentLog.warn("codex sandbox exec-server message failed", { error });
     });
   });
   socket.on("close", () => {
-    closeAllFileReads(fileReads);
-    for (const process of processes.values()) {
-      process.abortController.abort();
-    }
+    const cleanup = session.close();
+    execServer.cleanupTasks.add(cleanup);
+    void cleanup.then(
+      () => execServer.cleanupTasks.delete(cleanup),
+      (error: unknown) => {
+        execServer.cleanupTasks.delete(cleanup);
+        embeddedAgentLog.warn("codex sandbox exec-server socket cleanup failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
   });
 }
 
@@ -277,101 +476,11 @@ function handleExecServerSocketError(error: unknown): void {
   embeddedAgentLog.debug("codex sandbox exec-server websocket failed", { error });
 }
 
-async function handleMessage(
-  execServer: OpenClawExecServer,
-  processes: Map<string, ManagedProcess>,
-  fileReads: CodexSandboxFileReadHandles,
-  socket: WebSocket,
-  data: RawData,
-): Promise<void> {
-  const request = parseRequest(data);
-  if (!request.method) {
-    sendError(socket, request.id, -32600, "Invalid Request");
-    return;
-  }
-  const method = request.method;
-  if (request.id === undefined) {
-    if (method !== "initialized") {
-      sendError(socket, -1, -32600, `Unexpected notification: ${method}`);
-    }
-    return;
-  }
-  try {
-    const result = await dispatchRequest(execServer, processes, fileReads, socket, {
-      ...request,
-      method,
-    });
-    sendResult(socket, request.id, result);
-  } catch (error) {
-    sendError(
-      socket,
-      request.id,
-      error instanceof JsonRpcProtocolError ? error.code : -32603,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
-async function dispatchRequest(
-  execServer: OpenClawExecServer,
-  processes: Map<string, ManagedProcess>,
-  fileReads: CodexSandboxFileReadHandles,
-  socket: WebSocket,
-  request: Required<Pick<JsonRpcRequest, "method">> & Pick<JsonRpcRequest, "id" | "params">,
-): Promise<JsonValue | undefined> {
-  switch (request.method) {
-    case "initialize":
-      return { sessionId: randomUUID() };
-    case "environment/info":
-      // The shell and cwd describe the sandbox target, not the Gateway host.
-      return {
-        shell: { name: "sh", path: "/bin/sh" },
-        cwd: pathToFileURL(execServer.sandbox.containerWorkdir, { windows: false }).href,
-        capabilities: { networkProxyLaunch: false },
-      };
-    case "environment/status":
-      return { status: "ready" };
-    // These method names are the Codex exec-server remote-environment RPCs.
-    // The app-server process-control surface uses different names such as
-    // process/spawn, but those are not sent to registered exec-server URLs.
-    case "process/start":
-      return startProcess(execServer, processes, socket, request.params);
-    case "process/read":
-      return await readProcess(processes, request.params);
-    case "process/write":
-      return writeProcess(processes, request.params);
-    case "process/terminate":
-      return terminateProcess(processes, request.params);
-    case "fs/open":
-      return await openFile(execServer, fileReads, request.params);
-    case "fs/readBlock":
-      return readFileBlock(fileReads, request.params);
-    case "fs/close":
-      return closeFile(fileReads, request.params);
-    case "fs/readFile":
-      return await readFile(execServer, request.params);
-    case "fs/writeFile":
-      await writeFile(execServer, request.params);
-      return {};
-    case "fs/createDirectory":
-      await createDirectory(execServer, request.params);
-      return {};
-    case "fs/getMetadata":
-      return await getMetadata(execServer, request.params);
-    case "fs/readDirectory":
-      return await readDirectory(execServer, request.params);
-    case "fs/remove":
-      await removePath(execServer, request.params);
-      return {};
-    case "fs/copy":
-      await copyPath(execServer, request.params);
-      return {};
-    case "http/request":
-      return await httpRequest(execServer, socket, request.params);
-    default:
-      throw new JsonRpcProtocolError(
-        JSON_RPC_METHOD_NOT_FOUND,
-        `Unsupported OpenClaw sandbox exec-server method: ${request.method}`,
-      );
-  }
+async function handleMessage(session: CodexSandboxExecSession, data: RawData): Promise<void> {
+  const buffer = Array.isArray(data)
+    ? Buffer.concat(data)
+    : Buffer.isBuffer(data)
+      ? data
+      : Buffer.from(data);
+  await session.handleRequest(parseRequest(buffer.toString("utf8")));
 }

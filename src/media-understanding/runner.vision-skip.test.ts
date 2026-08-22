@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
@@ -73,7 +73,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
   pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
   cfg: OpenClawConfig,
 ) {
-  const pluginIds = loadPluginManifestRegistry({
+  const pluginIds = loadPluginManifestRegistryCore({
     config: cfg,
     env: process.env,
   })
@@ -187,6 +187,10 @@ describe("runCapability image skip", () => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this image";
+        msgCtx.media = Array.from({ length: 4 }, () => ({
+          path: mediaPath,
+          contentType: "image/png",
+        }));
         const cfg = {
           agents: {
             defaults: {
@@ -217,12 +221,169 @@ describe("runCapability image skip", () => {
         const attempt = imageDecision?.attachments[0]?.attempts[0];
         expect(result.appliedImage).toBe(false);
         expect(imageDecision?.outcome).toBe("skipped");
+        expect(imageDecision).toMatchObject({ nativeVisionActive: true });
         expect(attempt?.outcome).toBe("skipped");
         expect(attempt?.reason).toBe("primary model supports vision natively");
         expect(describeCalls).toBe(0);
         expect(msgCtx.Body).not.toContain(plantedVisionSentinel);
+        expect(msgCtx.Body).not.toContain("Image attachment not");
       },
     );
+  });
+
+  it("markers remote-url-only images instead of claiming native handoff", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-url-only-no-handoff",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect both images";
+        msgCtx.media = [
+          { path: mediaPath, contentType: "image/png" },
+          { url: "https://cdn.example.test/photos/second.png", contentType: "image/png" },
+        ];
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg: {
+            tools: { media: { image: { attachments: { mode: "all", maxAttachments: 4 } } } },
+          } as unknown as OpenClawConfig,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(mediaPath),
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        expect(imageDecision?.outcome).toBe("skipped");
+        expect(imageDecision?.attachmentDispositions).toMatchObject({
+          0: { kind: "handed-to-native-vision" },
+          1: { kind: "failed" },
+        });
+        // Local image stays suppressed (native hydration owns it); the
+        // remote-url image renders its failure despite nativeVisionActive.
+        expect(msgCtx.Body).toContain("[Image attachment could not be analyzed]");
+        expect(msgCtx.Body).not.toContain("not processed");
+      },
+    );
+  });
+
+  it("runs explicit image models untouched by native-vision probe failure", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-explicit-model-probe-immune",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "inspect this image";
+        msgCtx.media = [{ path: mediaPath, contentType: "image/png" }];
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        await loadModelCatalog.withImplementation(
+          async () => {
+            throw new Error("catalog unavailable");
+          },
+          async () => {
+            const result = await applyMediaUnderstanding({
+              ctx: msgCtx,
+              cfg,
+              agentDir: "/tmp",
+              workspaceDir: path.dirname(mediaPath),
+              providers: {
+                openrouter: {
+                  id: "openrouter",
+                  capabilities: ["image"],
+                  describeImage: async (req) => ({
+                    text: plantedVisionSentinel,
+                    model: req.model,
+                  }),
+                },
+              },
+              activeModel: { provider: "openai", model: "gpt-4.1" },
+            });
+
+            const imageDecision = result.decisions.find(
+              (decision) => decision.capability === "image",
+            );
+            // The lone selected attachment leaves nothing to marker, so the
+            // probe never fires and catalog failure cannot reach this path.
+            expect(result.appliedImage).toBe(true);
+            expect(imageDecision?.outcome).toBe("success");
+            expect(imageDecision?.attachmentDispositions).toEqual({ 0: { kind: "handled" } });
+            expect(imageDecision).not.toHaveProperty("nativeVisionActive");
+          },
+        );
+      },
+    );
+  });
+
+  it("keeps disabled outcomes precise and suppresses markers when the vision probe fails", async () => {
+    const ctx: MsgContext = {
+      Body: "inspect this image",
+      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+    };
+
+    await loadModelCatalog.withImplementation(
+      async () => {
+        throw new Error("catalog unavailable");
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({
+          ctx,
+          cfg: { tools: { media: { image: { enabled: false } } } },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((d) => d.capability === "image");
+        expect(imageDecision).toMatchObject({
+          outcome: "disabled",
+          attachmentDispositions: { 0: { kind: "capability-disabled" } },
+        });
+        // Probe failure leaves the flag unknown: no false delivery claim, no marker.
+        expect(imageDecision).not.toHaveProperty("nativeVisionActive");
+        expect(ctx.Body).not.toContain("not analyzed");
+      },
+    );
+  });
+
+  it("renders disabled markers when the active model has no native vision", async () => {
+    const ctx: MsgContext = {
+      Body: "inspect this image",
+      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: { tools: { media: { image: { enabled: false } } } },
+    });
+
+    expect(result.decisions).toContainEqual(
+      expect.objectContaining({
+        capability: "image",
+        outcome: "disabled",
+        nativeVisionActive: false,
+        attachmentDispositions: { 0: { kind: "capability-disabled" } },
+      }),
+    );
+    expect(ctx.Body).toContain("[Image attachment not analyzed: image understanding is disabled]");
   });
 
   it("skips agents.defaults.imageModel fallback when MiniMax M3 supports vision", async () => {
@@ -297,6 +458,10 @@ describe("runCapability image skip", () => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this explicit image";
+        msgCtx.media = Array.from({ length: 4 }, () => ({
+          path: mediaPath,
+          contentType: "image/png",
+        }));
         const cfg = {
           tools: {
             media: {
@@ -332,8 +497,17 @@ describe("runCapability image skip", () => {
         const imageDecision = result.decisions.find((decision) => decision.capability === "image");
         expect(result.appliedImage).toBe(true);
         expect(imageDecision?.outcome).toBe("success");
+        expect(imageDecision).toMatchObject({
+          nativeVisionActive: true,
+          attachmentDispositions: {
+            1: { kind: "not-selected" },
+            2: { kind: "not-selected" },
+            3: { kind: "not-selected" },
+          },
+        });
         expect(describeCalls).toBe(1);
         expect(msgCtx.Body).toContain(plantedVisionSentinel);
+        expect(msgCtx.Body).not.toContain("attachment limit reached");
       },
     );
   });

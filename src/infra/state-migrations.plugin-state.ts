@@ -20,7 +20,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { ensureMigrationDir, fileExists } from "./state-migrations.fs.js";
+import { ensureMigrationDir, migrationFileExists } from "./state-migrations.fs.js";
 import {
   PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
   archiveLegacyImportSource,
@@ -45,7 +45,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES)) {
@@ -171,7 +171,7 @@ export async function migrateLegacyInstalledPluginIndex(params: {
   stateDir: string;
 }): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     return { changes: [], warnings: [] };
   }
 
@@ -254,7 +254,7 @@ export function preflightLegacyInstalledPluginIndexMigration(params: {
     return `State dir migration skipped because persisted plugin install records in ${params.stateDir} are invalid`;
   }
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
-  if (fileExists(sourcePath) && !readLegacyInstalledPluginIndex(sourcePath)) {
+  if (migrationFileExists(sourcePath) && !readLegacyInstalledPluginIndex(sourcePath)) {
     return `State dir migration skipped because plugin install index ${sourcePath} is invalid`;
   }
   return null;
@@ -504,7 +504,11 @@ export async function runLegacyMigrationPlans(
                 cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)) &&
                 !failedTargetKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
             ));
-        if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
+        if (
+          allEntriesCovered &&
+          plan.cleanupSource === "rename" &&
+          migrationFileExists(plan.sourcePath)
+        ) {
           archiveLegacyImportSource({
             sourcePath: plan.sourcePath,
             label: plan.label,
@@ -512,7 +516,11 @@ export async function runLegacyMigrationPlans(
             warnings,
           });
         }
-        if (allEntriesCovered && plan.cleanupSource === "remove" && fileExists(plan.sourcePath)) {
+        if (
+          allEntriesCovered &&
+          plan.cleanupSource === "remove" &&
+          migrationFileExists(plan.sourcePath)
+        ) {
           try {
             fs.unlinkSync(plan.sourcePath);
             changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
@@ -531,7 +539,7 @@ export async function runLegacyMigrationPlans(
       });
       continue;
     }
-    if (fileExists(plan.targetPath)) {
+    if (migrationFileExists(plan.targetPath)) {
       continue;
     }
     try {

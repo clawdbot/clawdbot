@@ -23,7 +23,6 @@ import type {
   ToolCall,
   Usage,
 } from "../types.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
@@ -31,6 +30,7 @@ import {
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import { parseTerminalToolCallArguments } from "./transport-stream-shared.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -42,14 +42,8 @@ export type ResponsesThinkingBlock = ThinkingContent & {
   [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
 
-type TerminalOutput = {
-  content: Array<TextContent | ThinkingContent | ToolCall>;
-  providerReplay?: AssistantMessage["providerReplay"];
+type TerminalOutput = AssistantMessage & {
   usage: Usage & { reasoningTokens?: number };
-  stopReason: string;
-  responseModel?: string;
-  responseId?: string;
-  errorMessage?: string;
 };
 type TerminalOptions = {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -103,12 +97,10 @@ export function resolveCompletedResponsesToolCall(
   if (!name) {
     throw new Error("Responses stream completed tool call without a function name");
   }
-  const argumentsValue = parseJsonObjectPreservingUnsafeIntegers(
+  const argumentsValue = parseTerminalToolCallArguments(
     streamed?.arguments ?? item.arguments,
+    "Responses stream completed tool call with invalid JSON arguments",
   );
-  if (!argumentsValue) {
-    throw new Error("Responses stream completed tool call with invalid JSON arguments");
-  }
   return { name, arguments: argumentsValue };
 }
 
@@ -180,7 +172,7 @@ export function createResponsesTerminalController(params: {
         type: "text_end",
         contentIndex: started.index,
         content: text,
-        partial: output as never,
+        partial: output,
       });
       return started.index;
     }
@@ -197,7 +189,7 @@ export function createResponsesTerminalController(params: {
         type: "text_end",
         contentIndex: previous.index,
         content: collapse.text,
-        partial: output as never,
+        partial: output,
       });
       return previous.index;
     }
@@ -209,8 +201,8 @@ export function createResponsesTerminalController(params: {
     blocks.push(block);
     const index = blocks.length - 1;
     params.setLastTextBlock({ block, index, phase });
-    stream.push({ type: "text_start", contentIndex: index, partial: output as never });
-    stream.push({ type: "text_end", contentIndex: index, content: text, partial: output as never });
+    stream.push({ type: "text_start", contentIndex: index, partial: output });
+    stream.push({ type: "text_end", contentIndex: index, content: text, partial: output });
     return index;
   };
   const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>): number => {
@@ -223,8 +215,8 @@ export function createResponsesTerminalController(params: {
     };
     blocks.push(toolCall);
     const contentIndex = blocks.length - 1;
-    stream.push({ type: "toolcall_start", contentIndex, partial: output as never });
-    stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output as never });
+    stream.push({ type: "toolcall_start", contentIndex, partial: output });
+    stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
     return contentIndex;
   };
   const recoverTerminalOutput = (items: ResponseOutputItem[], includeToolCalls: boolean) => {
@@ -298,16 +290,14 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const finalizeResponse = (
+  const finalizeTerminalFacts = (
     response: Extract<
       ResponseStreamEvent,
-      { type: "response.completed" | "response.incomplete" }
+      { type: "response.completed" | "response.incomplete" | "response.failed" }
     >["response"],
-    terminalEventType: "response.completed" | "response.incomplete",
+    responseId = response.id,
   ) => {
-    params.markFinalized();
-    backfillReasoning(response.output ?? []);
-    output.responseId = response.id || output.responseId;
+    output.responseId = responseId || output.responseId;
     output.responseModel = response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
@@ -325,6 +315,17 @@ export function createResponsesTerminalController(params: {
         : (response.service_tier ?? options.serviceTier);
       options.applyServiceTierPricing(output.usage, tier);
     }
+  };
+  const finalizeResponse = (
+    response: Extract<
+      ResponseStreamEvent,
+      { type: "response.completed" | "response.incomplete" }
+    >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
+  ) => {
+    params.markFinalized();
+    backfillReasoning(response.output ?? []);
+    finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
       terminalEventType,
@@ -334,5 +335,5 @@ export function createResponsesTerminalController(params: {
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
   };
-  return { finalizeResponse, recoverTerminalOutput };
+  return { finalizeResponse, finalizeFailedResponse: finalizeTerminalFacts, recoverTerminalOutput };
 }

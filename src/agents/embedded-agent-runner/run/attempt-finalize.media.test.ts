@@ -56,7 +56,10 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
   it.each<TerminalCase>([
     ["current over stale", { kind: "ok" }, "stop", "stop", "success", { last: "aborted" }],
     ["normal completion", { kind: "ok" }, "length", "stop", "success", { completed: "stop" }],
-    ["length truncation", { kind: "ok" }, "length", "length", "error", {}],
+    // The fixture assistant carries visible text, which resolveTerminalAssistantTexts
+    // promotes to terminal text for a length stop, so this is a delivered partial
+    // reply and the trajectory must record it as success.
+    ["length truncation with visible text", { kind: "ok" }, "length", "length", "success", {}],
     [
       "yield plus prompt timeout",
       { kind: "timeout", phase: "prompt", source: "runtime" },

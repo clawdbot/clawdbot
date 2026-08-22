@@ -15,7 +15,9 @@ import {
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
+  normalizeOllamaCloudModelId,
 } from "./defaults.js";
+import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
 
 export type OllamaTagModel = {
   name: string;
@@ -339,17 +341,20 @@ export function isOllamaCloudModel(modelName: string | undefined): boolean {
   return isCloudModelRef(modelName);
 }
 
-export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+/**
+ * Cloud models are referenced both bare (`kimi-k3`) and suffixed (`kimi-k3:cloud`).
+ * Both spellings must reach the same known context window, or a suffixed ref silently
+ * falls back to the generic default whenever live inspection is unavailable.
+ */
+function resolveOllamaCloudDefaultModel(
+  modelId: string,
+): (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number] | undefined {
+  const normalized = normalizeOllamaCloudModelId(modelId);
+  return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
 }
 
-function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
-  // Match both the canonical direct-host id and the local `:cloud` routing alias.
-  const normalized = modelId
-    .trim()
-    .toLowerCase()
-    .replace(/:cloud$/, "");
-  return normalized === "glm-5.2" || /^deepseek-v4-(?:flash|pro)$/.test(normalized);
+export function isReasoningModelHeuristic(modelId: string): boolean {
+  return /r1|reasoning|think|reason/i.test(modelId);
 }
 
 export function buildOllamaModelDefinition(
@@ -361,7 +366,7 @@ export function buildOllamaModelDefinition(
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   const reasoning =
-    isKnownOllamaCloudReasoningModel(modelId) ||
+    supportsOllamaCloudFullThinkingEffort(modelId) ||
     (capabilities === undefined
       ? isReasoningModelHeuristic(modelId)
       : capabilities.includes("thinking"));
@@ -379,12 +384,8 @@ export function buildOllamaModelDefinition(
     cost: OLLAMA_DEFAULT_COST,
     contextWindow:
       contextWindow ??
-      (modelId
-        .trim()
-        .toLowerCase()
-        .replace(/:cloud$/, "") === "glm-5.2"
-        ? 1_000_000
-        : OLLAMA_DEFAULT_CONTEXT_WINDOW),
+      resolveOllamaCloudDefaultModel(modelId)?.contextWindow ??
+      OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
     compat,
   };

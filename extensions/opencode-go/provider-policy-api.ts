@@ -48,11 +48,6 @@ function resolveEffortThinkingProfile(
   return { levels, defaultLevel };
 }
 
-export function isOpencodeGoDeepSeekV4ModelId(modelId: unknown): boolean {
-  const normalized = typeof modelId === "string" ? modelId.trim().toLowerCase() : "";
-  return normalized === "deepseek-v4-flash" || normalized === "deepseek-v4-pro";
-}
-
 export function isOpencodeGoFixedAnthropicReasoningModelId(modelId: unknown): boolean {
   return (
     typeof modelId === "string" &&

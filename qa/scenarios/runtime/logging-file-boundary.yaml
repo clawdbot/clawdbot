@@ -19,6 +19,7 @@ scenario:
     - test/e2e/qa-lab/runtime/logging-file-boundary-runtime.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/logging-file-boundary-runtime.ts
     summary: Runs the real logger with a tiny file cap and validates JSONL rotation and trace correlation.
     args:

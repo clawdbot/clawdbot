@@ -3,6 +3,7 @@
  */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -11,7 +12,7 @@ import {
   isAvatarHttpUrl,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveLocalAgentAvatarPath } from "./identity-avatar-file.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
@@ -39,12 +40,10 @@ function resolveAvatarSource(
   opts?: { includeUiOverride?: boolean },
 ): string | null {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const fromUiConfig = normalizeOptionalString(cfg.ui?.assistant?.avatar) ?? null;
   if (opts?.includeUiOverride) {
-    // UI override only wins for the default agent unless callers explicitly ask
-    // for it as a final fallback for non-default agents.
-    if (normalizedAgentId === defaultAgentId && fromUiConfig) {
+    // The shared UI avatar belongs only to the sole or retained compatibility owner.
+    if (normalizedAgentId === tryResolveLegacyCompatibilityAgentId(cfg) && fromUiConfig) {
       return fromUiConfig;
     }
   }
@@ -59,7 +58,7 @@ function resolveAvatarSource(
   if (fromIdentity) {
     return fromIdentity;
   }
-  return opts?.includeUiOverride ? fromUiConfig : null;
+  return null;
 }
 
 function isSafeRelativeAvatarSource(source: string): boolean {

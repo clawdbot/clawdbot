@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama tests cover embedding provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +15,7 @@ const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(),
-  formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  formatErrorMessage: coerceErrorMessage,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
     return { allowedOrigins: [parsed.origin] };

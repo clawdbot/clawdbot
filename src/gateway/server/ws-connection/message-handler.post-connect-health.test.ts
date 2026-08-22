@@ -1,9 +1,11 @@
 // WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -13,16 +15,29 @@ import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { setAvatar } from "../../../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+  setAvatar,
+  syncGitHubIdentity,
+} from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
+import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
+import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import {
+  enforceSharedGatewaySessionGenerationForConfigWrite,
+  getRequiredSharedGatewaySessionGeneration,
+} from "../../server-shared-auth-generation.js";
+import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
+import { resolvePinnedClientMetadata } from "./connect-device-metadata.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -31,8 +46,10 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  createAuthenticatedGitHubIdentitySyncMock,
   adoptTailscaleProfileAvatarMock,
   ensureProfileForEmailMock,
+  prepareGatewayNodeConnectMock,
   resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
@@ -59,8 +76,10 @@ const {
       },
     },
   })),
+  createAuthenticatedGitHubIdentitySyncMock: vi.fn(),
   adoptTailscaleProfileAvatarMock: vi.fn(),
   ensureProfileForEmailMock: vi.fn(),
+  prepareGatewayNodeConnectMock: vi.fn(),
   resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -76,16 +95,32 @@ vi.mock("../../../state/user-profiles.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../github-user-identity.js", () => ({
+  createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
+}));
+
 vi.mock("./auth-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./auth-context.js")>();
   resolveConnectAuthStateMock.mockImplementation(actual.resolveConnectAuthState);
   return { ...actual, resolveConnectAuthState: resolveConnectAuthStateMock };
 });
 
+vi.mock("./connect-node-session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./connect-node-session.js")>();
+  prepareGatewayNodeConnectMock.mockImplementation(actual.prepareGatewayNodeConnect);
+  return { ...actual, prepareGatewayNodeConnect: prepareGatewayNodeConnectMock };
+});
+
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
 }));
+
+function localUserIngressFor(client: unknown) {
+  return typeof client === "object" && client !== null
+    ? getGatewayLocalUserIngress(client)
+    : undefined;
+}
 
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
@@ -105,7 +140,7 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
-import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
+import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
@@ -144,6 +179,25 @@ function createHealthSummary(): HealthSummary {
       count: 0,
       recent: [],
     },
+  };
+}
+
+async function createTestAgentRuntimeIdentityLease() {
+  const prepared = prepareSystemAgentRunAdmission(
+    {},
+    "run-1",
+    "ops",
+    "message-handler.post-connect-health.test",
+  );
+  await prepared.admit("embedded");
+  onTestFinished(prepared.close);
+  return {
+    close: prepared.close,
+    token: await mintAgentRuntimeIdentityToken({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+      operationalRunInstance: prepared.operationalRunInstance,
+    }),
   };
 }
 
@@ -218,9 +272,11 @@ function attachGatewayHarness(options: {
   requestOrigin?: string;
   requestHost?: string;
   headers?: Record<string, string>;
+  ingressAttribution?: GatewayAttributedIngress;
   remoteAddr?: string;
   localAddr?: string;
   resolvedAuth?: ResolvedGatewayAuth;
+  getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   rateLimiter?: AuthRateLimiter;
   client?: unknown;
   close?: CloseGatewayConnection;
@@ -241,7 +297,7 @@ function attachGatewayHarness(options: {
       return socket;
     }),
   } as unknown as WebSocket;
-  const send = vi.fn();
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   let client: unknown = options.client ?? null;
   const requestHost = options.requestHost ?? "127.0.0.1:19001";
   const remoteAddr = options.remoteAddr ?? "127.0.0.1";
@@ -252,6 +308,22 @@ function attachGatewayHarness(options: {
   };
   const advanceHandshakePhase = vi.fn();
   const logWsControl = createLogger();
+  const refreshConnectedUserProfile = vi.fn<
+    NonNullable<GatewayRequestContext["refreshConnectedUserProfile"]>
+  >((profile) => {
+    const authenticatedUserProfile = (
+      client as { authenticatedUserProfile?: Record<string, unknown> } | null
+    )?.authenticatedUserProfile;
+    if (authenticatedUserProfile) {
+      Object.assign(authenticatedUserProfile, {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        avatarRevision: profile.avatarRevision,
+        hasAvatar: profile.hasAvatar,
+        updatedAt: profile.updatedAt,
+      });
+    }
+  });
   attachGatewayWsMessageHandler({
     socket,
     upgradeReq: {
@@ -262,6 +334,19 @@ function attachGatewayHarness(options: {
       },
       socket: { localAddress: localAddr, remoteAddress: remoteAddr },
     } as unknown as IncomingMessage,
+    ingressAttribution:
+      options.ingressAttribution ??
+      (remoteAddr === "127.0.0.1"
+        ? {
+            kind: "direct-local",
+            clientIp: remoteAddr,
+            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
+          }
+        : {
+            kind: "direct-remote",
+            clientIp: remoteAddr,
+            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
+          }),
     connId: options.connId,
     remoteAddr,
     localAddr,
@@ -269,11 +354,12 @@ function attachGatewayHarness(options: {
     requestOrigin: options.requestOrigin,
     connectNonce: options.connectNonce,
     getResolvedAuth: () => resolvedAuth,
+    getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
     rateLimiter: options.rateLimiter,
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
-    buildRequestContext: () => ({}) as GatewayRequestContext,
+    buildRequestContext: () => ({ refreshConnectedUserProfile }) as never,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot:
       options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
@@ -302,6 +388,7 @@ function attachGatewayHarness(options: {
   return {
     advanceHandshakePhase,
     logWsControl,
+    refreshConnectedUserProfile,
     send,
     socketSend,
     sendRequest: (
@@ -416,8 +503,14 @@ function connectTrustedProxyUser(connId: string) {
       },
     },
     headers: {
+      "x-forwarded-for": "203.0.113.10",
       "x-forwarded-user": "alice@example.com",
       "x-forwarded-proto": "https",
+    },
+    ingressAttribution: {
+      kind: "trusted-proxy",
+      clientIp: "203.0.113.10",
+      rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
     },
   });
   harness.sendConnect(`connect-${connId}`, {
@@ -439,6 +532,30 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     vi.clearAllMocks();
+    createAuthenticatedGitHubIdentitySyncMock.mockImplementation(
+      (params: {
+        authResult: { method?: string; tailscaleIdentity?: { login: string } };
+        authConfig?: { trustedProxy?: { userHeader?: string; requiredHeaders?: string[] } };
+      }) => {
+        const tailscaleGitHub = params.authResult.tailscaleIdentity?.login.endsWith("@github");
+        const trustedProxy = params.authConfig?.trustedProxy;
+        const cloudflareAccess =
+          params.authResult.method === "trusted-proxy" &&
+          trustedProxy?.userHeader?.toLowerCase() === "cf-access-authenticated-user-email" &&
+          trustedProxy.requiredHeaders?.some(
+            (header) => header.toLowerCase() === "cf-access-jwt-assertion",
+          );
+        if (!tailscaleGitHub && !cloudflareAccess) {
+          return undefined;
+        }
+        return vi.fn(async () => {
+          const profile = params.authResult.tailscaleIdentity
+            ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
+            : ensureProfileForEmailMock("authenticated@example.test");
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
+      },
+    );
   });
 
   it("closes invalidated clients before dispatching queued requests", () => {
@@ -705,6 +822,25 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             hasAvatar: false,
           },
         });
+        expect(localUserIngressFor(first.harness.client)).toMatchObject({
+          facts: {
+            ingress: {
+              kind: "gateway-client",
+              rawSourceRef: profileId,
+              state: "present",
+            },
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: profileId,
+              displayLabel: "alice",
+            },
+            assurance: expect.arrayContaining([
+              expect.objectContaining({ kind: "durable-profile" }),
+              expect.objectContaining({ kind: "trusted-proxy" }),
+            ]),
+          },
+        });
 
         expect(setAvatar(profileId!, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
         const second = await connect("second");
@@ -760,9 +896,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         authResult: {
           ok: true,
           method: "tailscale",
-          user: "ada@github",
+          user: "ada@passkey",
           tailscaleIdentity: {
-            login: "ada@github",
+            login: "ada@passkey",
             name: "Ada Lovelace",
             profilePic: "https://avatars.example.test/ada.png",
           },
@@ -770,7 +906,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         authOk: true,
         authMethod: "tailscale",
         sharedAuthOk: true,
-        sharedAuthProvided: false,
       });
       const harness = attachGatewayHarness({
         connId: "conn-tailscale-avatar-detached",
@@ -792,9 +927,18 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
       await waitForFast(() => {
         expect(harness.client).toMatchObject({
-          authenticatedUserId: "ada@github",
+          authenticatedUserId: "ada@passkey",
           authenticatedUserIsTailscaleProvider: true,
           authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
+        });
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: {
+            invoker: { state: "present", kind: "person", displayLabel: "Ada Lovelace" },
+            assurance: expect.arrayContaining([
+              expect.objectContaining({ kind: "durable-profile" }),
+              expect.objectContaining({ kind: "tailscale-whois" }),
+            ]),
+          },
         });
         expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledOnce();
       });
@@ -806,23 +950,255 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         }
       ).authenticatedUserProfile;
       expect(setAvatar(profile.profileId, new Uint8Array([7, 8, 9]), "image/png").ok).toBe(true);
+      const adoptedUpdatedAt = profile.updatedAt + 1;
       resolveAvatar?.({
         id: profile.profileId,
         displayName: profile.displayName,
         avatarMime: "image/png",
         mergedInto: null,
         createdAt: profile.updatedAt,
-        updatedAt: profile.updatedAt + 1,
+        updatedAt: adoptedUpdatedAt,
       });
       await waitForFast(() => {
         expect(harness.client).toMatchObject({
-          authenticatedUserProfile: { hasAvatar: true, updatedAt: profile.updatedAt + 1 },
+          authenticatedUserProfile: { hasAvatar: true, updatedAt: adoptedUpdatedAt },
         });
+      });
+      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authResult: expect.objectContaining({ method: "tailscale", user: "ada@passkey" }),
+        }),
+      );
+    });
+  });
+
+  it("completes GitHub-authenticated login before deferred identity sync", async () => {
+    await withOpenClawTestState({ label: "gateway-github-profile-deferred" }, async () => {
+      const canonical = ensureProfileForEmail("canonical@example.test");
+      let finishSync: (() => void) | undefined;
+      const sync = vi.fn(
+        async () =>
+          await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+            finishSync = () => resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+          }),
+      );
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-identity-detached",
+        connectNonce: "nonce-github-identity-detached",
+      });
+
+      harness.sendConnect("connect-github-identity-detached", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "test",
+          version: "dev",
+          platform: "test",
+          mode: "test",
+        },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+        expect(harness.client).toMatchObject({
+          authenticatedUserId: "ada@github",
+          authenticatedGitHubIdentitySync: expect.any(Function),
+        });
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: { invoker: { state: "unknown" } },
+        });
+        expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authResult: expect.objectContaining({ method: "tailscale", user: "ada@github" }),
+          }),
+        );
+        expect(sync).toHaveBeenCalledOnce();
+      });
+      const initialPresence = upsertPresenceMock.mock.calls.find(
+        ([key]) => key === "conn-github-identity-detached",
+      )?.[1];
+      expect(initialPresence).not.toHaveProperty("user");
+      expect(harness.socketSend.mock.invocationCallOrder[0]).toBeLessThan(
+        sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(finishSync).toBeTypeOf("function");
+      finishSync?.();
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          authenticatedUserProfile: { profileId: canonical.id },
+        });
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: {
+            invoker: { state: "present", kind: "person", rawPrincipalRef: canonical.id },
+          },
+        });
+        expect(harness.refreshConnectedUserProfile).toHaveBeenCalledWith(
+          expect.objectContaining({ id: canonical.id }),
+        );
       });
     });
   });
 
-  it("falls back to email identity when durable profile resolution fails", async () => {
+  it("keeps a mutable GitHub alias unattributed when immutable sync fails", async () => {
+    await withOpenClawTestState({ label: "gateway-github-profile-failure" }, async () => {
+      syncGitHubIdentity({
+        identity: { accountId: 10, login: "prior-owner" },
+        authenticationAlias: { kind: "github-login", login: "released-login" },
+        initialDisplayName: "Prior Verified Owner",
+      });
+      const sync = vi.fn(async () => {
+        throw new Error("GitHub unavailable");
+      });
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "released-login@github",
+          tailscaleIdentity: { login: "released-login@github", name: "New Account" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-identity-failure",
+        connectNonce: "nonce-github-identity-failure",
+      });
+
+      harness.sendConnect("connect-github-identity-failure", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "test", version: "dev", platform: "test", mode: "test" },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.socketSend).toHaveBeenCalled();
+        expect(sync).toHaveBeenCalledOnce();
+      });
+      await waitForFast(() => {
+        expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: { invoker: { state: "unknown" } },
+        });
+      });
+      const presence = upsertPresenceMock.mock.calls.find(
+        ([key]) => key === "conn-github-identity-failure",
+      )?.[1];
+      expect(presence).not.toHaveProperty("user");
+      expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {
+    const assertion = "header.payload.signature";
+    loadConfigMock.mockImplementationOnce(() => ({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "cf-access-authenticated-user-email",
+            requiredHeaders: ["CF-Access-JWT-Assertion"],
+          },
+        },
+        trustedProxies: ["10.0.0.1"],
+        controlUi: { allowedOrigins: ["https://team.openclaw.ai"] },
+      },
+    }));
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "trusted-proxy",
+      allowTailscale: false,
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["CF-Access-JWT-Assertion"],
+      },
+    };
+    const harness = attachGatewayHarness({
+      connId: "conn-cloudflare-access",
+      connectNonce: "nonce-cloudflare-access",
+      requestHost: "team.openclaw.ai",
+      requestOrigin: "https://team.openclaw.ai",
+      remoteAddr: "10.0.0.1",
+      resolvedAuth,
+      headers: {
+        "cf-access-authenticated-user-email": "ada@example.com",
+        "cf-access-jwt-assertion": assertion,
+        "x-forwarded-for": "203.0.113.10",
+      },
+      ingressAttribution: {
+        kind: "trusted-proxy",
+        clientIp: "203.0.113.10",
+        rateLimit: { subject: { key: "203.0.113.10" }, resetOnSuccess: true },
+      },
+    });
+
+    harness.sendConnect("connect-cloudflare-access", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-control-ui",
+        version: "dev",
+        platform: "test",
+        mode: "ui",
+      },
+      role: "operator",
+      caps: [],
+    });
+
+    await waitForFast(() => {
+      expect(harness.client).toMatchObject({
+        authenticatedUserId: "ada@example.com",
+        authenticatedGitHubIdentitySync: expect.any(Function),
+      });
+      expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authResult: expect.objectContaining({
+            method: "trusted-proxy",
+            user: "ada@example.com",
+          }),
+          authConfig: expect.objectContaining({ mode: "trusted-proxy" }),
+          requestHeaders: expect.objectContaining({
+            "cf-access-jwt-assertion": assertion,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("does not mint Cloudflare sync for a generic or non-required-header proxy", async () => {
+    const harness = connectTrustedProxyUser("conn-generic-proxy-github");
+    await waitForFast(() => expect(harness.client).not.toBeNull());
+
+    expect(createAuthenticatedGitHubIdentitySyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authResult: expect.objectContaining({ method: "trusted-proxy" }),
+        authConfig: expect.objectContaining({
+          trustedProxy: expect.objectContaining({ userHeader: "x-forwarded-user" }),
+        }),
+      }),
+    );
+    expect(harness.client).not.toHaveProperty("authenticatedGitHubIdentitySync");
+  });
+
+  it("keeps presence fallback but records unknown invoker when profile resolution fails", async () => {
     ensureProfileForEmailMock.mockImplementationOnce(() => {
       throw new Error("profile store unavailable");
     });
@@ -837,6 +1213,19 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       );
     });
     expect(harness.client).toMatchObject({ authenticatedUserId: "alice@example.com" });
+    expect(localUserIngressFor(harness.client)).toMatchObject({
+      facts: {
+        ingress: expect.not.objectContaining({ rawSourceRef: expect.anything() }),
+        invoker: { state: "unknown" },
+        assurance: [
+          {
+            kind: "trusted-proxy",
+            rawEvidenceRef: "gateway-auth:trusted-proxy",
+            strength: "boundary-verified",
+          },
+        ],
+      },
+    });
     expect(harness.client).not.toMatchObject({ authenticatedUserProfile: expect.anything() });
     expect(harness.logWsControl.warn).toHaveBeenCalledTimes(1);
     expect(harness.logWsControl.warn).toHaveBeenCalledWith(
@@ -882,7 +1271,83 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
+    const localUserIngress = localUserIngressFor(harness.client);
+    expect(localUserIngress).toMatchObject({
+      facts: { ingress: expect.not.objectContaining({ rawSourceRef: expect.anything() }) },
+    });
+    expect(localUserIngress?.facts.invoker).toBeUndefined();
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a shared-auth handshake when credentials rotate before session attachment", async () => {
+    const oldAuth = {
+      mode: "token" as const,
+      token: "gateway-token-old",
+      allowTailscale: false,
+    };
+    const oldGeneration = resolveSharedGatewaySessionGeneration(oldAuth, []);
+    const newGeneration = resolveSharedGatewaySessionGeneration(
+      { ...oldAuth, token: "gateway-token-new" },
+      [],
+    );
+    expect(oldGeneration).toBeTypeOf("string");
+    expect(newGeneration).toBeTypeOf("string");
+    const generationState = { current: oldGeneration, required: null };
+    const preparationStarted = createDeferred();
+    const releasePreparation = createDeferred();
+    prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
+      preparationStarted.resolve();
+      await releasePreparation.promise;
+      return true;
+    });
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-token-rotated-during-connect",
+      connectNonce: "nonce-token-rotated-during-connect",
+      resolvedAuth: oldAuth,
+      getRequiredSharedGatewaySessionGeneration: () =>
+        getRequiredSharedGatewaySessionGeneration(generationState),
+      close,
+      setCloseCause,
+    });
+
+    harness.sendConnect("connect-token-rotated-during-connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      caps: [],
+      auth: { token: oldAuth.token },
+    });
+    await preparationStarted.promise;
+    enforceSharedGatewaySessionGenerationForConfigWrite({
+      state: generationState,
+      nextConfig: {
+        gateway: {
+          auth: { mode: "token", token: "gateway-token-new" },
+          reload: { mode: "off" },
+        },
+      },
+      resolveRuntimeSnapshotGeneration: () => newGeneration,
+      clients: [],
+    });
+    releasePreparation.resolve();
+
+    await waitForFast(() => {
+      expect(close).toHaveBeenCalledWith(4001, "gateway auth changed");
+    });
+    expect(setCloseCause).toHaveBeenCalledWith("gateway-auth-rotated", {
+      authGenerationStale: true,
+    });
+    expect(harness.client).toBeNull();
+    expect(harness.socketSend).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
   });
 
   it("emits a security event for rejected gateway auth", async () => {
@@ -1136,7 +1601,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       isOneShotModelRun: false,
       isRestartRecoveryResumeRun: false,
     });
-    expect(admission).toEqual({ runId: "local-operator-run" });
+    expect(admission).toEqual({
+      runId: "local-operator-run",
+      callerOrigin: { kind: "local" },
+    });
   });
 
   it("does not carry local operator authority for an authenticated remote client", async () => {
@@ -1283,6 +1751,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       refreshHealthSnapshot,
     });
 
+    const identityLease = await createTestAgentRuntimeIdentityLease();
     harness.sendConnect("connect-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -1296,10 +1765,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       scopes: ["operator.write"],
       caps: [],
       auth: {
-        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
-          agentId: "ops",
-          sessionKey: "agent:ops:telegram:direct:alice",
-        }),
+        agentRuntimeIdentityToken: identityLease.token,
       },
     });
 
@@ -1315,6 +1781,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       agentId: "ops",
       sessionKey: "agent:ops:telegram:direct:alice",
     });
+    identityLease.close();
   });
 
   it("rejects agent runtime identity tokens from remote clients", async () => {
@@ -1336,6 +1803,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       close,
     });
 
+    const identityLease = await createTestAgentRuntimeIdentityLease();
     harness.sendConnect("connect-remote-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -1350,10 +1818,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       caps: [],
       auth: {
         token: "gateway-token",
-        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
-          agentId: "ops",
-          sessionKey: "agent:ops:telegram:direct:alice",
-        }),
+        agentRuntimeIdentityToken: identityLease.token,
       },
     });
 
@@ -1364,6 +1829,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       );
     });
     expect(harness.client).toBeNull();
+    identityLease.close();
   });
 
   it("rejects invalid local agent runtime identity tokens", async () => {
@@ -1410,7 +1876,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins legacy node-host platform alias %s to paired canonical %s",
     (claimedPlatform, pairedPlatform) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -1434,7 +1900,7 @@ describe("resolvePinnedClientMetadata", () => {
     "normalizes exact legacy node-host platform %s to canonical %s",
     (legacyPlatform, canonicalPlatform, deviceFamily) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform: legacyPlatform,
@@ -1458,7 +1924,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins canonical node-host platform %s over paired legacy alias %s",
     (claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -1486,7 +1952,7 @@ describe("resolvePinnedClientMetadata", () => {
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId,
           clientMode: "node",
           claimedPlatform,
@@ -1506,7 +1972,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
         clientMode,
         claimedPlatform: "macOS 26.5.2",
@@ -1525,7 +1991,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "node-host",
         clientMode: "node",
         claimedPlatform: "macos",
@@ -1543,7 +2009,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("refreshes a shared node-host macOS pin from the native Mac app", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
         clientMode: "ui",
         claimedPlatform: "macOS 26.5.2",
@@ -1562,7 +2028,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("still requires approval when an iOS device family changes", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-ios",
         clientMode: "node",
         claimedPlatform: "iOS 26.5.0",
@@ -1581,7 +2047,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("still requires approval when a macOS device family changes", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
         clientMode: "node",
         claimedPlatform: "macOS 26.5.2",
@@ -1606,7 +2072,7 @@ describe("resolvePinnedClientMetadata", () => {
     "keeps non-version macOS platform changes approval-bound for %s",
     (clientId, claimed, paired) => {
       expect(
-        testing.resolvePinnedClientMetadata({
+        resolvePinnedClientMetadata({
           clientId,
           clientMode: "node",
           claimedPlatform: claimed,
@@ -1624,7 +2090,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("keeps non-native-app platform version changes approval-bound", () => {
     expect(
-      testing.resolvePinnedClientMetadata({
+      resolvePinnedClientMetadata({
         clientId: "node-host",
         clientMode: "node",
         claimedPlatform: "linux 6.9",

@@ -10,8 +10,8 @@ import {
 } from "../command-deploy-store.js";
 import {
   buildPreferenceModelKey,
+  preferenceTimestampMs,
   sanitizeRecentModels,
-  timestampMs,
 } from "./model-picker-preference-primitives.js";
 import {
   normalizePersistedBinding,
@@ -74,7 +74,7 @@ function normalizeLegacyPreferenceKey(key: string): string | undefined {
 }
 
 function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: number): string {
-  const baseMs = timestampMs(updatedAt);
+  const baseMs = preferenceTimestampMs(updatedAt);
   const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
   const shiftedMs = anchorMs - Math.max(0, index);
   return (

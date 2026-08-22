@@ -2,6 +2,7 @@
 import { GrammyError } from "grammy";
 import type { MessageEntity } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
@@ -118,7 +119,7 @@ export function getTelegramNativeQuoteReplyMessageId(
     return undefined;
   }
   const messageId = (replyParameters as { message_id?: unknown }).message_id;
-  return typeof messageId === "number" && Number.isFinite(messageId) ? messageId : undefined;
+  return asFiniteNumber(messageId);
 }
 
 export function isTelegramQuoteParamError(err: unknown): boolean {

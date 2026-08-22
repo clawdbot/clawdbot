@@ -380,14 +380,14 @@ function applyHeartbeatTargetHints(
   const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
+  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
   const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
       ...current,
       help: current.help ?? help,
-      placeholder: current.placeholder ?? "last",
+      placeholder: current.placeholder ?? "owner",
     };
   }
   return next;
@@ -567,7 +567,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: {
+export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
   cache?: boolean;
@@ -669,11 +669,148 @@ function resolveLookupChildSchema(
     return items;
   }
 
+  for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      const variantSchema = asSchemaObject(variant);
+      const resolved = variantSchema ? resolveLookupChildSchema(variantSchema, segment) : null;
+      if (resolved) {
+        return resolved;
+      }
+    }
+  }
+
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
     return schema.additionalProperties;
   }
 
   return null;
+}
+
+type ConfigSchemaPathSegmentKind = "property" | "record-key" | "array-index" | "invalid-record-key";
+
+function classifyLookupChildSchema(
+  schema: JsonSchemaObject,
+  segment: string,
+): ConfigSchemaPathSegmentKind | null {
+  if (schema.properties && Object.hasOwn(schema.properties, segment)) {
+    return "property";
+  }
+  if (parseConfigPathArrayIndex(segment) !== undefined && resolveItemsSchema(schema)) {
+    return "array-index";
+  }
+  for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+    const variants = schema[key];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      const variantSchema = asSchemaObject(variant);
+      const kind = variantSchema ? classifyLookupChildSchema(variantSchema, segment) : null;
+      if (kind) {
+        return kind;
+      }
+    }
+  }
+  if (schema.additionalProperties === true || typeof schema.additionalProperties === "object") {
+    return propertyNameSchemaAllows(schema.propertyNames, segment)
+      ? "record-key"
+      : "invalid-record-key";
+  }
+  return null;
+}
+
+const PROPERTY_NAME_SCHEMA_KEYS = new Set([
+  "$id",
+  "$schema",
+  "title",
+  "description",
+  "type",
+  "const",
+  "enum",
+  "pattern",
+  "minLength",
+  "maxLength",
+  "anyOf",
+  "oneOf",
+  "allOf",
+]);
+
+function propertyNameSchemaAllows(schema: unknown, value: string): boolean {
+  if (schema === undefined || schema === true) {
+    return true;
+  }
+  if (schema === false) {
+    return false;
+  }
+  const object = asSchemaObject(schema);
+  if (!object || Object.keys(object).some((key) => !PROPERTY_NAME_SCHEMA_KEYS.has(key))) {
+    return false;
+  }
+  const types = Array.isArray(object.type) ? object.type : [object.type];
+  if (object.type !== undefined && !types.includes("string")) {
+    return false;
+  }
+  if (object.const !== undefined && object.const !== value) {
+    return false;
+  }
+  if (Array.isArray(object.enum) && !object.enum.includes(value)) {
+    return false;
+  }
+  if (typeof object.minLength === "number" && value.length < object.minLength) {
+    return false;
+  }
+  if (typeof object.maxLength === "number" && value.length > object.maxLength) {
+    return false;
+  }
+  if (typeof object.pattern === "string") {
+    try {
+      if (!new RegExp(object.pattern).test(value)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  if (object.allOf?.some((candidate) => !propertyNameSchemaAllows(candidate, value))) {
+    return false;
+  }
+  if (
+    object.anyOf &&
+    !object.anyOf.some((candidate) => propertyNameSchemaAllows(candidate, value))
+  ) {
+    return false;
+  }
+  if (
+    object.oneOf &&
+    object.oneOf.filter((candidate) => propertyNameSchemaAllows(candidate, value)).length !== 1
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** Classify one already-parsed path segment without losing dots inside record keys. */
+export function classifyConfigSchemaPathSegment(
+  response: ConfigSchemaResponse,
+  parentParts: readonly string[],
+  segment: string,
+): ConfigSchemaPathSegmentKind | null {
+  let current = asSchemaObject(response.schema);
+  if (!current) {
+    return null;
+  }
+  for (const parentPart of parentParts) {
+    const next = resolveLookupChildSchema(current, parentPart);
+    if (!next) {
+      return null;
+    }
+    current = next;
+  }
+  return classifyLookupChildSchema(current, segment);
 }
 
 function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {

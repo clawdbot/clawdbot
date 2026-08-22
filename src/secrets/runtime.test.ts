@@ -8,7 +8,7 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
-  clearSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshotState,
 } from "./runtime-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
@@ -30,7 +30,7 @@ const CODEX_APP_SERVER_TOKEN_REF = {
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
-  clearSecretsRuntimeSnapshot();
+  clearSecretsRuntimeSnapshotState();
 });
 
 const TTS_REF = {
@@ -368,7 +368,10 @@ describe("secrets runtime snapshot", () => {
       config: asConfig({
         ...explicitMainRoster(),
         talk: {
-          apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+          provider: "example",
+          providers: {
+            example: { apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" } },
+          },
         },
       }),
       env: { TALK_API_KEY: secret },
@@ -914,7 +917,10 @@ describe("secrets runtime snapshot", () => {
         config: asConfig({
           ...explicitMainRoster(),
           talk: {
-            apiKey: { source: "exec", provider: "vault", id: "a/../b" },
+            provider: "example",
+            providers: {
+              example: { apiKey: { source: "exec", provider: "vault", id: "a/../b" } },
+            },
           },
           secrets: {
             providers: {

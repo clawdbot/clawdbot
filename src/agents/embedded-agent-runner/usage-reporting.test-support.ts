@@ -12,7 +12,7 @@ import {
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
@@ -87,7 +87,7 @@ describe("runEmbeddedAgent usage reporting", () => {
           expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
         ]),
       }),
-      expect.anything(),
+      expect.objectContaining({ catalogMode: "static" }),
     );
   });
 

@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -89,8 +89,10 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
   const sessionId = "session-archive-cloud-active";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const reclaimGate = createDeferred();
+  const reclaimStarted = createDeferredCore();
+  const reclaimGate = createDeferredCore();
   const reclaim = vi.fn(async () => {
+    reclaimStarted.resolve();
     await reclaimGate.promise;
     placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
     return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
@@ -98,7 +100,7 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
 
   const archive = directSessionReq(
     "sessions.patch",
-    { key: requestedKey, archived: true },
+    { key: requestedKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerSessionPlacementService: placementReader(() => placement),
@@ -107,7 +109,8 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
     },
   );
 
-  await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
+  await reclaimStarted.promise;
+  expect(reclaim).toHaveBeenCalledOnce();
   expect(reclaim).toHaveBeenCalledWith({ sessionId, sessionKey, agentId: "main" });
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   reclaimGate.resolve();
@@ -133,7 +136,7 @@ test.each(["rejected", "unavailable"] as const)(
 
     const archived = await directSessionReq(
       "sessions.patch",
-      { key: sessionKey, archived: true },
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
         context: {
           workerEnvironmentService: {
@@ -178,7 +181,7 @@ test("sessions.patch rejects a mismatched reclaimed identity without archiving",
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerSessionPlacementService: placementReader(() => placement),
@@ -200,14 +203,14 @@ test("sessions.patch rejects a placement identity changed during the runtime dra
   const sessionId = "session-archive-cloud-fresh-placement";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const drainGate = createDeferred();
+  const drainGate = createDeferredCore();
   const drainStarted = vi.fn();
   const release = vi.fn();
   const reclaim = vi.fn();
 
   const archive = directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         workerEnvironmentService: {
@@ -263,7 +266,7 @@ test.each([
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         ...(testCase.live
@@ -300,7 +303,7 @@ test.each([
 
   const archived = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: true },
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
         ...(testCase.gone
@@ -339,7 +342,7 @@ test.each([
 
   const restored = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: false },
+    { key: sessionKey, archived: false, expectedSessionId: sessionId },
     {
       context: {
         ...(testCase.gone
@@ -372,7 +375,7 @@ test("sessions.patch keeps restore blocked for an active cloud placement", async
 
   const restored = await directSessionReq(
     "sessions.patch",
-    { key: sessionKey, archived: false },
+    { key: sessionKey, archived: false, expectedSessionId: sessionId },
     { context: { workerSessionPlacementService: placementReader(() => placement) } },
   );
 
@@ -411,7 +414,10 @@ test("sessions.patchMany isolates a reclaim failure and archives a later target 
   }>(
     "sessions.patchMany",
     {
-      targets: [{ key: failedKey }, { key: laterKey }],
+      targets: [
+        { key: failedKey, expectedSessionId: failedSessionId },
+        { key: laterKey, expectedSessionId: laterSessionId },
+      ],
       patch: { archived: true },
     },
     {

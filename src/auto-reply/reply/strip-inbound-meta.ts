@@ -21,6 +21,7 @@
  * structured-context over-strip (arbitrary plugin labels are now recognized).
  */
 
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
@@ -88,15 +89,7 @@ function restoreNeutralizedMarkdownFences(value: unknown): unknown {
 }
 
 function parseJsonObjectRecord(jsonText: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(jsonText);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(jsonText) ?? null;
 }
 
 function parseInboundMetaBlock(

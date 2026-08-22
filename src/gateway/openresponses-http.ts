@@ -54,9 +54,12 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -74,7 +77,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { isFailedOpenAiAgentRun, resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -464,7 +467,11 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isUnknownGatewayAgentError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -610,7 +617,12 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -632,6 +644,15 @@ export async function handleOpenResponsesHttpRequest(
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId: resolved.agentId,
+    sessionKey,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    return true;
+  }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
@@ -698,9 +719,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (isFailedOpenAiAgentRun(result)) {
+        throw new Error("agent run failed");
+      }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
@@ -1157,6 +1181,26 @@ export async function handleOpenResponsesHttpRequest(
         abortSignal: abortController.signal,
       });
 
+      if (closed) {
+        return;
+      }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        rememberResponseSession();
+        finalizeFailedResponse(
+          createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "api_error", message: "internal error" },
+            usage: extractUsageFromResult(result),
+          }),
+        );
+        return;
+      }
+
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {
@@ -1392,5 +1436,4 @@ export async function handleOpenResponsesHttpRequest(
 
   return true;
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

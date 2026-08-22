@@ -248,7 +248,6 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.ts",
   "src/infra/state-migrations.acp-replay.ts",
   "src/infra/state-migrations.tui-last-session.ts",
-  "src/infra/state-migrations.commitments.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
   "src/infra/state-migrations.mcp-oauth.ts",
@@ -317,6 +316,7 @@ function isGeneratedAssetSourceFile(filePath: string) {
   const normalized = filePath.replaceAll(path.sep, "/");
   return (
     /(?:^|\/)extensions\/[^/]+\/(?:assets|dist)\/.+\.[cm]?js$/u.test(normalized) ||
+    /(?:^|\/)extensions\/canvas\/src\/host\/a2ui\/[^/]+\.bundle\.js$/u.test(normalized) ||
     /(?:^|\/)packages\/[^/]+\/dist\/.+\.[cm]?js$/u.test(normalized)
   );
 }

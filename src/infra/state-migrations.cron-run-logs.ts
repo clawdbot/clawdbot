@@ -1,5 +1,6 @@
 /** One-shot import of legacy cron run history into the authoritative task ledger. */
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
@@ -52,24 +53,18 @@ type CronRunLogTaskImportResult = {
   skipped: boolean;
 };
 
-function tableExists(db: DatabaseSync, name: string): boolean {
+export function hasLegacyCronRunLogs(db: DatabaseSync): boolean {
   return Boolean(
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(name),
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs' LIMIT 1",
+      )
+      .get(),
   );
 }
 
 function parseDetail(raw: string | null): Record<string, unknown> | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return raw ? safeParseJsonRecord(raw) : undefined;
 }
 
 function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]> {
@@ -152,7 +147,7 @@ function ordinalKey(jobId: string, ts: number): string {
 
 /** Runs inside the state schema transaction and removes the retired table after import. */
 export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLogTaskImportResult {
-  if (!tableExists(db, "cron_run_logs")) {
+  if (!hasLegacyCronRunLogs(db)) {
     return { imported: 0, alreadyMirrored: 0, malformed: 0, skipped: true };
   }
 

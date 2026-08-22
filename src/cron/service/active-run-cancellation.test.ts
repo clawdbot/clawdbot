@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { clearCronJobActive, markCronJobActive, noteActiveCronJobRemoval } from "../active-jobs.js";
 import {
   abortActiveCronTaskRuns,
   cancelActiveCronTaskRun,
@@ -13,6 +14,23 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 describe("cron task cancellation tracking", () => {
+  it("consumes a removal request made before the run controller binds", () => {
+    const marker = markCronJobActive("removed-before-controller");
+    const controller = new AbortController();
+    noteActiveCronJobRemoval("removed-before-controller");
+
+    const release = registerActiveCronTaskRun({
+      runId: "removed-before-controller-run",
+      controller,
+      activeJobMarker: marker,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.reason).toBe("Cron job removed by operator.");
+    release?.();
+    clearCronJobActive("removed-before-controller", marker);
+  });
+
   it("retires restart tracking while keeping an unsettled core suspension-visible", async () => {
     resetActiveCronTaskRunsForTests();
     let settle = () => {};

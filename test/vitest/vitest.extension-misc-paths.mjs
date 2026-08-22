@@ -11,7 +11,6 @@ export const miscExtensionTestRoots = [
   "extensions/kilocode",
   "extensions/litellm",
   "extensions/llm-task",
-  "extensions/linux-canvas",
   "extensions/lobster",
   "extensions/opencode",
   "extensions/opencode-go",
@@ -21,7 +20,6 @@ export const miscExtensionTestRoots = [
   "extensions/searxng",
   "extensions/synthetic",
   "extensions/tavily",
-  "extensions/thread-ownership",
   "extensions/vercel-ai-gateway",
   "extensions/webhooks",
 ];

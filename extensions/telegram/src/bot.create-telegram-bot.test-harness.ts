@@ -136,7 +136,7 @@ export function getUpsertChannelPairingRequestMock(): MockFn<
 }
 
 const skillCommandListHoisted = vi.hoisted(() => ({
-  listSkillCommandsForAgents: vi.fn(() => []),
+  listSkillCommandsForAgents: vi.fn<TelegramBotDeps["listSkillCommandsForAgents"]>(() => []),
 }));
 const modelProviderDataHoisted = vi.hoisted(() => ({
   buildModelsProviderData: vi.fn() as MockFn<TelegramBotDeps["buildModelsProviderData"]>,
@@ -195,7 +195,7 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
 vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher:
+  dispatchReplyWithBufferedBlockDispatcherCore:
     dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {

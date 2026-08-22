@@ -222,7 +222,7 @@ async function bindingFor(
     route.runner === "embedded"
       ? route.agentHarnessRuntimeOverride === "auto"
         ? "openclaw"
-        : route.agentHarnessRuntimeOverride
+        : (route.agentHarnessRuntimeOverride ?? "codex")
       : undefined;
   return createBinding(
     route,
@@ -868,7 +868,7 @@ describe("verified OpenClaw inference binding", () => {
     const fingerprint = () =>
       fingerprintAwsSdkRuntimeOwner({
         provider: route.provider,
-        backendId: route.agentHarnessRuntimeOverride,
+        backendId: route.agentHarnessRuntimeOverride ?? "openclaw",
         auth,
       });
     try {
@@ -1047,7 +1047,8 @@ describe("verified OpenClaw inference binding", () => {
     const route = await revalidate(binding, changed, authDeps());
 
     expect(route).toBe(binding.execution);
-    expect(route?.runConfig).toEqual(baseConfig);
+    expect(route?.runConfig).toMatchObject(baseConfig);
+    expect(route?.runConfig.agents?.entries).toEqual({ openclaw: {} });
     expect(route?.runConfig).not.toBe(baseConfig);
   });
 

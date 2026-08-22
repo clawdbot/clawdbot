@@ -119,31 +119,65 @@ describe("channel ingress queue", () => {
   it("keeps channel and account queue identities unambiguous", async () => {
     await withTempState(async (stateDir) => {
       const first = createChannelIngressQueue<{ text: string }>({
-        channelId: "a",
-        accountId: "b:c",
+        channelId: "discord",
+        accountId: "account-a",
         stateDir,
       });
       const second = createChannelIngressQueue<{ text: string }>({
-        channelId: "a:b",
-        accountId: "c",
+        channelId: "discord",
+        accountId: "account-b",
         stateDir,
       });
 
-      expect(await first.enqueue("same-id", { text: "first" })).toMatchObject({
+      expect(
+        await first.enqueue("same-id", { text: "first" }, { laneKey: "channel:same-lane" }),
+      ).toMatchObject({
         kind: "accepted",
       });
-      expect(await second.enqueue("same-id", { text: "second" })).toMatchObject({
+      expect(
+        await second.enqueue("same-id", { text: "second" }, { laneKey: "channel:same-lane" }),
+      ).toMatchObject({
         kind: "accepted",
       });
 
-      await first.complete("same-id");
+      const firstClaim = await first.claim("same-id", { ownerId: "first-worker" });
+      expect(firstClaim).not.toBeNull();
+      if (!firstClaim) {
+        return;
+      }
+      await first.fail(firstClaim, { reason: "poison", failedAt: 20 });
 
       expect(await first.enqueue("same-id", { text: "first duplicate" })).toMatchObject({
-        kind: "completed",
+        kind: "failed",
       });
       expect(await second.enqueue("same-id", { text: "second duplicate" })).toMatchObject({
         kind: "pending",
         record: { payload: { text: "second" } },
+      });
+
+      if (!first.resubmit) {
+        return;
+      }
+      await expect(first.resubmit("same-id", { resubmittedAt: 30 })).resolves.toMatchObject({
+        kind: "resubmitted",
+        record: { attempts: 0, laneKey: "channel:same-lane", payload: { text: "first" } },
+      });
+      const resubmittedClaim = await first.claim("same-id", { ownerId: "replacement" });
+      const secondClaim = await second.claim("same-id", { ownerId: "second-worker" });
+      expect(resubmittedClaim).not.toBeNull();
+      expect(secondClaim).not.toBeNull();
+      if (!resubmittedClaim || !secondClaim) {
+        return;
+      }
+      await first.fail(resubmittedClaim, { reason: "poison-again", failedAt: 40 });
+      await second.complete(secondClaim, { completedAt: 40 });
+
+      expect(await first.prune({ failedTtlMs: 1, now: 42 })).toBe(1);
+      expect(await first.enqueue("same-id", { text: "fresh after prune" })).toMatchObject({
+        kind: "accepted",
+      });
+      expect(await second.enqueue("same-id", { text: "completed duplicate" })).toMatchObject({
+        kind: "completed",
       });
     });
   });
@@ -651,7 +685,6 @@ describe("channel ingress queue", () => {
         await queue.enqueue("good-2", { text: "world" });
 
         const pending = await queue.listPending();
-        expect(pending).toHaveLength(2);
         expect(pending.map((r) => r.id).toSorted()).toEqual(["good-1", "good-2"]);
       });
     });
@@ -926,7 +959,7 @@ describe("channel ingress queue", () => {
         });
 
         await expect(queue.enqueue("dup-claimed-bad", { text: "late" })).rejects.toThrow(
-          "Corrupt payload_json in claimed channel ingress event",
+          "Corrupt claimed channel ingress event",
         );
 
         const { db } = openIngressStateDatabase(stateDir);
@@ -982,6 +1015,65 @@ describe("channel ingress queue", () => {
         expect(row?.claim_token).toBeNull();
         expect(row?.claimed_at).toBeNull();
         await expect(queue.recoverStaleClaims({ staleMs: Date.now() - oldTime })).resolves.toBe(0);
+      });
+    });
+
+    it("tombstones malformed claims regardless of timestamp and keeps them resubmittable", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue<{ text: string }>(stateDir);
+        const payload = JSON.stringify({ text: "still valid" });
+        // Valid payloads, but incomplete claim columns: no owner can ever
+        // release these rows. A NULL claimed_at dodges cutoff-based scans, and
+        // a corrupt future claimed_at dodges every cutoff comparison; the
+        // missing columns alone must pull both rows into the recovery scan.
+        insertCorruptRow(stateDir, '["test","account"]', "claimless", {
+          payload_json: payload,
+          status: "claimed",
+        });
+        insertCorruptRow(stateDir, '["test","account"]', "future-ownerless", {
+          payload_json: payload,
+          status: "claimed",
+          claim_token: "test-token-placeholder",
+          claimed_at: 1_000_000,
+        });
+
+        await expect(queue.listClaims()).resolves.toEqual([]);
+
+        const shouldRecoverCorrupt = vi.fn(() => false);
+        await expect(
+          queue.recoverStaleClaims({ staleMs: 10, now: 20, shouldRecoverCorrupt }),
+        ).resolves.toBe(2);
+        // No reachable owner exists, so ownership policy is not consulted.
+        expect(shouldRecoverCorrupt).not.toHaveBeenCalled();
+
+        const { db } = openIngressStateDatabase(stateDir);
+        const rows = executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
+            .selectFrom("channel_ingress_events")
+            .select(["event_id", "status", "failed_reason", "payload_json", "claim_token"])
+            .where("queue_name", "=", '["test","account"]')
+            .orderBy("event_id", "asc"),
+        ).rows;
+        expect(rows).toEqual([
+          {
+            event_id: "claimless",
+            status: "failed",
+            failed_reason: "corrupt_claim",
+            payload_json: payload,
+            claim_token: null,
+          },
+          {
+            event_id: "future-ownerless",
+            status: "failed",
+            failed_reason: "corrupt_claim",
+            payload_json: payload,
+            claim_token: null,
+          },
+        ]);
+
+        const resubmitted = await queue.resubmit?.("claimless");
+        expect(resubmitted?.kind).toBe("resubmitted");
       });
     });
 

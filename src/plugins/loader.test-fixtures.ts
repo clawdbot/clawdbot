@@ -74,7 +74,7 @@ export function inlineChannelPluginEntryFactorySource(): string {
 `;
 }
 
-export function makeTempDir() {
+export function makePluginLoaderTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   mkdirSafe(dir);
   return dir;
@@ -87,7 +87,7 @@ export function writePlugin(params: {
   filename?: string;
   configSchema?: Record<string, unknown>;
 }): TempPlugin {
-  const dir = params.dir ?? makeTempDir();
+  const dir = params.dir ?? makePluginLoaderTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
   mkdirSafe(dir);
   const file = path.join(dir, filename);
@@ -119,8 +119,8 @@ export function loadBundleFixture(params: {
   onlyPluginIds?: string[];
 }) {
   useNoBundledPlugins();
-  const workspaceDir = makeTempDir();
-  const stateDir = makeTempDir();
+  const workspaceDir = makePluginLoaderTempDir();
+  const stateDir = makePluginLoaderTempDir();
   const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", params.pluginId);
   params.build(bundleRoot);
   return withEnv({ OPENCLAW_STATE_DIR: stateDir, ...params.env }, () =>

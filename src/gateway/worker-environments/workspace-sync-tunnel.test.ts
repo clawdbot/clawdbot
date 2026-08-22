@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForFile } from "../../../test/helpers/process-wait.js";
+import { waitForChildClose, waitForPidFile } from "../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
@@ -21,7 +21,6 @@ import {
   startConnectedTunnel,
   success,
   waitForFast,
-  waitForStarts,
   workspaceSetup,
 } from "./tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
@@ -75,6 +74,10 @@ describe("worker tunnel manager", () => {
           localPath,
           sessionId: "session:one",
           generation: 7,
+          gitAuthor: {
+            name: "roboclaw-bot",
+            email: "42+roboclaw-bot@users.noreply.github.com",
+          },
         }),
       ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
 
@@ -97,6 +100,12 @@ describe("worker tunnel manager", () => {
         entry.argv.at(-1)?.includes("worker workspace symlink escapes"),
       );
       expect(manifest?.argv.at(-1)).toContain(commit);
+      const gitSetup = fake.runs.find(
+        (entry) =>
+          entry.argv.join("\0").includes(remoteWorkspaceDir) &&
+          entry.argv.join("\0").includes("42+roboclaw-bot@users.noreply.github.com"),
+      );
+      expect(gitSetup?.argv.join("\0")).toContain("roboclaw-bot");
     } finally {
       await handle.stop();
       await fs.rm(localPath, { recursive: true });
@@ -177,7 +186,6 @@ describe("worker tunnel manager", () => {
     });
     const { handle } = await startConnectedTunnel(fake, "worker:fallback-sync", 1, {
       ssh: endpoint,
-      beforeReady: (start) => expect(sshArgvPort(start.argv)).toBe(2222),
     });
 
     try {
@@ -195,7 +203,6 @@ describe("worker tunnel manager", () => {
       expect(ports).toEqual(expect.arrayContaining([2222, 22]));
       expect(new Set(ports)).toEqual(new Set([2222, 22]));
       const transfers = freshConnections.filter((entry) => entry.argv[0] === "rsync");
-      expect(transfers).toHaveLength(2);
       expect(transfers.map((entry) => rsyncReceiverNonce(entry.argv))).toEqual([
         expect.stringMatching(/^[a-f0-9]{32}$/u),
         expect.stringMatching(/^[a-f0-9]{32}$/u),
@@ -209,7 +216,7 @@ describe("worker tunnel manager", () => {
       const knownHostsOption = fake.runs[0]!.argv.find((value) =>
         value.startsWith("UserKnownHostsFile="),
       )!;
-      for (const connection of [...freshConnections, ...fake.starts]) {
+      for (const connection of freshConnections) {
         expect(connection.argv.join(" ")).toContain(identityPath);
         expect(connection.argv.join(" ")).toContain(knownHostsOption);
       }
@@ -290,7 +297,7 @@ describe("worker tunnel manager", () => {
       const fakeRsync = path.join(bin, "rsync");
       await fs.writeFile(
         fakeRsync,
-        '#!/bin/sh\nset -eu\n: > "$OPENCLAW_TEST_RECEIVER_MARKER"\nread -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"\nprintf \'late stale write\\n\' > "$OPENCLAW_TEST_RECEIVER_WORKSPACE/stale-late.txt"\n',
+        '#!/bin/sh\nset -eu\nprintf \'%s\\n\' "$$" > "$OPENCLAW_TEST_RECEIVER_MARKER"\nread -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"\nprintf \'late stale write\\n\' > "$OPENCLAW_TEST_RECEIVER_WORKSPACE/stale-late.txt"\n',
         { mode: 0o755 },
       );
 
@@ -301,8 +308,24 @@ describe("worker tunnel manager", () => {
         | undefined;
       let receiverWorkspace: string | undefined;
       let receiverRelative: string | undefined;
+      let receiverGroupPid: number | undefined;
       let receiverStderr = "";
-      const lifecycle: string[] = [];
+      let resetAcknowledgement: { nonce: string; groupAlive: boolean } | undefined;
+      const processGroupIsAlive = (pid: number): boolean => {
+        try {
+          process.kill(-pid, 0);
+          return true;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "EPERM") {
+            return true;
+          }
+          if (code === "ESRCH") {
+            return false;
+          }
+          throw error;
+        }
+      };
       const fake = localWorkspaceRunner(
         remoteHome,
         async (argv, localArgv, options, receiverTarget) => {
@@ -347,12 +370,9 @@ describe("worker tunnel manager", () => {
           receiverChild.stderr?.on("data", (chunk: string) => {
             receiverStderr += chunk;
           });
-          receiverChild.once("close", () => {
-            lifecycle.push("receiver-exit");
-          });
           receiverExited = waitForChildClose(receiverChild, 10_000);
-          await Promise.race([
-            waitForFile(receiverMarker, 10_000),
+          receiverGroupPid = await Promise.race([
+            waitForPidFile(receiverMarker, 10_000),
             receiverExited.then(() => {
               throw new Error(receiverStderr || "test receiver exited before its marker");
             }),
@@ -362,22 +382,24 @@ describe("worker tunnel manager", () => {
         (argv, result) => {
           const acknowledged = /^reset ([a-f0-9]{32})\n$/u.exec(result.stdout)?.[1];
           if (acknowledged) {
-            lifecycle.push(`reset-complete:${acknowledged}`);
+            if (receiverGroupPid === undefined) {
+              throw new Error("test receiver process group was not captured");
+            }
+            resetAcknowledgement = {
+              nonce: acknowledged,
+              groupAlive: processGroupIsAlive(receiverGroupPid),
+            };
           }
         },
       );
       const manager = createWorkerTunnelManager({ runner: fake.runner });
-      const starting = manager.start({
+      const handle = await manager.start({
         bundleHash: BUNDLE_HASH,
         environmentId: "worker:convergent-sync",
         ownerEpoch: 1,
         ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
-        gateway: { host: "127.0.0.1", port: 18789 },
         resolveIdentity,
       });
-      await waitForStarts(fake.starts, 1);
-      fake.starts[0]!.process.becomeReady();
-      const handle = await starting;
 
       try {
         const syncing = handle.syncWorkspace({
@@ -438,7 +460,9 @@ describe("worker tunnel manager", () => {
         });
         expect(resetCommands).toHaveLength(1);
         expect(sshArgvPort(resetCommands[0]!.argv)).toBe(22);
-        expect(lifecycle).not.toContain(`reset-complete:${resetCommands[0]!.nonce}`);
+        expect(receiverGroupPid).toBeDefined();
+        expect(processGroupIsAlive(receiverGroupPid!)).toBe(true);
+        expect(resetAcknowledgement).toBeUndefined();
         await expect(fs.readFile(path.join(receiverWorkspace!, "stale.txt"), "utf8")).resolves.toBe(
           "remove before fallback\n",
         );
@@ -464,7 +488,10 @@ describe("worker tunnel manager", () => {
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);
         const result = await syncing;
-        expect(lifecycle).toEqual(["receiver-exit", `reset-complete:${resetCommands[0]!.nonce}`]);
+        expect(resetAcknowledgement).toEqual({
+          nonce: resetCommands[0]!.nonce,
+          groupAlive: false,
+        });
         expect(result.mode).toBe("git");
         await expect(
           fs.readFile(path.join(result.remoteWorkspaceDir, "current.txt"), "utf8"),
@@ -493,6 +520,11 @@ describe("worker tunnel manager", () => {
             entry.argv[0] === "rsync" && entry.argv.some((arg) => arg.startsWith("--files-from=")),
         );
         expect(transfers.map((entry) => rsyncArgvPort(entry.argv))).toEqual([2222, 22]);
+        const fileLists = transfers.map((entry) =>
+          entry.argv.find((arg) => arg.startsWith("--files-from="))!.slice(13),
+        );
+        expect(new Set(fileLists.map((file) => path.dirname(file))).size).toBe(1);
+        expect(fileLists.map((file) => path.basename(file))).toEqual(["attempt-0", "attempt-1"]);
         for (const transfer of transfers) {
           expect(transfer.argv).toContain("--delete-delay");
           expect(transfer.argv).not.toContain("--delete-excluded");
@@ -563,17 +595,13 @@ describe("worker tunnel manager", () => {
         },
       );
       const manager = createWorkerTunnelManager({ runner: fake.runner });
-      const starting = manager.start({
+      const handle = await manager.start({
         bundleHash: BUNDLE_HASH,
         environmentId: "worker:retry-owner",
         ownerEpoch: 1,
         ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
-        gateway: { host: "127.0.0.1", port: 18789 },
         resolveIdentity,
       });
-      await waitForStarts(fake.starts, 1);
-      fake.starts[0]!.process.becomeReady();
-      const handle = await starting;
 
       try {
         await expect(
@@ -955,7 +983,7 @@ describe("worker tunnel manager", () => {
           sessionId: "session:symlink-sync",
           generation: 2,
         }),
-      ).rejects.toThrow("worker workspace symlink escapes the sync root");
+      ).rejects.toThrow("Cloud workspace symlink is not portable or escapes the sync root");
     } finally {
       await handle.stop();
       await fs.rm(root, { recursive: true });

@@ -25,16 +25,21 @@ vi.mock("../config/config.js", () => ({
   }),
 }));
 
-vi.mock("../sessions/transcript-events.js", () => ({
-  onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
-    transcriptUpdateHandler = cb;
-    return () => {
-      if (transcriptUpdateHandler === cb) {
-        transcriptUpdateHandler = undefined;
-      }
-    };
-  },
-}));
+vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
+  const { resolveTerminalAssistantTranscriptRunId } =
+    await importOriginal<typeof import("../sessions/transcript-events.js")>();
+  return {
+    resolveTerminalAssistantTranscriptRunId,
+    onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+      transcriptUpdateHandler = cb;
+      return () => {
+        if (transcriptUpdateHandler === cb) {
+          transcriptUpdateHandler = undefined;
+        }
+      };
+    },
+  };
+});
 
 vi.mock("./http-utils.js", () => ({
   getHeader: (req: IncomingMessage, name: string) => {
@@ -113,6 +118,11 @@ vi.mock("./session-transcript-readers.js", () => ({
 vi.mock("./session-history-state.js", () => ({
   buildSessionHistorySnapshot: () => ({
     history: { items: [], nextCursor: null, messages: [] },
+  }),
+  resolveCursorSeq: (_cursor: string | undefined) => undefined,
+  resolveSessionHistoryTailReadOptions: (limit: number) => ({
+    maxMessages: limit * 20 + 20,
+    maxLines: limit * 20 + 20,
   }),
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({

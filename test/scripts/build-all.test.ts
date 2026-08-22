@@ -9,7 +9,6 @@ import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
-  buildAllUsage,
   finalizeBuildAllStepCache,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
@@ -24,6 +23,7 @@ import {
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mts";
 import {
+  listPluginSdkDistArtifacts,
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -63,6 +63,7 @@ function withBuildCacheFixture(
             }
         >;
         requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
+        requiredCacheHitOutputs?: string[];
         restore?: "always";
         runOnHit?: {
           env?: NodeJS.ProcessEnv;
@@ -225,11 +226,6 @@ describe("resolveBuildAllStep", () => {
       expectedEnv: { FOO: "bar", OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" },
     },
     {
-      label: "copy-hook-metadata",
-      scriptPath: "scripts/copy-hook-metadata.ts",
-      expectedEnv: { FOO: "bar" },
-    },
-    {
       label: "write-build-info",
       scriptPath: "scripts/write-build-info.ts",
       expectedEnv: { FOO: "bar" },
@@ -268,6 +264,22 @@ describe("resolveBuildAllStep", () => {
     expect(result).toEqual({
       command: "/custom/node",
       args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
+      options: {
+        stdio: "inherit",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      },
+    });
+  });
+
+  it("routes no-pnpm UI builds through the canonical validation wrapper", () => {
+    expect(
+      resolveBuildAllStep(getBuildAllStep("ui:build"), {
+        nodeExecPath: "/custom/node",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      }),
+    ).toEqual({
+      command: "/custom/node",
+      args: ["scripts/ui.js", "build"],
       options: {
         stdio: "inherit",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
@@ -335,7 +347,8 @@ describe("resolveBuildAllSteps", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("unknown argument: --bogus");
-    expect(result.stderr).toContain(buildAllUsage());
+    expect(result.stderr).toContain("Usage: node --import tsx scripts/build-all.mts [profile]");
+    expect(result.stderr).toContain("Profiles:");
     expect(result.stderr).not.toContain("[build-all]");
     expect(result.stderr).not.toContain("at ");
   });
@@ -346,6 +359,7 @@ describe("resolveBuildAllSteps", () => {
       "tsdown-ai",
       "tsdown-packages",
       "tsdown-unified",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -353,7 +367,6 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "copy-hook-metadata",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
@@ -414,12 +427,14 @@ describe("resolveBuildAllSteps", () => {
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    expect(unified.cache?.requiredCacheHitOutputs).toEqual(listPluginSdkDistArtifacts());
   });
 
   it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -427,7 +442,6 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "copy-hook-metadata",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
@@ -552,6 +566,7 @@ describe("resolveBuildAllSteps", () => {
   it("uses a minimal built runtime profile for gateway watch regression", () => {
     expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
@@ -563,6 +578,7 @@ describe("resolveBuildAllSteps", () => {
     expect(resolveBuildAllSteps("qaRuntime").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -575,6 +591,7 @@ describe("resolveBuildAllSteps", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -588,6 +605,7 @@ describe("resolveBuildAllSteps", () => {
   it("uses a CLI startup profile without generated plugin assets", () => {
     expect(resolveBuildAllSteps("cliStartup").map((step) => step.label)).toEqual([
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
@@ -655,6 +673,19 @@ describe("resolveBuildAllSteps", () => {
         labels.indexOf("plugins:assets:copy"),
       );
       expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+        labels.indexOf("runtime-postbuild"),
+      );
+    }
+  });
+
+  it("builds isolated external plugin output after tsdown and before runtime postbuild", () => {
+    for (const profile of Object.keys(BUILD_ALL_PROFILES)) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      const lastTsdown = profile === "full" ? "tsdown-unified" : "tsdown";
+      expect(labels.indexOf("external-plugins:local-dist")).toBeGreaterThan(
+        labels.indexOf(lastTsdown),
+      );
+      expect(labels.indexOf("external-plugins:local-dist")).toBeLessThan(
         labels.indexOf("runtime-postbuild"),
       );
     }
@@ -731,11 +762,6 @@ describe("resolveBuildAllSteps", () => {
     expect(step.cache?.restore).toBe("always");
   });
 
-  it("does not cache hook metadata over compiled hook handlers", () => {
-    const step = getBuildAllStep("copy-hook-metadata");
-    expect(step.cache).toBeUndefined();
-  });
-
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
   });
@@ -762,15 +788,15 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildAllStepCacheState", () => {
-  it("shares content-addressed outputs across checkout roots", () => {
+  it("restores exact declaration snapshots across checkout roots", () => {
     const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-build-cache-"));
     const firstRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-source-"));
     const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-target-"));
     const step = {
-      label: "cached",
+      label: "tsdown-unified",
       cache: {
         inputs: ["src"],
-        outputs: ["dist"],
+        outputs: [{ path: "dist", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
         restore: "always" as const,
       },
     };
@@ -779,10 +805,18 @@ describe("resolveBuildAllStepCacheState", () => {
     try {
       for (const rootDir of [firstRoot, secondRoot]) {
         fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+        fs.mkdirSync(path.join(rootDir, "dist/plugin-sdk"), { recursive: true });
         fs.writeFileSync(path.join(rootDir, "src/input.ts"), "same input");
       }
-      fs.mkdirSync(path.join(firstRoot, "dist"), { recursive: true });
-      fs.writeFileSync(path.join(firstRoot, "dist/output.js"), "cached output");
+      const currentDts = path.join(secondRoot, "dist/plugin-sdk/current.d.ts");
+      const removedDts = path.join(secondRoot, "dist/plugin-sdk/removed-facade.d.ts");
+      const removedJs = path.join(secondRoot, "dist/plugin-sdk/removed-facade.js");
+      fs.writeFileSync(
+        path.join(firstRoot, "dist/plugin-sdk/current.d.ts"),
+        "export declare const current: true;",
+      );
+      fs.writeFileSync(removedDts, "export declare const removed: true;");
+      fs.writeFileSync(removedJs, "export const removed = true;");
 
       const sourceState = resolveBuildAllStepCacheState(step, { rootDir: firstRoot, env });
       writeBuildAllStepCacheStamp(
@@ -793,11 +827,19 @@ describe("resolveBuildAllStepCacheState", () => {
 
       const targetState = resolveBuildAllStepCacheState(step, { rootDir: secondRoot, env });
       expect(targetState).toMatchObject({ fresh: true, restorable: true });
-      expect(targetState.outputRoot).toBe(path.join(cacheRoot, "cached", "outputs"));
+      expect(targetState.outputRoot).toBe(path.join(cacheRoot, "tsdown-unified", "outputs"));
       expect(restoreBuildAllStepCacheOutputs(targetState, { rootDir: secondRoot })).toBe(true);
-      expect(fs.readFileSync(path.join(secondRoot, "dist/output.js"), "utf8")).toBe(
-        "cached output",
-      );
+      fs.rmSync(removedJs);
+
+      expect({
+        current: fs.readFileSync(currentDts, "utf8"),
+        declaration: fs.existsSync(removedDts),
+        runtime: fs.existsSync(removedJs),
+      }).toEqual({
+        current: "export declare const current: true;",
+        declaration: false,
+        runtime: false,
+      });
     } finally {
       fs.rmSync(cacheRoot, { force: true, recursive: true });
       fs.rmSync(firstRoot, { force: true, recursive: true });
@@ -928,6 +970,36 @@ describe("resolveBuildAllStepCacheState", () => {
         stampedOutputs: ["dist/output.js"],
       });
       expect(restoreBuildAllStepCacheOutputs(stale, { rootDir })).toBe(false);
+    });
+  });
+
+  it("rejects a cache hit when a required live output was removed", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const declarationPath = path.join(rootDir, "dist/output.d.ts");
+      fs.writeFileSync(declarationPath, "export declare const output: true;");
+      const guardedStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          outputs: [{ path: "dist", extensions: [".d.ts"] }],
+          requiredCacheHitOutputs: ["dist/output.js"],
+          restore: "always" as const,
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(guardedStep, { rootDir });
+      writeBuildAllStepCacheStamp(guardedStep, cacheState, { rootDir });
+
+      expect(resolveBuildAllStepCacheState(guardedStep, { rootDir })).toMatchObject({
+        fresh: true,
+        restorable: true,
+      });
+      fs.rmSync(outputPath);
+
+      expect(resolveBuildAllStepCacheState(guardedStep, { rootDir })).toMatchObject({
+        fresh: false,
+        reason: "stale",
+        restorable: false,
+      });
     });
   });
 

@@ -1,6 +1,4 @@
 // Canonical MCP OAuth session state. Legacy JSON import belongs to doctor only.
-import { createHash } from "node:crypto";
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
@@ -18,20 +16,23 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 
-type McpOAuthDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_stores">;
+type McpOAuthDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "mcp_oauth_pending_authorizations" | "mcp_oauth_stores"
+>;
 
 const MCP_OAUTH_STORE_FORMAT_VERSION = 1;
 const UNINITIALIZED_STORE_FIELDS = new Set(["credentialState", "pendingAuthorizationChallenge"]);
+const pendingSchemaDatabases = new WeakSet<DatabaseSync>();
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;
@@ -45,6 +46,7 @@ export type McpOAuthStore = {
   clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
   tokenExpiresAt?: number;
+  tokensAuthorizationServerUrl?: string;
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
@@ -186,18 +188,25 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   if (value.tokenExpiresAt !== undefined && value.tokens === undefined) {
     throw new McpOAuthStoreCorruptionError(storeKey, "tokenExpiresAt requires tokens");
   }
+  if (
+    value.tokensAuthorizationServerUrl !== undefined &&
+    (typeof value.tokensAuthorizationServerUrl !== "string" ||
+      !URL.canParse(value.tokensAuthorizationServerUrl))
+  ) {
+    throw new McpOAuthStoreCorruptionError(storeKey, "tokensAuthorizationServerUrl is invalid");
+  }
+  if (value.tokensAuthorizationServerUrl !== undefined && value.tokens === undefined) {
+    throw new McpOAuthStoreCorruptionError(
+      storeKey,
+      "tokensAuthorizationServerUrl requires tokens",
+    );
+  }
   assertOptionalString(storeKey, value, "codeVerifier");
   assertOptionalString(storeKey, value, "lastAuthorizationUrl");
   assertOptionalString(storeKey, value, "redirectUrl");
   assertDiscoveryState(storeKey, value.discoveryState);
   assertAuthorizationChallenge(storeKey, value.pendingAuthorizationChallenge);
   return value as McpOAuthStore;
-}
-
-export function resolveMcpOAuthStoreKey(serverName: string, serverUrl: string): string {
-  const safeServerName = sanitizeServerName(serverName, new Set<string>());
-  const hash = createHash("sha256").update(serverName).update("\0").update(serverUrl).digest("hex");
-  return `${safeServerName}-${hash.slice(0, 16)}`;
 }
 
 function storeFromRow(
@@ -234,15 +243,155 @@ export function readMcpOAuthStore(storeKey: string): McpOAuthStore {
 
 /** Read status state without creating or repairing the shared database. */
 export function readMcpOAuthStoreReadOnly(storeKey: string): McpOAuthStore {
-  const databasePath = resolveOpenClawStateSqlitePath();
-  if (!fs.existsSync(databasePath)) {
-    return {};
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "mcp_oauth_stores")) {
+        return {};
+      }
+      return readFromDatabase(db, storeKey);
+    }) ?? {}
+  );
+}
+
+/** List canonical store keys matching one server/principal prefix without creating state. */
+export function listMcpOAuthStoreKeysByPrefix(prefix: string): string[] {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "mcp_oauth_stores")) {
+        return [];
+      }
+      const rows = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<McpOAuthDatabase>(db)
+          .selectFrom("mcp_oauth_stores")
+          .select("store_key")
+          .orderBy("store_key", "asc"),
+      ).rows;
+      return rows.map((row) => row.store_key).filter((storeKey) => storeKey.startsWith(prefix));
+    }) ?? []
+  );
+}
+
+function ensurePendingSchema(database: DatabaseSync): void {
+  if (pendingSchemaDatabases.has(database)) {
+    return;
   }
-  return withOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "mcp_oauth_stores")) {
-      return {};
+  ensureMcpOAuthPendingSchema(database);
+  pendingSchemaDatabases.add(database);
+}
+
+function runPendingWrite<T>(run: (database: DatabaseSync) => T): T {
+  ensurePendingSchema(openOpenClawStateDatabase().db);
+  return runOpenClawStateWriteTransaction(({ db }) => run(db));
+}
+
+function deletePendingForStore(
+  database: DatabaseSync,
+  storeKey: string,
+  assertOwnedInTransaction?: (database: DatabaseSync) => void,
+): void {
+  assertOwnedInTransaction?.(database);
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<McpOAuthDatabase>(database)
+      .deleteFrom("mcp_oauth_pending_authorizations")
+      .where("store_key", "=", storeKey),
+  );
+}
+
+/**
+ * Sign-in links are channel-visible bearer state; a bounded lifetime caps how
+ * long a copied link stays completable. Enforced at lookup AND claim.
+ */
+const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
+
+/** Resolve one OAuth callback state without scanning credential JSON. */
+export function readMcpOAuthPendingAuthorization(state: string): string | undefined {
+  // Public unauthenticated callback path: must stay read-only. Table creation
+  // belongs to start-authorization; an unknown state must not write anything.
+  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    if (!tableExists(db, "mcp_oauth_pending_authorizations")) {
+      return undefined;
     }
-    return readFromDatabase(db, storeKey);
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<McpOAuthDatabase>(db)
+        .selectFrom("mcp_oauth_pending_authorizations")
+        .select("store_key")
+        .where("state", "=", state)
+        .where("create_time", ">", Date.now() - MCP_OAUTH_PENDING_STATE_TTL_MS),
+    )?.store_key;
+  });
+}
+
+/** Claim one exact unexpired callback state while its store lease is still owned. */
+export function consumeOAuthState(
+  storeKey: string,
+  state: string,
+  assertOwnedInTransaction?: (database: DatabaseSync) => void,
+): boolean {
+  return runPendingWrite((database) => {
+    assertOwnedInTransaction?.(database);
+    return (
+      executeSqliteQuerySync(
+        database,
+        getNodeSqliteKysely<McpOAuthDatabase>(database)
+          .deleteFrom("mcp_oauth_pending_authorizations")
+          .where("store_key", "=", storeKey)
+          .where("state", "=", state)
+          // Expired rows are unclaimable; supersede/clear paths delete them.
+          .where("create_time", ">", Date.now() - MCP_OAUTH_PENDING_STATE_TTL_MS),
+      ).numAffectedRows === 1n
+    );
+  });
+}
+
+/** Replace one store's pending callback state after OAuth persisted its session. */
+export function writeMcpOAuthPendingAuthorization(
+  storeKey: string,
+  state: string,
+  assertOwnedInTransaction?: (database: DatabaseSync) => void,
+): void {
+  runPendingWrite((database) => {
+    const now = Date.now();
+    assertOwnedInTransaction?.(database);
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<McpOAuthDatabase>(database)
+        .deleteFrom("mcp_oauth_pending_authorizations")
+        .where("create_time", "<=", now - MCP_OAUTH_PENDING_STATE_TTL_MS),
+    );
+    deletePendingForStore(database, storeKey);
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<McpOAuthDatabase>(database)
+        .insertInto("mcp_oauth_pending_authorizations")
+        .values({ state, store_key: storeKey, create_time: now }),
+    );
+  });
+}
+
+/** Delete callback correlation for one settled or cleared OAuth store. */
+export function deleteMcpOAuthPendingAuthorization(
+  storeKey: string,
+  assertOwnedInTransaction?: (database: DatabaseSync) => void,
+): void {
+  runPendingWrite((database) => {
+    deletePendingForStore(database, storeKey, assertOwnedInTransaction);
+  });
+}
+
+/** Delete callback correlation for every requester store under one server key prefix. */
+export function deleteMcpOAuthPendingAuthorizationsByPrefix(prefix: string): void {
+  runPendingWrite((database) => {
+    // Requester store-key grammar excludes SQL wildcard bytes; changing it without
+    // escaping here could clear unrelated principals.
+    executeSqliteQuerySync(
+      database,
+      getNodeSqliteKysely<McpOAuthDatabase>(database)
+        .deleteFrom("mcp_oauth_pending_authorizations")
+        .where("store_key", "like", `${prefix}%`),
+    );
   });
 }
 
@@ -296,7 +445,8 @@ export function clearMcpOAuthStore(
 ): void {
   // Explicit provenance distinguishes logout from challenge-only bootstrap state.
   // Doctor imports retired credentials only into an `uninitialized` row.
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runPendingWrite((db) => {
     replaceMcpOAuthStore(db, storeKey, { credentialState: "cleared" }, assertOwnedInTransaction);
+    deletePendingForStore(db, storeKey, assertOwnedInTransaction);
   });
 }

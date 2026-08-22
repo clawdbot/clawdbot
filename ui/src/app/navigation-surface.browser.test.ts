@@ -50,9 +50,10 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
           <main class="content">
             ${renderFloatingUpdateCard({
               navigationSurfaceHidden: true,
+              mobileNavLayout: false,
               onboarding: false,
               updateAvailable: null,
-              updateRunning: false,
+              updateBusy: false,
               onUpdate: () => undefined,
               refreshRequired: true,
               onRefresh: () => undefined,

@@ -2,10 +2,12 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { addTuiOptions } from "./tui-cli-options.js";
 
 export type ResumeCliOptions = {
+  handoff?: string;
   url?: string;
   token?: string;
   password?: string;
@@ -17,7 +19,8 @@ export function registerResumeCli(program: Command) {
   const command = program
     .command("resume")
     .description("Resume a recent Gateway session in the TUI")
-    .argument("[query]", "Session key, display name, or label");
+    .argument("[query]", "Session key, display name, or label")
+    .option("--handoff <payload>", "Opaque session handoff copied from the Control UI");
   addTuiOptions(command)
     .addHelpText(
       "after",
@@ -29,7 +32,7 @@ export function registerResumeCli(program: Command) {
         const { runResumeCommand } = await import("./resume-cli.runtime.js");
         await runResumeCommand(query, opts);
       } catch (error) {
-        defaultRuntime.error(String(error));
+        defaultRuntime.error(formatErrorMessage(error));
         defaultRuntime.exit(1);
       }
     });

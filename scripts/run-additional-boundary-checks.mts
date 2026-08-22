@@ -5,15 +5,22 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 // Boundary checks are disposable subprocesses; bound descendant cleanup after timeout.
 const TIMEOUT_KILL_GRACE_MS = 250;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 250;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -59,6 +66,8 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
+    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
     [
       "lint:plugins:no-register-http-handler",
       "pnpm",
@@ -85,7 +94,6 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
     ],
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
-    ["web-search-provider-boundary", "pnpm", ["run", "lint:web-search-provider-boundaries"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-src-outside-plugin-sdk-boundary",
@@ -93,9 +101,9 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:extensions:no-src-outside-plugin-sdk"],
     ],
     [
-      "extension-plugin-sdk-internal-boundary",
+      "extension-normalization-core-bypass-boundary",
       "pnpm",
-      ["run", "lint:extensions:no-plugin-sdk-internal"],
+      ["run", "lint:extensions:no-normalization-core-bypass"],
     ],
     [
       "extension-relative-outside-package-boundary",
@@ -148,14 +156,6 @@ export function resolvePositiveInteger(value: unknown, fallback: number, label =
     throw new Error(`${label} must be a positive integer; got: ${displayValue(value)}`);
   }
   return parsed;
-}
-
-function resolveTimerTimeoutMs(valueMs: number) {
-  const value = valueMs;
-  if (!Number.isFinite(value)) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
 /**
@@ -298,38 +298,20 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
 }
 
 function terminateChild(child: ChildProcess, signal: ProcessSignal) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal as NodeJS.Signals);
-      return;
-    } catch {}
-  }
-  child.kill(signal as NodeJS.Signals);
+  terminateManagedChild(child, signal as NodeJS.Signals, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 function processGroupAlive(child: ChildProcess) {
-  if (process.platform === "win32" || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
-  }
+  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForProcessGroupExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!processGroupAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !processGroupAlive(child);
+function waitForProcessGroupExit(child: ChildProcess, timeoutMs: number) {
+  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function finishTerminatedProcessTree(
@@ -443,7 +425,7 @@ export function runSingleCheck(
   }: RunSingleCheckOptions,
 ) {
   return new Promise<BoundaryCheckResult>((resolve) => {
-    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs);
+    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs, MAX_TIMER_TIMEOUT_MS);
     const startedAt = performance.now();
     const child = spawn(check.command, check.args, {
       cwd,

@@ -13,7 +13,7 @@ import {
  */
 
 const FILE_SECRET_REF_SEGMENT_PATTERN = /^(?:[^~]|~0|~1)*$/;
-/** Shared alias grammar for env/file/exec secret provider names. */
+/** Shared alias grammar for env/file/exec/store secret provider names. */
 export const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 
@@ -43,6 +43,8 @@ type SecretRefDefaultsCarrier = {
       file?: string;
       /** Default provider alias for exec-backed secret refs. */
       exec?: string;
+      /** Default provider alias for shared-store secret refs. */
+      store?: string;
     };
     /** Provider declarations used only when callers ask to prefer the first matching source. */
     providers?: Record<string, { source?: string }>;
@@ -60,12 +62,7 @@ export function resolveDefaultSecretProviderAlias(
   source: SecretRefSource,
   options?: { preferFirstProviderForSource?: boolean },
 ): string {
-  const configured =
-    source === "env"
-      ? config.secrets?.defaults?.env
-      : source === "file"
-        ? config.secrets?.defaults?.file
-        : config.secrets?.defaults?.exec;
+  const configured = config.secrets?.defaults?.[source];
   if (configured?.trim()) {
     return configured.trim();
   }
@@ -84,6 +81,49 @@ export function resolveDefaultSecretProviderAlias(
   }
 
   return DEFAULT_SECRET_PROVIDER_ALIAS;
+}
+
+/** Builds an environment-backed gateway credential using its configured provider alias. */
+export function createGatewayEnvSecretRef(
+  config: SecretRefDefaultsCarrier,
+  envVarName: string,
+): SecretRef {
+  return {
+    source: "env",
+    provider: resolveDefaultSecretProviderAlias(config, "env", {
+      preferFirstProviderForSource: true,
+    }),
+    id: envVarName,
+  };
+}
+
+/** Whether a source-specific built-in provider owns this selected default alias. */
+export function isBuiltInDefaultSecretProviderRef(
+  config: SecretRefDefaultsCarrier,
+  ref: SecretRef,
+): boolean {
+  const configuredSource = config.secrets?.providers?.[ref.provider]?.source;
+  return (
+    configuredSource !== ref.source &&
+    (ref.source === "env" || ref.source === "store") &&
+    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
+  );
+}
+
+/** Returns the configured provider source when a SecretRef selects an impossible pairing. */
+export function resolveSecretRefProviderSourceMismatch(
+  config: SecretRefDefaultsCarrier,
+  ref: SecretRef,
+): string | null {
+  const configuredSource = config.secrets?.providers?.[ref.provider]?.source;
+  if (
+    !configuredSource ||
+    configuredSource === ref.source ||
+    isBuiltInDefaultSecretProviderRef(config, ref)
+  ) {
+    return null;
+  }
+  return configuredSource;
 }
 
 /** Validates file secret ref ids against the shared JSON-pointer-style contract. */
@@ -140,6 +180,9 @@ export function isValidSecretRef(ref: SecretRef): boolean {
   }
   if (ref.source === "file") {
     return isValidFileSecretRefId(ref.id);
+  }
+  if (ref.source === "store") {
+    return isValidEnvSecretRefId(ref.id);
   }
   return isValidExecSecretRefId(ref.id);
 }

@@ -34,7 +34,6 @@ import {
   createDiscordMessageNonce,
   resolveChannelId,
   resolveDiscordChannel,
-  stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordAllowedMentions,
 } from "./send.shared.js";
@@ -172,6 +171,7 @@ type DiscordComponentSendOpts = {
   allowedMentions?: DiscordAllowedMentions;
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -200,10 +200,7 @@ async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
   opts: DiscordComponentSendOpts;
   accountId: string;
-}): Promise<{
-  body: ReturnType<typeof stripUndefinedFields>;
-  buildResult: ReturnType<typeof buildDiscordComponentMessage>;
-}> {
+}) {
   const messageReference = params.opts.reply
     ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
     : undefined;
@@ -259,10 +256,10 @@ async function buildDiscordComponentPayload(params: {
     ...(finalFlags ? { flags: finalFlags } : {}),
     ...(files ? { files } : {}),
   };
-  const body = stripUndefinedFields({
+  const body = {
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
-  });
+  };
 
   return { body, buildResult };
 }
@@ -291,6 +288,7 @@ export async function sendDiscordComponentMessage(
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
       onDeliveryResult: opts.onDeliveryResult,
+      onPlatformSendDispatch: opts.onPlatformSendDispatch,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
@@ -321,6 +319,7 @@ export async function sendDiscordComponentMessage(
 
   let result: { id: string; channel_id: string };
   try {
+    await opts.onPlatformSendDispatch?.();
     result = (await request(
       () =>
         createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {

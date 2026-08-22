@@ -165,8 +165,8 @@ async function resolveAgentId(params: {
     }
     return requestedAgentId;
   }
-  const { resolveDefaultAgentId } = await import("../../agents/agent-scope.js");
-  return resolveDefaultAgentId(params.cfg);
+  const { resolveAmbientOwnerAgentId } = await import("../../agents/agent-scope.js");
+  return resolveAmbientOwnerAgentId(params.cfg);
 }
 
 function buildSystemPrompt(params: LlmCompleteParams): string | undefined {
@@ -321,10 +321,6 @@ function finalizeCompletion(params: {
     );
   }
   return { ...params.result, usage };
-}
-
-function finiteOption(value: number | undefined): number | undefined {
-  return asFiniteNumber(value);
 }
 
 function normalizeAllowedModelRef(raw: string): string | null {
@@ -716,8 +712,8 @@ export function createRuntimeLlm(
         cfg,
         context,
         options: {
-          maxTokens: finiteOption(params.maxTokens),
-          temperature: finiteOption(params.temperature),
+          maxTokens: asFiniteNumber(params.maxTokens),
+          temperature: asFiniteNumber(params.temperature),
           ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },

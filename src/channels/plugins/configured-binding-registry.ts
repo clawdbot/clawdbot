@@ -9,6 +9,7 @@ import type {
   ConfiguredBindingRecordResolution,
   ConfiguredBindingResolution,
 } from "./binding-types.js";
+import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import { resolveCompiledBindingRegistry } from "./configured-binding-compiler.js";
 import {
   materializeConfiguredBindingRecord,
@@ -56,6 +57,7 @@ export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }):
   bindingCount: number;
   channelCount: number;
 } {
+  ensureConfiguredBindingBuiltinsRegistered();
   const { rulesByChannel } = resolveCompiledBindingRegistry(params.cfg);
   return {
     bindingCount: [...rulesByChannel.values()].reduce((sum, rules) => sum + rules.length, 0),
@@ -73,6 +75,7 @@ export function resolveConfiguredBindingRecord(params: {
   conversationId: string;
   parentConversationId?: string;
 }): ConfiguredBindingRecordResolution | null {
+  ensureConfiguredBindingBuiltinsRegistered();
   return (
     resolveMaterializedConfiguredBinding({
       cfg: params.cfg,
@@ -93,6 +96,7 @@ export function resolveConfiguredBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingResolution | null {
+  ensureConfiguredBindingBuiltinsRegistered();
   const resolved = resolveMaterializedConfiguredBinding(params);
   if (!resolved) {
     return null;
@@ -112,6 +116,7 @@ export function resolveConfiguredBindingRecordBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): ConfiguredBindingRecordResolution | null {
+  ensureConfiguredBindingBuiltinsRegistered();
   return resolveConfiguredBindingRecordBySessionKeyFromRegistry({
     registry: resolveCompiledBindingRegistry(params.cfg),
     sessionKey: params.sessionKey,

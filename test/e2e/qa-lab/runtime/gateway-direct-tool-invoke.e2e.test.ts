@@ -9,9 +9,9 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "../../../../src/gateway/test-helpers.js";
 import {
@@ -90,7 +90,7 @@ describe("Gateway direct tool invoke product proof", () => {
     "enforces public auth, invocation, approval, and call-id contracts",
     { timeout: 60_000 },
     async () => {
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       const configPath = createConfigIO().configPath;
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
@@ -129,12 +129,12 @@ describe("Gateway direct tool invoke product proof", () => {
         ]),
       );
 
-      let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
       let readOnlyClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       let writeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
 
       try {
-        gateway = await startGatewayServer(port, {
+        gateway = await startTestGatewayServer(port, {
           host: "127.0.0.1",
           auth: { mode: "token", token: GATEWAY_TOKEN },
           controlUiEnabled: false,

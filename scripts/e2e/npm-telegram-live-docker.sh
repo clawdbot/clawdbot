@@ -437,6 +437,7 @@ export HOME="$runtime_home"
 export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
+export OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION="$(node -e 'const pkg = require("/npm-global/lib/node_modules/openclaw/package.json"); process.stdout.write(pkg.version)')"
 sut_command="/npm-global/bin/openclaw"
 
 dump_hotpath_logs() {

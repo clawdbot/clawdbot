@@ -12,7 +12,10 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
@@ -62,7 +65,7 @@ const {
   resolveDefaultAccountId,
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
-  nestedObjectKeys: ["botLoopProtection", "relay"],
+  nestedObjectKeys: ["botLoopProtection", "presenceEvents", "relay"],
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
     if (slack?.postAs === "user") {
@@ -123,9 +126,7 @@ type SlackStreamingConfig = NonNullable<SlackAccountConfig["streaming"]>;
 type SlackStreamingConfigValue = SlackStreamingConfig | boolean | string;
 
 function asStreamingConfigObject(value: unknown): SlackStreamingConfig | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as SlackStreamingConfig)
-    : undefined;
+  return asOptionalRecord(value) as SlackStreamingConfig | undefined;
 }
 
 function asLegacyStreamingScalar(value: unknown): boolean | string | undefined {

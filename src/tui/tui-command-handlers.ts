@@ -14,7 +14,11 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
@@ -256,7 +260,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       const result = await client.patchSession({
         key: selection.sessionKey,
-        ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
         ...patch,
       });
       return isCurrentSessionSelection(selection) ? result : null;
@@ -300,7 +304,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     selector.onSelect = (item) => {
       void (async () => {
-        await onSelect(item.value);
+        try {
+          await onSelect(item.value);
+        } catch (err) {
+          // A rejected selection must not strand the overlay open with an
+          // unhandled rejection; close it and surface the cause in chat.
+          chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+        }
         closeOverlayAndRender(overlayHandle);
       })();
     };
@@ -314,7 +324,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
-      const models = await client.listModels();
+      const models = await client.listModels({ agentId: selection.agentId });
       if (!isCurrentSessionSelection(selection)) {
         return;
       }
@@ -670,11 +680,33 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         "reasoning failed",
       );
     },
-    usage: async (args) => {
+    usage: async (args, raw) => {
+      if (args.toLowerCase() === "cost") {
+        if (!opts.local) {
+          await sendMessage(raw);
+          return;
+        }
+        if (!client.runUsageCostCommand) {
+          addUnsupportedLocalCommand("usage cost");
+          return;
+        }
+        const selection = captureSessionSelection();
+        try {
+          const result = await client.runUsageCostCommand(selection);
+          if (isCurrentSessionSelection(selection)) {
+            chatLog.addSystem(result.text);
+          }
+        } catch (err) {
+          if (isCurrentSessionSelection(selection)) {
+            chatLog.addSystem(`usage cost failed: ${formatTuiErrorMessage(err)}`);
+          }
+        }
+        return;
+      }
       const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
       const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
       if (args && !normalized && !isReset) {
-        chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
+        chatLog.addSystem("usage: /usage <off|tokens|full|cost|reset>");
         return;
       }
       if (isReset) {
@@ -734,12 +766,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       const finishSessionTransition = beginSessionTransition("new");
       try {
-        // Clear token counts immediately to avoid stale display (#1523)
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-
         const uniqueKey = `tui-${randomUUID()}`;
         const result = await client.createSession({
           key: uniqueKey,
@@ -751,6 +777,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (!result.key) {
           throw new Error("sessions.create returned no session key");
         }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
         await setSession(result.key);
         chatLog.addSystem(`new session: ${result.key}`);
       } catch (err) {
@@ -767,20 +797,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       let resetResultSelection = resetSelection;
       const finishSessionTransition = beginSessionTransition("reset");
       try {
-        // Clear token counts immediately to avoid stale display (#1523)
-        state.sessionInfo.inputTokens = null;
-        state.sessionInfo.outputTokens = null;
-        state.sessionInfo.totalTokens = null;
-        tui.requestRender();
-
         const result = await client.resetSession(
           resetSelection.sessionKey,
           "reset",
-          resetSelection.sessionKey === "global" ? { agentId: resetSelection.agentId } : undefined,
+          !parseAgentSessionKey(resetSelection.sessionKey)
+            ? { agentId: resetSelection.agentId }
+            : undefined,
         );
         if (!isCurrentSessionSelection(resetSelection)) {
           return;
         }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
         if (applySessionMutationResult(result, resetSelection)) {
           resetResultSelection = captureSessionSelection();
           await refreshSessionInfo();
@@ -884,7 +914,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       const sendResult = await client.sendChat({
         sessionKey: sendSelection.sessionKey,
-        ...(sendSelection.sessionKey === "global" ? { agentId: sendSelection.agentId } : {}),
+        ...(!parseAgentSessionKey(sendSelection.sessionKey)
+          ? { agentId: sendSelection.agentId }
+          : {}),
         sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,

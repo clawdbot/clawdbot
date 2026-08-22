@@ -6,7 +6,7 @@ import { withEnv } from "../test-utils/env.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -24,7 +24,7 @@ function addStartupActivation(pluginDir: string, onStartup: boolean): void {
 }
 
 function buildSnapshotCompatibilityNoticeCodes(plugin: { dir: string; file: string; id: string }) {
-  const stateDir = makeTempDir();
+  const stateDir = makePluginLoaderTempDir();
   return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
     useNoBundledPlugins();
     return buildPluginCompatibilitySnapshotNotices({
@@ -69,14 +69,14 @@ describe("plugin compatibility snapshot notices", () => {
   });
 
   it("reports actual hook-only registrations without activating cold plugin modules", () => {
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const runtimeMarker = path.join(pluginDir, "runtime-loaded");
     const plugin = writePlugin({
       id: "runtime-hook-only",
       dir: pluginDir,
       body: `module.exports = { id: "runtime-hook-only", register(api) { require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded"); api.on("message_received", () => {}); } };\n`,
     });
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const config = {
       plugins: {
         load: { paths: [plugin.file] },

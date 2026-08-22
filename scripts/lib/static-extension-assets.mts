@@ -2,11 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-
-// This helper is copied into standalone updater fixtures without workspace packages.
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
+import { isRecord } from "./record-shared.mjs";
 
 type StaticExtensionAsset = {
   pluginDir?: string;
@@ -27,11 +23,14 @@ function toPosixPath(value: unknown) {
 }
 
 function readJsonFile(filePath: string, fsImpl: typeof fs) {
-  return asRecord(JSON.parse(fsImpl.readFileSync(filePath, "utf8")));
+  const value: unknown = JSON.parse(fsImpl.readFileSync(filePath, "utf8"));
+  return isRecord(value) ? value : {};
 }
 
 function readPackageSection(pkg: Record<string, unknown>, section: "assetScripts" | "build") {
-  return asRecord(asRecord(pkg.openclaw)[section]);
+  const openclaw = isRecord(pkg.openclaw) ? pkg.openclaw : {};
+  const value = openclaw[section];
+  return isRecord(value) ? value : {};
 }
 
 function normalizePackageRelativePath(value: unknown) {
@@ -134,7 +133,7 @@ function listDistExtensionPackageDirs(rootDir: string, fsImpl: typeof fs) {
 
 function readPackageStaticAssetEntries(packageJson: Record<string, unknown>) {
   const entries = readPackageSection(packageJson, "build").staticAssets;
-  return Array.isArray(entries) ? entries.map(asRecord) : [];
+  return Array.isArray(entries) ? entries.filter(isRecord) : [];
 }
 
 function hasPackageAssetBuild(packageJson: Record<string, unknown>) {

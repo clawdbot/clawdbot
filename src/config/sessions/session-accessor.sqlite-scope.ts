@@ -1,3 +1,5 @@
+// Sanctioned low-level scope/Kysely entry point for doctor, migrations, and infrastructure.
+// Runtime feature code imports the session accessor barrel instead of this module.
 import path from "node:path";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
@@ -8,7 +10,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -23,6 +25,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "./store-writer-state.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
@@ -36,7 +39,9 @@ type SessionSqliteDatabase = Pick<
   | "session_conversations"
   | "session_members"
   | "session_nodes"
+  | "session_participants"
   | "session_suggestions"
+  | "session_transcript_archives"
   | "session_transcript_active_events"
   | "session_transcript_index_state"
   | "session_windows"
@@ -78,7 +83,6 @@ export type SessionSqliteTargetResolutionCache = Map<
 >;
 
 const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
-const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
 
 export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);

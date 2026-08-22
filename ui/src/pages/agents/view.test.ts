@@ -145,8 +145,8 @@ describe("renderAgents", () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
-    const globalNextWakeAtMs = Date.now() + 60_000;
-    const scopedNextWakeAtMs = globalNextWakeAtMs + 3_600_000;
+    const nextWakeAtMs = Date.now() + 60_000;
+    const scopedNextWakeAtMs = nextWakeAtMs + 3_600_000;
     const container = document.createElement("div");
     render(
       renderAgents(
@@ -154,7 +154,7 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            status: { enabled: true, jobs: 51, nextWakeAtMs: globalNextWakeAtMs },
+            status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
             jobs: [job],
             jobsTotal: 1,
             jobsHasMore: false,
@@ -188,7 +188,7 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe(
       formatNextRun(scopedNextWakeAtMs),
     );
-    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(globalNextWakeAtMs));
+    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
@@ -227,7 +227,7 @@ describe("renderAgents", () => {
             activePanel: "cron",
             selectedAgentId: "alpha",
             cron: {
-              status: { enabled: true, jobs: 80, nextWakeAtMs: null },
+              status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
               jobs: cronState.cronJobs,
               jobsTotal: cronState.cronJobsTotal,
               jobsHasMore: cronState.cronJobsHasMore,
@@ -335,12 +335,10 @@ describe("renderAgents", () => {
       container,
     );
 
-    const defaultSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(select?.value).toBe("openai/gpt-5.4");
-      return select;
-    });
-    expect(defaultSelect?.selectedOptions[0]?.value).toBe("openai/gpt-5.4");
+    const defaultSelect = container.querySelector("wa-select.model-picker__select");
+    expect(defaultSelect?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
+      "openai/gpt-5.4",
+    );
 
     render(
       renderAgents(
@@ -358,12 +356,8 @@ describe("renderAgents", () => {
       container,
     );
 
-    const inheritedSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(select?.value).toBe("");
-      return select;
-    });
-    expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
+    const inheritedSelect = container.querySelector("wa-select.model-picker__select");
+    expect(inheritedSelect?.querySelector("wa-option[selected]")?.textContent?.trim()).toBe(
       "Inherit default (openai/gpt-5.4)",
     );
   });
@@ -381,7 +375,15 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        entries: { alpha: {}, beta: {} },
+        entries: {
+          alpha: {
+            models: {
+              "local/unlisted-model": { alias: "Alpha local model" },
+              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
+            },
+          },
+          beta: {},
+        },
       },
     };
 
@@ -421,19 +423,24 @@ describe("renderAgents", () => {
       container,
     );
 
-    const select = await vi.waitFor(() => {
-      const candidate = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(candidate?.value).toBe("anthropic/claude-opus-4-8");
-      return candidate;
-    });
+    const select = container.querySelector("wa-select.model-picker__select");
+    expect(select?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
+      "anthropic/claude-opus-4-8",
+    );
     const options = new Map(
-      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+      Array.from(select?.querySelectorAll("wa-option") ?? []).map((option) => [
+        option.getAttribute("value"),
+        option.querySelector(".picker-select__label")?.textContent?.trim(),
+      ]),
     );
 
     expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
     expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
+    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
+    expect(options.get("google/gemini-3-flash-preview")).toBe(
+      "Alpha Flash (google/gemini-3-flash-preview)",
+    );
   });
 
   it.each([
@@ -505,13 +512,8 @@ describe("renderAgents", () => {
       container,
     );
 
-    const betaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(
-        Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
-      ).toBe(true);
-      return select;
-    });
+    const betaSelect = container.querySelector("wa-select.model-picker__select");
+    expect(betaSelect?.querySelector('wa-option[value="openai/gpt-5.4"]')).not.toBeNull();
 
     render(
       renderAgents(
@@ -529,15 +531,10 @@ describe("renderAgents", () => {
       container,
     );
 
-    const alphaSelect = await vi.waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>("select.settings-select");
-      expect(
-        Array.from(select?.options ?? []).some(
-          (option) => option.value === "anthropic/claude-sonnet-4-6",
-        ),
-      ).toBe(true);
-      return select;
-    });
+    const alphaSelect = container.querySelector("wa-select.model-picker__select");
+    expect(
+      alphaSelect?.querySelector('wa-option[value="anthropic/claude-sonnet-4-6"]'),
+    ).not.toBeNull();
     expect(alphaSelect).not.toBe(betaSelect);
   });
 

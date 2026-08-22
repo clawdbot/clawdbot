@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../components/modal-dialog.ts";
 import { showToast } from "./toast.ts";
 
 async function mountHost() {
@@ -12,6 +13,7 @@ async function mountHost() {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -31,6 +33,41 @@ describe("shared toast", () => {
     await host.updateComplete;
     expect(host.querySelectorAll(".app-toast")).toHaveLength(1);
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
+  });
+
+  it("uses the active modal's toast layer before the app layer", async () => {
+    const appHost = await mountHost();
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.open = true;
+    document.body.append(modal);
+    await modal.updateComplete;
+    const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+
+    showToast({ message: "Above overlay" });
+    await appHost.updateComplete;
+
+    expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+    expect(moveBefore.mock.contexts).toContain(modal);
+    expect(appHost.textContent).toContain("Above overlay");
+  });
+
+  it("routes through an active modal inside a shadow root", async () => {
+    const appHost = await mountHost();
+    const shadowOwner = document.createElement("div");
+    const shadowRoot = shadowOwner.attachShadow({ mode: "open" });
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.open = true;
+    shadowRoot.append(modal);
+    document.body.append(shadowOwner);
+    await modal.updateComplete;
+    const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+
+    showToast({ message: "Critical session notice" });
+    await appHost.updateComplete;
+
+    expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+    expect(moveBefore.mock.contexts).toContain(modal);
+    expect(appHost.textContent).toContain("Critical session notice");
   });
 
   it("auto-dismisses after the configured duration", async () => {

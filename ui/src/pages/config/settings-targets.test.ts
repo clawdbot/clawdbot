@@ -28,6 +28,7 @@ describe("settings search target manifest", () => {
     ).toEqual([
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
+      ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],

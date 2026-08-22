@@ -212,12 +212,3 @@ export async function runDuckDuckGoSearch(params: {
   writeCache(DDG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  decodeDuckDuckGoUrl,
-  decodeHtmlEntities,
-  isBotChallenge,
-  parseDuckDuckGoHtml,
-  readDuckDuckGoHtmlResponse,
-};
-export { testing as __testing };

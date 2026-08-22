@@ -4,7 +4,11 @@
  */
 export { createBrowserTool } from "./src/browser-tool.js";
 export {
-  applyBrowserProxyPaths,
+  createAttachedBrowserToolRuntime,
+  type AttachedBrowserToolRuntime,
+  type CreateAttachedBrowserToolRuntimeParams,
+} from "./src/attached-browser-tool-runtime.js";
+export {
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
@@ -60,7 +64,6 @@ export {
   normalizeBrowserFormFieldValue,
   normalizeBrowserRequestPath,
   parseBrowserMajorVersion,
-  persistBrowserProxyFiles,
   type ProfileStatus,
   readBrowserVersion,
   redactCdpUrl,

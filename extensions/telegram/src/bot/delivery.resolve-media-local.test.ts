@@ -1,5 +1,6 @@
 import { GrammyError } from "grammy";
 import type { Message } from "grammy/types";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 // Telegram tests cover delivery.resolve media retry plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -56,7 +57,7 @@ vi.mock("./delivery.resolve-media.runtime.js", () => {
   }
   return {
     readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
-    formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    formatErrorMessage: coerceErrorMessage,
     logVerbose: () => {},
     MediaFetchError,
     resolveTelegramApiBase: (apiRoot?: string) =>

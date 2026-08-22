@@ -28,8 +28,6 @@ function createHarness(
   const attachedAccessEpochs = new Map([[7, { revision: 0, tabRevision: 0 }]]);
   const attachingTabs = new Map<number, Promise<unknown>>();
   const send = vi.fn();
-  const onConsentChanged = vi.fn(async () => undefined);
-  const onTabRemoved = vi.fn(async () => undefined);
   const policy = {
     mode,
     beginRevocation: vi.fn(() => Symbol("revocation")),
@@ -99,9 +97,7 @@ function createHarness(
     policy,
     attachedTabs,
     attachedAccessEpochs,
-    copilotDeniedTabs: new Set(),
     attachingTabs,
-    getCopilot: () => ({ onConsentChanged, onTabRemoved }),
     send,
     scheduleTabsSync: vi.fn(),
     detachDebugger,
@@ -125,8 +121,6 @@ function createHarness(
     debuggerDetachListener,
     debuggerEventListener,
     groupUpdatedListener,
-    onConsentChanged,
-    onTabRemoved,
     policy,
     pauseTab,
     removeTabFromOpenClawGroup,
@@ -204,8 +198,6 @@ describe("tab access event epochs", () => {
       await Promise.resolve();
 
       expect(harness.detachDebugger).not.toHaveBeenCalled();
-      expect(harness.onConsentChanged).not.toHaveBeenCalledWith(7, { revoked: true });
-      expect(harness.onConsentChanged).toHaveBeenCalledWith(7, { revoked: false });
       harness.debuggerEventListener({ tabId: 7 }, "Runtime.consoleAPICalled", {});
       expect(harness.send).toHaveBeenCalledWith(
         expect.objectContaining({ type: "cdpEvent", tabId: 7 }),
@@ -251,7 +243,6 @@ describe("tab access event epochs", () => {
       harness.tabsUpdatedListener(7, secondChange);
       await vi.waitFor(() => {
         expect(harness.detachDebugger).toHaveBeenCalledTimes(1);
-        expect(harness.onConsentChanged).toHaveBeenCalledWith(7, { revoked: true });
       });
 
       firstInspection.resolve({ accessible: false });
@@ -259,7 +250,6 @@ describe("tab access event epochs", () => {
       await Promise.resolve();
 
       expect(harness.detachDebugger).toHaveBeenCalledTimes(1);
-      expect(harness.onConsentChanged).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -273,8 +263,6 @@ describe("tab access event epochs", () => {
       expect(harness.policy.replaceTab).toHaveBeenCalledWith(8, 7);
       expect(harness.detachDebugger).toHaveBeenCalledWith(7);
       expect(harness.detachDebugger).toHaveBeenCalledWith(8);
-      expect(harness.onTabRemoved).toHaveBeenCalledWith(7);
-      expect(harness.onConsentChanged).toHaveBeenCalledWith(8, { revoked: true });
     });
   });
 
@@ -311,7 +299,7 @@ describe("tab access event epochs", () => {
     harness.groupUpdatedListener();
     await vi.waitFor(() => expect(harness.policy.listAccessibleTabs).toHaveBeenCalledTimes(1));
     harness.groupUpdatedListener();
-    await vi.waitFor(() => expect(harness.onConsentChanged).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(harness.policy.listAccessibleTabs).toHaveBeenCalledTimes(2));
     harness.setAccessible(false);
     harness.policy.invalidateTab();
     firstList.resolve([{ id: 7 }]);

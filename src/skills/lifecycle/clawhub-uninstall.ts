@@ -160,6 +160,29 @@ export async function planTrackedClawHubSkillState(params: {
   };
 }
 
+export async function checkClawHubSkillPlanAtPath(
+  plan: ClawHubSkillUninstallPlan,
+  skillDir: string,
+  readFile: typeof fs.readFile = fs.readFile,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const stat = await fs.lstat(skillDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
+    }
+    const content = await readFile(path.join(skillDir, plan.skillFilePath));
+    if (
+      sha256Hex(content) !== plan.skillFileSha256 ||
+      (await digestClawHubSkillTree(skillDir)) !== plan.fileTreeSha256
+    ) {
+      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+}
+
 export async function applyClawHubSkillUninstall(
   plan: ClawHubSkillUninstallPlan,
   deps: {
@@ -193,12 +216,12 @@ export async function applyClawHubSkillUninstall(
   try {
     await rename(plan.targetDir, stagedDir);
     staged = true;
-    const content = await (deps.readFile ?? fs.readFile)(path.join(stagedDir, plan.skillFilePath));
-    if (sha256Hex(content) !== plan.skillFileSha256) {
-      await rename(stagedDir, plan.targetDir);
-      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
-    }
-    if ((await digestClawHubSkillTree(stagedDir)) !== plan.fileTreeSha256) {
+    const stagedPlan = await checkClawHubSkillPlanAtPath(
+      plan,
+      stagedDir,
+      deps.readFile ?? fs.readFile,
+    );
+    if (!stagedPlan.ok) {
       await rename(stagedDir, plan.targetDir);
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
     }

@@ -220,6 +220,18 @@ describe("Slack message tools", () => {
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
+    const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    for (const propertyName of ["forceDocument", "asDocument"]) {
+      const entries = schemas.filter((entry) => propertyName in entry.properties);
+      expect(entries.map((entry) => entry.actions)).toEqual([["send"], ["upload-file"]]);
+      for (const entry of entries) {
+        const description = (entry.properties[propertyName] as { description?: string })
+          .description;
+        expect(description).toMatch(/preserve original image bytes/i);
+        expect(description).toMatch(/without image optimization/i);
+        expect(description).toMatch(/not.*Slack document/i);
+      }
+    }
   });
 
   it("honors account-scoped action gates", () => {

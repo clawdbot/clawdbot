@@ -30,7 +30,7 @@ function parseJson(source: string): JsonValue {
 }
 
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function valueAt(value: JsonValue | undefined, ...keys: string[]): JsonValue | undefined {

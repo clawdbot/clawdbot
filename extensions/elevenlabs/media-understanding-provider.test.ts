@@ -1,10 +1,7 @@
 // Elevenlabs tests cover media understanding provider plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  elevenLabsMediaUnderstandingProvider,
-  transcribeElevenLabsAudio,
-} from "./media-understanding-provider.js";
+import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 function requireFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] {
   const [call] = fetchMock.mock.calls;
@@ -38,7 +35,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
       .fn<typeof fetch>()
       .mockResolvedValue(new Response(JSON.stringify({ text: "hello" })));
 
-    const result = await transcribeElevenLabsAudio({
+    const result = await elevenLabsMediaUnderstandingProvider.transcribeAudio!({
       buffer: Buffer.from("audio"),
       fileName: "voice.mp3",
       mime: "audio/mpeg",
@@ -66,7 +63,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("{ nope"));
 
     await expect(
-      transcribeElevenLabsAudio({
+      elevenLabsMediaUnderstandingProvider.transcribeAudio!({
         buffer: Buffer.from("audio"),
         fileName: "voice.mp3",
         mime: "audio/mpeg",
@@ -82,7 +79,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([])));
 
     await expect(
-      transcribeElevenLabsAudio({
+      elevenLabsMediaUnderstandingProvider.transcribeAudio!({
         buffer: Buffer.from("audio"),
         fileName: "voice.mp3",
         mime: "audio/mpeg",

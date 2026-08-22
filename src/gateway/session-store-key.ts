@@ -3,12 +3,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
-  resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -32,8 +33,27 @@ export function canonicalizeSessionKeyForAgent(agentId: string, key: string): st
   return `agent:${normalizeAgentId(agentId)}:${normalized}`;
 }
 
-function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
-  return normalizeAgentId(resolveDefaultAgentId(cfg));
+// Logical unscoped keys must honor the durable fixed-store owner. The physical-store
+// compatibility fallback is intentionally not used here because it can name a retired agent.
+function resolveLogicalSessionStoreAgentId(cfg: OpenClawConfig, sessionKey: string): string {
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
+  if (persistedOwner.kind === "configured") {
+    return persistedOwner.agentId;
+  }
+  if (persistedOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: `session key "${sessionKey}"`,
+      hint: `Its recorded owner "${persistedOwner.agentId}" is no longer configured. Select a configured agent explicitly.`,
+    });
+  }
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  if (compatibilityAgentId) {
+    return normalizeAgentId(compatibilityAgentId);
+  }
+  throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+    surface: `session key "${sessionKey}"`,
+    hint: "Use an agent-prefixed session key or select an agent explicitly.",
+  });
 }
 
 function shouldRemapLegacyDefaultMainAlias(
@@ -45,13 +65,16 @@ function shouldRemapLegacyDefaultMainAlias(
   if (agentId !== DEFAULT_AGENT_ID || listAgentIds(cfg).includes(DEFAULT_AGENT_ID)) {
     return false;
   }
-  const defaultAgentId = resolveDefaultStoreAgentId(cfg);
-  if (options?.storeAgentId && normalizeAgentId(options.storeAgentId) !== defaultAgentId) {
-    return false;
-  }
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  return rest === "main" || rest === mainKey;
+  if (rest !== "main" && rest !== mainKey) {
+    return false;
+  }
+  if (options?.storeAgentId) {
+    return true;
+  }
+  resolveLogicalSessionStoreAgentId(cfg, "main");
+  return true;
 }
 
 function resolveParsedSessionStoreKey(
@@ -66,7 +89,9 @@ function resolveParsedSessionStoreKey(
       sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
-  const agentId = resolveDefaultStoreAgentId(cfg);
+  const agentId = options?.storeAgentId
+    ? normalizeAgentId(options.storeAgentId)
+    : resolveLogicalSessionStoreAgentId(cfg, "main");
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   return { agentId, sessionKey: `agent:${agentId}:${rest}` };
 }
@@ -106,25 +131,28 @@ export function resolveSessionStoreKey(params: {
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const storeAgentId = params.storeAgentId ? normalizeAgentId(params.storeAgentId) : undefined;
   if (lowered === "main" || lowered === rawMainKey) {
-    if (storeAgentId) {
-      return resolveAgentMainSessionKey({ cfg: params.cfg, agentId: storeAgentId });
+    if (params.cfg.session?.scope === "global") {
+      return "global";
     }
-    return resolveMainSessionKey(params.cfg);
+    return resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId: storeAgentId ?? resolveLogicalSessionStoreAgentId(params.cfg, raw),
+    });
   }
-  const agentId = storeAgentId ?? resolveDefaultStoreAgentId(params.cfg);
+  const agentId = storeAgentId ?? resolveLogicalSessionStoreAgentId(params.cfg, raw);
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }
 
 /** Resolve the agent that owns a canonical session-store key. */
 export function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
   if (canonicalKey === "global" || canonicalKey === "unknown") {
-    return resolveDefaultStoreAgentId(cfg);
+    return resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
   }
   const parsed = parseAgentSessionKey(canonicalKey);
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
-  return resolveDefaultStoreAgentId(cfg);
+  return resolveLogicalSessionStoreAgentId(cfg, canonicalKey);
 }
 
 /** Resolve a session key for lookup inside a specific agent's store. */
@@ -140,6 +168,16 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
+  }
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
+  if (
+    !parseAgentSessionKey(raw) &&
+    persistedOwner.kind === "configured" &&
+    persistedOwner.agentId === normalizeAgentId(params.agentId) &&
+    lowered !== "main" &&
+    lowered !== normalizeMainKey(params.cfg.session?.mainKey)
+  ) {
+    return raw;
   }
   const key = parseAgentSessionKey(raw) ? raw : canonicalizeSessionKeyForAgent(params.agentId, raw);
   return resolveSessionStoreKey({

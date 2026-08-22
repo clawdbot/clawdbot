@@ -1,14 +1,14 @@
 // Resolves directive interpretation and prompt projection at the text-command boundary.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
-import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
+import { type InlineDirectives, parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { stripInlineStatus } from "./reply-inline.js";
 
 type NativeDirectiveCommand = NonNullable<
-  Parameters<typeof parseInlineDirectives>[1]
+  Parameters<typeof parseInlineSessionDirectives>[1]
 >["nativeCommand"];
 
 function hasInlineDirective(directives: InlineDirectives): boolean {
@@ -70,7 +70,7 @@ export function resolveReplyDirectiveRouting(params: {
   unauthorizedReasoningDirectiveAttempt: boolean;
 } {
   const allowStatusDirective = params.canInterpretTextDirectives;
-  let parsed = parseInlineDirectives(params.commandText, {
+  let parsed = parseInlineSessionDirectives(params.commandText, {
     modelAliases: params.modelAliases,
     allowStatusDirective,
     nativeCommand: params.nativeCommand,
@@ -108,7 +108,7 @@ export function resolveReplyDirectiveRouting(params: {
       : stripped;
     if (
       noMentions.trim() &&
-      parseInlineDirectives(noMentions, { modelAliases: params.modelAliases }).cleaned.trim()
+      parseInlineSessionDirectives(noMentions, { modelAliases: params.modelAliases }).cleaned.trim()
     ) {
       parsed = isModelSelectionDirective(parsed)
         ? preserveMixedModelDirective(parsed, parsed.cleaned)
@@ -134,7 +134,7 @@ export function resolveReplyDirectiveRouting(params: {
   let cleanedBody = preserveAgentText
     ? params.agentText
     : params.agentText
-      ? parseInlineDirectives(params.agentText, {
+      ? parseInlineSessionDirectives(params.agentText, {
           modelAliases: params.modelAliases,
           allowStatusDirective,
         }).cleaned

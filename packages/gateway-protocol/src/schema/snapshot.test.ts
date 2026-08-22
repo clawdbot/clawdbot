@@ -61,6 +61,33 @@ describe("SnapshotSchema", () => {
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
   });
 
+  it("accepts ingress dead letters and active lane pressure", () => {
+    const snapshot = {
+      ...snapshotWithPresence({ ts: 1 }),
+      health: {
+        deliveryQueues: {
+          failed: [],
+          ingressFailed: [
+            { channelId: "telegram", accountId: "ops", count: 2, oldestFailedAt: 1_000 },
+          ],
+          ingressPressure: [
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 1,
+              pendingCount: 56,
+              claimedCount: 0,
+              blockedCount: 55,
+              oldestReceivedAt: 2_000,
+            },
+          ],
+        },
+      },
+    };
+
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+  });
+
   it("accepts additive update availability and schedule state", () => {
     const snapshot = {
       ...snapshotWithPresence({ ts: 1 }),

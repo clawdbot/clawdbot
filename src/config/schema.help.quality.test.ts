@@ -150,6 +150,12 @@ describe("config help copy quality", () => {
     }
   }
 
+  it("describes auto-mode collection mutation", () => {
+    const help = requireHelp("skills.workshop.autonomous.mode");
+    expect(help).toContain("daily");
+    expect(help).toContain("rewrite or drop");
+  });
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(requireLabel(key)).not.toHaveLength(0);
@@ -238,6 +244,8 @@ describe("config help copy quality", () => {
       name: "documents session maintenance duration/size examples and deprecations",
       fields: [
         ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
+        ["session.maintenance.preserveRecent", ["7d", /false/i]],
         ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
         ["session.maintenance.maxDiskBytes", ["500mb"]],
         ["session.maintenance.highWaterBytes", ["80%"]],

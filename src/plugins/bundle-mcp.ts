@@ -1,10 +1,12 @@
 // Bundles MCP metadata exposed by plugins for package output.
 import fs from "node:fs";
 import path from "node:path";
+import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
 import {
   loadEnabledBundleConfig,
@@ -239,24 +241,12 @@ function hasOnlyKeys(raw: Record<string, unknown>, allowed: ReadonlySet<string>)
   return Object.keys(raw).every((key) => allowed.has(key));
 }
 
-function isStringRecord(raw: unknown): raw is Record<string, string> {
-  return isRecord(raw) && Object.values(raw).every((value) => typeof value === "string");
-}
-
-function isPathWithin(baseDir: string, targetPath: string): boolean {
-  const relative = path.relative(baseDir, targetPath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-  );
-}
-
 function isValidAgentCommand(command: unknown, rootDir: string): command is string {
   if (typeof command !== "string" || command.length === 0) {
     return false;
   }
   if (command.startsWith("./")) {
-    return command.length > 2 && isPathWithin(rootDir, path.resolve(rootDir, command));
+    return command.length > 2 && isPathInside(rootDir, path.resolve(rootDir, command));
   }
   return !/[\s/\\]/.test(command);
 }
@@ -282,7 +272,7 @@ function isValidAgentCwd(cwd: unknown, rootDir: string, pluginDataDir: string): 
     return false;
   }
   const expanded = expandBundleRootPlaceholders({ value: cwd, rootDir, pluginDataDir });
-  return isPathWithin(baseDir, path.resolve(baseDir, expanded));
+  return isPathInside(baseDir, path.resolve(baseDir, expanded));
 }
 
 function validateAgentMcpServer(params: {

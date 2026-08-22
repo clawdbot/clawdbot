@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
@@ -34,11 +34,13 @@ type CodexThreadFinalConfigPatchResult = {
 
 export type CodexPluginThreadConfigProvider = {
   enabled: boolean;
+  /** Rebuild before reuse so live policy can narrow or revoke stored authority. */
+  requiresCurrentPolicyCheck?: boolean;
   inputFingerprint?: string;
   enabledPluginConfigKeys?: readonly string[];
   recoverablePluginConfigKeys?: readonly string[];
   accountAppRecoveryEnabled?: boolean;
-  build: () => Promise<CodexPluginThreadConfig>;
+  build: (options?: { threadId?: string }) => Promise<CodexPluginThreadConfig>;
 };
 
 export type CodexStartOrResumeThreadParams = {
@@ -47,14 +49,20 @@ export type CodexStartOrResumeThreadParams = {
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
   params: EmbeddedRunAttemptParams;
+  /** Private execution identity resolved by this harness's catalog generation. */
+  runtimeModelId?: string;
   agentId?: string;
+  agentDir?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,

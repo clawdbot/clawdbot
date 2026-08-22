@@ -4,6 +4,10 @@ import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  resolvePreparedRunAdmission,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
+import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
@@ -21,7 +25,8 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
-import type { WorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   windowWorkerReplayMessages,
   type WorkerReplayMessageWindowUnavailable,
@@ -31,6 +36,14 @@ import {
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
+import {
+  measureAgentRuntimeIdentityTokenBytes,
+  mintAgentRuntimeIdentityToken,
+  type AgentRuntimeIdentityTokenParams,
+} from "../agent-runtime-identity-token.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -38,6 +51,88 @@ type WorkerInitialMessagePlan =
       kind: "provider-replay-unavailable";
       details: WorkerProviderReplayUnavailable | WorkerReplayMessageWindowUnavailable;
     };
+
+function buildWorkerAgentRuntimeIdentity(params: {
+  admittedRunContext: AdmittedRunContext;
+  agentId: string;
+  sessionKey: string;
+  turn: Pick<
+    SessionPlacementTurnParams,
+    | "agentAccountId"
+    | "currentChannelId"
+    | "currentMessagingTarget"
+    | "currentThreadTs"
+    | "messageChannel"
+    | "messageProvider"
+  >;
+  turnClaim: WorkerSessionTurnClaim;
+}): AgentRuntimeIdentityTokenParams {
+  const { turn } = params;
+  // Worker-local process keys isolate ephemeral state only. The signed caller
+  // identity retains the host-owned session and route used by approvals.
+  return {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    executionIdentityToken: params.admittedRunContext.executionIdentityToken,
+    turnSourceChannel: turn.messageChannel ?? turn.messageProvider,
+    turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
+    turnSourceAccountId: turn.agentAccountId,
+    turnSourceThreadId: turn.currentThreadTs,
+    workerTurnClaim: params.turnClaim,
+  };
+}
+
+type PrepareWorkerAgentRuntimeIdentityParams = Omit<
+  Parameters<typeof buildWorkerAgentRuntimeIdentity>[0],
+  "admittedRunContext" | "turn"
+> & {
+  runtimeInstanceId: string;
+  turn: SessionPlacementTurnParams;
+  placements: WorkerSessionPlacementStore;
+};
+
+export async function prepareWorkerAgentRuntimeIdentity(
+  params: PrepareWorkerAgentRuntimeIdentityParams,
+) {
+  const admittedRunContext = await resolvePreparedRunAdmission({
+    runId: params.turn.runId,
+    runtimeKind: "worker",
+    runtimeInstanceId: params.runtimeInstanceId,
+    admittedRunContext: params.turn.admittedRunContext,
+    preparedRunAdmission: params.turn.preparedRunAdmission,
+  });
+  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  // Worker session RPC carries no raw identity token. Bind provenance to the exact
+  // host claim before launch so child lineage cannot become bearer authority.
+  if (runtimeIdentity.executionIdentityToken) {
+    bindWorkerTurnExecutionIdentity(
+      params.placements,
+      params.turnClaim,
+      runtimeIdentity.executionIdentityToken,
+      admittedRunContext.operationalRunInstance,
+      { agentId: params.agentId, sessionKey: params.sessionKey },
+    );
+  }
+  return {
+    operationalRunInstance: admittedRunContext.operationalRunInstance,
+    runtimeIdentity,
+  };
+}
+
+export function emitProviderReplayRejected(
+  config: SessionPlacementTurnParams["config"],
+  details: { reason: string; bytes?: number; limitBytes?: number; count?: number },
+): void {
+  if (isDiagnosticsEnabled(config)) {
+    emitTrustedDiagnosticEvent({
+      type: "payload.large",
+      surface: "worker.provider-replay",
+      action: "rejected",
+      ...details,
+    });
+  }
+}
 
 export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMessagePlan {
   const windowed = windowWorkerReplayMessages(messages, WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1);
@@ -58,8 +153,12 @@ export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMe
   return { kind: "complete", messages: projected };
 }
 
-type WorkerLaunchPlan =
-  | { kind: "launch"; descriptor: WorkerLaunchDescriptor }
+// Node hosts append their own bounded websocket endpoint after sizing; reserve
+// its 4 KiB URL, TLS pin, keys, and JSON escaping before admitting replay bytes.
+const WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES = 4_608;
+
+type WorkerLaunchFit =
+  | { kind: "launch"; plan: WorkerLaunchPlan }
   | {
       kind: "local-fallback";
       reason: "provider-replay-launch-payload-limit";
@@ -67,16 +166,44 @@ type WorkerLaunchPlan =
       limitBytes: number;
     };
 
-export function fitLaunchDescriptor(
-  build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchDescriptor,
+/** Fits replay context before minting the exact worker-bound identity bearer. */
+export async function fitLaunchDescriptorWithRuntimeIdentity(params: {
+  build: (identityToken: string, messages: WorkerTranscriptMessage[]) => WorkerLaunchPlan;
+  messages: WorkerTranscriptMessage[];
+  runtimeIdentity: AgentRuntimeIdentityTokenParams;
+}): Promise<WorkerLaunchFit> {
+  const tokenBytes = measureAgentRuntimeIdentityTokenBytes(params.runtimeIdentity);
+  const plan = fitLaunchDescriptor(
+    (messages) => params.build("x".repeat(tokenBytes), messages),
+    params.messages,
+  );
+  if (plan.kind !== "launch") {
+    return plan;
+  }
+  const token = await mintAgentRuntimeIdentityToken(params.runtimeIdentity);
+  if (Buffer.byteLength(token, "utf8") !== tokenBytes) {
+    throw new Error("Agent runtime identity changed while preparing worker launch");
+  }
+  return {
+    kind: "launch",
+    plan: {
+      ...plan.plan,
+      assignment: { ...plan.plan.assignment, agentRuntimeIdentityToken: token },
+    },
+  };
+}
+
+function fitLaunchDescriptor(
+  build: (initialMessages: WorkerTranscriptMessage[]) => WorkerLaunchPlan,
   messages: WorkerTranscriptMessage[],
-): WorkerLaunchPlan {
+): WorkerLaunchFit {
   let initialMessages = messages;
   while (true) {
-    const descriptor = build(initialMessages);
-    const bytes = Buffer.byteLength(JSON.stringify(descriptor), "utf8");
+    const plan = build(initialMessages);
+    const bytes =
+      Buffer.byteLength(JSON.stringify(plan), "utf8") + WORKER_LAUNCH_ENDPOINT_OVERHEAD_BYTES;
     if (bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
-      return { kind: "launch", descriptor };
+      return { kind: "launch", plan };
     }
     const replayIndex = initialMessages.findLastIndex(
       (message) => message.role === "assistant" && message.providerReplay !== undefined,
@@ -117,7 +244,13 @@ export function parseRuntimeResult(stdout: string): WorkerRuntimeResult {
   if (
     result.status === "failed" &&
     result.reason === "turn-failed" &&
-    Object.keys(result).every((key) => ["status", "reason"].includes(key))
+    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
+    typeof result.transcriptNextSeq === "number" &&
+    Number.isSafeInteger(result.transcriptNextSeq) &&
+    result.transcriptNextSeq >= 1 &&
+    Object.keys(result).every((key) =>
+      ["status", "reason", "transcriptLeafId", "transcriptNextSeq"].includes(key),
+    )
   ) {
     return result as WorkerRuntimeResult;
   }

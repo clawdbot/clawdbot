@@ -6,9 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
 import { parsePackageRootArg } from "./lib/package-root-args.mts";
+// Keep this prepack smoke independent of workspace package links.
+import { isRecord } from "./lib/record-shared.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
 
 installProcessWarningFilter();

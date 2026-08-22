@@ -78,6 +78,9 @@ function readTarballPackageJson(tarball) {
   }
 }
 
+export function inspectNpmPackageTarball(tarball) {
+  return { packageJson: readTarballPackageJson(tarball), sha256: sha256File(tarball) };
+}
 function validateManifestShape(manifest) {
   if (
     !manifest ||

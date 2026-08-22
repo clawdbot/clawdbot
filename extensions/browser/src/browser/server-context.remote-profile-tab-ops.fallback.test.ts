@@ -78,6 +78,8 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+    expect(tabs[0]?.wsLookup).toBeTypeOf("function");
+    expect(JSON.stringify(tabs[0])).not.toContain("wsLookup");
   });
 
   it("filters browser-internal and non-page targets from raw CDP tab listing", async () => {

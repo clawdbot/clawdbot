@@ -37,6 +37,7 @@ function placementRecord(
     sessionId,
     agentId: "main",
     sessionKey: "agent:main:worker-session",
+    executionMode: "worker-turn" as const,
     turnClaim: null,
     createdAtMs: 1,
     updatedAtMs: 2,
@@ -55,6 +56,8 @@ function placementRecord(
       lastTranscriptAckCursor: null,
       lastLiveEventAckCursor: null,
       recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
     };
   }
   return {
@@ -69,6 +72,8 @@ function placementRecord(
     lastTranscriptAckCursor: null,
     lastLiveEventAckCursor: null,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 
@@ -89,6 +94,7 @@ function terminalPlacementRecord(
     sessionId,
     agentId: "main",
     sessionKey: "agent:main:worker-session",
+    executionMode: "worker-turn" as const,
     generation: 2,
     turnClaim: null,
     createdAtMs: 1,
@@ -101,6 +107,8 @@ function terminalPlacementRecord(
       ...terminalMetadata,
       state,
       recoveryError: "worker recovery stopped",
+      terminalReason: "worker recovery stopped",
+      terminalAtMs: 2,
     };
   }
   return {
@@ -108,6 +116,8 @@ function terminalPlacementRecord(
     ...terminalMetadata,
     state,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 

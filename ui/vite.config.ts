@@ -4,9 +4,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { gzip } from "pako";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
@@ -70,7 +72,8 @@ export function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      source: gzipSync(body, { level: 9 }),
+      // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true })),
     },
   ];
 }
@@ -151,7 +154,6 @@ function readGitDirty(): boolean | null {
 
 type ControlUiBuildInfoSources = {
   env?: NodeJS.ProcessEnv;
-  now?: () => Date;
   readPackageVersion?: () => string | null;
   readGitCommit?: () => string | null;
   readGitCommitTimestamp?: (commit: string) => string | null;
@@ -159,19 +161,16 @@ type ControlUiBuildInfoSources = {
   readGitDirty?: () => boolean | null;
 };
 
-function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
+function normalizeBuildTimestamp(value: string | undefined): string | null {
   const explicit = value?.trim();
-  if (explicit) {
-    const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
-    if (!timestamp) {
-      throw new Error(
-        "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
-      );
-    }
-    return timestamp;
+  if (!explicit) {
+    return null;
   }
-  const candidate = now();
-  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString();
+  const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
+  if (!timestamp) {
+    throw new Error("OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z");
+  }
+  return timestamp;
 }
 
 export function resolveControlUiBuildInfo(
@@ -215,10 +214,7 @@ export function resolveControlUiBuildInfo(
         commitAt: readCommitTimestamp(commit),
       }).commitAt
     : null;
-  const builtAt = normalizeBuildTimestamp(
-    env.OPENCLAW_BUILD_TIMESTAMP,
-    sources.now ?? (() => new Date()),
-  );
+  const builtAt = normalizeBuildTimestamp(env.OPENCLAW_BUILD_TIMESTAMP);
   // Branch/dirty identity is advisory: the readers return null instead of
   // throwing, so malformed environment or Git state never blocks a build.
   // Tags must not be presented as branches in GitHub-built artifacts.
@@ -312,9 +308,11 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "json-schema"),
+    sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "result"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
@@ -438,6 +436,11 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
     },
     publicDir: path.resolve(here, "public"),
+    css: {
+      postcss: {
+        plugins: [controlUiHoverGuardPlugin()],
+      },
+    },
     optimizeDeps: {
       include: [
         "ipaddr.js",

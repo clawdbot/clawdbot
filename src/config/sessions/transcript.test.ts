@@ -33,7 +33,7 @@ import {
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 import {
   bindOwnedSessionTranscriptWrites,
-  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWrite,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
 import {
@@ -41,7 +41,6 @@ import {
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
-  readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -448,7 +447,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("runs matching owned transcript appends through the active session write lock", async () => {
+  it("runs matching owned transcript appends through the active write context", async () => {
     await writeTranscriptStore();
     const sessionFile = `sqlite:main:${sessionId}:${fixture.storePath()}`;
     const events: string[] = [];
@@ -463,9 +462,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionKey,
           storePath: fixture.storePath(),
         },
-        assertOwned: () => undefined,
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
+        withTranscriptWrite: async (run) => {
+          events.push("owned-write");
           return await run();
         },
       },
@@ -478,10 +476,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(events).toEqual(["lock"]);
+    expect(events).toEqual(["owned-write"]);
   });
 
-  it("does not reuse owned write locks for a different concrete transcript file", async () => {
+  it("does not reuse an owned write context for a different concrete transcript file", async () => {
     const oldSessionFile = resolveSessionTranscriptPathInDir("old-session", fixture.sessionsDir());
     const nextSessionFile = resolveSessionTranscriptPathInDir(
       "next-session",
@@ -493,14 +491,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile: oldSessionFile,
         sessionKey,
-        assertOwned: () => undefined,
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
+        withTranscriptWrite: async (run) => {
+          events.push("owned-write");
           return await run();
         },
       },
       async () =>
-        await runWithOwnedSessionTranscriptWriteLock(
+        await runWithOwnedSessionTranscriptWrite(
           { sessionFile: nextSessionFile, sessionKey },
           () => {
             events.push("write");
@@ -513,7 +510,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(events).toEqual(["write"]);
   });
 
-  it("does not reuse owned write locks for the same key in another transcript target", async () => {
+  it("does not reuse an owned write context for the same key in another transcript target", async () => {
     const cases = [
       [
         { agentId: "main", sessionKey: "global", storePath: "/tmp/main.sqlite" },
@@ -532,14 +529,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionFile: ownerTarget.sessionKey,
           sessionKey: ownerTarget.sessionKey,
           sessionTarget: ownerTarget,
-          assertOwned: () => undefined,
-          withSessionWriteLock: async (run) => {
-            events.push("lock");
+          withTranscriptWrite: async (run) => {
+            events.push("owned-write");
             return await run();
           },
         },
         async () =>
-          await runWithOwnedSessionTranscriptWriteLock(
+          await runWithOwnedSessionTranscriptWrite(
             {
               sessionFile: otherTarget.sessionKey,
               sessionKey: otherTarget.sessionKey,
@@ -557,21 +553,20 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("keeps matching owned transcript appends locked from bound callbacks", async () => {
+  it("keeps matching owned transcript appends tracked from bound callbacks", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     const events: string[] = [];
     const callback = bindOwnedSessionTranscriptWrites(
       {
         sessionFile,
         sessionKey,
-        assertOwned: () => undefined,
-        withSessionWriteLock: async (run) => {
-          events.push("lock");
+        withTranscriptWrite: async (run) => {
+          events.push("owned-write");
           return await run();
         },
       },
       async () =>
-        await runWithOwnedSessionTranscriptWriteLock({ sessionFile, sessionKey }, () => {
+        await runWithOwnedSessionTranscriptWrite({ sessionFile, sessionKey }, () => {
           events.push("write");
           return "ok";
         }),
@@ -580,7 +575,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await callback();
 
     expect(result).toBe("ok");
-    expect(events).toEqual(["lock", "write"]);
+    expect(events).toEqual(["owned-write", "write"]);
   });
 
   it("uses SQLite identity for malformed persisted sessionFile metadata", async () => {
@@ -1314,72 +1309,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(latestAssistantText).toBeUndefined();
   });
 
-  it("keeps transcript-only OpenClaw assistant entries available to the tail reader", async () => {
-    await writeTranscriptStore();
-
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Tail delivery mirror",
-      storePath: fixture.storePath(),
-    });
-    expect(mirrorResult.ok).toBe(true);
-    if (!mirrorResult.ok) {
-      return;
-    }
-
-    const tailAssistantText = await readTailAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
-    expect(tailAssistantText?.id).toBe(mirrorResult.messageId);
-    expect(tailAssistantText?.text).toBe("Tail delivery mirror");
-  });
-
-  it("scans past trailing non-assistant entries (e.g. openclaw.cache-ttl) to find the latest assistant text", async () => {
-    // Regression for openclaw/openclaw#83427: the cache-ttl custom entry was
-    // emitted after the canonical assistant turn, and the tail reader returned
-    // undefined on the first non-assistant line, so the gap-fill check in
-    // persistTextTurnTranscript wrote a duplicate `api: "cli"` assistant
-    // message — poisoning the model's own context with verbatim duplicates.
-    await writeTranscriptStore();
-
-    const assistantResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({
-        text: "Canonical answer",
-        provider: "anthropic",
-        model: "claude-haiku-4-5-20251001",
-      }),
-    });
-    expect(assistantResult.ok).toBe(true);
-    if (!assistantResult.ok) {
-      return;
-    }
-
-    const cacheTtlEntry = `${JSON.stringify({
-      type: "custom",
-      customType: "openclaw.cache-ttl",
-      timestamp: new Date().toISOString(),
-      data: {
-        provider: "anthropic",
-        modelId: "claude-haiku-4-5-20251001",
-      },
-    })}\n`;
-    await appendTranscriptEvent(createFixtureTranscriptScope(), JSON.parse(cacheTtlEntry));
-
-    const tailAssistantText = await readTailAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
-    expect(tailAssistantText?.id).toBe(assistantResult.messageId);
-    expect(tailAssistantText?.text).toBe("Canonical answer");
-  });
-
   it("scans past trailing assistant entries without visible text", async () => {
     await writeTranscriptStore();
 
@@ -1424,84 +1353,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
     expect(latestAssistantText?.id).toBe(assistantResult.messageId);
     expect(latestAssistantText?.text).toBe("Visible answer before tool call");
-  });
-
-  it("does not scan past a real tail assistant with no visible text for dedupe", async () => {
-    await writeTranscriptStore();
-
-    const assistantResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({
-        text: "Older visible answer",
-      }),
-    });
-    expect(assistantResult.ok).toBe(true);
-
-    const toolOnlyResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: {
-        ...createExactAssistantMessage({
-          content: [
-            {
-              type: "toolCall",
-              id: "call_tail_no_visible_text",
-              name: "maniple__list_workers",
-              arguments: {},
-            },
-          ],
-        }),
-        stopReason: "toolUse",
-      },
-    });
-    expect(toolOnlyResult.ok).toBe(true);
-    if (!toolOnlyResult.ok) {
-      return;
-    }
-
-    await expect(
-      readTailAssistantTextFromSessionTranscript(toolOnlyResult.target, {
-        excludeTranscriptOnlyOpenClawAssistant: true,
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("scans past excluded delivery mirrors in explicit file-backed tail reads", async () => {
-    const transcriptPath = path.join(fixture.sessionsDir(), "file-backed-delivery-tail.jsonl");
-    fs.writeFileSync(
-      transcriptPath,
-      [
-        {
-          type: "message",
-          id: "real-assistant",
-          message: createExactAssistantMessage({ text: "File-backed canonical answer" }),
-        },
-        {
-          type: "message",
-          id: "delivery-mirror",
-          message: {
-            ...createExactAssistantMessage({
-              provider: "openclaw",
-              model: "delivery-mirror",
-              text: "delivery mirror text",
-            }),
-          },
-        },
-      ]
-        .map((event) => JSON.stringify(event))
-        .join("\n") + "\n",
-      "utf-8",
-    );
-
-    await expect(
-      readTailAssistantTextFromSessionTranscript(transcriptPath, {
-        excludeTranscriptOnlyOpenClawAssistant: true,
-      }),
-    ).resolves.toMatchObject({
-      id: "real-assistant",
-      text: "File-backed canonical answer",
-    });
   });
 
   it("does not reuse an older matching assistant message across turns", async () => {

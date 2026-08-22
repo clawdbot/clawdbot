@@ -44,6 +44,8 @@ client surface.
   until the event loop can process Gateway IO.
 - `@openclaw/gateway-client/timeouts` exports timeout constants and safe timer
   resolution helpers.
+- `@openclaw/gateway-client/websocket-data` converts every Node `ws` raw-data
+  shape to UTF-8 text.
 
 ## Node quickstart
 
@@ -136,6 +138,9 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
   the socket; `stop()` closes it and rejects pending requests.
 - A request uses `request(method, params)` after `hello-ok`. Passing
   `timeoutMs: null` creates an intentionally unbounded request.
+- Finite request deadlines reject with `GatewayProtocolRequestTimeoutError`,
+  whose `CLIENT_TIMEOUT` code, method, deadline, and send-boundary flag remain
+  distinct from authoritative Gateway response errors.
 - Device identity persistence, signing, proxy routing, TLS formatting, and
   logging stay host-owned through `GatewayClientHostDeps`.
 - Protocol changes are additive first. Incompatible changes require an explicit

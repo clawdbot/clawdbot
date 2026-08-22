@@ -20,6 +20,8 @@ describe("media-understanding formatDecisionSummary guards", () => {
         capability: "image",
         outcome: "skipped",
         attachments: undefined as unknown as MediaUnderstandingDecision["attachments"],
+        attachmentDispositions: {},
+        nativeVisionActive: false,
       }),
     ).toBe("image: skipped");
   });

@@ -1143,6 +1143,12 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages[1]?.at(-1)).toBe(firstSteer);
     expect(requestMessages[1]).not.toContain(secondSteer);
     expect(requestMessages[2]?.at(-1)).toBe(secondSteer);
+    const queuedMessageStarts = events.filter(
+      (event): event is Extract<AgentEvent, { type: "message_start" }> =>
+        event.type === "message_start" && event.message.role === "user",
+    );
+    expect(queuedMessageStarts.at(-2)?.message).toBe(firstSteer);
+    expect(queuedMessageStarts.at(-1)?.message).toBe(secondSteer);
     expect(
       requestMessages[1]?.find((message) => message.role === "toolResult" && message.isError),
     ).not.toHaveProperty("__openclaw");
@@ -1488,6 +1494,42 @@ describe("agentLoop tool termination", () => {
     expect(secondExecute).not.toHaveBeenCalled();
     expect(shouldStopAfterTurn).toHaveBeenCalledOnce();
     expect(getSteeringMessages).toHaveBeenCalled();
+  });
+
+  it("delivers steering admitted while the final follow-up drain is pending", async () => {
+    const followUpDrainStarted = createDeferred();
+    const releaseFollowUpDrain = createDeferred();
+    const steer = { role: "user" as const, content: "one more thing", timestamp: 2 };
+    const queued: AgentMessage[] = [];
+    const requestMessages: Message[][] = [];
+    const run = runAgentLoop(
+      [{ role: "user", content: "start", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      {
+        ...config,
+        getSteeringMessages: async () => queued.splice(0, 1),
+        getFollowUpMessages: async () => {
+          followUpDrainStarted.resolve();
+          await releaseFollowUpDrain.promise;
+          return [];
+        },
+      },
+      () => {},
+      undefined,
+      createTurnSequenceStream(
+        [[{ type: "text", text: "initial response" }], [{ type: "text", text: "steer response" }]],
+        requestMessages,
+      ),
+    );
+
+    await followUpDrainStarted.promise;
+    queued.push(steer);
+    releaseFollowUpDrain.resolve();
+    await run;
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[1]?.at(-1)).toBe(steer);
+    expect(queued).toEqual([]);
   });
 
   it("suppresses sequential tools when steering arrives from awaited message_end", async () => {

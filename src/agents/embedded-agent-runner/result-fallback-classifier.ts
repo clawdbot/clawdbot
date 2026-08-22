@@ -1,10 +1,8 @@
-/**
- * Classifies embedded-agent run results for model fallback decisions.
- */
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+/** Classifies embedded-agent run results for model fallback decisions. */
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
+import { classifyFailoverReason } from "../failover/classify.js";
+import type { FailoverReason } from "../failover/signal.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
@@ -78,6 +76,10 @@ export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult)
   return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
     (text) => typeof text === "string" && isSilentReplyPayloadText(text),
   );
+}
+
+export function hasIntentionalTerminalCompletion(result: EmbeddedAgentRunResult): boolean {
+  return result.meta.intentionalTerminalCompletion === "tool-batch";
 }
 
 function hasDeliverableAssistantPayload(result: {
@@ -203,6 +205,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (
+    hasIntentionalTerminalCompletion(params.result) ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true

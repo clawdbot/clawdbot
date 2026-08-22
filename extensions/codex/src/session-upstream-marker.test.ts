@@ -1,9 +1,7 @@
+import { readNonEmptyStringPreservingWhitespace as normalizeTurnId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
 import { codexUpstreamBaseline } from "./session-upstream-marker.js";
-
-const normalizeTurnId = (value: unknown) =>
-  typeof value === "string" && value ? value : undefined;
 
 describe("codexUpstreamBaseline", () => {
   it("baselines an active adoption-time turn including its current user items", () => {

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
+import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-input.js";
 import { resolveDeprecatedProviderInstallCatalogEntry } from "../../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
@@ -19,7 +20,6 @@ import {
   resolveDeprecatedAuthChoiceReplacement,
 } from "../../auth-choice-legacy.js";
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
-import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
 import {
@@ -36,8 +36,6 @@ type ResolvedNonInteractiveApiKey = NonNullable<
   Awaited<ReturnType<typeof resolveNonInteractiveApiKey>>
 >;
 
-const GENERIC_NON_INTERACTIVE_AUTH_CHOICES = ["oauth", "setup-token", "token", "apiKey"];
-
 /** Applies a local non-interactive auth choice to the pending OpenClaw config. */
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: OpenClawConfig;
@@ -52,6 +50,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
     config: params.nextConfig,
+    workspaceDir: params.target.workspaceDir,
     env: process.env,
   });
   const nextConfig = params.nextConfig;
@@ -176,18 +175,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  const validAuthChoices = Array.from(
-    new Set([
-      ...formatAuthChoiceChoicesForCli({
-        includeLegacyAliases: false,
-        includeSkip: true,
-        config: nextConfig,
-        workspaceDir: params.target.workspaceDir,
-        env: process.env,
-      }).split("|"),
-      ...GENERIC_NON_INTERACTIVE_AUTH_CHOICES,
-    ]),
-  );
+  const validAuthChoices = formatAuthChoiceChoicesForCli({
+    includeSkip: true,
+    config: nextConfig,
+    workspaceDir: params.target.workspaceDir,
+    env: process.env,
+  }).split("|");
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
     runtime.error(
       `Unknown --auth-choice ${JSON.stringify(authChoice)}. Valid choices: ${validAuthChoices.join(", ")}.`,
@@ -309,16 +302,11 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (
-    authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error(
-      authChoice === "oauth"
-        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
-        : "OAuth requires interactive mode.",
-    );
+    runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
     return null;
   }

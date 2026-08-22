@@ -1,18 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { stableStringify } from "../packages/normalization-core/src/stable-stringify.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
-
-// The CLI is invoked from temporary Git repositories, outside workspace package resolution.
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // Source files knip's production scan reads. Any edit to one of these can orphan
 // an export -- including an import-only edit that drops a barrel re-export's last
@@ -47,7 +44,7 @@ const LIVE_DOCKER_TOOLING_PATHS = new Set([
 ]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
-  /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mts$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+  /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/(?:sync-plugin-sdk-exports|plugin-sdk-api-diff)\.mts$)/u;
 const BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE =
   /^(?:src\/config\/(?:bundled-channel-config-metadata\.generated|zod-schema\.[^/]+)\.ts|src\/channels\/plugins\/config-schema\.ts|src\/plugin-sdk\/(?:bundled-channel-config-schema|channel-config-schema)\.ts|src\/plugins\/(?:bundled-dir|public-surface-loader|public-surface-runtime|sdk-alias)\.ts|scripts\/(?:generate-bundled-channel-config-metadata\.ts|load-channel-config-surface\.ts|lib\/(?:bundled-plugin-source-utils|format-generated-module|generated-output-utils)\.mts)|extensions\/[^/]+\/(?:openclaw\.plugin\.json|package\.json|(?:config|security-contract)-api\.[cm]?[jt]sx?|src\/config-(?:schema(?:-[^/]+)?|surface|ui-hints)\.[cm]?[jt]sx?))$/u;
 /**
@@ -452,8 +449,8 @@ export function isLiveDockerPackageScriptOnlyChange(before: string, after: strin
   const afterStripped = stripLiveDockerPackageScripts(afterPackage);
 
   return (
-    stableJson(beforeStripped) === stableJson(afterStripped) &&
-    stableJson(beforeAllowed) !== stableJson(afterAllowed)
+    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
+    stableStringify(beforeAllowed) !== stableStringify(afterAllowed)
   );
 }
 
@@ -473,8 +470,8 @@ export function isPackageScriptOnlyChange(before: string, after: string): boolea
   const afterStripped = stripPackageScripts(afterPackage);
 
   return (
-    stableJson(beforeStripped) === stableJson(afterStripped) &&
-    stableJson(beforeScripts) !== stableJson(afterScripts)
+    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
+    stableStringify(beforeScripts) !== stableStringify(afterScripts)
   );
 }
 
@@ -544,19 +541,6 @@ function stripPackageScripts(packageJson: Record<string, unknown>) {
   const clone = structuredClone(packageJson);
   delete clone.scripts;
   return clone;
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
 }
 
 /**

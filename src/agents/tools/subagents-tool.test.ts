@@ -2,12 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS } from "../../tasks/task-status.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../subagents/registry/subagent-lifecycle-events.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
+} from "../subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { createSubagentsTool } from "./subagents-tool.js";
 
 function task(params: {

@@ -1,8 +1,13 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
 import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred, type Deferred } from "../shared/deferred.js";
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  DEVICE_CODE_PHISHING_WARNING,
+  WizardCancelledError,
+  type WizardProgress,
+  type WizardPrompter,
+} from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
@@ -109,9 +114,12 @@ class WizardSessionPrompter implements WizardPrompter {
     const fallbackMessage = [
       params.message ?? "Enter this one-time code on the provider's sign-in page.",
       `Code: ${params.code}`,
-      ...(params.expiresInMinutes
-        ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
-        : []),
+      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+      // Device-code phishing works by getting the victim to enter the attacker's
+      // code, so the warning has to cover received codes, not just shared ones.
+      // Unconditional: codes delivered over a chat channel are the risky case and
+      // carry no expiry hint. Matches the Codex CLI prompt.
+      DEVICE_CODE_PHISHING_WARNING,
     ].join("\n");
     await this.prompt({
       type: "note",
@@ -312,7 +320,7 @@ export class WizardSession {
       return this.terminalResult();
     }
     if (!this.stepDeferred) {
-      this.stepDeferred = createDeferred();
+      this.stepDeferred = createDeferredCore();
     }
     const step = await this.stepDeferred.promise;
     if (step) {
@@ -486,7 +494,7 @@ export class WizardSession {
       throw new Error("wizard: session not running");
     }
     this.pushStep(step);
-    const deferred = createDeferred<unknown>();
+    const deferred = createDeferredCore<unknown>();
     this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
     return await deferred.promise;
   }

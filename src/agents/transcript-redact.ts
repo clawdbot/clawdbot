@@ -1,3 +1,4 @@
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 /**
  * Agent transcript redaction helpers.
  *
@@ -20,6 +21,7 @@ import {
   shouldPreserveNestedTranscriptImageDataUrlFields,
   shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
+import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
@@ -77,14 +79,6 @@ type TranscriptAssistantRoute = {
   provider?: string;
 };
 
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
   "google-vertex",
@@ -110,8 +104,12 @@ function isOpenAIReplayContextHash(value: unknown): value is string {
   return typeof value === "string" && OPENAI_REPLAY_CONTEXT_HASH_RE.test(value);
 }
 
+function isOpenAIResponsesApi(api: string): boolean {
+  return OPENAI_RESPONSES_APIS.has(api);
+}
+
 function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_RESPONSES_APIS.has(route.api);
+  return typeof route?.api === "string" && isOpenAIResponsesApi(route.api);
 }
 
 function isGoogleReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
@@ -232,6 +230,17 @@ function isOpenAIResponseItemId(
   return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
 }
 
+const replaySanitizerHelpers = {
+  isAnthropicReasoningRoute,
+  isOpenAIReplayContextHash,
+  isOpenAIResponseItemId,
+  isOpenAIResponsesApi,
+  isOpenAIResponsesRoute,
+  isPlainTranscriptObject,
+  isStructurallyValidOpaqueReplayToken,
+  redactTranscriptText,
+};
+
 function isOpenAITextSignature(
   value: string,
   route: TranscriptAssistantRoute | undefined,
@@ -273,60 +282,6 @@ const OPENAI_REASONING_REPLAY_METADATA_KEYS = new Set([
   "authProfileHash",
 ]);
 const OPENAI_REASONING_REPLAY_METADATA_KEY = "__openclaw_replay";
-const OPENAI_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
-const OPENAI_COMPACTION_SUPPRESSION_TYPE = "openai-responses-compaction-suppression";
-const OPENAI_COMPACTION_SUPPRESSION_DATA = "rejected";
-
-function sanitizeOpenAICompactionReplayState(
-  value: unknown,
-  route: TranscriptAssistantRoute | undefined,
-): Record<string, unknown> | undefined {
-  const replayType =
-    value && typeof value === "object" && isPlainTranscriptObject(value) ? value.type : undefined;
-  const isSuppression = replayType === OPENAI_COMPACTION_SUPPRESSION_TYPE;
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !isPlainTranscriptObject(value) ||
-    !isOpenAIResponsesRoute(route) ||
-    value.v !== 1 ||
-    (replayType !== OPENAI_COMPACTION_REPLAY_TYPE && !isSuppression) ||
-    typeof value.data !== "string" ||
-    (isSuppression
-      ? value.data !== OPENAI_COMPACTION_SUPPRESSION_DATA
-      : !isStructurallyValidOpaqueReplayToken(value.data)) ||
-    (value.replayIndex !== undefined &&
-      (isSuppression ||
-        !Number.isSafeInteger(value.replayIndex) ||
-        (value.replayIndex as number) < 0)) ||
-    value.provider !== route?.provider ||
-    typeof value.api !== "string" ||
-    !OPENAI_RESPONSES_APIS.has(value.api) ||
-    value.model !== route?.model ||
-    !isOpenAIReplayContextHash(value.baseUrlHash) ||
-    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
-    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
-  ) {
-    return undefined;
-  }
-  const replayId =
-    !isSuppression && typeof value.id === "string" && isOpenAIResponseItemId(value.id, route)
-      ? value.id
-      : undefined;
-  return {
-    v: 1,
-    type: replayType,
-    ...(replayId !== undefined ? { id: replayId } : {}),
-    data: value.data,
-    ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
-    provider: value.provider,
-    api: value.api,
-    model: value.model,
-    baseUrlHash: value.baseUrlHash,
-    ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
-    ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
-  };
-}
 
 function sanitizeOpenAIReasoningReplayMetadata(
   value: unknown,
@@ -583,8 +538,18 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    // The append transaction owns this control-plane identity. Redacting it would
+    // make stored dedupe disagree with the admitted message identity.
+    if (location === "root" && key === "idempotencyKey") {
+      continue;
+    }
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
-      const sanitizedReplay = sanitizeOpenAICompactionReplayState(item, currentAssistantRoute);
+      const sanitizedReplay = sanitizeCompactionReplayState(
+        item,
+        currentAssistantRoute,
+        cfg,
+        replaySanitizerHelpers,
+      );
       if (sanitizedReplay !== undefined) {
         if (sanitizedReplay !== item) {
           next ??= { ...source };

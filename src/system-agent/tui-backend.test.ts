@@ -8,10 +8,10 @@ import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.
 import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
-import { resolveSystemAgentVerifiedInferenceRoute } from "./verified-inference.js";
+import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.js";
 
 const verifiedInferenceMocks = vi.hoisted(() => ({
-  preparedBindings: new WeakSet<object>(),
+  preparedBindings: new WeakMap<object, OpenClawConfig>(),
 }));
 
 vi.mock("../plugins/providers.js", () => ({
@@ -30,11 +30,12 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./verified-inference.js")>();
   return {
     ...original,
-    resolveSystemAgentVerifiedInferenceRoute: vi.fn(async (binding, deps) =>
-      verifiedInferenceMocks.preparedBindings.has(binding)
-        ? binding.execution
-        : await original.resolveSystemAgentVerifiedInferenceRoute(binding, deps),
-    ),
+    resolveSystemAgentVerifiedInferenceState: vi.fn(async (binding, deps) => {
+      const config = verifiedInferenceMocks.preparedBindings.get(binding);
+      return config
+        ? { config, route: binding.execution }
+        : await original.resolveSystemAgentVerifiedInferenceState(binding, deps);
+    }),
   };
 });
 
@@ -106,7 +107,7 @@ async function createVerifiedTuiOptions(
       ? sharedVerifiedFixture
       : await createSystemAgentVerifiedInferenceTestFixture(config);
   if (!useRealVerification) {
-    verifiedInferenceMocks.preparedBindings.add(fixture.binding);
+    verifiedInferenceMocks.preparedBindings.set(fixture.binding, config);
   }
   return {
     verifiedInference: fixture.binding,
@@ -162,8 +163,8 @@ describe("runSystemAgentTui", () => {
       verifiedConfig,
       true,
     );
-    const resolveVerifiedRoute = vi.mocked(resolveSystemAgentVerifiedInferenceRoute);
-    resolveVerifiedRoute.mockClear();
+    const resolveVerifiedState = vi.mocked(resolveSystemAgentVerifiedInferenceState);
+    resolveVerifiedState.mockClear();
     const runTui = vi.fn(
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
         runTuiCalls += 1;
@@ -181,9 +182,9 @@ describe("runSystemAgentTui", () => {
     );
 
     expect(runTuiCalls).toBe(1);
-    expect(resolveVerifiedRoute).toHaveBeenCalledOnce();
-    expect(resolveVerifiedRoute).toHaveBeenCalledWith(verified.verifiedInference, verified.deps);
-    const [resolveOrder] = resolveVerifiedRoute.mock.invocationCallOrder;
+    expect(resolveVerifiedState).toHaveBeenCalledOnce();
+    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference, verified.deps);
+    const [resolveOrder] = resolveVerifiedState.mock.invocationCallOrder;
     const [runTuiOrder] = runTui.mock.invocationCallOrder;
     if (resolveOrder === undefined || runTuiOrder === undefined) {
       throw new Error("expected verified route resolution before TUI startup");

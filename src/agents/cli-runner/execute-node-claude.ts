@@ -14,7 +14,7 @@ const NODE_CLI_MAX_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 type NodeClaudePlacement = { nodeId: string; cwd?: string };
 
-export function resolveNodeClaudePlacement(
+export function resolveNodeClaudeTarget(
   context: PreparedCliRunContext,
 ): NodeClaudePlacement | null {
   const entry = context.params.sessionEntry;
@@ -30,7 +30,12 @@ export function resolveNodeClaudePlacement(
   return { nodeId, ...(entry.execCwd?.trim() ? { cwd: entry.execCwd.trim() } : {}) };
 }
 
-const NODE_CLI_OMIT_BARE_ARGS = new Set(["--strict-mcp-config"]);
+const NODE_CLI_OMIT_BARE_ARGS = new Set([
+  "--strict-mcp-config",
+  // The Gateway's version probe says nothing about the paired node's Claude binary.
+  // Omit the optimization instead of making an older node reject every turn.
+  "--exclude-dynamic-system-prompt-sections",
+]);
 const NODE_CLI_OMIT_VALUE_ARGS = new Set([
   "--permission-mode",
   "--plugin-dir",
@@ -201,6 +206,7 @@ export async function executeNodeClaudeRun(params: {
     ? {
         kind: "cli" as const,
         runId: contextParams.runId,
+        toolAuthorityFingerprint: contextParams.toolAuthorityFingerprint,
         cancel: abortNodeRun,
       }
     : undefined;

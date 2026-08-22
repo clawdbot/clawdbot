@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 // Control UI tests cover workboard status persistence behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { WorkboardCard } from "../../lib/workboard/index.ts";
@@ -124,12 +125,7 @@ const staleReviewCard = {
   ],
 } satisfies WorkboardCard;
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -350,14 +346,10 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await page.getByRole("button", { name: "Save" }).click();
 
       const requests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
-      expect(
-        requestParams(expectDefined(requests[0], "execution-linked card update")),
-      ).toMatchObject({
+      expect(requestParams(expectDefined(requests[0], "execution-linked card update"))).toEqual({
         id: executionLinkedCard.id,
-        patch: {
-          title: updatedCard.title,
-          sessionKey: linkedSessionKey,
-        },
+        expectedUpdatedAt: executionLinkedCard.updatedAt,
+        patch: { title: updatedCard.title },
       });
       await editDialog.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".workboard-card", { hasText: updatedCard.title }).waitFor({
@@ -439,14 +431,11 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
             {
               match: {
                 id: "card-1",
+                expectedUpdatedAt: initialCard.updatedAt,
                 patch: {
                   title: "Persisted renamed card",
                   notes: "Edited notes survive reopening.",
-                  status: "todo",
                   priority: "high",
-                  labels: ["ui"],
-                  agentId: "main",
-                  sessionKey: linkedSessionKey,
                 },
               },
               response: { card: editedCard },
@@ -484,14 +473,12 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
-      expect(
-        requestParams(expectDefined(updateRequests[0], "workboard update request")),
-      ).toMatchObject({
+      expect(requestParams(expectDefined(updateRequests[0], "workboard update request"))).toEqual({
         id: "card-1",
+        expectedUpdatedAt: initialCard.updatedAt,
         patch: {
           notes: "Edited notes survive reopening.",
           priority: "high",
-          status: "todo",
           title: "Persisted renamed card",
         },
       });

@@ -7,9 +7,7 @@ export function registerTabAccessEvents({
   policy,
   attachedTabs,
   attachedAccessEpochs,
-  copilotDeniedTabs,
   attachingTabs,
-  getCopilot,
   send,
   scheduleTabsSync,
   detachDebugger,
@@ -56,7 +54,6 @@ export function registerTabAccessEvents({
           policy.invalidateTab(source.tabId);
           await removeTabFromOpenClawGroup(source.tabId);
           scheduleTabsSync();
-          await getCopilot()?.onConsentChanged(source.tabId, { revoked: true });
         }
       } finally {
         policy.endRevocation(revocation);
@@ -70,10 +67,8 @@ export function registerTabAccessEvents({
       policy.invalidateTab(tabId);
       attachedTabs.delete(tabId);
       attachedAccessEpochs.delete(tabId);
-      copilotDeniedTabs.delete(tabId);
       scheduleTabsSync();
       await policy.forgetTab(tabId).catch(() => undefined);
-      await getCopilot().onTabRemoved(tabId);
     })();
   });
 
@@ -82,18 +77,13 @@ export function registerTabAccessEvents({
     policy.invalidateTab(removedTabId);
     attachedTabs.delete(removedTabId);
     attachedAccessEpochs.delete(removedTabId);
-    copilotDeniedTabs.delete(removedTabId);
     scheduleTabsSync();
     void (async () => {
       try {
         await accessReady;
-        const pauseTransferred = await policy.replaceTab(addedTabId, removedTabId);
+        await policy.replaceTab(addedTabId, removedTabId);
         await Promise.allSettled([attachingTabs.get(removedTabId), attachingTabs.get(addedTabId)]);
         await Promise.allSettled([detachDebugger(removedTabId), detachDebugger(addedTabId)]);
-        await getCopilot().onTabRemoved(removedTabId);
-        if (pauseTransferred) {
-          await getCopilot().onConsentChanged(addedTabId, { revoked: true });
-        }
       } finally {
         policy.endRevocation(revocation);
         scheduleTabsSync();
@@ -128,16 +118,10 @@ export function registerTabAccessEvents({
           return;
         }
         await detachDebugger(tabId);
-        if (!eventIsCurrent()) {
-          return;
-        }
-        await getCopilot().onConsentChanged(tabId, { revoked: true });
-        return;
       }
       if (attachedTabs.has(tabId) && attachedAccessEpochs.has(tabId)) {
         attachedAccessEpochs.set(tabId, eventEpoch);
       }
-      await getCopilot().onConsentChanged(tabId, { revoked: false });
     })();
   });
 
@@ -203,9 +187,7 @@ export function registerTabAccessEvents({
       }
       if (newerTabEventOwnsAccess) {
         onGroupChanged();
-        return;
       }
-      await getCopilot().onConsentChanged();
     });
   };
   chromeApi.tabGroups.onUpdated.addListener(onGroupChanged);

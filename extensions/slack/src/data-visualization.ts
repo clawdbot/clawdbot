@@ -5,6 +5,7 @@ import {
   renderMessagePresentationChartFallbackText,
   type MessagePresentationChartBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 
@@ -40,15 +41,9 @@ type SlackDataVisualizationBlock = Block & {
   chart: SlackPieChart | SlackSeriesChart;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Detect native chart blocks without depending on unreleased Slack SDK types. */
 export function hasSlackDataVisualizationBlock(blocks?: readonly unknown[]): boolean {
-  return blocks?.some((block) => asRecord(block)?.type === "data_visualization") ?? false;
+  return blocks?.some((block) => asOptionalRecord(block)?.type === "data_visualization") ?? false;
 }
 
 function isStringWithin(value: unknown, maxLength: number): value is string {
@@ -138,7 +133,7 @@ export function buildSlackDataVisualizationBlock(
 }
 
 function readSlackChartDatum(value: unknown): SlackChartDatum | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   const label = record?.label;
   const datumValue = record?.value;
   return typeof label === "string" && typeof datumValue === "number"
@@ -149,9 +144,9 @@ function readSlackChartDatum(value: unknown): SlackChartDatum | undefined {
 function parseSlackDataVisualizationBlock(
   value: unknown,
 ): MessagePresentationChartBlock | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   const title = block?.title;
-  const chart = asRecord(block?.chart);
+  const chart = asOptionalRecord(block?.chart);
   if (block?.type !== "data_visualization" || typeof title !== "string" || !chart) {
     return undefined;
   }
@@ -172,7 +167,7 @@ function parseSlackDataVisualizationBlock(
   if (chart.type !== "bar" && chart.type !== "area" && chart.type !== "line") {
     return undefined;
   }
-  const axisConfig = asRecord(chart.axis_config);
+  const axisConfig = asOptionalRecord(chart.axis_config);
   const categories = axisConfig?.categories;
   if (!Array.isArray(categories) || !categories.every((category) => typeof category === "string")) {
     return undefined;
@@ -181,7 +176,7 @@ function parseSlackDataVisualizationBlock(
     return undefined;
   }
   const series = chart.series.map((rawSeries) => {
-    const seriesRecord = asRecord(rawSeries);
+    const seriesRecord = asOptionalRecord(rawSeries);
     if (typeof seriesRecord?.name !== "string" || !Array.isArray(seriesRecord.data)) {
       return undefined;
     }
@@ -223,7 +218,7 @@ function parseSlackDataVisualizationBlock(
 
 /** Extract a deterministic accessible summary from a native Slack chart block. */
 export function renderSlackDataVisualizationFallbackText(value: unknown): string | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   if (block?.type !== "data_visualization") {
     return undefined;
   }
@@ -236,7 +231,7 @@ export function renderSlackDataVisualizationFallbackText(value: unknown): string
 
 /** Render a native chart as mrkdwn without activating raw data control tokens. */
 export function renderSlackDataVisualizationMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   if (block?.type !== "data_visualization") {
     return undefined;
   }

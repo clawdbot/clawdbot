@@ -236,6 +236,7 @@ jobs:
         if: ${{ inputs.run_windows_ci }}
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: restore
           node-version: 22.x
 
       - name: Runtime versions

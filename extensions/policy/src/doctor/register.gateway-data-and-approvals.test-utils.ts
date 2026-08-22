@@ -101,7 +101,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy(),
       diagnostics: { otel: { enabled: true, captureContent: true } },
       session: { maintenance: { mode: "warn" } },
-      memory: { search: { rememberAcrossConversations: true } },
+      memory: { search: { rememberAcrossConversations: true, sources: ["sessions"] } },
     } as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       sensitiveLogging: { requireRedaction: true },

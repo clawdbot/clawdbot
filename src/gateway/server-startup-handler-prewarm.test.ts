@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
     mocks.events.push("sessions.count");
     return true;
   }),
-  loadCombinedSessionStoreForGateway: vi.fn((_cfg: unknown, options: { agentId: string }) => {
+  loadCombinedSessionStoreForGatewayCore: vi.fn((_cfg: unknown, options: { agentId: string }) => {
     mocks.events.push(`sessions.load.${options.agentId}`);
     return {
       durableStorePath: `/state/${options.agentId}.sqlite`,
@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
   canPrewarmCombinedSessionStoresForGateway: mocks.canPrewarmCombinedSessionStoresForGateway,
-  loadCombinedSessionStoreForGateway: mocks.loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
 }));
 
 vi.mock("./session-utils-list.js", () => ({
@@ -50,7 +50,7 @@ beforeEach(() => {
     mocks.events.push("sessions.count");
     return true;
   });
-  mocks.loadCombinedSessionStoreForGateway.mockClear();
+  mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
   mocks.listSessionsFromStoreAsync.mockClear();
   mocks.listManagedPlugins.mockClear();
 });
@@ -83,11 +83,11 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       "sessions.rows.research",
       "plugins",
     ]);
-    expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenNthCalledWith(1, cfg, {
+    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenNthCalledWith(1, cfg, {
       agentId: "main",
       projection: "list",
     });
-    expect(mocks.loadCombinedSessionStoreForGateway).toHaveBeenNthCalledWith(2, cfg, {
+    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenNthCalledWith(2, cfg, {
       agentId: "research",
       projection: "list",
     });

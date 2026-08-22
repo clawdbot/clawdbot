@@ -26,6 +26,8 @@ export type PluginApprovalRequestPayload = {
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  /** Host-derived source run; never accepted from plugin approval RPC params. */
+  runId?: string | null;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
@@ -34,6 +36,8 @@ export type PluginApprovalRequestPayload = {
 
 /** Timed plugin approval request persisted while awaiting a decision. */
 export type PluginApprovalRequest = {
+  /** Descriptive wire metadata; readers derive it from the payload when absent. */
+  approvalKind?: "plugin";
   id: string;
   request: PluginApprovalRequestPayload;
   createdAtMs: number;

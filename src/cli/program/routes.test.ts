@@ -122,15 +122,15 @@ describe("program routes", () => {
   it("passes parsed agents list flags through", async () => {
     await expect(expectRoute(["agents"]).run(routeArgv("agents"))).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenCalledWith(
-      { json: false, bindings: false },
+      { json: false, bindings: false, tree: false },
       defaultRuntime,
     );
 
     await expect(
-      expectRoute(["agents", "list"]).run(routeArgv("agents list --json --bindings")),
+      expectRoute(["agents", "list"]).run(routeArgv("agents list --json --bindings --tree")),
     ).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenLastCalledWith(
-      { json: true, bindings: true },
+      { json: true, bindings: true, tree: true },
       defaultRuntime,
     );
   });
@@ -296,11 +296,11 @@ describe("program routes", () => {
 
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
-    await expect(route.run(routeArgv("status --json --deep --usage --timeout 5000"))).resolves.toBe(
-      true,
-    );
+    await expect(
+      route.run(routeArgv("status --json --deep --usage --agent beta --timeout 5000")),
+    ).resolves.toBe(true);
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
-      { deep: true, all: false, usage: true, timeoutMs: 5000 },
+      { deep: true, all: false, usage: true, agent: "beta", timeoutMs: 5000 },
       defaultRuntime,
     );
   });
@@ -415,6 +415,46 @@ describe("program routes", () => {
 
   it("returns false for models status route when --probe-profile has no value", async () => {
     await expectRunFalse(["models", "status"], routeArgv("models status --probe-profile"));
+  });
+
+  it.each([
+    ["bare parent", ["models"], { json: false, plain: false, agent: undefined }],
+    ["JSON alias", ["models", "--json"], { json: true, plain: false, agent: undefined }],
+    [
+      "status JSON alias",
+      ["models", "--status-json"],
+      { json: true, plain: false, agent: undefined },
+    ],
+    ["plain alias", ["models", "--status-plain"], { json: false, plain: true, agent: undefined }],
+    [
+      "agent before alias",
+      ["models", "--agent", "main", "--status-json"],
+      { json: true, plain: false, agent: "main" },
+    ],
+    [
+      "agent after alias",
+      ["models", "--status-json", "--agent=main"],
+      { json: true, plain: false, agent: "main" },
+    ],
+  ] as const)(
+    "routes models $name through the canonical status owner",
+    async (_name, args, expected) => {
+      const argv = ["node", "openclaw", ...args];
+      const route = expectRoute(["models"], argv);
+
+      await expect(route.run(argv)).resolves.toBe(true);
+      expect(modelsStatusCommandMock).toHaveBeenCalledWith(expected, defaultRuntime);
+    },
+  );
+
+  it.each([
+    ["child action", ["models", "--status-json", "list"]],
+    ["unknown option", ["models", "--unknown"]],
+    ["missing agent", ["models", "--agent"]],
+    ["argument terminator", ["models", "--", "--status-json"]],
+  ])("leaves models parent %s to Commander", async (_name, args) => {
+    await expectRunFalse(["models"], ["node", "openclaw", ...args]);
+    expect(modelsStatusCommandMock).not.toHaveBeenCalled();
   });
 
   it("accepts negative-number probe profile values", async () => {

@@ -31,17 +31,20 @@ function sanitizeLabel(value) {
  *   groupSize?: number | string;
  *   lanes?: string;
  *   upgradeSurvivorBaselines?: string;
+ *   upgradeSurvivorScenarios?: string;
  * }} [options]
  * @returns {{
  *   docker_lanes: string;
  *   label: string;
  *   published_upgrade_survivor_baselines?: string;
+ *   timeout_minutes?: number;
  * }[]}
  */
 export function planTargetedDockerLaneGroups({
   groupSize = 1,
   lanes,
   upgradeSurvivorBaselines = "",
+  upgradeSurvivorScenarios = "",
 } = {}) {
   const selectedLanes = splitTokens(lanes);
   if (selectedLanes.length === 0) {
@@ -50,8 +53,20 @@ export function planTargetedDockerLaneGroups({
 
   const parsedGroupSize = parsePositiveInt(groupSize, "groupSize");
   const baselineSpecs = splitTokens(upgradeSurvivorBaselines);
+  const hasExpandedSurvivorScenarios = splitTokens(upgradeSurvivorScenarios).length > 0;
   const groups = [];
   let pendingLanes = [];
+
+  const addGroup = (group) => {
+    const groupLanes = splitTokens(group.docker_lanes);
+    if (
+      hasExpandedSurvivorScenarios &&
+      groupLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
+    ) {
+      group.timeout_minutes = 90;
+    }
+    groups.push(group);
+  };
 
   const flushPending = () => {
     if (pendingLanes.length === 0) {
@@ -60,7 +75,7 @@ export function planTargetedDockerLaneGroups({
     const first = sanitizeLabel(pendingLanes[0]);
     const last = sanitizeLabel(pendingLanes[pendingLanes.length - 1]);
     const label = pendingLanes.length === 1 ? first : `${first}--${last}`;
-    groups.push({ docker_lanes: pendingLanes.join(" "), label });
+    addGroup({ docker_lanes: pendingLanes.join(" "), label });
     pendingLanes = [];
   };
 
@@ -68,7 +83,7 @@ export function planTargetedDockerLaneGroups({
     if (BASELINE_SHARDED_LANES.has(lane) && baselineSpecs.length > 1) {
       flushPending();
       for (const baselineSpec of baselineSpecs) {
-        groups.push({
+        addGroup({
           docker_lanes: lane,
           label: `${sanitizeLabel(lane)}-${sanitizeLabel(baselineSpec)}`,
           published_upgrade_survivor_baselines: baselineSpec,
@@ -96,6 +111,7 @@ if (isMain) {
         groupSize: process.env.GROUP_SIZE,
         lanes: process.env.LANES,
         upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+        upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
       }),
     ),
   );

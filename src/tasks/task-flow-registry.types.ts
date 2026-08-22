@@ -6,19 +6,8 @@ export type { JsonValue } from "./task-registry.types.js";
 
 export type TaskFlowSyncMode = "task_mirrored" | "managed";
 
-/** Lifecycle status for multi-step task flows. */
-export type TaskFlowStatus =
-  | "queued"
-  | "running"
-  | "waiting"
-  | "blocked"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "lost";
-
-const TASK_FLOW_SYNC_MODES = new Set<TaskFlowSyncMode>(["task_mirrored", "managed"]);
-const TASK_FLOW_STATUSES = new Set<TaskFlowStatus>([
+/** Lifecycle statuses for multi-step task flows. */
+export const TASK_FLOW_STATUSES = [
   "queued",
   "running",
   "waiting",
@@ -27,7 +16,11 @@ const TASK_FLOW_STATUSES = new Set<TaskFlowStatus>([
   "failed",
   "cancelled",
   "lost",
-]);
+] as const;
+export type TaskFlowStatus = (typeof TASK_FLOW_STATUSES)[number];
+
+const TASK_FLOW_SYNC_MODES = new Set<TaskFlowSyncMode>(["task_mirrored", "managed"]);
+const TASK_FLOW_STATUS_SET = new Set<TaskFlowStatus>(TASK_FLOW_STATUSES);
 
 function parsePersistedFlowValue<T extends string>(
   value: unknown,
@@ -48,7 +41,7 @@ export function parseOptionalTaskFlowSyncMode(value: unknown): TaskFlowSyncMode 
 }
 
 export function parseTaskFlowStatus(value: unknown): TaskFlowStatus {
-  return parsePersistedFlowValue(value, TASK_FLOW_STATUSES, "status");
+  return parsePersistedFlowValue(value, TASK_FLOW_STATUS_SET, "status");
 }
 
 export type TaskFlowRecord = {

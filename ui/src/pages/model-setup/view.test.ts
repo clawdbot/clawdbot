@@ -86,7 +86,7 @@ const detected: SystemAgentSetupDetectResult = {
       id: "llama-cpp",
       brandId: "llama-cpp",
       label: "llama.cpp",
-      hint: "Run one private GGUF model directly inside this Gateway",
+      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
       actionLabel: "Set up model",
     },
   ],
@@ -116,6 +116,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     canVerify: true,
     canPrepare: true,
     gatewayTooOld: false,
+    refreshWarning: null,
     actionsDisabled: false,
     manualProviderId: "openai",
     manualApiKey: "",
@@ -1039,7 +1040,6 @@ describe("renderModelSetup", () => {
       "prepare",
     );
     expect(text(prepareConfirm)).toContain("Continue");
-    expect(text(prepareConfirm)).toContain("No");
     expect(text(prepareConfirm)).not.toContain("Yes");
   });
 

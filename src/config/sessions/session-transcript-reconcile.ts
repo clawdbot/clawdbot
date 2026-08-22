@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   openOpenClawAgentDatabase,
@@ -90,10 +91,6 @@ function yieldToGateway(): Promise<void> {
 
 function nextProjectionClaimId(): number {
   return -randomInt(1, 2 ** 47);
-}
-
-function normalizeReconcileError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 // Node Worker messages take a transfer list, unlike Window.postMessage.
@@ -242,7 +239,7 @@ export async function reconcileSessionTranscriptIndexes(
       { workerData: input, execArgv: sourceWorkerExecArgv },
     );
   } catch (error) {
-    throw normalizeReconcileError(error);
+    throw toStringifiedError(error);
   }
 
   return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
@@ -282,7 +279,7 @@ export async function reconcileSessionTranscriptIndexes(
             (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
           );
         } catch (error) {
-          settle(() => reject(normalizeReconcileError(error)), true);
+          settle(() => reject(toStringifiedError(error)), true);
           return;
         }
         settle(() => resolve({ reconciledSessions }), false);
@@ -321,14 +318,14 @@ export async function reconcileSessionTranscriptIndexes(
         }
         continueProjectionWorker(worker, owned);
       } catch (error) {
-        settle(() => reject(normalizeReconcileError(error)), true);
+        settle(() => reject(toStringifiedError(error)), true);
       }
     };
     worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
       void handleMessage(message);
     });
     worker.once("error", (error) => {
-      settle(() => reject(normalizeReconcileError(error)), true);
+      settle(() => reject(toStringifiedError(error)), true);
     });
     worker.once("exit", (code) => {
       if (doneReceived && code === 0) {

@@ -423,6 +423,35 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
     });
 
+    it("does not disable a renamed external owner through its removed bundled channel id", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: {
+            entries: {
+              "openclaw-qqbot": { enabled: true },
+            },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+    });
+
     it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
       const result = applyPluginAutoEnable({
         config: {

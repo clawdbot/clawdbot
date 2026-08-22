@@ -1,5 +1,9 @@
 // Qa Lab plugin module implements coverage report behavior.
-import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString as stringifyConfigValue,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRepoRootRelativeRef } from "./cli-paths.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
@@ -134,10 +138,6 @@ function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
   );
 }
 
-function stringifyConfigValue(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaScenarioSearchMatch {
   const config = scenario.execution.config ?? {};
   return {
@@ -169,7 +169,18 @@ export function findQaScenarioMatches(
   return scenarios
     .filter((scenario) => {
       const haystack = scenarioSearchText(scenario);
-      return tokens.every((token) => haystack.includes(token));
+      return tokens.every((token) => {
+        if (haystack.includes(token)) {
+          return true;
+        }
+        const executionPathQuery = token.replaceAll("\\", "/");
+        return (
+          executionPathQuery.includes("/") &&
+          isRepoRootRelativeRef(executionPathQuery) &&
+          scenario.execution.kind !== "flow" &&
+          normalizeSearchText(scenario.execution.path).includes(executionPathQuery)
+        );
+      });
     })
     .map(summarizeScenarioSearchMatch)
     .toSorted((left, right) => left.id.localeCompare(right.id));

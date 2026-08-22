@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const cfg = {
   channels: {
@@ -99,6 +100,94 @@ describe("slack group policy", () => {
       ).toEqual({ allow: ["sessions.list"] });
     },
   );
+
+  it("scopes Enterprise mention and tool policies to the event workspace", () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    const enterpriseCfg = {
+      channels: {
+        slack: {
+          channels: {
+            "team:T11111111:channel:C01234567": {
+              requireMention: false,
+              tools: { allow: ["message.send"] },
+            },
+            "team:T22222222:channel:C01234567": {
+              requireMention: true,
+              tools: { deny: ["exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    try {
+      expect(
+        resolveSlackGroupRequireMention({
+          cfg: enterpriseCfg,
+          groupId: "C01234567",
+          groupSpace: "T11111111",
+        }),
+      ).toBe(false);
+      expect(
+        resolveSlackGroupToolPolicy({
+          cfg: enterpriseCfg,
+          groupId: "C01234567",
+          groupSpace: "T11111111",
+        }),
+      ).toEqual({ allow: ["message.send"] });
+      expect(
+        resolveSlackGroupRequireMention({
+          cfg: enterpriseCfg,
+          groupId: "C01234567",
+          groupSpace: "T22222222",
+        }),
+      ).toBe(true);
+      expect(
+        resolveSlackGroupToolPolicy({
+          cfg: enterpriseCfg,
+          groupId: "C01234567",
+          groupSpace: "T22222222",
+        }),
+      ).toEqual({ deny: ["exec"] });
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it("retains bare channel policy matching for workspace installs", () => {
+    const installationState = registerSlackInstallationState("default", "workspace");
+    const workspaceCfg = {
+      channels: {
+        slack: {
+          channels: {
+            C01234567: {
+              requireMention: false,
+              tools: { allow: ["message.send"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    try {
+      expect(
+        resolveSlackGroupRequireMention({
+          cfg: workspaceCfg,
+          groupId: "C01234567",
+          groupSpace: "T11111111",
+        }),
+      ).toBe(false);
+      expect(
+        resolveSlackGroupToolPolicy({
+          cfg: workspaceCfg,
+          groupId: "C01234567",
+          groupSpace: "T11111111",
+        }),
+      ).toEqual({ allow: ["message.send"] });
+    } finally {
+      installationState.release();
+    }
+  });
 
   it("prefers the exact channel ID when case variants have different policies", () => {
     const caseSensitiveCfg = {

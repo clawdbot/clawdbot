@@ -1,5 +1,6 @@
 import { extractWWWAuthenticateParams } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import {
   recordMcpOAuthAuthorizationRequired,
   resolveMcpOAuthAccessToken,
@@ -47,11 +48,10 @@ async function dispatchRequest(fetchFn: FetchLike, request: Request): Promise<Re
 export function withMcpOAuthBearer(params: {
   fetchFn: FetchLike;
   authFetchFn: FetchLike;
-  serverName: string;
-  resourceUrl: string;
+  identity: McpOAuthIdentity;
   config?: McpOAuthConfig;
 }): McpOAuthFetch {
-  const resourceOrigin = new URL(params.resourceUrl).origin;
+  const resourceOrigin = new URL(params.identity.serverUrl).origin;
   return async (input, init) => {
     const source = input instanceof Request ? input.clone() : input;
     const request = new Request(source, init);
@@ -60,8 +60,7 @@ export function withMcpOAuthBearer(params: {
     }
 
     const accessToken = await resolveMcpOAuthAccessToken({
-      serverName: params.serverName,
-      serverUrl: params.resourceUrl,
+      identity: params.identity,
       config: params.config,
       fetchFn: params.authFetchFn,
       // Resource feedback can reject an unknown-expiry token. Avoid rotating it
@@ -84,8 +83,7 @@ export function withMcpOAuthBearer(params: {
     // first request's dispatcher lease across discovery/refresh.
     await response.body?.cancel().catch(() => undefined);
     const nextAccessToken = await resolveMcpOAuthAccessToken({
-      serverName: params.serverName,
-      serverUrl: params.resourceUrl,
+      identity: params.identity,
       config: params.config,
       fetchFn: params.authFetchFn,
       acceptUnknownExpiry: true,
@@ -104,8 +102,7 @@ export function withMcpOAuthBearer(params: {
     if (retryResponse.status === 401 || retryInsufficientScope) {
       const rejectedAccessToken = nextAccessToken;
       await recordMcpOAuthAuthorizationRequired({
-        serverName: params.serverName,
-        serverUrl: params.resourceUrl,
+        identity: params.identity,
         rejectedAccessToken,
         resourceMetadataUrl: retryChallenge.resourceMetadataUrl ?? challenge.resourceMetadataUrl,
         scope: retryChallenge.scope ?? challenge.scope,

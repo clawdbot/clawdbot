@@ -1,16 +1,16 @@
 // Coordinates automatic state-migration and gateway-startup checkpoints in shared state.
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname } from "node:os";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
 import {
   executeSqliteQuerySync,
@@ -156,8 +156,12 @@ function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
   callback: (db: DatabaseSync) => T,
 ): T {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
   return withStartupMigrationCheckpointDatabase(env, (db) =>
-    runSqliteImmediateTransactionSync(db, () => callback(db)),
+    runSqliteImmediateTransactionSync(db, () => {
+      assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
+      return callback(db);
+    }),
   );
 }
 
@@ -263,30 +267,28 @@ export function hasActiveStartupMigrationLease(
 ): boolean {
   const env = params.env ?? process.env;
   const nowMs = params.nowMs ?? Date.now();
-  const pathname = resolveOpenClawStateSqlitePath(env);
-  if (!existsSync(pathname)) {
-    return false;
-  }
-  return withOpenClawStateDatabaseReadOnly(
-    ({ db }) => {
-      const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
-      const lease = executeSqliteQueryTakeFirstSync(
-        db,
-        stateDb
-          .selectFrom("state_leases")
-          .select("payload_json as payloadJson")
-          .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
-          .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
-          .where("expires_at", ">", nowMs),
-      );
-      return Boolean(
-        lease &&
-        !isStartupMigrationLeaseOwnerDefinitelyGone(
-          parseStartupMigrationLeaseOwner(lease.payloadJson),
-        ),
-      );
-    },
-    { env },
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => {
+        const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
+        const lease = executeSqliteQueryTakeFirstSync(
+          db,
+          stateDb
+            .selectFrom("state_leases")
+            .select("payload_json as payloadJson")
+            .where("scope", "=", STARTUP_MIGRATION_LEASE_SCOPE)
+            .where("lease_key", "=", STARTUP_MIGRATION_LEASE_KEY)
+            .where("expires_at", ">", nowMs),
+        );
+        return Boolean(
+          lease &&
+          !isStartupMigrationLeaseOwnerDefinitelyGone(
+            parseStartupMigrationLeaseOwner(lease.payloadJson),
+          ),
+        );
+      },
+      { env },
+    ) ?? false
   );
 }
 

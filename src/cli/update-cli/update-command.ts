@@ -28,16 +28,25 @@ import {
 } from "../../infra/update-check.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import {
+  parseDevUpdateTargetEnv,
+  type DevUpdateTarget,
+  UPDATE_DEV_TARGET_REF_ENV,
+} from "../../infra/update-dev-target.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
+  resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -79,10 +88,22 @@ import {
   type ManagedServiceRootRedirect,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
-export { updateFinalizeCommand } from "./update-command-post-core.js";
+export { updateFinalizeCommand } from "./update-command-finalize.js";
 
 const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
+
+function readDevUpdateTargetOrExit(): { ok: true; target?: DevUpdateTarget } | { ok: false } {
+  const parsed = parseDevUpdateTargetEnv(process.env);
+  if (parsed.status === "invalid") {
+    defaultRuntime.error(
+      `Invalid internal ${UPDATE_DEV_TARGET_REF_ENV} contract; expected a plain Git ref or a supported tracked-target encoding.`,
+    );
+    defaultRuntime.exit(1);
+    return { ok: false };
+  }
+  return parsed.status === "valid" ? { ok: true, target: parsed.target } : { ok: true };
+}
 
 async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -133,9 +154,33 @@ async function updateCommandInternal(
     defaultRuntime.exit(1);
     return;
   }
+  let devTarget: DevUpdateTarget | undefined;
+  if (requestedChannel === "dev") {
+    const resolvedDevTarget = readDevUpdateTargetOrExit();
+    if (!resolvedDevTarget.ok) {
+      return;
+    }
+    devTarget = resolvedDevTarget.target;
+  }
 
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     defaultRuntime.error(formatExternalSupervisorUpdateRequired());
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (opts.dryRun !== true) {
+    await assertOpenClawStateWriteAllowedAtPath({
+      databasePath: resolveOpenClawStateSqlitePath(process.env),
+      recoverOrphanedSidecars: false,
+    });
+  }
+  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
+  const discoveredRoot = await resolveUpdateRoot();
+  const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
+  if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
+    defaultRuntime.error(
+      `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -152,7 +197,7 @@ async function updateCommandInternal(
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let root = await resolveUpdateRoot();
+  let root = discoveredRoot;
   if (postCoreUpdateResume) {
     await resumePostCoreUpdate({
       root,
@@ -163,7 +208,6 @@ async function updateCommandInternal(
     return;
   }
 
-  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
@@ -184,7 +228,7 @@ async function updateCommandInternal(
 
   let configSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: true,
-    ...(opts.dryRun === true ? { observe: false } : {}),
+    observe: false,
   });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
@@ -236,15 +280,26 @@ async function updateCommandInternal(
           currentVersion: VERSION,
           installKind: updateInstallKind,
         }).channel);
-  const devTargetRef =
-    channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
+  if (channel === "dev" && requestedChannel !== "dev") {
+    const resolvedDevTarget = readDevUpdateTargetOrExit();
+    if (!resolvedDevTarget.ok) {
+      return;
+    }
+    devTarget = resolvedDevTarget.target;
+  }
 
   const explicitTag = normalizeTag(opts.tag);
-  if (channel === "extended-stable" && explicitTag) {
+  const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
+  if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
     await reportPreMutationUpdateFailure({
       root,
       installKind: updateInstallKind,
-      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      reason: unsupportedMainTag
+        ? "unsupported-package-target"
+        : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      message: unsupportedMainTag
+        ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
+        : undefined,
       opts,
       controlPlaneUpdateSentinelMeta,
     });
@@ -335,6 +390,18 @@ async function updateCommandInternal(
           managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
         packageName: installedPackageName,
       });
+      const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
+      if (npmLifecycleGate.error) {
+        await reportPreMutationUpdateFailure({
+          root,
+          installKind: updateInstallKind,
+          reason: "npm lifecycle policy preflight",
+          message: npmLifecycleGate.error,
+          opts,
+          controlPlaneUpdateSentinelMeta,
+        });
+        return;
+      }
     }
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
@@ -542,6 +609,11 @@ async function updateCommandInternal(
     }
   }
 
+  // Startup migrations belong to the freshly installed Doctor. Admit shared-state
+  // mutation only after every pre-install refusal has passed.
+  await assertOpenClawStateWriteAllowedAtPath({
+    databasePath: resolveOpenClawStateSqlitePath(process.env),
+  });
   await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
   const showProgress = !opts.json && process.stdout.isTTY;
@@ -569,7 +641,7 @@ async function updateCommandInternal(
     showProgress,
     opts,
     shouldRestart,
-    devTargetRef,
+    devTarget,
     packageInstallSpec,
     packageInstallEnv,
     packageInstallTarget,
@@ -591,6 +663,7 @@ async function updateCommandInternal(
   await finishUpdate({
     result,
     root,
+    previousInstallRoot: discoveredRoot,
     installKindChanged: switchToGit || switchToPackage,
     configSnapshot: finalizationConfigSnapshot,
     requestedChannel,

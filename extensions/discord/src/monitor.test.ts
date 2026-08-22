@@ -909,7 +909,10 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
 }));
 
 const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
-vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
+vi.spyOn(channelRuntimeModule, "enqueueRoutedSystemEvent").mockImplementation(
+  (text, route, options) =>
+    enqueueSystemEventSpy(text, { ...options, sessionKey: route.sessionKey }) as boolean,
+);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);

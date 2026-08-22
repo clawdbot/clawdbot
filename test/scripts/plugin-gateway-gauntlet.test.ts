@@ -150,6 +150,7 @@ describe("plugin gateway gauntlet helpers", () => {
       counts: { failed: 0, passed: 1, total: 1 },
       metrics,
       run: {
+        status: "completed",
         concurrency: 1,
         fastMode: false,
         finishedAt: "2026-05-30T00:00:01.000Z",
@@ -358,7 +359,6 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
     await writeManifest("qa-lab", "openclaw.plugin.json", JSON.stringify({ id: "qa-lab" }));
-    await writeManifest("qqbot", "openclaw.plugin.json", JSON.stringify({ id: "qqbot" }));
     await writeManifest("telegram", "openclaw.plugin.json", JSON.stringify({ id: "telegram" }));
 
     const matrix = discoverBundledPluginManifests(repoRoot);
@@ -1716,6 +1716,7 @@ process.exit(7);
         counts: { failed: 1, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
+          status: "completed",
           concurrency: 1,
           fastMode: false,
           finishedAt: "2026-05-30T00:00:01.000Z",
@@ -1738,12 +1739,32 @@ process.exit(7);
     });
   });
 
+  it("fails successful QA chunks whose summary is still running", async () => {
+    await runQaSummaryFailureScenario({
+      qaSummary: {
+        counts: { failed: 0, passed: 1, total: 1 },
+        run: { status: "running" },
+        scenarios: [
+          {
+            name: "channel-chat-baseline",
+            status: "pass",
+            steps: [{ name: "reply", status: "pass" }],
+          },
+        ],
+      },
+      scenarioIds: ["channel-chat-baseline"],
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: "QA suite summary run.status must be completed, got running",
+    });
+  });
+
   it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
     await runQaSummaryFailureScenario({
       qaSummary: {
         counts: { failed: 0, passed: 1, total: 1 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
+          status: "completed",
           concurrency: 1,
           fastMode: false,
           finishedAt: "2026-05-30T00:00:01.000Z",
@@ -1769,6 +1790,7 @@ process.exit(7);
         counts: { failed: 0, passed: 1, total: 2 },
         metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
         run: {
+          status: "completed",
           concurrency: 1,
           fastMode: false,
           finishedAt: "2026-05-30T00:00:01.000Z",

@@ -347,6 +347,8 @@ extension SettingsProTab {
                         .font(OpenClawType.body)
                 }
                 .disabled(self.isRefreshingGateway)
+            } footer: {
+                self.gatewayActionStatusView
             }
 
             self.gatewaySetupCard
@@ -831,6 +833,17 @@ extension SettingsProTab {
             {
                 Task { await self.runDiagnostics() }
             }
+
+            self.gatewayActionStatusView
+        }
+    }
+
+    @ViewBuilder
+    var gatewayActionStatusView: some View {
+        if let gatewayActionStatusText {
+            Text(verbatim: gatewayActionStatusText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1334,6 +1347,7 @@ extension SettingsProTab {
             get: { self.manualGatewayTransport.effectiveTLS },
             set: { enabled in
                 guard !self.manualGatewayTransport.requiresTLS else { return }
+                self.manualGatewayContextPath = nil
                 self.manualGatewayTLS = enabled
             })
     }
@@ -1501,7 +1515,6 @@ extension SettingsProTab {
             self.settingsToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
-            self.settingsToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {

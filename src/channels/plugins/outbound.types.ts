@@ -6,6 +6,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
@@ -136,10 +137,10 @@ export type ChannelDeliveryCapabilities = {
 export type ChannelOutboundPayloadHint =
   | {
       kind: "approval-pending";
-      approvalKind: "exec" | "plugin";
+      approvalKind: ChannelApprovalKind;
       nativeRouteActive?: boolean;
     }
-  | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
+  | { kind: "approval-resolved"; approvalKind: ChannelApprovalKind };
 
 export type ChannelOutboundTargetRef = {
   channel: string;
@@ -228,6 +229,12 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void> | void;
+  /** Adopt a provider-created thread for later payloads in the same durable batch. */
+  adoptTargetFromDelivery?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
   /**

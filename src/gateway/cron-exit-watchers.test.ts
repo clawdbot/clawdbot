@@ -238,10 +238,10 @@ describe("createCronExitWatchers", () => {
       expect.objectContaining({ consecutiveErrors: 1 }),
     );
     expect(w.activeJobIds()).toEqual(["job-a"]);
-    // The backoff timer re-arms without an external reconcile.
-    await delay(5);
-    await flush();
-    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    // The backoff timer re-arms without an external reconcile. The 0ms retry
+    // timer is armed only after async state persistence, so a fixed sleep races
+    // it on loaded CI workers — wait for the re-arm instead.
+    await vi.waitFor(() => expect(supervisor.spawn).toHaveBeenCalledTimes(2));
     expect(w.activeJobIds()).toEqual(["job-a"]);
   });
 
@@ -264,10 +264,9 @@ describe("createCronExitWatchers", () => {
       expect.objectContaining({ id: "job-a" }),
       expect.objectContaining({ consecutiveErrors: 1 }),
     );
-    // Backoff re-arm succeeds on the second spawn.
-    await delay(5);
-    await flush();
-    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    // Backoff re-arm succeeds on the second spawn. Same async-persist race as
+    // the wait-rejection case above: wait for the re-arm, not a fixed sleep.
+    await vi.waitFor(() => expect(supervisor.spawn).toHaveBeenCalledTimes(2));
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
     // Cancelling clears any pending retry timer; once the cancelled child
@@ -400,15 +399,21 @@ describe("createCronExitWatchers", () => {
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
-    w.reconcile([]);
+    let drained = false;
+    const drain = w.cancelAll().then(() => {
+      drained = true;
+    });
     expect(cancelled).toContain("cron-exit:job-a");
     expect(w.activeJobIds()).toEqual(["job-a"]);
+    await flush();
+    expect(drained).toBe(false);
 
     expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
       exitCode: null,
       reason: "manual-cancel",
     });
-    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
+    await drain;
+    expect(w.activeJobIds()).toEqual([]);
   });
 
   it("does not fire a job whose watcher was cancelled before exit", async () => {
@@ -456,11 +461,17 @@ describe("createCronExitWatchers", () => {
       reason: "exit",
     });
     await vi.waitFor(() => expect(persistCompletion).toHaveBeenCalledOnce());
-    w.reconcile([]);
+    let drained = false;
+    const drain = w.cancelAll().then(() => {
+      drained = true;
+    });
     expect(w.activeJobIds()).toEqual(["job-a"]);
+    await flush();
+    expect(drained).toBe(false);
 
     releasePersist(releaseCompletion);
-    await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
+    await drain;
+    expect(w.activeJobIds()).toEqual([]);
     expect(fireOnExit).not.toHaveBeenCalled();
     expect(releaseCompletion).toHaveBeenCalledOnce();
   });

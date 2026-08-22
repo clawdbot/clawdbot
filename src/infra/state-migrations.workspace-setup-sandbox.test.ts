@@ -13,7 +13,7 @@ import {
 } from "../agents/workspace-state-store.js";
 import {
   listSessionEntryKeysReadOnly,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -61,7 +61,7 @@ describe("sandbox workspace Doctor migration", () => {
   async function registerSandboxSession(sessionKey: string) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "main";
     const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId, env: process.env, sessionKey },
       { sessionId: `workspace-migration-proof-${sessionHash}`, updatedAt: 1 },
     );

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   registerOpenClawAgentDatabase,
@@ -208,10 +208,13 @@ describe("media persistence migration targets", () => {
       makeTempDir(tempDirs, "media-persistence-custom-store-"),
     );
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveStorePath(path.join(customRoot, "{agentId}", "sessions.json"), {
-      agentId: "main",
-      env,
-    });
+    const storePath = resolveSessionStorePathCore(
+      path.join(customRoot, "{agentId}", "sessions.json"),
+      {
+        agentId: "main",
+        env,
+      },
+    );
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
       defaultAgentId: "main",

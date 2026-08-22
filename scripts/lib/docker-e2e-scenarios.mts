@@ -647,9 +647,6 @@ export const mainLanes: DockerE2eLane[] = [
       stateScenario: "empty",
     },
   ),
-  lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
-    stateScenario: "empty",
-  }),
   liveLane("npm-telegram-live", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-telegram-live", {
     e2eImageKind: "bare",
     provider: "openai",
@@ -889,7 +886,6 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
       "config-reload",
       "session-runtime-context",
       "plugin-binding-command-escape",
-      "commitments-safety",
       "agent-bundle-mcp-tools",
       "mcp-channels",
       "mcp-code-mode-gateway",

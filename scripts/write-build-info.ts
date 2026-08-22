@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 
 const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
@@ -22,6 +23,7 @@ export type BuildInfo = {
   version: string | null;
   commit: string | null;
   builtAt: string;
+  buildId: string;
 };
 
 type ResolveBuildInfoOptions = {
@@ -106,11 +108,23 @@ export function resolveBuildInfo(options: ResolveBuildInfoOptions = {}): BuildIn
   const builtAt = explicitTimestamp
     ? normalizeBuildTimestamp(explicitTimestamp)
     : (options.now ?? (() => new Date()))().toISOString();
+  const releaseFlag = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim();
+  if (releaseFlag && releaseFlag !== "1") {
+    throw new Error("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
+  }
+  const buildId = normalizeControlUiBuildInfo({
+    version: readPackageVersion(rootDir),
+    commit,
+    builtAt,
+    release: releaseFlag === "1",
+    buildId: env.OPENCLAW_CONTROL_UI_BUILD_ID,
+  }).buildId;
 
   return {
     version: readPackageVersion(rootDir),
     commit,
     builtAt,
+    buildId,
   };
 }
 

@@ -1,3 +1,4 @@
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
@@ -24,7 +25,12 @@ export function resolveGatewayRestartIntentOptions(
 }
 
 /** Request an OpenClaw-aware restart through the running Gateway. */
-export async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
+type SafeRestartTarget = { pid: number; ownerId: string; port: number };
+
+export async function runSafeGatewayRestart(
+  opts: DaemonLifecycleOptions,
+  target?: SafeRestartTarget,
+): Promise<boolean> {
   if (opts.force) {
     throw new Error("--safe cannot be combined with --force; omit --safe to force restart now");
   }
@@ -32,15 +38,38 @@ export async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): P
     throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
   }
   const skipDeferral = opts.skipDeferral === true;
-  const params: { reason: string; skipDeferral?: true } = { reason: "gateway.restart.safe" };
+  const params: {
+    reason: string;
+    safe?: true;
+    skipDeferral?: true;
+    target?: SafeRestartTarget;
+  } = { reason: "gateway.restart.safe" };
+  if (target) {
+    params.safe = true;
+    params.target = {
+      pid: target.pid,
+      ownerId: target.ownerId,
+      port: target.port,
+    };
+  }
   if (skipDeferral) {
     params.skipDeferral = true;
   }
   const result = await callGatewayCli<SafeGatewayRestartRequestResult>({
     method: "gateway.restart.request",
     params,
+    ...(target
+      ? {
+          ignoreEnvUrlOverride: true,
+          localPortOverride: target.port,
+          requiredCapabilities: [GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE],
+        }
+      : {}),
     timeoutMs: 10_000,
   });
+  if (target && result.restart.pid !== target.pid) {
+    throw new Error("invalid safe restart acknowledgement");
+  }
   appendGatewayLifecycleAudit({
     action: "restart",
     source: "safe-rpc",

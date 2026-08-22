@@ -164,13 +164,13 @@ describe("OpenAI provider policy artifact", () => {
     }
   });
 
-  it("lets authoritative Codex model/list metadata override native fallbacks", () => {
+  it("merges partial Codex model/list metadata with known native capabilities", () => {
     const solLevels = resolveThinkingProfile({
       provider: "openai",
       modelId: "gpt-5.6-sol",
       agentRuntime: "codex",
       api: "openai-chatgpt-responses",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      compat: { supportedReasoningEfforts: ["low", "high"] },
     })?.levels.map((level) => level.id);
     const terraLevels = resolveThinkingProfile({
       provider: "openai",
@@ -182,39 +182,45 @@ describe("OpenAI provider policy artifact", () => {
       },
     })?.levels.map((level) => level.id);
 
-    expect(solLevels).not.toContain("ultra");
-    expect(terraLevels).toContain("ultra");
+    expect(solLevels).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(terraLevels).toEqual(["off", "low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
   it.each([
-    { efforts: [], expected: ["off"] },
-    { efforts: ["high"], expected: ["off", "high"] },
-  ])("uses the complete authoritative Codex effort list for $efforts", ({ efforts, expected }) => {
-    const profile = resolveThinkingProfile({
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-      agentRuntime: "codex",
-      api: "openai-chatgpt-responses",
-      compat: { supportedReasoningEfforts: efforts },
-    });
+    { efforts: [], expected: ["off"], defaultLevel: undefined },
+    {
+      efforts: ["high"],
+      expected: ["off", "low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultLevel: "medium",
+    },
+  ])(
+    "distinguishes an explicit empty Codex effort list from an incomplete one",
+    ({ efforts, expected, defaultLevel }) => {
+      const profile = resolveThinkingProfile({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentRuntime: "codex",
+        api: "openai-chatgpt-responses",
+        compat: { supportedReasoningEfforts: efforts },
+      });
 
-    expect(profile?.levels.map((level) => level.id)).toEqual(expected);
-    expect(profile?.defaultLevel).toBeUndefined();
-  });
+      expect(profile?.levels.map((level) => level.id)).toEqual(expected);
+      expect(profile?.defaultLevel).toBe(defaultLevel);
+    },
+  );
 
-  it("keeps Codex Luna capped at Max without authoritative Ultra metadata", () => {
+  it("keeps Codex Luna capped at Max when live metadata advertises Ultra", () => {
     const levels = resolveThinkingProfile({
       provider: "openai",
       modelId: "gpt-5.6-luna",
       agentRuntime: "codex",
-      api: "openai-responses",
+      api: "openai-chatgpt-responses",
       compat: {
-        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        supportedReasoningEfforts: ["low", "ultra"],
       },
     })?.levels.map((level) => level.id);
 
-    expect(levels).toContain("max");
-    expect(levels).not.toContain("ultra");
+    expect(levels).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
   });
   it("orders Platform before ChatGPT for unconfigured routable models", () => {
     const expected = {

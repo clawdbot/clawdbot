@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
@@ -99,11 +100,6 @@ function requireString(value, key) {
   return value.trim();
 }
 
-// This release entrypoint runs before dependencies are installed.
-function asRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
-}
-
 function requireGradlePropertyNames(value) {
   if (
     !Array.isArray(value) ||
@@ -119,7 +115,8 @@ function requireGradlePropertyNames(value) {
 }
 
 function readManifest(manifestPath) {
-  const parsed = asRecord(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+  const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const parsed = isRecord(value) ? value : {};
   const manifest = {
     signingRepo: requireString(parsed.signingRepo, "signingRepo"),
     signingBranch: requireString(parsed.signingBranch, "signingBranch"),

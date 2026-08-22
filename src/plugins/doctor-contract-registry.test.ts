@@ -569,26 +569,165 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["ollama-cloud"]);
   });
 
+  it("collects distinct provider ids from every canonical model selector and model policy", () => {
+    const providerIds = collectRelevantDoctorPluginIds({
+      agents: {
+        defaults: {
+          model: {
+            primary: "default-primary/model",
+            fallbacks: ["default-fallback/model", 42],
+          },
+          utilityModel: "default-utility/model",
+          imageModel: "default-image/model",
+          voiceModel: "default-voice/model",
+          pdfModel: "default-pdf/model",
+          mediaModels: {
+            image: "media-image/model",
+            video: "media-video/model",
+            music: "media-music/model",
+          },
+          heartbeat: { model: "heartbeat/model" },
+          subagents: {
+            model: { primary: "subagent-primary/model", fallbacks: ["subagent-fallback/model"] },
+          },
+          compaction: {
+            model: "compaction/model",
+            memoryFlush: { model: "memory-flush/model" },
+          },
+          models: {
+            "default-map/model": {},
+            bare: {},
+          },
+          modelPolicy: { allow: ["default-policy/*", 42, "bare"] },
+        },
+        entries: {
+          worker: {
+            model: "entry-model/model",
+            models: { "entry-map/model": {} },
+            modelPolicy: { allow: ["entry-policy/model", null] },
+            tools: { exec: { reviewer: { model: "entry-reviewer/model" } } },
+            tts: { summaryModel: "entry-tts/model" },
+          },
+        },
+        list: [
+          {
+            id: "shadow",
+            model: "shadow-model/model",
+            modelPolicy: { allow: ["shadow-policy/model"] },
+          },
+        ],
+      },
+      tools: { exec: { reviewer: { model: "global-reviewer/model" } } },
+      hooks: {
+        mappings: [{ model: "hook-mapping/model" }, { model: 42 }],
+        gmail: { model: "hook-gmail/model" },
+      },
+      tts: { summaryModel: "tts-summary/model" },
+      channels: {
+        modelByChannel: { discord: { guild: "channel-override/model" } },
+        discord: {
+          voice: {
+            model: "discord-voice/model",
+            tts: { summaryModel: "discord-voice-tts/model" },
+          },
+          accounts: {
+            work: {
+              voice: {
+                model: "discord-account-voice/model",
+                tts: { summaryModel: "discord-account-tts/model" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(providerIds).toEqual(
+      [
+        "channel-override",
+        "compaction",
+        "default-fallback",
+        "default-image",
+        "default-map",
+        "default-pdf",
+        "default-policy",
+        "default-primary",
+        "default-utility",
+        "default-voice",
+        "discord",
+        "discord-account-tts",
+        "discord-account-voice",
+        "discord-voice",
+        "discord-voice-tts",
+        "entry-map",
+        "entry-model",
+        "entry-policy",
+        "entry-reviewer",
+        "entry-tts",
+        "global-reviewer",
+        "heartbeat",
+        "hook-gmail",
+        "hook-mapping",
+        "media-image",
+        "media-music",
+        "media-video",
+        "memory-flush",
+        "subagent-fallback",
+        "subagent-primary",
+        "tts-summary",
+      ].toSorted(),
+    );
+    expect(providerIds).not.toContain("shadow-model");
+    expect(providerIds).not.toContain("shadow-policy");
+  });
+
+  it("collects model and policy providers from the legacy list when entries is absent", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        agents: {
+          list: [
+            {
+              id: "legacy",
+              model: "legacy-model/model",
+              modelPolicy: { allow: ["legacy-policy/*"] },
+            },
+          ],
+        },
+      }),
+    ).toEqual(["legacy-model", "legacy-policy"]);
+  });
+
+  it("does not collect shadow-list policy providers when entries is null", () => {
+    expect(
+      collectRelevantDoctorPluginIds({
+        agents: {
+          entries: null,
+          list: [{ id: "shadow", modelPolicy: { allow: ["shadow-policy/*"] } }],
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("excludes channel metadata and blank ids from full and touched doctor scans", () => {
     const raw = {
       channels: {
         defaults: {},
-        modelByChannel: { discord: "openai/gpt-5.6-luna" },
+        modelByChannel: { discord: { guild: "openai/gpt-5.6-luna" } },
         " ": {},
         discord: {},
       },
     };
 
-    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord"]);
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord", "openai"]);
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
         raw,
-        touchedPaths: [["channels", "modelByChannel", "discord"]],
+        touchedPaths: [["channels", "modelByChannel", "discord", "guild"]],
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual(["openai"]);
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths: [["channels"]] }),
-    ).toEqual(["discord"]);
+    ).toEqual(["discord", "openai"]);
   });
 
   it("collects provider ids from media model entries", () => {
@@ -675,6 +814,42 @@ describe("doctor-contract-registry module loader", () => {
     });
   });
 
+  it("loads a provider doctor contract when a media preference is its only activation", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
+    mocks.createJiti.mockImplementation(() => () => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, repaired: true },
+        changes: ["repaired configured provider model"],
+      }),
+    }));
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "opencode",
+          rootDir: pluginRoot,
+          channels: [],
+          providers: ["opencode"],
+          doctorContract: { configRepair: true },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = {
+      tools: { media: { image: { preferredModel: "opencode/hy3-free" } } },
+    };
+    const pluginIds = collectRelevantDoctorPluginIds(config);
+
+    expect(pluginIds).toEqual(["opencode"]);
+    expect(
+      applyPluginDoctorCompatibilityMigrations(config, { config, env: {}, pluginIds }),
+    ).toEqual({
+      config: { ...config, repaired: true },
+      changes: ["repaired configured provider model"],
+    });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {
     expect(
       collectRelevantDoctorPluginIdsForTouchedPaths({
@@ -705,6 +880,55 @@ describe("doctor-contract-registry module loader", () => {
         ],
       }),
     ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud"]);
+  });
+
+  it("keeps all configured model and policy providers active during touched scans", () => {
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: {
+          agents: {
+            defaults: {
+              model: { primary: "agent-primary/model", fallbacks: ["agent-fallback/model"] },
+            },
+            entries: {
+              worker: { modelPolicy: { allow: ["worker-policy/*"] } },
+            },
+          },
+          hooks: { gmail: { model: "gmail-model/model" } },
+          tts: { summaryModel: "untouched-tts/model" },
+          channels: {
+            modelByChannel: { slack: { room: "channel-model/model" } },
+            discord: { voice: { model: "untouched-voice/model" } },
+          },
+        },
+        touchedPaths: [
+          ["agents", "defaults", "model"],
+          ["agents", "entries", "worker", "modelPolicy", "allow", "0"],
+          ["hooks", "gmail", "model"],
+          ["channels", "modelByChannel", "slack", "room"],
+        ],
+      }),
+    ).toEqual([
+      "agent-fallback",
+      "agent-primary",
+      "channel-model",
+      "gmail-model",
+      "untouched-tts",
+      "untouched-voice",
+      "worker-policy",
+    ]);
+  });
+
+  it("does not infer touched-path ownership from dotted configured ids", () => {
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: {
+          agents: { entries: { "worker.blue": { model: "provider.with.dots/model" } } },
+          plugins: { entries: { other: {} } },
+        },
+        touchedPaths: [["plugins", "entries", "other", "enabled"]],
+      }),
+    ).toEqual(["other", "provider.with.dots"]);
   });
 
   it("falls back to the full doctor-id set when touched paths are too broad", () => {

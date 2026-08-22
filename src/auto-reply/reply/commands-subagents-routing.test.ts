@@ -13,7 +13,6 @@ import {
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
-  stopWithText,
 } from "./commands-subagents-dispatch.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -163,13 +162,6 @@ describe("subagents command dispatch", () => {
     const restTokens = ["foo"];
     expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens })).toBeNull();
     expect(restTokens).toEqual(["foo"]);
-  });
-
-  it("builds stop replies", () => {
-    expect(stopWithText("hello")).toEqual({
-      shouldContinue: false,
-      reply: { text: "hello" },
-    });
   });
 
   it("rejects native subagents commands from non-owner senders when the plugin enforces owner-only commands", async () => {

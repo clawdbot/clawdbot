@@ -37,6 +37,14 @@ describe("channels command", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
+  it("guides operators when no channels are configured", () => {
+    const lines = formatGatewayChannelsStatusLines({ channelAccounts: {} });
+
+    expect(lines).toContain(
+      "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
+    );
+  });
+
   it("surfaces Signal runtime errors in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelLabels: {
@@ -109,6 +117,18 @@ describe("channels command", () => {
     expect(lines.join("\n")).toMatch(/Gateway event loop degraded/);
     expect(lines.join("\n")).toMatch(/for 3m \(p99 61000ms\)/);
     expect(lines.join("\n")).toMatch(/eventLoopDelayMaxMs=62000/);
+  });
+
+  it("surfaces top-level partial status warnings", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      partial: true,
+      warnings: ["whatsapp:default status failed: snapshot failed"],
+      channelLabels: {},
+      channelAccounts: {},
+    });
+
+    expect(lines.join("\n")).toMatch(/Channel status is partial/);
+    expect(lines.join("\n")).toContain("whatsapp:default status failed: snapshot failed");
   });
 
   it("surfaces transport liveness timestamps in channels status output", () => {

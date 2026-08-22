@@ -2,6 +2,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -96,15 +98,18 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 const runMessageActionMock = vi.hoisted(() =>
-  vi.fn(async ({ action, params }: RunMessageActionParams) => ({
-    kind: action === "poll" ? "poll" : "send",
-    channel: typeof params.channel === "string" ? params.channel : "telegram",
-    action: action === "poll" ? "poll" : "send",
-    to: typeof params.target === "string" ? params.target : "123456",
-    handledBy: "plugin",
-    payload: { ok: true },
-    dryRun: false,
-  })),
+  vi.fn(async ({ action, params }: RunMessageActionParams): Promise<MessageActionResult> => {
+    const base = {
+      channel: typeof params.channel === "string" ? params.channel : "telegram",
+      to: typeof params.target === "string" ? params.target : "123456",
+      handledBy: "plugin" as const,
+      payload: { ok: true },
+      dryRun: false,
+    };
+    return action === "poll"
+      ? { ...base, kind: "poll", action: "poll" }
+      : { ...base, kind: "send", action: "send" };
+  }),
 );
 
 vi.mock("../infra/outbound/message-action-runner.js", () => ({
@@ -252,6 +257,34 @@ async function runMessageCommand(opts: Record<string, unknown> = {}) {
 }
 
 describe("messageCommand", () => {
+  it("includes aggregate broadcast failure and every target row in JSON output", async () => {
+    const results: Extract<MessageActionResult, { kind: "broadcast" }>["payload"]["results"] = [
+      { channel: "telegram", to: "123", ok: true },
+      { channel: "telegram", to: "456", ok: false, error: "provider rejected the message" },
+    ];
+    runMessageActionMock.mockResolvedValueOnce({
+      kind: "broadcast",
+      channel: "telegram",
+      action: "broadcast",
+      handledBy: "core",
+      payload: { results },
+      dryRun: false,
+    });
+
+    await runMessageCommand({
+      action: "broadcast",
+      target: undefined,
+      targets: ["123", "456"],
+    });
+
+    const output = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+      ok?: boolean;
+      payload?: { results?: unknown[] };
+    };
+    expect(output.ok).toBe(false);
+    expect(output.payload?.results).toEqual(results);
+  });
+
   it("rejects a malformed explicit account before resolving secrets", async () => {
     await expect(runMessageCommand({ accountId: "!!!" })).rejects.toThrow("Invalid account ID");
 
@@ -416,6 +449,55 @@ describe("messageCommand", () => {
         (id) => !id.startsWith("channels.telegram."),
       ),
     ).toStrictEqual([]);
+  });
+
+  it("keeps the retained legacy owner after config load strips the default marker", async () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: {
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { telegram: {} },
+    }).config as Record<string, unknown>;
+    testConfig = migrated;
+    const effectiveConfig = structuredClone(migrated);
+    applyPluginAutoEnable.mockReturnValueOnce({ config: effectiveConfig, changes: [] });
+
+    await runMessageCommand();
+
+    expect(
+      (migrated.agents as { entries?: { ops?: { default?: boolean } } }).entries?.ops?.default,
+    ).toBeUndefined();
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
+  });
+
+  it("resolves the ordinary owner from the effective command config", async () => {
+    const effectiveConfig = { agents: { entries: { ops: {} } } };
+    mockResolvedCommandConfig({ rawConfig: {}, resolvedConfig: effectiveConfig, diagnostics: [] });
+
+    await runMessageCommand();
+
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
+  });
+
+  it("uses the configured system owner for an explicit multi-agent config", async () => {
+    const effectiveConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+    mockResolvedCommandConfig({ rawConfig: {}, resolvedConfig: effectiveConfig, diagnostics: [] });
+
+    await runMessageCommand();
+
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
   it("keeps local-fallback resolved cfg and logs diagnostics", async () => {

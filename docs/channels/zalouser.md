@@ -159,9 +159,10 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
   channels: {
     zalouser: {
       enabled: true,
-      defaultAccount: "default",
+      groupPolicy: "allowlist",
+      defaultAccount: "work",
       accounts: {
-        work: { enabled: true, profile: "work" },
+        work: { enabled: true, profile: "work", groupPolicy: "allowlist" },
       },
     },
   },

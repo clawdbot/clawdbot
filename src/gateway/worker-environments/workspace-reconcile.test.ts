@@ -9,7 +9,11 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import {
+  MAX_RECONCILIATION_ENTRIES,
+  parseWorkerWorkspaceReconciliationPlan,
+  serializeWorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
   type WorkerWorkspaceReconciliationJournal,
@@ -190,7 +194,7 @@ describe("worker workspace reconciliation", () => {
     }
   });
 
-  it("applies the complete candidate before publishing its recovery ref", async () => {
+  it("applies the candidate before publishing its recovery ref", async () => {
     const local = await temporaryDirectory("workspace-staged-ref-local");
     const payload = await temporaryDirectory("workspace-staged-ref-payload");
     const complete = await temporaryDirectory("workspace-staged-ref-complete");
@@ -302,6 +306,59 @@ describe("worker workspace reconciliation", () => {
         })
       ).code,
     ).not.toBe(0);
+  });
+
+  it("rejects an over-budget two-record modification before staging", async () => {
+    const local = await temporaryDirectory("workspace-changed-entry-limit-local");
+    const payload = await temporaryDirectory("workspace-changed-entry-limit-payload");
+    await gitInit(local);
+    const currentSha256 = createHash("sha256").update("x").digest("hex");
+    const baseSha256 = createHash("sha256").update("y").digest("hex");
+    const entries = Array.from({ length: MAX_RECONCILIATION_ENTRIES / 2 + 1 }, (_, index) => ({
+      path: `changed-${index.toString().padStart(5, "0")}.txt`,
+      type: "file" as const,
+      mode: 0o644,
+      size: 1,
+      sha256: currentSha256,
+    }));
+    const base = encodeWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: entries.map((entry) => ({ ...entry, sha256: baseSha256 })),
+    });
+    const current = encodeWorkspaceManifest({ version: 1, baseCommit: null, entries });
+
+    await expect(
+      stageWorkerWorkspaceResult({
+        root: local,
+        stagingRoot: payload,
+        stagedResultRef: workerWorkspaceResultRef("claim-entry-limit"),
+        baseManifestRef: base.ref,
+        currentManifestRef: current.ref,
+        baseManifestRaw: base.raw,
+        currentManifestRaw: current.raw,
+      }),
+    ).rejects.toThrow(`exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`);
+
+    expect(() =>
+      parseWorkerWorkspaceReconciliationPlan(
+        JSON.stringify({
+          version: 1,
+          temporaryNonce: "a".repeat(32),
+          baseManifestRef: base.ref,
+          currentManifestRef: current.ref,
+          baseEntries: Array.from({ length: MAX_RECONCILIATION_ENTRIES + 1 }, (_, index) => ({
+            ...entries[0]!,
+            path: `serialized-${index.toString().padStart(5, "0")}.txt`,
+          })),
+          appliedEntries: [],
+          baseDirectories: [],
+          appliedDirectories: [],
+          baseTree: "b".repeat(40),
+          basePackSha256: "c".repeat(64),
+        }),
+      ),
+    ).toThrow("unsupported shape");
   });
 
   it("preserves the published result when its fence-row update fails", async () => {
@@ -894,7 +951,7 @@ describe("worker workspace reconciliation", () => {
     const staged = await temporaryDirectory("workspace-directory-delete-derived-staged");
     await fs.mkdir(path.join(local, "removed", "nested"), { recursive: true });
     await fs.writeFile(path.join(local, "removed", "nested", "base.txt"), "base");
-    const base = await manifestFor(local);
+    const base = { ...(await manifestFor(local)), baseCommit: "a".repeat(40) };
     await fs.mkdir(path.join(local, "removed", "nested", "__pycache__"));
     await fs.writeFile(
       path.join(local, "removed", "nested", "__pycache__", "cache.pyc"),
@@ -905,7 +962,7 @@ describe("worker workspace reconciliation", () => {
       root: local,
       stagingRoot: staged,
       base,
-      current: await manifestFor(staged),
+      current: { ...(await manifestFor(staged)), baseCommit: "a".repeat(40) },
     });
 
     expect(applied.conflictPaths).toEqual([]);

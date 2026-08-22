@@ -11,10 +11,10 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isNixMode } from "../config/config.js";
+import { isNixMode, resolveConfigPath } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import {
   listAgentSessionDirs,
   removePath,
@@ -125,28 +125,37 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-    resolveCleanupPlanFromDisk();
-
-  if (scope !== "config") {
-    logBackupRecommendation(runtime);
-    if (dryRun) {
-      runtime.log("[dry-run] stop gateway service");
-    } else if (!(await stopGatewayIfRunning(runtime))) {
-      runtime.exit(1);
-      return;
-    }
-  }
-
   if (scope === "config") {
+    const configPath = resolveConfigPath();
     await removePath(configPath, runtime, { dryRun, label: configPath });
     return;
   }
 
+  logBackupRecommendation(runtime);
+  if (dryRun) {
+    runtime.log("[dry-run] stop gateway service");
+  } else if (!(await stopGatewayIfRunning(runtime))) {
+    runtime.exit(1);
+    return;
+  }
+
+  const cleanupPlan = dryRun
+    ? await resolveCleanupPlanForDryRun()
+    : await resolveCleanupPlanForRemoval(runtime);
+  if (!cleanupPlan) {
+    runtime.exit(1);
+    return;
+  }
+  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+    cleanupPlan;
+
   if (scope === "config+creds+sessions") {
     await removePath(configPath, runtime, { dryRun, label: configPath });
     await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    const sessionDirs = await listAgentSessionDirs(stateDir);
+    const sessionDirs = await listAgentSessionDirs(stateDir).catch((error: unknown) => {
+      runtime.error(`Failed to inspect session directories: ${String(error)}`);
+      return [];
+    });
     // Session stores are per-agent directories under state; enumerate them from
     // disk so reset handles agents that are no longer present in config.
     for (const dir of sessionDirs) {

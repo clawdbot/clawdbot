@@ -1,6 +1,7 @@
 // Gateway plugin startup bootstrap and adjacent startup maintenance.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -15,6 +16,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
@@ -131,14 +134,14 @@ export async function prepareGatewayPluginBootstrap(params: {
         ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
+  const pluginWorkspaceDir = tryResolveConfiguredAgentWorkspaceDir(gatewayPluginConfig);
+  const defaultWorkspaceDir = pluginWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
   const pluginLookUpTable =
     params.minimalTestGateway || pluginsGloballyDisabled
       ? undefined
       : loadPluginLookUpTable({
           config: gatewayPluginConfig,
-          workspaceDir: defaultWorkspaceDir,
+          workspaceDir: pluginWorkspaceDir,
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
@@ -177,6 +180,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
+    pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
     pluginMetadataSnapshot: pluginLookUpTable ?? params.pluginMetadataSnapshot,
@@ -195,7 +199,7 @@ export async function prepareGatewayPluginBootstrap(params: {
  */
 export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   config: OpenClawConfig;
-  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
@@ -214,7 +218,7 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  workspaceDir: string;
+  workspaceDir?: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
   coreGatewayMethodNames?: readonly string[];
@@ -223,10 +227,24 @@ export async function loadGatewayStartupPluginRuntime(params: {
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   startupTrace?: GatewayStartupTrace;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  resolveGatewayContext?: GatewayContextResolver;
+  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
+  getCurrentPluginRegistry?: () => PluginRegistry;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
+  await params.pluginRuntimeClaim?.waitForUnblocked();
+  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
+    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
+    if (!currentPluginRegistry) {
+      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
+    }
+    return {
+      pluginRegistry: currentPluginRegistry,
+      gatewayMethods: params.baseMethods,
+    };
+  }
   const loaded = loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
@@ -242,6 +260,9 @@ export async function loadGatewayStartupPluginRuntime(params: {
     channelPluginLoadIntent: "full",
     startupTrace: params.startupTrace,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
   });
   warnUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.cfg,

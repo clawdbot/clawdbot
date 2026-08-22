@@ -542,11 +542,8 @@ const main = async (argv = process.argv.slice(2)) => {
 
 export const testing = {
   CLAUDE_COOKIE_HOST_SQL,
-  CLAUDE_FIREFOX_COOKIE_HOST_SQL,
   FETCH_RESPONSE_MAX_BYTES,
-  browserRootLabel,
   fetchAnthropicOAuthUsage,
-  mask,
   parseArgs,
   readBoundedResponseText,
   resolveFetchTimeoutMs,

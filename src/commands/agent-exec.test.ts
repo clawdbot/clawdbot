@@ -296,12 +296,12 @@ describe("agent exec command composition", () => {
     });
   });
 
-  it("creates and removes ephemeral state around the embedded run", async () => {
+  it("creates and removes ephemeral state for a configless run", async () => {
     const { runtime } = createRuntime();
     let observedStateDir = "";
     let observedConfigPath: string | undefined;
     let observedConfig: unknown;
-    const result = await agentExecCommand("inspect", {}, runtime, {
+    const result = await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
       runAgent: vi.fn(async () => {
         observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
         observedConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -927,6 +927,7 @@ describe("agent exec run config layering", () => {
 
     expect(config.agents?.defaults?.workspace).toBe("/run/here");
     expect(config.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(config.skills?.load?.watch).toBe(false);
   });
 
   it("never downgrades a configured sandbox or shell env to the exec defaults", () => {
@@ -999,6 +1000,21 @@ describe("agent exec run config layering", () => {
     expect(config.agents?.entries?.ops?.agentDir).toBeUndefined();
     // Only the directory is dropped; the rest of the entry is still inherited.
     expect(config.agents?.entries?.ops?.model).toBe("openai/gpt-5.6-sol");
+  });
+
+  it("drops an inherited session store so the invocation state dir owns the agent database", () => {
+    const config = buildExecRunConfig({
+      base: {
+        session: {
+          store: "/persistent/agents/{agentId}/sessions/sessions.json",
+          mainKey: "primary",
+        },
+      },
+      cwd: "/run/here",
+    });
+
+    expect(config.session?.store).toBeUndefined();
+    expect(config.session?.mainKey).toBe("primary");
   });
 
   it("drops an inherited harness cwd so --cwd wins", () => {
@@ -1102,18 +1118,16 @@ describe("agent exec base config resolution", () => {
     );
   });
 
-  it("reads no config at all under --auth-env-only", async () => {
+  it("loads no authored config under --auth-env-only", async () => {
     const seedPath = await writeSeed(JSON.stringify(seedConfig));
 
     // A config can supply provider credentials through several surfaces, so
-    // env-only means no config at all.
-    await expect(resolveExecBaseConfig({ authEnvOnly: true })).resolves.toEqual({});
+    // env-only means no authored config; only the canonical missing-config migration applies.
+    await expect(resolveExecBaseConfig({ authEnvOnly: true })).resolves.toEqual({
+      agents: { entries: { main: {} } },
+    });
     // Proves the assertion above is not vacuous.
     const inherited = await resolveExecBaseConfig({ config: seedPath });
     expect(inherited.models?.providers?.custom?.apiKey).toBe("sk-config");
-  });
-
-  it("ignores the ambient config under --isolated", async () => {
-    await expect(resolveExecBaseConfig({ isolated: true })).resolves.toEqual({});
   });
 });

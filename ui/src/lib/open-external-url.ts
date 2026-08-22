@@ -1,5 +1,5 @@
 // Control UI module implements open external url behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const DATA_URL_PREFIX = "data:";
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:"]);

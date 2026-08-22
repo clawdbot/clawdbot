@@ -20,17 +20,17 @@ describe("parseExtensionMessage", () => {
     expect(
       parseExtensionMessage(
         JSON.stringify({
-          type: "pageShare",
-          requestId: 7,
-          payload: { url: "https://example.com", title: "Example", content: "Body" },
+          type: "tabs",
+          tabs: [{ tabId: 2, url: "https://example.com/2", title: "Two", active: false }],
         }),
       ),
-    ).toMatchObject({ type: "pageShare", requestId: 7 });
-    // Frame parsing intentionally recognizes only the discriminator. The bridge
-    // owns payload validation and returns a correlated error.
-    expect(parseExtensionMessage(JSON.stringify({ type: "pageShare" }))).toEqual({
-      type: "pageShare",
-    });
+    ).toMatchObject({ type: "tabs", tabs: [{ tabId: 2 }] });
+    expect(
+      parseExtensionMessage(JSON.stringify({ type: "cdpEvent", tabId: 1, method: "Page.load" })),
+    ).toMatchObject({ type: "cdpEvent", tabId: 1 });
+    expect(
+      parseExtensionMessage(JSON.stringify({ type: "detached", tabId: 1, reason: "cancel" })),
+    ).toMatchObject({ type: "detached", tabId: 1 });
   });
 
   it.each([
@@ -69,5 +69,49 @@ describe("parseExtensionMessage", () => {
     expect(parseExtensionMessage(JSON.stringify({ type: "evil" }))).toBeNull();
     expect(parseExtensionMessage(JSON.stringify({ noType: true }))).toBeNull();
     expect(parseExtensionMessage(JSON.stringify(42))).toBeNull();
+  });
+
+  // The bridge dereferences frame fields without try/catch (bindSocket invokes
+  // the handler straight from the ws "message" event), so parse must reject
+  // frames whose payload shape would crash syncTabs/handleExtensionMessage.
+  it("rejects frames with malformed payload fields", () => {
+    const cases: unknown[] = [
+      // hello: identity fields and tab list must be present and typed.
+      { ...validHello, tabs: {} },
+      { ...validHello, tabs: null },
+      { ...validHello, tabs: [null] },
+      { ...validHello, tabs: [{ tabId: "1", url: "u", title: "t", active: true }] },
+      { ...validHello, userAgent: 42 },
+      // tabs: same tab-list shape as hello.
+      { type: "tabs", tabs: {} },
+      { type: "tabs", tabs: null },
+      { type: "tabs", tabs: [null] },
+      { type: "tabs", tabs: [{ tabId: 1, url: "u", title: "t" }] },
+      { type: "tabs", tabs: [{ tabId: 1.5, url: "u", title: "t", active: true }] },
+      {
+        type: "tabs",
+        tabs: [
+          { tabId: 1, url: "u", title: "t", active: true },
+          { tabId: 1, url: "v", title: "s", active: false },
+        ],
+      },
+      // cdpEvent: numeric tabId + string method.
+      { type: "cdpEvent", tabId: "1", method: "Page.load" },
+      { type: "cdpEvent", tabId: 1.5, method: "Page.load" },
+      { type: "cdpEvent", tabId: 1 },
+      { type: "cdpEvent", tabId: 1, sessionId: 2, method: "Page.load" },
+      // result/error: numeric seq correlates the pending command.
+      { type: "result", seq: "3" },
+      { type: "result", seq: -1 },
+      { type: "result", seq: 1.5 },
+      { type: "error", seq: null, message: "boom" },
+      { type: "error", seq: 3, message: {} },
+      // detached: numeric tabId.
+      { type: "detached", tabId: "1", reason: "cancel" },
+      { type: "detached", tabId: 1, reason: null },
+    ];
+    for (const frame of cases) {
+      expect(parseExtensionMessage(JSON.stringify(frame))).toBeNull();
+    }
   });
 });

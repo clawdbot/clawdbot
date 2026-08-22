@@ -8,7 +8,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: () =>
+  listSessionEntriesCore: () =>
     Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
@@ -16,7 +16,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: () => "/stores/main.json",
+  resolveSessionStorePathCore: () => "/stores/main.json",
 }));
 
 vi.mock("../../config/sessions/lifecycle.js", async () => {
@@ -76,6 +76,9 @@ describe("command resolveSession provider-owned daily reset", () => {
         updatedAt: startedAt,
         sessionStartedAt: startedAt,
         lastInteractionAt: startedAt,
+        pendingTranscriptRepair: [
+          { id: "predecessor-repair", text: "old reply", createdAt: startedAt },
+        ],
       },
     };
 
@@ -87,6 +90,7 @@ describe("command resolveSession provider-owned daily reset", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("old-session-id");
+    expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
   });
 
   it("keeps a model-locked session across the daily boundary", () => {
