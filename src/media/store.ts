@@ -36,6 +36,7 @@ export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 // records/*.json files are the pre-SQLite migration barrier. An mtime-only
 // sweep would delete both out from under that reaper.
 const MANAGED_OUTGOING_SUBDIR = "outgoing";
+const INBOUND_SUBDIR = "inbound";
 const OUTBOUND_STAGING_SUBDIR = "outbound";
 // Match delivery-queue orphan grace: staged files get a full day to reach
 // every direct, streamed, fan-out, or queue-owned delivery path.
@@ -262,6 +263,10 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
     }
     const scopedDir = path.join(mediaDir, entry.name);
     const recursive = options.recursive === true;
+    if (entry.name === INBOUND_SUBDIR) {
+      await pruneUnreferencedInboundMedia(scopedDir, ttlMs, options);
+      continue;
+    }
     await openMediaStore(MAX_BYTES, scopedDir).pruneExpired({
       ttlMs,
       recursive,
@@ -270,6 +275,49 @@ async function pruneNonPlaybackMedia(ttlMs: number, options: CleanOldMediaOption
     });
     if (options.pruneEmptyDirs) {
       await fs.rmdir(scopedDir).catch(() => {});
+    }
+  }
+}
+
+async function pruneUnreferencedInboundMedia(
+  inboundDir: string,
+  ttlMs: number,
+  options: CleanOldMediaOptions,
+): Promise<void> {
+  const now = Date.now();
+  const entries = await fs.readdir(inboundDir, { withFileTypes: true }).catch(() => []);
+  const expired: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(inboundDir, entry.name);
+    if (entry.isDirectory()) {
+      await openMediaStore(MAX_BYTES, entryPath).pruneExpired({
+        ttlMs,
+        recursive: options.recursive === true,
+        pruneEmptyDirs: options.pruneEmptyDirs,
+      });
+      if (options.pruneEmptyDirs) {
+        await fs.rmdir(entryPath).catch(() => {});
+      }
+      continue;
+    }
+    const stat = await fs.lstat(entryPath).catch(() => null);
+    if (stat?.isFile() && now - stat.mtimeMs > ttlMs) {
+      expired.push(entry.name);
+    }
+  }
+  if (expired.length === 0) {
+    return;
+  }
+  const { collectTranscriptReferencedInboundMediaIds } =
+    await import("./inbound-transcript-refs.js");
+  const referenced = collectTranscriptReferencedInboundMediaIds(new Set(expired));
+  if (!referenced) {
+    return;
+  }
+  const inboundStore = openMediaStore(MAX_BYTES, inboundDir);
+  for (const name of expired) {
+    if (!referenced.has(name)) {
+      await inboundStore.remove(name).catch(() => {});
     }
   }
 }
