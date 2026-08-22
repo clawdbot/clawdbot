@@ -5,6 +5,7 @@ import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.
 import { isRecord } from "../utils.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
+  formatClobberSnapshotSkipWarning,
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
@@ -151,14 +152,6 @@ function extractRestoreErrorDetails(error: unknown): {
       ? (error as { message: string }).message
       : null;
   return { code, message };
-}
-
-function formatClobberSnapshotSkipWarning(
-  context: string,
-  configPath: string,
-  suspicious: string[],
-): string {
-  return `Config ${context} skipped: could not write the .clobbered.* copy of the current config: ${configPath} (${suspicious.join(", ")})`;
 }
 
 function returnOriginalConfigRead(params: ConfigReadRecoveryParams): ConfigReadRecoveryResult {
