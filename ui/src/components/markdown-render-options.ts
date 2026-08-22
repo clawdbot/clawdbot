@@ -17,7 +17,7 @@ export type MarkdownRenderOptions = {
 };
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
-  streamingOpenFenceLine: number | null;
+  streamingOpenFence?: boolean;
 };
 
 export function normalizeMarkdownRenderOptions(
@@ -33,7 +33,6 @@ export function normalizeMarkdownRenderOptions(
     progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
     sessionLinks: options.sessionLinks ?? false,
-    streamingOpenFenceLine: null,
     tableInteractions: options.tableInteractions ?? "none",
   };
 }

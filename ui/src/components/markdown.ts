@@ -597,23 +597,19 @@ export function toStreamingMarkdownHtml(
   }
   const input = formatTruncatedMarkdownInput(trimmedInput);
 
-  const { boundary, tailRepairStart, openFenceLine } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
     return stableHtml;
   }
-  const tailRenderOptions =
-    openFenceLine === null
-      ? renderOptions
-      : { ...renderOptions, streamingOpenFenceLine: openFenceLine };
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, tailRenderOptions)
+      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-          tailRenderOptions,
+          renderOptions,
         );
   return `${stableHtml}${tailHtml}`;
 }

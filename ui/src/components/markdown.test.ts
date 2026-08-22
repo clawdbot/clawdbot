@@ -983,6 +983,16 @@ describe("toStreamingMarkdownHtml", () => {
     expect(code[1]?.querySelector("span")).toBeNull();
   });
 
+  it("keeps a completed fence highlighted when a later backtick fence has invalid info", () => {
+    const html = toStreamingMarkdownHtml(
+      "- ```ts\n  const closed = 1;\n  ```\n\n  ```bad`info\n  trailing text",
+    );
+    const code = htmlFragment(html).querySelector("code.language-ts");
+
+    expect(code?.textContent).toContain("const closed = 1;");
+    expect(code?.classList.contains("hljs")).toBe(true);
+  });
+
   it("streams an open list code fence through blank lines", () => {
     const html = toStreamingMarkdownHtml("- ```ts\n  const x = 1;\n\n  const y = 2;");
     const fragment = htmlFragment(html);
