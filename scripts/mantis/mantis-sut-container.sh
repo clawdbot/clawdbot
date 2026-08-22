@@ -580,6 +580,8 @@ readonly network_probe_script='
 readonly build_command='
   set -eu
   store=.mantis-pnpm-store
+  test -d "$store"
+  test -n "$(find "$store" -type f -print -quit)"
   cleanup() {
     rm -rf "$store"
   }
@@ -649,10 +651,14 @@ shift || true
 case "$command" in
   build)
     [[ "${SUDO_USER:-}" == "runner" ]] || die "build is restricted to the workflow runner"
-    [[ $# -eq 1 ]] || die "build expects the candidate worktree"
+    [[ $# -eq 2 ]] || die "build expects the candidate worktree and host pnpm store"
     worktree_root="$(realpath -e "$(<"$worktree_root_file")")"
     candidate_root="$(realpath -e "$1")"
+    host_pnpm_store="$(realpath -e "$2")"
     [[ "$candidate_root" == "$worktree_root/candidate" ]] || die "unexpected candidate worktree"
+    [[ -d "$host_pnpm_store" ]] || die "host pnpm store is not a directory"
+    [[ "$host_pnpm_store" != "$candidate_root" && "$host_pnpm_store" != "$candidate_root/"* ]] \
+      || die "host pnpm store must be outside the candidate worktree"
     [[ "$(stat -c %u "$candidate_root")" == "$(id -u mantis-builder)" ]] || die "candidate owner mismatch"
     [[ -f "$candidate_root/.git" && ! -L "$candidate_root/.git" ]] \
       || die "candidate Git link is not a regular file"
@@ -689,6 +695,13 @@ case "$command" in
     isolated_root="$build_mount/repo"
     mkdir "$isolated_root"
     /bin/cp -a "$candidate_root/." "$isolated_root/"
+    store_copy_start=$SECONDS
+    mkdir "$isolated_root/.mantis-pnpm-store"
+    # A reflink is copy-on-write, and the fallback is a regular copy. Never bind or
+    # hard-link the host store: candidate lifecycle scripts may rewrite their store.
+    /bin/cp -a --reflink=auto "$host_pnpm_store/." "$isolated_root/.mantis-pnpm-store/"
+    test -n "$(find "$isolated_root/.mantis-pnpm-store" -type f -print -quit)"
+    echo "Copied disposable pnpm store in $((SECONDS - store_copy_start))s."
     chown -R mantis-builder:mantis-builder "$isolated_root"
     create_public_only_network "$network_name"
     run_network_probe "$network_name"

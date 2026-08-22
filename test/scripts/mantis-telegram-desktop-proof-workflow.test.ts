@@ -709,25 +709,22 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).not.toContain("OPENCLAW_TELEGRAM_USER_PROOF_CMD");
   });
 
-  it("reuses only the exact baseline build while always preparing both proof lanes", () => {
+  it("incrementally refreshes stale baseline builds while preparing both proof lanes in parallel", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
     const create = workflowStep("Create exact proof worktrees");
     const setup = workflowStep("Setup Node environment");
     const restore = workflowStep("Restore exact baseline build");
-    const baseline = workflowStep("Prepare baseline proof build");
+    const builds = workflowStep("Prepare baseline and candidate proof builds");
     const save = workflowStep("Save exact baseline build");
-    const candidate = workflowStep("Prepare candidate proof build");
     const createRun = create.run ?? "";
-    const baselineRun = baseline.run ?? "";
-    const candidateRun = candidate.run ?? "";
+    const buildRun = builds.run ?? "";
     const stepIndex = (name: string) => steps.findIndex((step) => step.name === name);
 
     expect(stepIndex(create.name ?? "")).toBeLessThan(stepIndex(restore.name ?? ""));
-    expect(stepIndex(restore.name ?? "")).toBeLessThan(stepIndex(baseline.name ?? ""));
-    expect(stepIndex(baseline.name ?? "")).toBeLessThan(stepIndex(save.name ?? ""));
-    expect(stepIndex(save.name ?? "")).toBeLessThan(stepIndex(candidate.name ?? ""));
-    expect(stepIndex(candidate.name ?? "")).toBeLessThan(
+    expect(stepIndex(restore.name ?? "")).toBeLessThan(stepIndex(builds.name ?? ""));
+    expect(stepIndex(builds.name ?? "")).toBeLessThan(stepIndex(save.name ?? ""));
+    expect(stepIndex(save.name ?? "")).toBeLessThan(
       stepIndex("Install TDLib and restore Telegram QA user"),
     );
 
@@ -744,51 +741,76 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.pnpm_version");
     expect(restore.with?.key).toContain("mantis-baseline-v3");
+    expect(restore.with?.key).toMatch(/pnpm_version.*baseline_revision/u);
+    expect(restore.with?.["restore-keys"]).toBe(
+      "${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-\n",
+    );
     expect(restore.with?.path).toBe(".artifacts/mantis-baseline-build.tar");
-    expect(baseline.if).toBeUndefined();
-    expect(baselineRun).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
-    expect(baselineRun).toContain('if [[ "$BASELINE_BUILD_CACHE_HIT" == "true" ]]');
-    expect(baselineRun).toContain('tar -xf "$BASELINE_BUILD_ARCHIVE"');
-    expect(baselineRun).toContain('"$toolchain_dir/pnpm" build');
-    expect(baselineRun).toContain('tar -cf "$BASELINE_BUILD_ARCHIVE"');
-    expect(baselineRun).toContain(".artifacts/build-all-cache");
-    expect(baselineRun).toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
-    expect(baselineRun).toContain("-type f -links +1");
+    expect(builds.if).toBeUndefined();
+    expect(builds.env?.HOST_PNPM_STORE).toBe(
+      "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}",
+    );
+    expect(buildRun).toContain('if [[ -f "$BASELINE_BUILD_ARCHIVE" ]]');
+    expect(buildRun).toContain('tar -C "$baseline_root" -xf "$BASELINE_BUILD_ARCHIVE"');
+    expect(buildRun).toContain("baseline_archive_restored=true");
+    expect(buildRun).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
+    expect(buildRun).toContain('if [[ "$BASELINE_BUILD_CACHE_HIT" != "true" ]]');
+    expect(buildRun).toContain('"$toolchain_dir/pnpm" build');
+    expect(buildRun).toContain('mv -T "$baseline_archive_new" "$BASELINE_BUILD_ARCHIVE"');
+    expect(buildRun).toContain(".artifacts/build-all-cache");
+    expect(buildRun).toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
+    expect(buildRun).toContain("-type f -links +1");
     expect(save.if).toContain("steps.baseline_build_cache.outputs.cache-hit != 'true'");
     expect(save.uses).toContain("actions/cache/save@");
     expect(save.with?.path).toBe(restore.with?.path);
-    expect(candidate.if).toBeUndefined();
-    expect(candidateRun).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
-    expect(candidateRun).toContain(
+    expect(buildRun).toContain("baseline_build() {");
+    expect(buildRun).toContain("candidate_build() {");
+    expect(buildRun).toContain("[baseline] ");
+    expect(buildRun).toContain("[candidate] ");
+    expect(buildRun).toContain("baseline_pid=$!");
+    expect(buildRun).toContain("candidate_pid=$!");
+    expect(buildRun).toContain('wait "$baseline_pid"');
+    expect(buildRun).toContain('wait "$candidate_pid"');
+    expect(buildRun).toContain("exit 1");
+    expect(buildRun).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
+    expect(buildRun).toContain('if [[ "$baseline_archive_restored" == "true" ]] &&');
+    expect(buildRun).toContain(
       'git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA"',
     );
-    expect(candidateRun).toContain("scripts/build-all.mts");
-    expect(candidateRun).toContain("scripts/lib");
-    expect(candidateRun).toContain("scripts/pnpm-runner.mts");
-    expect(candidateRun).toContain("packages/normalization-core");
-    expect(candidateRun).toContain("pnpm-lock.yaml");
-    expect(candidateRun).toContain("pnpm-workspace.yaml");
-    expect(candidateRun).toContain("tsconfig.json");
-    expect(candidateRun).toContain(
+    expect(buildRun).toContain("scripts/build-all.mts");
+    expect(buildRun).toContain("scripts/lib");
+    expect(buildRun).toContain("scripts/pnpm-runner.mts");
+    expect(buildRun).toContain("packages/normalization-core");
+    expect(buildRun).toContain("pnpm-lock.yaml");
+    expect(buildRun).toContain("pnpm-workspace.yaml");
+    expect(buildRun).toContain("tsconfig.json");
+    expect(buildRun).toContain(
       'tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE"',
     );
-    expect(candidateRun).toContain(".artifacts/build-all-cache dist/plugin-sdk");
-    expect(candidateRun).toContain('find "$candidate_root/dist/plugin-sdk" -type l');
-    expect(candidateRun).toContain('find "$candidate_root/dist/plugin-sdk" -type f -links +1');
-    expect(candidateRun.indexOf("tar --no-same-owner")).toBeLessThan(
-      candidateRun.indexOf('sudo chown -R mantis-builder:mantis-builder "$candidate_root"'),
+    expect(buildRun).toContain(".artifacts/build-all-cache dist/plugin-sdk");
+    expect(buildRun).toContain('find "$candidate_root/dist/plugin-sdk" -type l');
+    expect(buildRun).toContain('find "$candidate_root/dist/plugin-sdk" -type f -links +1');
+    expect(buildRun.indexOf("tar --no-same-owner")).toBeLessThan(
+      buildRun.indexOf('sudo chown -R mantis-builder:mantis-builder "$candidate_root"'),
     );
-    expect(candidateRun).not.toContain("cp -al");
-    expect(candidateRun).toContain(
-      'sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"',
-    );
-    expect(candidateRun).not.toContain("sudo -u mantis-builder");
-    expect(candidateRun).not.toContain("sudo setfacl");
-    expect(candidateRun).toContain('test "$(cat "$candidate_root/.git")" = "$candidate_git_link"');
-    expect(candidateRun).toContain(
+    expect(buildRun).not.toContain("cp -al");
+    expect(buildRun).toContain('build "$candidate_root" "$HOST_PNPM_STORE"');
+    expect(buildRun).not.toContain("sudo -u mantis-builder");
+    expect(buildRun).not.toContain("sudo setfacl");
+    expect(buildRun).toContain('test "$(cat "$candidate_root/.git")" = "$candidate_git_link"');
+    expect(buildRun).toContain(
       'git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code',
     );
-    for (const run of [createRun, baselineRun, candidateRun]) {
+    expect(buildRun).toContain(
+      'git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code',
+    );
+    expect(buildRun).toContain(
+      'test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"',
+    );
+    expect(buildRun).toContain(
+      'test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"',
+    );
+    for (const run of [createRun, buildRun]) {
       expect(run).not.toContain("GH_TOKEN");
       expect(run).not.toContain("OPENAI_API_KEY");
       expect(run).not.toContain("CRABBOX_");
@@ -1158,7 +1180,19 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(wrapper).toContain('"$worktree_root/candidate"');
     expect(wrapper).toContain('"${SUDO_USER:-}" == "runner"');
+    expect(wrapper).toContain("build expects the candidate worktree and host pnpm store");
+    expect(wrapper).toContain(
+      '/bin/cp -a --reflink=auto "$host_pnpm_store/." "$isolated_root/.mantis-pnpm-store/"',
+    );
+    expect(wrapper).toContain('find "$isolated_root/.mantis-pnpm-store" -type f -print -quit');
+    expect(wrapper).toContain(
+      'echo "Copied disposable pnpm store in $((SECONDS - store_copy_start))s."',
+    );
+    expect(wrapper).not.toContain("type=bind,src=$host_pnpm_store");
+    expect(wrapper).not.toContain("cp -al");
     expect(wrapper).toContain("corepack pnpm install --frozen-lockfile");
+    expect(wrapper).toContain('test -d "$store"');
+    expect(wrapper).toContain('rm -rf "$store"');
     expect(wrapper).toContain('published_root="$worktree_root/.candidate-built-$$"');
     expect(wrapper).toContain('/bin/cp -a --no-dereference "$isolated_root/." "$published_root/"');
     expect(wrapper).toContain('rm -rf --one-file-system "$candidate_root"');
