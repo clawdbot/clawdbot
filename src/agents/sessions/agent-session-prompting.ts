@@ -44,7 +44,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
       this.lastRunEndedForTurnHandoff = false;
       // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
-      if (!endedForTurnHandoff) {
+      if (endedForTurnHandoff) {
+        this.emit({ type: "agent_handoff" });
+      } else {
+        this.emit({ type: "agent_settled" });
         await this.currentExtensionRunner.emit({ type: "agent_settled" });
       }
     }

@@ -335,7 +335,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     try {
       await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
-      emit({ type: "agent_end", messages: [] });
+      emit({ type: "agent_settled" });
       await vi.advanceTimersByTimeAsync(0);
 
       await rejection;
@@ -382,7 +382,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     try {
       await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
-      emit({ type: "agent_end", messages: [] });
+      emit({ type: "agent_settled" });
       await vi.advanceTimersByTimeAsync(0);
       releasePreparation();
 
@@ -616,8 +616,8 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
       await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
       emit({ type: "agent_end", messages: [] });
-      emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
       await vi.advanceTimersByTimeAsync(0);
+      emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
 
       expect(queueMessages).toEqual([targetMessage]);
 

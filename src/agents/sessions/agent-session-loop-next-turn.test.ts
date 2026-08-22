@@ -384,12 +384,16 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       resourceLoader: createResourceLoader(handlers),
     });
     sessionRef.current = session;
+    const lifecycleEvents: string[] = [];
+    session.subscribe((event) => lifecycleEvents.push(event.type));
 
     await session.prompt("yield now");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     expect(session.agent.hasQueuedMessages()).toBe(true);
     expect(settled).not.toHaveBeenCalled();
+    expect(lifecycleEvents).toContain("agent_handoff");
+    expect(lifecycleEvents).not.toContain("agent_settled");
     session.agent.clearAllQueues();
   });
 

@@ -97,21 +97,11 @@ function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean 
 }
 
 function isTerminalActiveSessionEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "agent_end",
-  );
-}
-
-function isAutoRetryStartEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "auto_retry_start",
-  );
-}
-
-function isCompactionStartEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "compaction_start",
-  );
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+  const type = (event as { type?: unknown }).type;
+  return type === "agent_settled" || type === "agent_handoff";
 }
 
 function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
@@ -174,7 +164,6 @@ async function steerAndWaitForTranscriptCommit(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    let terminalTimer: ReturnType<typeof setTimeout> | undefined;
     let accepted = false;
     let abortRequested = abortSignal?.aborted === true;
     let acceptanceReported = false;
@@ -194,9 +183,6 @@ async function steerAndWaitForTranscriptCommit(
       settled = true;
       if (timer) {
         clearTimeout(timer);
-      }
-      if (terminalTimer) {
-        clearTimeout(terminalTimer);
       }
       unsubscribe?.();
       unsubscribePersistenceFailure?.();
@@ -235,22 +221,6 @@ async function steerAndWaitForTranscriptCommit(
       reportAcceptance(false);
       finish(new Error(message));
     };
-    const scheduleTerminalCancellation = () => {
-      if (terminalTimer) {
-        return;
-      }
-      terminalTimer = setTimeout(() => {
-        terminalTimer = undefined;
-        const message =
-          "active session ended before queued steering message was committed to the transcript";
-        if (accepted) {
-          rejectAfterCancellation(message);
-          return;
-        }
-        rejectBeforeAcceptance(message);
-      }, 0);
-      terminalTimer.unref?.();
-    };
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
       () => {
         const message =
@@ -265,24 +235,18 @@ async function steerAndWaitForTranscriptCommit(
     );
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
-      if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
-        // Continuation events prove the run is still alive under a new attempt,
-        // so keep waiting for the queued user message to drain.
-        if (terminalTimer) {
-          clearTimeout(terminalTimer);
-          terminalTimer = undefined;
-        }
-        return;
-      }
       if (isQueuedUserMessageEnd(event, queueIdentity)) {
         finish();
         return;
       }
       if (isTerminalActiveSessionEvent(event)) {
-        // AgentSession emits agent_end before announcing auto-retry or
-        // auto-compaction continuations. Defer cancellation one tick so those
-        // continuation events can keep draining this message.
-        scheduleTerminalCancellation();
+        const message =
+          "active session ended before queued steering message was committed to the transcript";
+        if (accepted) {
+          rejectAfterCancellation(message);
+          return;
+        }
+        rejectBeforeAcceptance(message);
       }
     });
     const unsubscribePersistenceFailure = subscribeSteeringMessagePersistenceFailure(
