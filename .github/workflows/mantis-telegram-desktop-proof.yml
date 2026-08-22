@@ -181,7 +181,7 @@ jobs:
             setOutput("request_source", requestSource);
       - name: Create Mantis status token
         id: mantis_status_token
-        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        if: ${{ steps.resolve.outputs.pr_number != '' }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -201,12 +201,9 @@ jobs:
         with:
           github-token: ${{ steps.mantis_status_token.outputs.token }}
           script: |
-            const markerRoot = "<!-- mantis-telegram-desktop-proof:";
-            const runId = Number(process.env.GITHUB_RUN_ID);
-            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            const marker = `${markerRoot}${runId}-${runAttempt} -->`;
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const body = `${marker}\nMantis started this proof. [Follow the active job](${runUrl}).`;
+            const body = `${marker}\n👀 Mantis started this proof. [Follow the active job](${runUrl}).`;
             const { owner, repo } = context.repo;
             const issueNumber = Number(process.env.TARGET_PR);
             await github.rest.issues.createComment({
@@ -248,7 +245,7 @@ jobs:
         if: >-
           ${{
             always() &&
-            steps.resolve.outputs.request_source == 'issue_comment' &&
+            steps.resolve.outputs.pr_number != '' &&
             (
               steps.mantis_status_token.outcome != 'success' ||
               steps.mantis_status_comment.outcome != 'success'
@@ -260,7 +257,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const { owner, repo } = context.repo;
             await github.rest.issues.createComment({
@@ -1226,7 +1223,7 @@ jobs:
             --request-source "$REQUEST_SOURCE"
 
       - name: Report failed Mantis proof
-        if: ${{ always() && needs.resolve_request.outputs.request_source == 'issue_comment' && steps.publish_evidence.outcome != 'success' }}
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.publish_evidence.outcome != 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
@@ -1355,7 +1352,8 @@ jobs:
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-${PUBLISH_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --marker "<!-- mantis-telegram-desktop-proof -->" \
+            --marker "<!-- mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} -->" \
+            --create-missing false \
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"

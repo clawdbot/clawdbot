@@ -378,10 +378,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const fallbackComment = resolver?.steps?.find(
       (step) => step.name === "Report Mantis start failure with workflow token",
     );
-    expect(startedToken?.if).toContain("request_source == 'issue_comment'");
+    expect(startedToken?.if).toBe("${{ steps.resolve.outputs.pr_number != '' }}");
+    expect(startedToken?.if).not.toContain("request_source");
     expect(startedToken?.with?.["permission-pull-requests"]).toBe("write");
     expect(startedComment?.["continue-on-error"]).toBe(true);
-    expect(startedComment?.with?.script).toContain("Mantis started this proof.");
+    expect(startedComment?.with?.script).toContain("👀 Mantis started this proof.");
     expect(startedComment?.with?.script).toContain("actions/runs/${process.env.GITHUB_RUN_ID}");
     expect(startedComment?.with?.script).toContain("mantis-telegram-desktop-proof:");
     expect(startedComment?.with?.script).toContain("GITHUB_RUN_ATTEMPT");
@@ -389,6 +390,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(startedComment?.with?.script).toContain("issues.deleteComment");
     expect(fallbackComment?.if).toContain("steps.mantis_status_token.outcome != 'success'");
     expect(fallbackComment?.if).toContain("steps.mantis_status_comment.outcome != 'success'");
+    expect(fallbackComment?.if).toContain("steps.resolve.outputs.pr_number != ''");
+    expect(fallbackComment?.if).not.toContain("request_source");
     expect(fallbackComment?.with?.["github-token"]).toBe("${{ github.token }}");
     expect(fallbackComment?.["continue-on-error"]).toBeUndefined();
     expect(fallbackComment?.with?.script).toContain("mantis-telegram-desktop-proof");
@@ -402,7 +405,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const failureComment = proofSteps.find((step) => step.name === "Report failed Mantis proof");
     expect(evidenceComment?.id).toBe("publish_evidence");
     expect(failureComment?.if).toContain("always()");
-    expect(failureComment?.if).toContain("request_source == 'issue_comment'");
+    expect(failureComment?.if).toContain("needs.resolve_request.outputs.pr_number != ''");
+    expect(failureComment?.if).not.toContain("request_source");
     expect(failureComment?.if).toContain("steps.publish_evidence.outcome != 'success'");
     expect(failureComment?.with?.script).toContain("Mantis could not complete this proof.");
     expect(failureComment?.with?.script).toContain("issues.updateComment");
@@ -450,6 +454,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain(
       "PUBLISH_ARTIFACT_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/",
     );
+    const evidenceComment = jobStep(
+      WORKFLOW,
+      "publish_existing_telegram_desktop_proof",
+      "Comment PR with inline QA evidence",
+    );
+    expect(evidenceComment.run).toContain(
+      "mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+    );
+    expect(evidenceComment.run).toContain("--create-missing false");
   });
 
   it("limits evidence publishers to comment and PR-read permissions", () => {
