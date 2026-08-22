@@ -18,6 +18,7 @@ import {
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { getLatestSubagentRunByChildSessionKey } from "./subagents/registry/subagent-registry-read.js";
 import { resetSubagentRegistryForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
+import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;
@@ -278,6 +279,46 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
     expect(sendCalls.length).toBe(0);
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
+  });
+
+  it("records execution placement through the real spawn and list owners", async () => {
+    const config = {
+      session: { mainKey: "main", scope: "per-sender" as const },
+      messages: { queue: {} },
+      agents: {
+        defaults: { subagents: { runTimeoutSeconds: RUN_TIMEOUT_SECONDS } },
+        executionBackends: {
+          local: { type: "process" as const, profiles: { small: {} } },
+        },
+      },
+    };
+    setSessionsSpawnConfigOverride(config);
+    setupSessionsSpawnGatewayMock({ agentWaitResult: { status: "pending" } });
+    const spawnTool = await getSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    const spawned = await spawnTool.execute("call-placement", {
+      task: "do thing",
+      cleanup: "keep",
+      execution: { backend: "local", profile: "small" },
+    });
+    expectAcceptedRunDetails(spawned.details);
+
+    const listTool = createSubagentsTool({
+      agentSessionKey: "agent:main:main",
+      config,
+    });
+    const listed = await listTool.execute("list-placement", { action: "list" });
+    const details = listed.details as {
+      active?: Array<{ executionPlacement?: unknown }>;
+      text?: string;
+    };
+    expect(details.active).toHaveLength(1);
+    expect(details.active?.[0]?.executionPlacement).toEqual({
+      backend: "local",
+      type: "process",
+      profile: "small",
+    });
+    expect(details.text).toContain("exec local/small");
   });
 
   it("gives native child agent startup enough gateway request time", async () => {

@@ -15,6 +15,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import type { AgentExecutionPlacement } from "../../execution-backends.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -45,6 +46,7 @@ type SubagentRunReadSqliteRow = Pick<
   delivery_status: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
+  execution_placement: string | null;
 };
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
@@ -319,6 +321,7 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
         subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
+        subagentPayloadJsonValue<string | null>("$.executionPlacement").as("execution_placement"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
         ),
@@ -350,6 +353,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
     : undefined;
   const startedAt = normalizeFiniteNumber(row.started_at);
   const endedAt = normalizeFiniteNumber(row.ended_at);
+  const executionPlacement = readExecutionPlacement(row.execution_placement);
   return Object.fromEntries(
     Object.entries({
       runId,
@@ -358,6 +362,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       requesterSessionKey,
       requesterAgentId: row.requester_agent_id?.trim() || undefined,
       model: row.model || undefined,
+      executionPlacement,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,
       execution: {
@@ -380,6 +385,23 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
         : undefined,
     }).filter(([, value]) => value !== undefined),
   ) as SubagentRunReadRecord;
+}
+
+function readExecutionPlacement(value: string | null): AgentExecutionPlacement | undefined {
+  const parsed = parseJson(value);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.backend !== "string" ||
+    (parsed.type !== "process" && parsed.type !== "container" && parsed.type !== "kubernetes") ||
+    (parsed.profile !== undefined && typeof parsed.profile !== "string")
+  ) {
+    return undefined;
+  }
+  return {
+    backend: parsed.backend,
+    type: parsed.type,
+    ...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
+  };
 }
 
 function loadScopedSubagentRuns(scope: SubagentRegistryReadScope): SubagentRunRecord[] {

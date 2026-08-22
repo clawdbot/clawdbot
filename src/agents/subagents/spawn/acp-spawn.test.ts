@@ -33,7 +33,7 @@ import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -961,7 +961,7 @@ describe("spawnAcpDirect", () => {
     const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     let capturedIdentity: AgentRuntimeIdentity | undefined;
-    setSubagentSpawnDepsForTest({
+    subagentSpawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -1001,7 +1001,7 @@ describe("spawnAcpDirect", () => {
       );
     } finally {
       releaseAgentRunDelegatedAuthority(authority);
-      setSubagentSpawnDepsForTest();
+      subagentSpawnTesting.setDepsForTest();
     }
   });
 

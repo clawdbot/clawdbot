@@ -1051,21 +1051,17 @@ for provider examples and precedence.
 
 ### Spawn execution backends
 
-`agents.executionBackends` defines named placement backends and profiles for spawned work. The first implementation supports the built-in `local` backend with `type: "process"` and preserves current local execution behavior. `container` and `kubernetes` backend configs are accepted as forward-compatible config, but `sessions_spawn` rejects them until those backends are implemented.
+`agents.executionBackends` defines named placement backends and profiles for spawned work. The first implementation supports the built-in `local` backend with `type: "process"` and preserves current local execution behavior. `container` and `kubernetes` backend configs are accepted as forward-compatible config, but `sessions_spawn` rejects them until those backends are implemented. Profiles are named placement metadata only; resource limits are unavailable until a backend dispatcher enforces them.
 
 ```json5
 {
   agents: {
-    entries: { main: { default: true } },
+    entries: { main: {} },
     executionBackends: {
       local: {
         type: "process",
         profiles: {
-          small: {
-            resources: {
-              requests: { cpu: "500m", memory: "1Gi" },
-            },
-          },
+          small: { label: "Small local worker" },
         },
       },
     },

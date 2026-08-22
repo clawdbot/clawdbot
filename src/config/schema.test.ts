@@ -602,9 +602,6 @@ describe("config schema", () => {
               profiles: {
                 small: {
                   label: "Small local worker",
-                  resources: {
-                    requests: { cpu: "500m", memory: "1Gi" },
-                  },
                 },
               },
             },
@@ -613,9 +610,6 @@ describe("config schema", () => {
               profiles: {
                 "large-build": {
                   image: "ghcr.io/openclaw/agent-worker:test",
-                  resources: {
-                    requests: { cpu: "4", memory: "8Gi" },
-                  },
                 },
               },
             },
@@ -643,6 +637,26 @@ describe("config schema", () => {
           entries: { main: { default: true } },
           executionBackends: {
             local: { type: "process", profiles: { " small ": {} } },
+          },
+        },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          entries: { main: { default: true } },
+          executionBackends: { " local ": { type: "process" } },
+        },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          entries: { main: { default: true } },
+          executionBackends: {
+            local: { type: "process", profiles: { small: { resources: {} } } },
           },
         },
       }),

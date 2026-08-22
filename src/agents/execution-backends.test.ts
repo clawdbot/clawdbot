@@ -47,7 +47,7 @@ describe("agent execution placement", () => {
       }),
     ).toEqual({
       ok: false,
-      error: 'execution backend "missing" is not supported until it has a dispatcher',
+      error: 'unknown execution backend "missing"; use "local" or configure the backend first',
     });
 
     expect(
@@ -110,7 +110,7 @@ describe("agent execution placement", () => {
     });
     expect(result).toEqual({
       ok: false,
-      error: `execution backend "${"x".repeat(128)}" is not supported until it has a dispatcher`,
+      error: `unknown execution backend "${"x".repeat(128)}"; use "local" or configure the backend first`,
     });
   });
 });

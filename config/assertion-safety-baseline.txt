@@ -2078,7 +2078,7 @@ src/agents/subagents/spawn/subagent-depth.ts	1
 src/agents/subagents/spawn/subagent-spawn-cleanup.ts	1
 src/agents/subagents/spawn/subagent-spawn-gateway.ts	3
 src/agents/subagents/spawn/subagent-spawn-session-patch.ts	1
-src/agents/subagents/spawn/subagent-spawn.ts	2
+src/agents/subagents/spawn/subagent-spawn.ts	1
 src/agents/subagents/swarm/swarm-output-schema.ts	1
 src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	2

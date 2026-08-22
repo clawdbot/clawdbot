@@ -7,7 +7,11 @@ import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
 const ExecutionBackendProfileSchema = z
   .object({ label: z.string().optional(), resources: z.record(z.string(), z.unknown()).optional() })
-  .catchall(z.unknown());
+  .catchall(z.unknown())
+  .refine(
+    (value) => !Object.hasOwn(value, "resources"),
+    "execution profile resources are unsupported until a backend dispatcher enforces them",
+  );
 const ExecutionBackendProfileKeySchema = z
   .string()
   .min(1)
@@ -15,6 +19,14 @@ const ExecutionBackendProfileKeySchema = z
   .refine(
     (value) => value === value.trim(),
     "execution profile keys must not have leading or trailing whitespace",
+  );
+const ExecutionBackendKeySchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .refine(
+    (value) => value === value.trim(),
+    "execution backend keys must not have leading or trailing whitespace",
   );
 const ExecutionBackendSchema = z
   .object({
@@ -47,7 +59,7 @@ export const AgentsSchema = z
   .object({
     ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
-    executionBackends: z.record(z.string().min(1).max(128), ExecutionBackendSchema).optional(),
+    executionBackends: z.record(ExecutionBackendKeySchema, ExecutionBackendSchema).optional(),
     entries: z
       .record(
         z.string().regex(/^[a-z0-9_][a-z0-9_-]{0,63}$/i, "Invalid agent id"),

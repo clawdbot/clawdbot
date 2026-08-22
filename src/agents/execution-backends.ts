@@ -39,6 +39,11 @@ export function resolveAgentExecutionPlacement(params: {
   const configuredBackend = configuredBackends[requestedBackend];
   const backendTypeRaw = requestedBackend === "local" ? "process" : configuredBackend?.type;
 
+  if (requestedBackend !== "local" && !configuredBackend) {
+    return err(
+      `unknown execution backend "${requestedBackend}"; use "local" or configure the backend first`,
+    );
+  }
   if (requestedBackend !== "local") {
     return err(
       `execution backend "${requestedBackend}" is not supported until it has a dispatcher`,

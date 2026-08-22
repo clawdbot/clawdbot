@@ -69,6 +69,7 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
     requesterSessionKey: entry.requesterSessionKey,
     ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
     ...(entry.model ? { model: entry.model } : {}),
+    ...(entry.executionPlacement ? { executionPlacement: entry.executionPlacement } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
     createdAt: entry.createdAt,
     execution: {
