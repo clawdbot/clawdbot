@@ -4,7 +4,7 @@ import type { CodexAppServerClient } from "./client.js";
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
-import { settleInput, waitForResponse } from "./turn-router.test-support.js";
+import { settleInput, waitForResponse, type WireResponse } from "./turn-router.test-support.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
