@@ -144,6 +144,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
       : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    deferralCount: Math.max(0, ...states.map((state) => state.deferralCount ?? 0)),
   };
 }
 
