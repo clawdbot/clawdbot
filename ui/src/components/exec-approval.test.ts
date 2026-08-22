@@ -163,6 +163,7 @@ describe("openclaw-exec-approval", () => {
     );
     expect(dialog.getAttribute("aria-description")).toBe("expires in 01:31");
 
+    const renderSpy = vi.spyOn(approval as LitElement & { render(): unknown }, "render");
     nowMs = 1_000;
     await vi.waitFor(
       () => {
@@ -174,8 +175,8 @@ describe("openclaw-exec-approval", () => {
     );
     await getRenderedModalDialog(container);
 
-    await approval.updateComplete;
     expect(dialog.getAttribute("aria-description")).toBe("expires in 01:30");
+    expect(renderSpy).not.toHaveBeenCalled();
   });
 
   it("selects another queued request without changing queue order", async () => {

@@ -6,7 +6,6 @@ import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-appr
 import { t } from "../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import { PollController } from "../lit/poll-controller.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
@@ -96,19 +95,12 @@ class ExecApproval extends OpenClawLightDomContentsElement {
   @query("openclaw-modal-dialog") private dialog?: OpenClawModalDialog;
   @state() private selectedApprovalId: string | null = null;
   @state() private explicitlyOpen = false;
-  private readonly accessibilityPolling = new PollController(
-    this,
-    1_000,
-    () => this.requestUpdate(),
-    false,
-  );
 
   show(): void {
     if (!this.props?.queue.length) {
       return;
     }
     this.explicitlyOpen = true;
-    this.accessibilityPolling.start();
     void this.updateComplete.then(() => this.dialog?.show());
   }
 
@@ -138,7 +130,6 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     if (previousProps?.queue.length && !this.props?.queue.length) {
       this.explicitlyOpen = false;
       this.selectedApprovalId = null;
-      this.accessibilityPolling.stop();
       return;
     }
     // Pin the presented request: late-arriving older approvals re-sort the
@@ -167,7 +158,6 @@ class ExecApproval extends OpenClawLightDomContentsElement {
       // stays pending and visible via the attention chip and session badges.
       // Denying here would turn Esc into a silent destructive decision.
       this.explicitlyOpen = false;
-      this.accessibilityPolling.stop();
     };
     return html`
       <openclaw-modal-dialog
