@@ -340,6 +340,37 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
+  it("reads nested public files but refuses symlinked directory components", async () => {
+    const harness = await setupHarness();
+    const outside = path.join(path.dirname(harness.outputRoot), "outside.txt");
+    fs.writeFileSync(outside, "not allowed");
+    fs.mkdirSync(path.join(harness.outputRoot, "nested"));
+    fs.writeFileSync(path.join(harness.outputRoot, "nested", "body.txt"), "nested body");
+    fs.symlinkSync(path.dirname(harness.outputRoot), path.join(harness.outputRoot, "escape"));
+    try {
+      await runLane(harness.env, [
+        "send",
+        "--lane",
+        "candidate",
+        "--text-file",
+        path.join(harness.outputRoot, "nested", "body.txt"),
+      ]);
+      expect(harness.requests).toEqual([{ command: "send", text: "nested body" }]);
+      await expect(
+        runLane(harness.env, [
+          "send",
+          "--lane",
+          "candidate",
+          "--text-file",
+          path.join(harness.outputRoot, "escape", "outside.txt"),
+        ]),
+      ).rejects.toThrow("--text-file must be inside the Mantis output directory");
+      expect(harness.requests).toEqual([{ command: "send", text: "nested body" }]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("runs scenario-authored actions inside the ephemeral desktop", async () => {
     const harness = await setupHarness();
     const actions = path.join(harness.outputRoot, "click-picker.json");

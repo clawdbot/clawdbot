@@ -234,6 +234,16 @@ function publicRelativePath(root: string, file: string, label: string): string {
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`${label} must be inside the Mantis output directory.`);
   }
+  // Node has no openat(2), so containment is re-proven component by component: a directory
+  // swapped for a symlink after the caller resolved the path would otherwise route an
+  // already-open descriptor outside the root, which O_NOFOLLOW only prevents for the leaf.
+  let cursor = resolvedRoot;
+  for (const segment of relative.split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      throw new Error(`${label} must be inside the Mantis output directory.`);
+    }
+  }
   return relative;
 }
 
@@ -244,11 +254,11 @@ function readPublicFile(
   maxBytes: number,
 ): { relative: string; text: string } {
   const resolved = fs.realpathSync(input);
-  publicRelativePath(root, resolved, label);
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
-    const opened = fs.realpathSync(`/proc/self/fd/${descriptor}`);
-    const relative = publicRelativePath(root, opened, label);
+    // Containment is checked after the open so the descriptor being read is the file the
+    // check accepted, not one a concurrent swap redirected it to.
+    const relative = publicRelativePath(root, resolved, label);
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile() || stat.size > maxBytes) {
       throw new Error(`${label} must be a regular file no larger than ${maxBytes} bytes.`);
@@ -297,6 +307,16 @@ function saveActive(sessionRoot: string, state: ActiveSession): void {
   writeJsonAtomic(activeFile(sessionRoot, state.lane), state);
 }
 
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the pid exists under another user; only ESRCH proves the lock owner is gone.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 function acquireHarnessLock(sessionRoot: string): () => void {
   const lock = path.join(sessionRoot, "harness.lock");
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -314,7 +334,7 @@ function acquireHarnessLock(sessionRoot: string): () => void {
         throw error;
       }
       const owner = Number(fs.readFileSync(lock, "utf8").trim());
-      if (Number.isInteger(owner) && owner > 0 && fs.existsSync(`/proc/${owner}`)) {
+      if (Number.isInteger(owner) && owner > 0 && processIsAlive(owner)) {
         throw new Error("The shared Telegram harness already has a command in progress.", {
           cause: error,
         });
