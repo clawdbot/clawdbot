@@ -131,7 +131,9 @@ describe("model-visible tool payload redaction", () => {
     const input = [
       "token = timeObserverToken",
       "API_TOKEN = computeToken()",
+      "API_TOKEN=computeToken()",
       "API_KEY: str = computeKey()",
+      '"api_key": "computeToken()"',
       `registered: ${credentials[0]}`,
       `Authorization: Bearer ${credentials[1]}`,
       `https://user:${credentials[2]}@example.test/path`,
@@ -142,7 +144,9 @@ describe("model-visible tool payload redaction", () => {
 
     expect(output).toContain("token = timeObserverToken");
     expect(output).toContain("API_TOKEN = computeToken()");
+    expect(output).toContain("API_TOKEN=computeToken()");
     expect(output).toContain("API_KEY: str = computeKey()");
+    expect(output).toContain('"api_key": "computeToken()"');
     for (const credential of credentials) {
       expect(output).not.toContain(credential);
     }

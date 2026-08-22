@@ -70,9 +70,8 @@ const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
 const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 4;
-// `.envrc` is executable shell source; keep its source-shaped assignments on the narrow policy.
-const CONFIG_ARTIFACT_PATH_RE =
-  /(?:^|[/\\])\.env(?:\.[^/\\]+)?$|\.(?:cfg|conf|env|ini|properties|toml|ya?ml)$/i;
+// `.env` files are credential stores; `.envrc` and general config files remain source-shaped.
+const ENV_FILE_PATH_RE = /(?:^|[/\\])(?:\.env(?:\.[^/\\]+)?|[^/\\]+\.env)$/i;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -1059,7 +1058,7 @@ export function createOpenClawReadTool(
         `read:${filePath}`,
         options?.imageSanitization,
       );
-      const modelVisibleResult = CONFIG_ARTIFACT_PATH_RE.test(filePath)
+      const modelVisibleResult = ENV_FILE_PATH_RE.test(filePath)
         ? { ...sanitizedResult, content: redactSecrets(sanitizedResult.content) }
         : sanitizedResult;
       return normalizeReadResultDetails(modelVisibleResult);

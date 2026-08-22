@@ -60,11 +60,12 @@ OpenClaw masks sensitive tokens before log or transcript output leaves the proce
 
 Model-visible tool-result text preserves ambiguous source assignments such as
 `token = timeObserverToken`. Registered secrets and explicit credential forms,
-including structured fields, environment entries, authorization headers, URL
-credentials, and known token formats, remain masked. Reads of recognized config
+including structured fields, authorization headers, URL credentials, and known
+token formats, remain masked. Direct reads of `.env`
 files apply broader assignment masking before their content becomes a tool
-result. Other transcript fields and diagnostic sinks retain broad assignment
-matching.
+result. Other config and source reads preserve opaque values; register actual
+secrets instead of relying on key-name matching. Other transcript fields and
+diagnostic sinks retain broad assignment matching.
 
 - Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (overrides defaults)

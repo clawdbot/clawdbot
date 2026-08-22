@@ -3090,11 +3090,14 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(details?.truncation).not.toHaveProperty("content");
   });
 
-  it("redacts config artifacts while preserving source-shaped read output", async () => {
+  it("redacts env files while preserving config and source reads", async () => {
     const credential = "unquoted-config-credential-1234567890";
     const source = "API_TOKEN = computeToken()";
     const execute = vi.fn(async (_toolCallId: string, args: { path: string }) => {
-      const text = args.path.endsWith(".ts") ? source : `api_key: ${credential}`;
+      const text =
+        args.path.endsWith(".ts") || args.path.endsWith(".envrc")
+          ? source
+          : `api_key: ${credential}`;
       return {
         content: [{ type: "text" as const, text }],
         details: { kind: "text", content: text },
@@ -3111,10 +3114,12 @@ describe("createOpenClawCodingTools read behavior", () => {
     const yamlResult = await readTool.execute("read-yaml", { path: "settings.yaml" });
     const envResult = await readTool.execute("read-env", { path: "production.env" });
     const sourceResult = await readTool.execute("read-source", { path: "settings.ts" });
+    const envrcResult = await readTool.execute("read-envrc", { path: ".envrc" });
 
-    expect(extractToolText(yamlResult)).not.toContain(credential);
+    expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
     expect(extractToolText(envResult)).not.toContain(credential);
     expect(extractToolText(sourceResult)).toBe(source);
+    expect(extractToolText(envrcResult)).toBe(source);
   });
 });
 

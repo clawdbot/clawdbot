@@ -45,6 +45,7 @@ describe("OpenClaw provider tool-result redaction", () => {
 
   it("carries the redacted result into Anthropic and OpenAI-compatible payloads", async () => {
     const configCredential = "unquoted-provider-config-credential-1234567890";
+    const envCredential = "provider-env-credential-1234567890";
     const sourceLines = [
       "API_TOKEN = computeToken()",
       "API_KEY: str = computeKey()",
@@ -58,7 +59,9 @@ describe("OpenClaw provider tool-result redaction", () => {
       execute: async (_toolCallId, args: { path: string }) => {
         const text = args.path.endsWith(".yaml")
           ? `api_key: ${configCredential}`
-          : sourceLines.join("\n");
+          : args.path.endsWith(".env")
+            ? `API_KEY=${envCredential}`
+            : sourceLines.join("\n");
         return {
           content: [{ type: "text" as const, text }],
           details: { kind: "text", content: text },
@@ -66,10 +69,12 @@ describe("OpenClaw provider tool-result redaction", () => {
       },
     });
     const configResult = await readTool.execute("read-config", { path: "settings.yaml" });
+    const envResult = await readTool.execute("read-env", { path: "production.env" });
     const sourceResult = await readTool.execute("read-source", { path: "settings.py" });
     const providerText = [
       extractToolResultText(toolResultContent),
       extractToolResultText(configResult.content),
+      extractToolResultText(envResult.content),
       extractToolResultText(sourceResult.content),
     ].join("\n");
     const context: Context = {
@@ -145,7 +150,8 @@ describe("OpenClaw provider tool-result redaction", () => {
         expect(serialized).toContain(sourceLine);
       }
       expect(serialized).not.toContain("provider-secret-value");
-      expect(serialized).not.toContain(configCredential);
+      expect(serialized).toContain(configCredential);
+      expect(serialized).not.toContain(envCredential);
     }
   });
 });

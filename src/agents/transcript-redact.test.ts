@@ -121,7 +121,7 @@ describe("redactTranscriptMessage", () => {
       expect(text).toContain(sourceLine);
     }
     expect(text).not.toContain(apiKey);
-    expect(text).not.toContain(envToken);
+    expect(text).toContain(envToken);
   });
 
   it("keeps broad assignment masking for non-tool transcript messages", () => {

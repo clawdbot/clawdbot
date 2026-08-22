@@ -614,8 +614,8 @@ describe("installSessionToolResultGuard", () => {
     expect(serializedToolResult).toContain("visible");
   });
 
-  it("persists config read results only after owner-context redaction", async () => {
-    const credential = "persisted-yaml-credential-1234567890";
+  it("persists env reads only after owner-context redaction", async () => {
+    const credential = "persisted-env-credential-1234567890";
     const text = `api_key: ${credential}`;
     const readTool = createOpenClawReadTool({
       name: "read",
@@ -627,7 +627,7 @@ describe("installSessionToolResultGuard", () => {
         details: { kind: "text", content: text },
       }),
     });
-    const result = await readTool.execute("call_1", { path: "settings.yaml" });
+    const result = await readTool.execute("call_1", { path: ".env.production" });
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: ({ message }) => ({
