@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  callGateway,
   cleanupMcpCliTestState,
   createWorkspace,
   lastErrorLine,
@@ -268,7 +269,6 @@ describe("mcp cli", () => {
           dispose: async () => {},
         };
       });
-
       await expect(
         runMcpCommand(["mcp", "add", "hung-default", "--command", process.execPath]),
       ).rejects.toThrow("__exit__:1");
@@ -849,6 +849,114 @@ describe("mcp cli", () => {
       expect(logWarn.mock.calls.map(([line]) => String(line)).join("\n")).not.toContain(
         'env "API_TOKEN" is blocked for stdio startup safety and was ignored',
       );
+    });
+  });
+
+  it("preserves MCP scalar literals across every CLI-created probe runtime", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const capturedServers: Array<{
+        name: string;
+        env: unknown;
+        headers: unknown;
+      }> = [];
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          mcp: {
+            servers: {
+              proof: {
+                command: process.execPath,
+                env: {
+                  DOLLAR: "$MCP_PROBE_LITERAL",
+                  TEMPLATE: "${MCP_PROBE_LITERAL}",
+                  ESCAPED_TEMPLATE: "$${MCP_PROBE_LITERAL}",
+                },
+                headers: {
+                  "X-Dollar": "$MCP_PROBE_LITERAL",
+                  "X-Template": "${MCP_PROBE_LITERAL}",
+                  "X-Escaped-Template": "$${MCP_PROBE_LITERAL}",
+                },
+              },
+            },
+          },
+        })}\n`,
+        "utf8",
+      );
+      setCreateSessionMcpRuntimeOverride((params) => {
+        const entry = Object.entries(params.cfg?.mcp?.servers ?? {})[0];
+        if (!entry) {
+          throw new Error("expected one MCP probe server");
+        }
+        const [name, server] = entry;
+        capturedServers.push({ name, env: server.env, headers: server.headers });
+        return {
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: "cli-probe-literal-shorthand",
+          createdAt: 0,
+          lastUsedAt: 0,
+          getCatalog: async () => ({
+            version: 1,
+            generatedAt: Date.now(),
+            servers: {
+              [name]: {
+                serverName: name,
+                launchSummary: process.execPath,
+                toolCount: 0,
+              },
+            },
+            tools: [],
+            diagnostics: [],
+          }),
+          peekCatalog: () => null,
+          markUsed: () => {},
+          callTool: async () => ({ content: [] }),
+          dispose: async () => {},
+        };
+      });
+
+      await withEnvAsync({ MCP_PROBE_LITERAL: "must-not-materialize" }, async () => {
+        await runMcpCommand(["mcp", "probe", "proof", "--json"]);
+        await runMcpCommand(["mcp", "doctor", "proof", "--probe", "--json"]);
+        await runMcpCommand(["mcp", "configure", "proof", "--probe", "--timeout", "12"]);
+        await runMcpCommand([
+          "mcp",
+          "add",
+          "added",
+          "--command",
+          process.execPath,
+          "--env",
+          "DOLLAR=$MCP_PROBE_LITERAL",
+          "--env",
+          "TEMPLATE=${MCP_PROBE_LITERAL}",
+        ]);
+      });
+
+      const configuredScalarValues = {
+        DOLLAR: "$MCP_PROBE_LITERAL",
+        TEMPLATE: "must-not-materialize",
+        ESCAPED_TEMPLATE: "${MCP_PROBE_LITERAL}",
+      };
+      const configuredHeaderValues = {
+        "X-Dollar": "$MCP_PROBE_LITERAL",
+        "X-Template": "must-not-materialize",
+        "X-Escaped-Template": "${MCP_PROBE_LITERAL}",
+      };
+      const cliFlagLiterals = {
+        DOLLAR: "$MCP_PROBE_LITERAL",
+        TEMPLATE: "${MCP_PROBE_LITERAL}",
+      };
+      expect(capturedServers).toEqual([
+        { name: "proof", env: configuredScalarValues, headers: configuredHeaderValues },
+        { name: "proof", env: configuredScalarValues, headers: configuredHeaderValues },
+        { name: "proof", env: configuredScalarValues, headers: configuredHeaderValues },
+        { name: "added", env: cliFlagLiterals, headers: undefined },
+      ]);
+      expect(callGateway).not.toHaveBeenCalled();
     });
   });
 

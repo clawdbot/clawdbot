@@ -33,6 +33,7 @@ import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   startOAuthLoopbackCallbackServer,
@@ -42,6 +43,7 @@ import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import { shouldAuditPlaintextMcpValue } from "../secrets/mcp-target-sensitivity.js";
+import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { formatCliCommand } from "./command-format.js";
@@ -556,10 +558,21 @@ async function createMcpProbeRuntime(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
 }) {
+  const probeConfig = buildMcpProbeConfig({ config: params.config, servers: params.servers });
+  const targetIds = getMcpCommandSecretTargetIds();
+  const scopedTargets = {
+    targetIds,
+    allowedPaths: new Set(
+      discoverConfigSecretTargetsByIds(probeConfig, targetIds)
+        .filter((target) => isSecretRef(target.value))
+        .map((target) => target.path),
+    ),
+  };
   const { resolvedConfig } = await resolveCommandConfigWithSecrets({
-    config: buildMcpProbeConfig({ config: params.config, servers: params.servers }),
+    config: probeConfig,
     commandName: params.commandName,
-    targetIds: getMcpCommandSecretTargetIds(),
+    targetIds: scopedTargets.targetIds,
+    allowedPaths: scopedTargets.allowedPaths,
     runtime: defaultRuntime,
   });
   return createSessionMcpRuntime({

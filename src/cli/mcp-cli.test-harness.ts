@@ -45,6 +45,7 @@ export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization
 export const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
 export const countMcpOAuthPrincipals = mocks.countMcpOAuthPrincipals;
 export const logWarn = mocks.logWarn;
+export const callGateway = mocks.callGateway;
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
