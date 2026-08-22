@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -52,6 +53,14 @@ import java.util.concurrent.atomic.AtomicReference
 private const val LIFECYCLE_TEST_TIMEOUT_MS = 8_000L
 private const val LIFECYCLE_CONNECT_CHALLENGE_FRAME =
   """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce","ts":1700000000123}}"""
+
+// After this many retry starts the pending wait is ~5s, so an un-interrupted wait is unmistakable,
+// and a ladder that failed to reset would wait ~8s next instead of ~1s.
+private const val BACKOFF_PROBE_RETRIES = 4
+private const val SETTLE_INTO_BACKOFF_MS = 250L
+private const val BACKOFF_TEST_TIMEOUT_MS = 30_000L
+private const val WAKE_LATENCY_BUDGET_MS = 1_500L
+private const val FAST_BAND_BUDGET_MS = 3_000L
 
 private class ReconnectDeviceAuthStore(
   private val entry: DeviceAuthEntry? = null,
@@ -1962,6 +1971,213 @@ class GatewaySessionReconnectTest {
       sockets = sockets,
       requestFrames = requestFrames,
     )
+  }
+
+  // --- reconnect backoff policy -------------------------------------------------------------
+  //
+  // The delay policy is a pure function so these can pin every band without waiting minutes of
+  // wall clock. `legacyReconnectDelayMs` reproduces the delay this loop shipped before the
+  // battery fix and is used as a control: the new policy must never retry sooner than it did.
+
+  @Test
+  fun transientReconnectDelaysAreUnchanged() {
+    // A brief blip must still recover as fast as it always did, whatever jitter is drawn.
+    for (attempt in 1..5) {
+      for (jitter in listOf(0.0, 0.25, 0.5, 0.75, 1.0)) {
+        assertEquals(
+          "attempt $attempt jitter $jitter",
+          legacyReconnectDelayMs(attempt),
+          gatewayReconnectDelayMs(attempt, jitter),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun reconnectDelayKeepsGrowingPastTheOldSteadyCadence() {
+    // The defect was that growth stopped here and the loop probed at this cadence forever.
+    for (jitter in listOf(0.0, 0.5, 1.0)) {
+      var previous = 0L
+      for (attempt in 1..24) {
+        val delay = gatewayReconnectDelayMs(attempt, jitter)
+        assertTrue("attempt $attempt jitter $jitter went backwards", delay >= previous)
+        previous = delay
+      }
+      assertTrue(
+        "jitter $jitter never left the old cadence",
+        gatewayReconnectDelayMs(12, jitter) > GATEWAY_RECONNECT_MIN_STEADY_DELAY_MS,
+      )
+    }
+  }
+
+  @Test
+  fun sustainedFailureLeavesSecondsScaleCadence() {
+    // The user-visible defect: an unreachable gateway kept being probed every few seconds all day.
+    for (attempt in 13..64) {
+      for (jitter in listOf(0.0, 0.5, 1.0)) {
+        assertTrue(
+          "attempt $attempt jitter $jitter still probes every ${gatewayReconnectDelayMs(attempt, jitter)}ms",
+          gatewayReconnectDelayMs(attempt, jitter) >= GATEWAY_RECONNECT_MAX_DELAY_MS / 2,
+        )
+      }
+    }
+  }
+
+  @Test
+  fun steadyReconnectDelayStaysInsideItsJitterBand() {
+    assertEquals(GATEWAY_RECONNECT_MAX_DELAY_MS / 2, gatewayReconnectDelayMs(20, jitter = 0.0))
+    assertEquals(GATEWAY_RECONNECT_MAX_DELAY_MS, gatewayReconnectDelayMs(20, jitter = 1.0))
+    assertEquals(225_000L, gatewayReconnectDelayMs(20, jitter = 0.5))
+  }
+
+  @Test
+  fun reconnectDelayIsNeverShorterThanBeforeThisChange() {
+    // The whole point is less radio work, so no attempt number may retry sooner than it used to.
+    for (attempt in 1..256) {
+      for (jitter in listOf(0.0, 0.33, 1.0)) {
+        assertTrue(
+          "attempt $attempt jitter $jitter retries sooner than the old policy",
+          gatewayReconnectDelayMs(attempt, jitter) >= legacyReconnectDelayMs(attempt),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun reconnectDelayStaysBoundedSoAnEndpointOnlyRestartIsStillFound() {
+    // Android never reports a network change when only the gateway process restarts, so probing
+    // must never stop or drift unbounded; it just has to get cheap.
+    for (attempt in 1..1024) {
+      val delay = gatewayReconnectDelayMs(attempt, jitter = 1.0)
+      assertTrue("attempt $attempt stopped probing", delay > 0)
+      assertTrue("attempt $attempt exceeded the ceiling", delay <= GATEWAY_RECONNECT_MAX_DELAY_MS)
+    }
+  }
+
+  @Test
+  fun reconnectDelayClampsOutOfRangeInputs() {
+    val first = gatewayReconnectDelayMs(1, jitter = 0.0)
+    assertEquals(first, gatewayReconnectDelayMs(0, jitter = 0.0))
+    assertEquals(first, gatewayReconnectDelayMs(-7, jitter = 0.0))
+    assertEquals(
+      gatewayReconnectDelayMs(20, jitter = 0.0),
+      gatewayReconnectDelayMs(20, jitter = -1.0),
+    )
+    assertEquals(
+      gatewayReconnectDelayMs(20, jitter = 1.0),
+      gatewayReconnectDelayMs(20, jitter = 4.0),
+    )
+  }
+
+  private fun legacyReconnectDelayMs(attempt: Int): Long = minOf(8_000L, (350.0 * Math.pow(1.7, attempt.toDouble())).toLong())
+
+  // --- reconnect wake semantics -------------------------------------------------------------
+
+  @Test
+  fun networkRestoreDuringBackoffRetriesNowAndResumesTheFastBand() = runBlocking { assertWakeInterruptsBackoff { it.retryAfterNetworkRestore() } }
+
+  @Test
+  fun manualReconnectDuringBackoffRetriesNowAndResumesTheFastBand() = runBlocking { assertWakeInterruptsBackoff { it.reconnect() } }
+
+  @Test
+  fun clearingAnAuthPauseAfterALongOutageResumesTheFastBand() =
+    runBlocking {
+      // An auth pause can be entered after the ladder has already climbed. Clearing the pause is a
+      // deliberate user action, so the retry that follows must not inherit the long steady wait.
+      val json = Json { ignoreUnknownKeys = true }
+      val pauseNext = AtomicBoolean(false)
+      val retryStarts = Channel<Long>(Channel.UNLIMITED)
+      val paused = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            val details =
+              if (pauseNext.get()) {
+                """{"code":"AUTH_TOKEN_MISSING"}"""
+              } else {
+                """{"code":"AUTH_TOKEN_INVALID","recommendedNextStep":"wait_then_retry"}"""
+              }
+            webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"denied","details":$details}}""")
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          onDisconnected = { status -> if (status == "Reconnecting…") retryStarts.trySend(System.nanoTime()) },
+          onConnectFailure = { _, pauseReconnect -> if (pauseReconnect) paused.complete(Unit) },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        // Climb the ladder on failures that explicitly do not pause reconnect.
+        withTimeout(BACKOFF_TEST_TIMEOUT_MS) { repeat(BACKOFF_PROBE_RETRIES) { retryStarts.receive() } }
+        pauseNext.set(true)
+        withTimeout(BACKOFF_TEST_TIMEOUT_MS) { paused.await() }
+
+        // Clear the pause the way the user would, and let the next attempt fail normally again.
+        pauseNext.set(false)
+        harness.session.reconnect()
+        val resumedAt = withTimeout(BACKOFF_TEST_TIMEOUT_MS) { retryStarts.receive() }
+        val nextAt = withTimeout(BACKOFF_TEST_TIMEOUT_MS) { retryStarts.receive() }
+        val gapMs = (nextAt - resumedAt) / 1_000_000
+        assertTrue(
+          "next retry waited ${gapMs}ms; clearing the auth pause did not reset the ladder",
+          gapMs < FAST_BAND_BUDGET_MS,
+        )
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  /**
+   * Drives real connect failures until the loop is deep enough in backoff for the wait to be
+   * unmistakable, then wakes it and checks both halves of the contract: the wait ends immediately,
+   * and the attempt that follows a failed wake is back in the fast band instead of the steady one.
+   *
+   * Retry starts are counted through the status callback, which reports "Reconnecting…" exactly
+   * once per retry iteration; the gap between two of them is the reconnect cadence itself.
+   */
+  private suspend fun assertWakeInterruptsBackoff(wake: (GatewaySession) -> Unit) {
+    val retryStarts = Channel<Long>(Channel.UNLIMITED)
+    val harness =
+      createReconnectHarness(
+        onDisconnected = { status -> if (status == "Reconnecting…") retryStarts.trySend(System.nanoTime()) },
+      )
+    // A port with nothing listening: every connect fails immediately, so backoff sets the pace.
+    val deadPort =
+      MockWebServer().run {
+        start()
+        val assigned = port
+        shutdown()
+        assigned
+      }
+
+    try {
+      connectNodeSession(harness.session, deadPort)
+      withTimeout(BACKOFF_TEST_TIMEOUT_MS) { repeat(BACKOFF_PROBE_RETRIES) { retryStarts.receive() } }
+
+      // That retry fails too, so the loop is now waiting out a multi-second backoff.
+      delay(SETTLE_INTO_BACKOFF_MS)
+      val wokeAt = System.nanoTime()
+      wake(harness.session)
+      val retriedAt = withTimeout(BACKOFF_TEST_TIMEOUT_MS) { retryStarts.receive() }
+      val wakeLatencyMs = (retriedAt - wokeAt) / 1_000_000
+      assertTrue(
+        "wake took ${wakeLatencyMs}ms; the pending backoff was not interrupted",
+        wakeLatencyMs < WAKE_LATENCY_BUDGET_MS,
+      )
+
+      // The woken attempt fails as well. The ladder must have restarted, so the next retry comes
+      // back in the fast band instead of at the steady cadence the loop had already climbed to.
+      val followUpAt = withTimeout(BACKOFF_TEST_TIMEOUT_MS) { retryStarts.receive() }
+      val followUpMs = (followUpAt - retriedAt) / 1_000_000
+      assertTrue(
+        "next retry waited ${followUpMs}ms; the ladder did not reset after the wake",
+        followUpMs < FAST_BAND_BUDGET_MS,
+      )
+    } finally {
+      harness.session.disconnect()
+      harness.sessionJob.cancelAndJoin()
+    }
   }
 }
 

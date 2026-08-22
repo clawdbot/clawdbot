@@ -48,6 +48,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.random.Random
 
 /**
  * Identity advertised during gateway connect; these fields become the device row users approve.
@@ -513,10 +514,24 @@ class GatewaySession(
     }
   }
 
-  private fun drainReconnectSignals() {
+  /**
+   * Waits out [timeoutMs] unless the loop is woken deliberately, and reports which happened.
+   *
+   * A wake — a restored network, a manual reconnect, a cleared auth pause, or a new desired
+   * endpoint — is fresh information, so callers restart the retry ladder instead of resuming the
+   * long wait they had climbed to. They reset to the first retry step rather than to zero, so an
+   * in-progress reconnect keeps reporting "Reconnecting…" and holds the guidance attached to it.
+   */
+  private suspend fun awaitReconnectWake(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { reconnectSignal.receive() } != null
+
+  /** Discards retry requests the attempt about to start already satisfies; true if any was queued. */
+  private fun drainReconnectSignals(): Boolean {
+    var drained = false
     while (reconnectSignal.tryReceive().isSuccess) {
       // A newly ready connection already incorporates every earlier retry request.
+      drained = true
     }
+    return drained
   }
 
   private fun readyConnection(): Connection? = currentConnection?.takeIf { it.isReady() }
@@ -1895,14 +1910,16 @@ class GatewaySession(
           desired ?: return
         }
       if (target.reconnectPausedForAuthFailure) {
-        withTimeoutOrNull(250) { reconnectSignal.receive() }
+        if (awaitReconnectWake(250)) target.attempt = FIRST_RETRY_ATTEMPT
         continue
       }
 
       try {
         synchronized(notificationLock) {
           if (synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
-            drainReconnectSignals()
+            // A wake can land between the backoff expiring and this drain. Dropping it silently
+            // would let a failed attempt resume the pre-wake ladder, so it resets here too.
+            if (drainReconnectSignals()) target.attempt = FIRST_RETRY_ATTEMPT
             onDisconnected(if (target.attempt == 0) "Connecting…" else "Reconnecting…")
           }
         }
@@ -1933,8 +1950,8 @@ class GatewaySession(
           }
         }
         if (desired !== target || target.reconnectPausedForAuthFailure) continue
-        val sleepMs = minOf(8_000L, (350.0 * Math.pow(1.7, target.attempt.toDouble())).toLong())
-        withTimeoutOrNull(sleepMs) { reconnectSignal.receive() }
+        val sleepMs = gatewayReconnectDelayMs(target.attempt, jitter = Random.nextDouble())
+        if (awaitReconnectWake(sleepMs)) target.attempt = FIRST_RETRY_ATTEMPT
       }
     }
   }
@@ -2144,6 +2161,49 @@ class GatewaySession(
     // remote gateways when an existing TLS pin already identifies the endpoint.
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
+}
+
+/** Retry step a deliberate wake restarts from; not 0, which would report a first connect instead. */
+private const val FIRST_RETRY_ATTEMPT = 1
+
+/** First retry delay after a failed connect; unchanged, so a brief blip still recovers sub-second. */
+internal const val GATEWAY_RECONNECT_BASE_DELAY_MS = 350L
+
+/** Per-attempt growth factor; unchanged. */
+internal const val GATEWAY_RECONNECT_GROWTH = 1.7
+
+/**
+ * Delay at which retries stop being "transient recovery" and become steady probing of an endpoint
+ * that is simply not there. Retries never get *more* frequent than this, which is the cadence this
+ * loop used to hold forever.
+ */
+internal const val GATEWAY_RECONNECT_MIN_STEADY_DELAY_MS = 8_000L
+
+/**
+ * Ceiling for steady probing. A gateway can come back without Android ever reporting a network
+ * change (the process restarts, or the LAN becomes routable again), so the loop must keep probing;
+ * this bounds how long that recovery can take while keeping the radio idle nearly all of the time.
+ */
+internal const val GATEWAY_RECONNECT_MAX_DELAY_MS = 300_000L
+
+/**
+ * Delay before retry number [attempt] (1-based) against a gateway that keeps failing to connect.
+ *
+ * Growth continues past [GATEWAY_RECONNECT_MIN_STEADY_DELAY_MS] instead of flattening there, so a
+ * gateway that stays unreachable costs progressively less. Once past that point the delay is spread
+ * over the upper half of its window ([jitter] in `0.0..1.0`) so a gateway that restarts is not met
+ * by every waiting device at the same instant.
+ */
+internal fun gatewayReconnectDelayMs(
+  attempt: Int,
+  jitter: Double,
+): Long {
+  // Guard the 1-based contract: a non-positive attempt would otherwise shrink the delay below base.
+  val growth = Math.pow(GATEWAY_RECONNECT_GROWTH, attempt.coerceAtLeast(1).toDouble())
+  val delay = minOf(GATEWAY_RECONNECT_BASE_DELAY_MS * growth, GATEWAY_RECONNECT_MAX_DELAY_MS.toDouble())
+  if (delay <= GATEWAY_RECONNECT_MIN_STEADY_DELAY_MS) return delay.toLong()
+  val spread = delay / 2 + delay / 2 * jitter.coerceIn(0.0, 1.0)
+  return maxOf(spread, GATEWAY_RECONNECT_MIN_STEADY_DELAY_MS.toDouble()).toLong()
 }
 
 /** Decides whether auth failures should stop reconnect churn until the user changes credentials. */
