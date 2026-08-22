@@ -73,7 +73,13 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
 };
 
 function loadControlUiPresentation(environment: ControlUiEnvironment | null, seamColor?: string) {
-  if (environment || seamColor) {
+  const root = document.documentElement;
+  if (
+    environment ||
+    seamColor ||
+    root.hasAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE) ||
+    root.style.getPropertyValue("--ring")
+  ) {
     void import("./control-ui-presentation.ts").then(({ applyControlUiPresentation }) =>
       applyControlUiPresentation({ environment, seamColor }),
     );

@@ -81,6 +81,106 @@ describe("Control UI environment presentation", () => {
     expect(decodeURIComponent(favicon.href)).toContain("#f59e0b");
   });
 
+  it("clears environment presentation when a configured bootstrap refresh becomes unset", async () => {
+    document.title = "OpenClaw Control";
+    document.documentElement.style.setProperty("--control-ui-environment-amber", "#f59e0b");
+
+    const svgFavicon = document.createElement("link");
+    svgFavicon.rel = "icon";
+    svgFavicon.setAttribute("href", "/favicon.svg");
+    svgFavicon.setAttribute("type", "image/svg+xml");
+    const pngFavicon = document.createElement("link");
+    pngFavicon.rel = "icon";
+    pngFavicon.setAttribute("href", "/favicon-32.png");
+    pngFavicon.setAttribute("type", "image/png");
+    document.head.append(svgFavicon, pngFavicon);
+
+    const bootstrap: ControlUiBootstrapConfig = {
+      basePath: "",
+      assistantName: "OpenClaw",
+      assistantAvatar: "O",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ ...bootstrap, environment: { label: "edge", color: "amber" } }),
+          ),
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify(bootstrap))),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+
+    await config.refresh();
+    await vi.dynamicImportSettled();
+
+    expect(document.querySelector(".control-ui-environment-stripe")).not.toBeNull();
+    expect(svgFavicon.getAttribute("href")).toContain("data:image/svg+xml,");
+    expect(pngFavicon.getAttribute("type")).toBe("image/svg+xml");
+    expect(document.title).toBe("OpenClaw Control · edge");
+    expect(document.documentElement.hasAttribute("data-openclaw-environment")).toBe(true);
+
+    await config.refresh();
+    await vi.dynamicImportSettled();
+
+    expect(config.current.environment).toBeNull();
+    expect(document.querySelector(".control-ui-environment-stripe")).toBeNull();
+    expect(svgFavicon.getAttribute("href")).toBe("/favicon.svg");
+    expect(svgFavicon.getAttribute("type")).toBe("image/svg+xml");
+    expect(pngFavicon.getAttribute("href")).toBe("/favicon-32.png");
+    expect(pngFavicon.getAttribute("type")).toBe("image/png");
+    expect(document.documentElement.style.getPropertyValue("--control-ui-environment-color")).toBe(
+      "",
+    );
+    expect(document.documentElement.style.getPropertyValue("--control-ui-environment-ink")).toBe(
+      "",
+    );
+    expect(document.title).toBe("OpenClaw Control");
+    expect(document.documentElement.hasAttribute("data-openclaw-environment")).toBe(false);
+  });
+
+  it("clears seam-color presentation when a seam-only bootstrap refresh becomes unset", async () => {
+    const bootstrap: ControlUiBootstrapConfig = {
+      basePath: "",
+      assistantName: "OpenClaw",
+      assistantAvatar: "O",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ...bootstrap, seamColor: "#123456" })))
+        .mockResolvedValueOnce(new Response(JSON.stringify(bootstrap))),
+    );
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+
+    await config.refresh();
+    await vi.dynamicImportSettled();
+
+    expect(document.documentElement.style.getPropertyValue("--ring")).toBe("#123456");
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#123456");
+
+    await config.refresh();
+    await vi.dynamicImportSettled();
+
+    for (const property of [
+      "--ring",
+      "--accent",
+      "--accent-hover",
+      "--accent-muted",
+      "--accent-subtle",
+      "--accent-glow",
+      "--primary",
+      "--focus",
+      "--focus-ring",
+      "--focus-glow",
+    ]) {
+      expect(document.documentElement.style.getPropertyValue(property)).toBe("");
+    }
+  });
+
   it("applies public document environment metadata before authenticated bootstrap", async () => {
     document.documentElement.setAttribute(
       "data-openclaw-environment",
