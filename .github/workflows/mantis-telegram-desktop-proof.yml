@@ -273,7 +273,7 @@ jobs:
     needs: resolve_request
     if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 360
+    timeout-minutes: 120
     environment: qa-live-shared
     outputs:
       comparison_status: ${{ steps.inspect.outputs.comparison_status }}
@@ -934,6 +934,8 @@ jobs:
                 abort --lane "$lane" || result=1
             fi
           done
+          sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-desktop-recorder \
+            teardown --session desktop-recorder.json || result=1
           if sudo test -f "$lock"; then
             echo "Mantis harness lock remained after cleanup." >&2
             result=1

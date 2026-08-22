@@ -139,7 +139,9 @@ behavior, call `block`; do not call `finish` and describe the block only in pros
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
 PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
 near the bottom and the recording covers the behavior—not only its final state.
-Iterate as needed; all attempts remain recorded.
+Iteration is allowed, but if `start` reports `desktop-unavailable`, record that
+fact and use `block`; never retry that lane. Two non-advancing repeats of the
+same failing step mean classify and stop, not retry. All attempts remain recorded.
 
 If you design a novel working scenario worth reusing, optionally write
 `MANTIS_OUTPUT_DIR/recipe-suggestion.md` with its trigger, exact commands, and

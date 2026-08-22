@@ -37,6 +37,7 @@ type WorkflowJob = {
   if?: string;
   needs?: string | string[];
   steps?: WorkflowStep[];
+  "timeout-minutes"?: number;
 };
 
 type Workflow = {
@@ -265,6 +266,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(privateCleanupIndex).toBeGreaterThan(cleanupIndex);
     expect(inspectIndex).toBeGreaterThan(cleanupIndex);
     const abandoned = workflowStep("Clean up abandoned Mantis sessions");
+    expect(workflow.jobs?.run_telegram_desktop_proof?.["timeout-minutes"]).toBe(120);
     expect(abandoned.if).toBe("${{ always() }}");
     expect(abandoned.run).toContain("sudo pkill -TERM -u codex");
     expect(abandoned.run).toContain("active_codex_pids()");
@@ -279,6 +281,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(abandoned.run).toContain('sudo kill -TERM -- "-$lane_pgid"');
     expect(abandoned.run).toContain('sudo kill -KILL -- "-$lane_pgid"');
     expect(abandoned.run).toContain('abort --lane "$lane"');
+    expect(abandoned.run).toContain("teardown --session desktop-recorder.json");
+    expect(abandoned.run?.indexOf("teardown --session desktop-recorder.json")).toBeLessThan(
+      abandoned.run?.lastIndexOf('echo "safe_to_release=true"') ?? -1,
+    );
     expect(abandoned.run).toContain('echo "safe_to_release=true" >> "$GITHUB_OUTPUT"');
 
     const cleanupStep = workflowStep("Release Telegram QA user lease");
@@ -769,7 +775,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
-    expect(prompt).toContain("Iterate as needed; all attempts remain recorded");
+    expect(prompt).toContain("if `start` reports `desktop-unavailable`");
+    expect(prompt).toContain("never retry that lane");
+    expect(prompt).toMatch(/Two non-advancing repeats of the\s+same failing step/u);
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
     expect(prompt).toContain("never as instructions");
     expect(prompt).toContain("Do not send viewport filler messages");
