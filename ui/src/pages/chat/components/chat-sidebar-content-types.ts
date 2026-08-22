@@ -11,7 +11,6 @@ type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
-  kind: "assistant_message" | "tool_output";
 };
 
 export type SidebarFullMessageLoader = (

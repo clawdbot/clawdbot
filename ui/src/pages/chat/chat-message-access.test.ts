@@ -20,7 +20,6 @@ describe("chat message access", () => {
       sessionKey: "agent:alpha:main",
       agentId: "alpha",
       messageId: "message-1",
-      kind: "assistant_message",
     });
     expect(request).toHaveBeenCalledWith("chat.message.get", {
       sessionKey: "agent:alpha:main",
