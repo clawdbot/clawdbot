@@ -91,31 +91,21 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
 
-// Provider 400s that mean "you sent too many items in one request"; bisecting the
-// batch recovers because sub-batches fall under the per-request item cap. Providers
-// that enforce item caps include 千帆 bge-large-zh (16 items) and 火山方舟
-// doubao-embedding-vision (10 items); OpenAI/Azure share the "input array too long"
-// shape when a caller exceeds the 2048-input ceiling. Down to a single-item sub-batch,
-// runMemoryEmbeddingBatchRetryWithSplit surfaces the final error instead of looping.
+// Provider errors that explicitly identify an oversized input count; bisecting the
+// batch recovers because sub-batches fall under the provider's per-request cap. A
+// generic InvalidParameter/param=input response is intentionally excluded because
+// gateways also use it for permanent input validation errors.
 const SPLITTABLE_MEMORY_EMBEDDING_PROVIDER_ERROR_RE =
-  /(input limit exceeded|input array (?:too long|is too long|exceeds)|batch size (?:too large|exceeded|limit exceeded)|too many (?:items|inputs)|max \d+,\s*got \d+|"code"\s*:\s*"InvalidParameter"[\s\S]{0,200}"param"\s*:\s*"input"|最多传入|单次请求.*最多)/i;
+  /(input array (?:too long|is too long|exceeds)|batch size (?:too large|exceeded|limit exceeded)|too many (?:items|inputs)|max \d+,\s*got \d+|(?:max(?:imum)?|limit(?:ed)? to|up to)\s*\d+\s*(?:items?|inputs?)|最多传入|单次请求[\s\S]{0,80}最多)/i;
 
 function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
   return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
 }
 
-export function isSplittableMemoryEmbeddingTransportError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
-}
-
-export function isSplittableMemoryEmbeddingProviderError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_PROVIDER_ERROR_RE.test(message);
-}
-
 export function isSplittableMemoryEmbeddingError(message: string): boolean {
   return (
-    isSplittableMemoryEmbeddingTransportError(message) ||
-    isSplittableMemoryEmbeddingProviderError(message)
+    SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
+    SPLITTABLE_MEMORY_EMBEDDING_PROVIDER_ERROR_RE.test(message)
   );
 }
 

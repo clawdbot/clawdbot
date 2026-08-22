@@ -6,8 +6,6 @@ import {
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingError,
-  isSplittableMemoryEmbeddingProviderError,
-  isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -170,16 +168,14 @@ describe("memory embedding policy", () => {
 
     for (const message of splittableMessages) {
       expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
-      expect(isSplittableMemoryEmbeddingTransportError(message)).toBe(true);
+      expect(isSplittableMemoryEmbeddingError(message)).toBe(true);
     }
     expect(isRetryableMemoryEmbeddingError("ECONNREFUSED")).toBe(true);
-    expect(isSplittableMemoryEmbeddingTransportError("ECONNREFUSED")).toBe(false);
+    expect(isSplittableMemoryEmbeddingError("ECONNREFUSED")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("EHOSTUNREACH")).toBe(true);
-    expect(isSplittableMemoryEmbeddingTransportError("EHOSTUNREACH")).toBe(false);
+    expect(isSplittableMemoryEmbeddingError("EHOSTUNREACH")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("memory embeddings batch timed out")).toBe(true);
-    expect(isSplittableMemoryEmbeddingTransportError("memory embeddings batch timed out")).toBe(
-      false,
-    );
+    expect(isSplittableMemoryEmbeddingError("memory embeddings batch timed out")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("worker terminated by user")).toBe(false);
     expect(isRetryableMemoryEmbeddingError("embedding validation failed")).toBe(false);
   });
@@ -198,7 +194,7 @@ describe("memory embedding policy", () => {
       items: ["a", "b", "c", "d"],
       run,
       isRetryable: isRetryableMemoryEmbeddingError,
-      isSplittable: isSplittableMemoryEmbeddingTransportError,
+      isSplittable: isSplittableMemoryEmbeddingError,
       waitForRetry: async () => {},
       maxAttempts: 3,
       baseDelayMs: 500,
@@ -207,36 +203,50 @@ describe("memory embedding policy", () => {
     expect(result).toEqual([[97], [98], [99], [100]]);
     expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
     expect(isRetryableMemoryEmbeddingError("431 request_headers_too_large")).toBe(false);
-    expect(isSplittableMemoryEmbeddingTransportError("431 request_headers_too_large")).toBe(true);
+    expect(isSplittableMemoryEmbeddingError("431 request_headers_too_large")).toBe(true);
     expect(
-      isSplittableMemoryEmbeddingTransportError("embedding validation failed at item 4312"),
+      isSplittableMemoryEmbeddingError("embedding validation failed at item 4312"),
     ).toBe(false);
   });
 
-  it("recognizes provider item-count 400s as splittable", () => {
+  it("recognizes provider item-count errors only with explicit limit evidence", () => {
     const volcArkError =
       'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"The parameter input specified in the request are not valid: Embeddings API input limit exceeded: max 10, got 33. Request id: 021787028597364bb9ebb4b6644457884a01efaa0fed63392b6fd","param":"input","type":"BadRequest"}}';
     const qianfanError =
-      'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"The parameter input specified in the request are not valid: ... Request id: abc","param":"input","type":"BadRequest"}}';
+      'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"The parameter input specified in the request are not valid: 单次请求最多传入 16 条 input. Request id: abc","param":"input","type":"BadRequest"}}';
     const openAiOversizedInputArray =
       "openai embeddings failed: 400 input array is too long: max 2048";
 
-    expect(isSplittableMemoryEmbeddingProviderError(volcArkError)).toBe(true);
-    expect(isSplittableMemoryEmbeddingProviderError(qianfanError)).toBe(true);
-    expect(isSplittableMemoryEmbeddingProviderError(openAiOversizedInputArray)).toBe(true);
     expect(isSplittableMemoryEmbeddingError(volcArkError)).toBe(true);
     expect(isSplittableMemoryEmbeddingError(qianfanError)).toBe(true);
+    expect(isSplittableMemoryEmbeddingError(openAiOversizedInputArray)).toBe(true);
 
-    // Unrelated permanent errors must not be treated as splittable.
-    expect(isSplittableMemoryEmbeddingProviderError("embedding validation failed")).toBe(false);
+    // A bare input-limit phrase has no item-count evidence and must not split.
     expect(
-      isSplittableMemoryEmbeddingProviderError("openai embeddings failed: 401 unauthorized"),
+      isSplittableMemoryEmbeddingError("openai embeddings failed: 400 input limit exceeded"),
     ).toBe(false);
-    expect(
-      isSplittableMemoryEmbeddingProviderError(
-        '{"error":{"code":"InvalidParameter","param":"model"}}',
-      ),
-    ).toBe(false);
+  });
+
+  it("does not recursively split permanent input validation errors", async () => {
+    const permanentError = new Error(
+      'openai embeddings failed: 400 {"error":{"code":"InvalidParameter","message":"input must be a string","param":"input","type":"BadRequest"}}',
+    );
+    const run = vi.fn(async () => {
+      throw permanentError;
+    });
+
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["a", "b", "c"],
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        isSplittable: isSplittableMemoryEmbeddingError,
+        waitForRetry: async () => {},
+        maxAttempts: 1,
+        baseDelayMs: 500,
+      }),
+    ).rejects.toBe(permanentError);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("bisects provider item-count 400s until each sub-batch fits under the cap", async () => {
@@ -339,7 +349,7 @@ describe("memory embedding policy", () => {
       items: ["a", "b", "c", "d"],
       run,
       isRetryable: isRetryableMemoryEmbeddingError,
-      isSplittable: isSplittableMemoryEmbeddingTransportError,
+      isSplittable: isSplittableMemoryEmbeddingError,
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
@@ -366,7 +376,7 @@ describe("memory embedding policy", () => {
         items: ["a", "b"],
         run,
         isRetryable: isRetryableMemoryEmbeddingError,
-        isSplittable: isSplittableMemoryEmbeddingTransportError,
+        isSplittable: isSplittableMemoryEmbeddingError,
         waitForRetry: async () => {},
         maxAttempts: 1,
         baseDelayMs: 500,
@@ -385,7 +395,7 @@ describe("memory embedding policy", () => {
         items: ["a", "b"],
         run,
         isRetryable: isRetryableMemoryEmbeddingError,
-        isSplittable: isSplittableMemoryEmbeddingTransportError,
+        isSplittable: isSplittableMemoryEmbeddingError,
         waitForRetry: async () => {},
         maxAttempts: 2,
         baseDelayMs: 500,

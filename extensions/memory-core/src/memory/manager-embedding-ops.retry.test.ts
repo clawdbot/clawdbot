@@ -10,6 +10,15 @@ type EmbeddingQueryRetryHarness = {
   withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
 };
 
+type EmbeddingBatchRetryHarness = {
+  provider: EmbeddingProvider;
+  embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
+  markLocalEmbeddingProviderDegraded: (error: unknown) => void;
+  resolveEmbeddingTimeout: () => number;
+  waitForEmbeddingRetry: () => Promise<void>;
+  withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
+};
+
 function createEmbeddingQueryRetryHarness(
   embedQuery: EmbeddingProvider["embedQuery"],
   timeoutMs = 60_000,
@@ -29,6 +38,25 @@ function createEmbeddingQueryRetryHarness(
     markLocalEmbeddingProviderDegraded: vi.fn(),
     withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
   }) as EmbeddingQueryRetryHarness;
+}
+
+function createEmbeddingBatchRetryHarness(
+  embedBatch: EmbeddingProvider["embedBatch"],
+): EmbeddingBatchRetryHarness {
+  const provider: EmbeddingProvider = {
+    id: "test-provider",
+    model: "test-embedding-model",
+    embedQuery: async () => [],
+    embedBatch,
+  };
+
+  return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
+    provider,
+    resolveEmbeddingTimeout: () => 60_000,
+    markLocalEmbeddingProviderDegraded: vi.fn(),
+    waitForEmbeddingRetry: async () => {},
+    withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
+  }) as EmbeddingBatchRetryHarness;
 }
 
 describe("memory embedding query retry cancellation", () => {
@@ -107,5 +135,30 @@ describe("memory embedding query retry cancellation", () => {
       true,
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("memory embedding batch retry boundary", () => {
+  it("bisects provider item-count failures through embedBatchWithRetry", async () => {
+    const providerItemCap = 10;
+    const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
+    const embedBatch = vi.fn(async (texts: string[]) => {
+      if (texts.length > providerItemCap) {
+        throw new Error(
+          'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"InvalidParameter","message":"input array is too long: max 10, got 33","param":"input"}}',
+        );
+      }
+      return texts.map((text) => [text.length]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+
+    const result = await manager.embedBatchWithRetry(items);
+
+    expect(result).toHaveLength(items.length);
+    expect(result.map(([length]) => length)).toEqual(items.map((text) => text.length));
+    expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([
+      33, 17, 9, 8, 16, 8, 8,
+    ]);
+    expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
   });
 });
