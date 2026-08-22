@@ -52,13 +52,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/scope-upgrade-shell.ts",
-      "text": "device scope upgrade banner"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/components/app-topbar.ts",

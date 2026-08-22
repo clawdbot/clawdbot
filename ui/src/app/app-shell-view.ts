@@ -6,7 +6,9 @@ import type {
   SidebarWorkboardRenderers,
   SidebarWorkboardSnapshot,
 } from "../components/app-sidebar-workboard.ts";
+import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
@@ -26,7 +28,6 @@ import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gate
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { openScopeUpgradeDetails, scopeUpgradeStatusVisible } from "./device-scope-upgrade.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -39,22 +40,26 @@ import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
-  renderScopeUpgradeShellStatusTrigger,
-  renderScopeUpgradeShellSurface,
-  SCOPE_UPGRADE_DESKTOP_TRIGGER_ID,
-  SCOPE_UPGRADE_MOBILE_TRIGGER_ID,
-  SCOPE_UPGRADE_NATIVE_TRIGGER_ID,
-} from "./scope-upgrade-shell.ts";
-import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
   loadSettings,
   normalizeCatalogOpenTarget,
 } from "./settings.ts";
-import { renderShellChromeControls } from "./shell-chrome-controls-view.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
+const SCOPE_UPGRADE_SURFACE_ELEMENT = {
+  tagName: "openclaw-device-scope-upgrade-banner",
+  label: t("connection.scopeUpgrade.status"),
+  loadModule: () =>
+    import("./device-scope-upgrade.runtime.ts").catch(
+      () => import("./device-scope-upgrade-retry.runtime.ts"),
+    ),
+} satisfies OptionalCustomElement;
+
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly runtime: ApplicationRuntime | undefined;
@@ -282,21 +287,22 @@ export function renderApplicationShell(host: ShellViewHost) {
     routeId: activeRoute,
     onboarding,
   });
-  const showScopeUpgradeStatus = scopeUpgradeStatusVisible(gatewaySnapshot);
-  const scopeUpgradeAnchorId = mobileNavLayout
-    ? SCOPE_UPGRADE_MOBILE_TRIGGER_ID
-    : nativeWebChrome
-      ? SCOPE_UPGRADE_NATIVE_TRIGGER_ID
-      : SCOPE_UPGRADE_DESKTOP_TRIGGER_ID;
-  const scopeUpgradeSurface = renderScopeUpgradeShellSurface(
-    host.lazyCustomElements,
-    gatewaySnapshot,
-    {
-      mobile: mobileNavLayout,
-      anchorId: scopeUpgradeAnchorId,
-      popoverPlacement: onboarding ? "bottom-end" : "bottom-start",
-    },
-  );
+  const showScopeUpgradeStatus =
+    gatewayConnected &&
+    gatewaySnapshot.hello?.auth?.scopes !== undefined &&
+    !operatorAccess.canAdmin;
+  if (showScopeUpgradeStatus) {
+    host.lazyCustomElements.preload(SCOPE_UPGRADE_SURFACE_ELEMENT, { reportError: true });
+  }
+  const scopeUpgradeSurface = showScopeUpgradeStatus
+    ? html`<openclaw-device-scope-upgrade-banner
+        .props=${{
+          snapshot: gatewaySnapshot,
+          mobile: mobileNavLayout,
+          showTrigger: !mergedChatChrome,
+        }}
+      ></openclaw-device-scope-upgrade-banner>`
+    : null;
   // Drawer navigation always opens expanded; the desktop collapse preference
   // stays persisted for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
@@ -488,13 +494,6 @@ export function renderApplicationShell(host: ShellViewHost) {
               .newSessionDisabledReason=${newSessionAccess.allowed
                 ? undefined
                 : newSessionAccess.reason}
-              .trailingActions=${showScopeUpgradeStatus
-                ? renderScopeUpgradeShellStatusTrigger({
-                    id: SCOPE_UPGRADE_NATIVE_TRIGGER_ID,
-                    className:
-                      "topbar-icon-btn macos-titlebar-controls__button macos-titlebar-controls__scope-upgrade",
-                  })
-                : nothing}
               .onToggleSidebar=${() => host.toggleNavigationSurface()}
               .onOpenPalette=${() => host.openPalette()}
               .onOpenNewSession=${() => host.handleNativeNewSession()}
@@ -504,31 +503,72 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-app-topbar
         .resourceBasePath=${context.resourceBasePath}
         .navDrawerOpen=${navDrawerOpen}
-        .trailingActions=${showScopeUpgradeStatus && !mergedChatChrome && !onboarding
-          ? renderScopeUpgradeShellStatusTrigger({
-              id: SCOPE_UPGRADE_MOBILE_TRIGGER_ID,
-              className: "topbar-icon-btn topbar-scope-upgrade",
-              onActivate: openScopeUpgradeDetails,
-            })
+        .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
+          ? scopeUpgradeSurface
           : nothing}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
-      ${renderShellChromeControls({
-        onboarding,
-        settingsTakeover,
-        mobileNavLayout,
-        nativeWebChrome,
-        navCollapsed,
-        newSessionAccess,
-        selectedAgentId,
-        custodianPanelAvailable,
-        showScopeUpgradeStatus,
-        onToggleNavigation: () => host.toggleNavigationSurface(),
-        onOpenNewSession: openNewSession,
-        onOpenPalette: () => host.openPalette(),
-        onOpenScopeUpgrade: openScopeUpgradeDetails,
-      })}
+      ${!onboarding && !settingsTakeover && !mobileNavLayout
+        ? html`
+            <div class="shell-chrome-controls">
+              <openclaw-tooltip
+                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
+              >
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
+                  aria-label=${t(navCollapsed ? "nav.expand" : "nav.collapse")}
+                  aria-expanded=${navCollapsed ? "false" : "true"}
+                  @click=${() => host.toggleNavigationSurface()}
+                >
+                  ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                </button>
+              </openclaw-tooltip>
+              ${navCollapsed
+                ? html`<openclaw-tooltip
+                    .content=${newSessionAccess.allowed
+                      ? t("chat.runControls.newSession")
+                      : newSessionAccess.reason}
+                  >
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__new-thread"
+                      aria-label=${t("chat.runControls.newSession")}
+                      ?disabled=${!newSessionAccess.allowed}
+                      @click=${() => openNewSession(selectedAgentId)}
+                    >
+                      ${icons.plus}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing}
+              <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button shell-chrome-controls__search"
+                  aria-label=${t("chat.openCommandPalette")}
+                  @click=${() => host.openPalette()}
+                >
+                  ${icons.search}
+                </button>
+              </openclaw-tooltip>
+              ${navCollapsed && custodianPanelAvailable
+                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
+                      aria-label=${t("nav.askOpenClaw")}
+                      @click=${() =>
+                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
+                    >
+                      ${icons.lobster}
+                    </button>
+                  </openclaw-tooltip>`
+                : nothing}
+            </div>
+          `
+        : nothing}
+      ${!mobileNavLayout || onboarding || mergedChatChrome ? scopeUpgradeSurface : nothing}
       <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
         ${mobileNavLayout
           ? html`<openclaw-modal-dialog
@@ -565,7 +605,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${scopeUpgradeSurface.inline}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
@@ -601,7 +640,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
-      ${scopeUpgradeSurface.overlay}
       <openclaw-terminal-panel
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}

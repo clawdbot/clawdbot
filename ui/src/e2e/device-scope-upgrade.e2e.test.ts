@@ -37,6 +37,7 @@ const HIDDEN_WEB_CHROME_HOSTS = [
 const MANUAL_UPGRADE_GUIDANCE =
   "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.";
 const BANNER_MODULE_ROUTE = /device-scope-upgrade\.runtime(?:-[^/.]+)?\.(?:js|ts)/u;
+const BANNER_RETRY_MODULE_ROUTE = /device-scope-upgrade-retry\.runtime(?:-[^/.]+)?\.(?:js|ts)/u;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -147,7 +148,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       await menu.waitFor();
       expect(await mobile.page.locator(".chat-pane__palette-open").count()).toBe(0);
       expect(await mobile.page.locator(".chat-side-panel-toggle").count()).toBe(0);
-      expect(await mobile.page.locator(".topbar-scope-upgrade").count()).toBe(0);
+      expect(await mobile.page.locator(".scope-upgrade-shell-status").count()).toBe(0);
       expect(await mobile.page.locator(".sidebar-attention--floating").count()).toBe(0);
       expect(await mobile.page.locator(".sidebar-update-card--floating").count()).toBe(0);
       expect(await mobile.page.locator(".chat-header-session-menu__status-dot").count()).toBe(1);
@@ -181,9 +182,18 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       await installMockGateway(mobile.page, { operatorScopes: LIMITED_SCOPES });
       await mobile.page.goto(`${server.baseUrl}cron`);
       const title = mobile.page.locator(".content-header .page-title");
-      const status = mobile.page.locator(".topbar-scope-upgrade");
+      const status = mobile.page.locator(".scope-upgrade-shell-status");
       await title.waitFor();
       await status.waitFor();
+      await status.focus();
+      await mobile.page.keyboard.press("Tab");
+      await expect
+        .poll(() =>
+          mobile.page
+            .locator(".topbar-search")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
       expect(
         await mobile.page.locator(".content > openclaw-device-scope-upgrade-banner").count(),
       ).toBe(0);
@@ -203,12 +213,43 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       await closeProofContext(mobile, "automations-mobile");
     }
 
+    const tablet = await createProofContext({ width: 900, height: 1000 }, "automations-tablet");
+    try {
+      await installMockGateway(tablet.page, { operatorScopes: LIMITED_SCOPES });
+      await tablet.page.goto(`${server.baseUrl}cron`);
+      const title = tablet.page.locator(".content-header .page-title");
+      const status = tablet.page.locator(".scope-upgrade-shell-status");
+      await title.waitFor();
+      await status.click();
+      await tablet.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await captureProof(tablet.page, "tablet-automations-access-details.png");
+      const dialogBox = await tablet.page
+        .locator("openclaw-modal-dialog.scope-upgrade-details-dialog")
+        .evaluate(async (modal) => {
+          const dialog = modal.shadowRoot?.querySelector("wa-dialog");
+          const panel = dialog?.shadowRoot?.querySelector<HTMLElement>('[part="dialog"]');
+          if (!panel) {
+            throw new Error("Missing scope-upgrade dialog panel");
+          }
+          await Promise.all(
+            panel.getAnimations({ subtree: true }).map((animation) => animation.finished),
+          );
+          const box = panel.getBoundingClientRect();
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        });
+      expect(dialogBox.x).toBe(0);
+      expect(dialogBox.width).toBe(900);
+      expect(dialogBox.y + dialogBox.height).toBe(1000);
+    } finally {
+      await closeProofContext(tablet, "automations-tablet");
+    }
+
     const desktop = await createProofContext({ width: 1280, height: 900 }, "automations-desktop");
     try {
       await installMockGateway(desktop.page, { operatorScopes: LIMITED_SCOPES });
       await desktop.page.goto(`${server.baseUrl}cron`);
       const title = desktop.page.locator(".content-header .page-title");
-      const status = desktop.page.locator(".shell-chrome-controls__scope-upgrade");
+      const status = desktop.page.locator(".scope-upgrade-shell-status");
       await title.waitFor();
       await status.waitFor();
       const titleTopBefore = (await title.boundingBox())?.y;
@@ -256,18 +297,22 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
 
     const limitedBanner = page.getByText("This browser has limited access.", { exact: true });
     try {
-      await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
       await expect.poll(() => heldBannerModule).toBe(true);
+      expect(await page.getByRole("button", { name: "Show limited access details" }).count()).toBe(
+        0,
+      );
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
-      await captureProof(page, "limited.png");
     } finally {
       releaseBannerModule();
       await bannerModuleRouteSettled;
     }
     await navigation;
     await page.getByRole("button", { name: "Show limited access details" }).click();
+    await limitedBanner.waitFor();
     await page.getByRole("button", { name: "Request admin" }).waitFor();
+    await captureProof(page, "limited.png");
+    await page.getByRole("button", { name: "Close limited access details" }).click();
 
     await page.locator("#new-session-project-trigger").click();
     const projectPopover = page.locator("wa-popover.new-session-page__project-popover");
@@ -414,21 +459,53 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       }
       const status = page.getByRole("button", { name: "Show limited access details" });
       await status.waitFor();
+      expect(await status.evaluate((element) => getComputedStyle(element).position)).toBe("fixed");
       if (rootClass === "openclaw-native-web-chrome") {
         await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-        expect(
-          await status.evaluate((element) => Boolean(element.closest(".macos-titlebar-controls"))),
-        ).toBe(true);
+        expect((await status.boundingBox())?.x).toBe(252);
       } else {
-        expect(
-          await status.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
-        ).toBe(true);
+        expect((await status.boundingBox())?.x).toBe(10);
         expect(await page.locator(".shell-chrome-controls__search").isVisible()).toBe(false);
       }
       await status.click();
       await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
     },
   );
+
+  it("keeps native mobile access status clear of the compact topbar", async () => {
+    const native = await createProofContext({ width: 555, height: 1000 }, "native-mobile-access");
+    try {
+      await native.context.addInitScript(() => {
+        (window as Window & { __OPENCLAW_NATIVE_WEB_CHROME__?: boolean })[
+          "__OPENCLAW_NATIVE_WEB_CHROME__"
+        ] = true;
+        document.documentElement.classList.add(
+          "openclaw-native-macos",
+          "openclaw-native-web-chrome",
+        );
+      });
+      await installMockGateway(native.page, { operatorScopes: LIMITED_SCOPES });
+      await native.page.goto(`${server.baseUrl}cron`);
+      const status = native.page.getByRole("button", { name: "Show limited access details" });
+      const search = native.page.locator(".topbar-search");
+      await status.waitFor();
+      await search.waitFor();
+      await native.page.locator(".shell").evaluate(async (shell) => {
+        await Promise.all(
+          shell.getAnimations({ subtree: true }).map((animation) => animation.finished),
+        );
+      });
+      const statusBox = await status.boundingBox();
+      const searchBox = await search.boundingBox();
+      expect(statusBox?.x).toBe(457);
+      expect(statusBox?.y).toBe(10);
+      expect((statusBox?.x ?? 0) + (statusBox?.width ?? 0)).toBeLessThanOrEqual(searchBox?.x ?? 0);
+      await status.click();
+      await native.page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    } finally {
+      await closeProofContext(native, "native-mobile-access");
+    }
+  });
 
   it("does not misreport limited Custodian access as an outdated Gateway", async () => {
     const context = await createContext();
@@ -449,14 +526,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "custodian-limited.png");
   });
 
-  it("keeps manual repair guidance when the banner module fails to load", async () => {
+  it("recovers scope details after the lazy module initially fails", async () => {
     const context = await createContext();
     const page = await context.newPage();
     let bannerModuleRejected = false;
     const rejectBannerModule = async (route: Route) => {
       // A network abort intentionally starts whole-document stale-chunk recovery,
       // which is a different contract and can reload while this test tears down.
-      // Fail module evaluation instead so only the optional-banner fallback owns it.
+      // Fail module evaluation instead so the shared lazy-view error owns recovery.
       await route.fulfill({
         body: 'throw new Error("device scope banner module failed to evaluate");',
         contentType: "application/javascript",
@@ -471,13 +548,45 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       const navigation = page.goto(`${server.baseUrl}chat`);
       await expect.poll(() => bannerModuleRejected).toBe(true);
       await navigation;
-      await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
-
-      expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
+      await page.getByRole("button", { name: "Show limited access details" }).click();
+      await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Request admin" }).waitFor();
+      expect(await page.getByRole("button", { name: "Retry" }).count()).toBe(0);
     } finally {
       // A failed dynamic import can be retried by a later shell render. Remove
       // the route before closing so teardown cannot race a fresh intercepted request.
       await page.unroute(BANNER_MODULE_ROUTE, rejectBannerModule);
+      await page.close({ runBeforeUnload: false });
+    }
+  });
+
+  it("keeps recovery visible when both scope-upgrade entries fail", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    let rejectedModules = 0;
+    const rejectBannerModule = async (route: Route) => {
+      rejectedModules += 1;
+      await route.fulfill({
+        body: 'throw new Error("device scope banner module failed to evaluate");',
+        contentType: "application/javascript",
+        status: 200,
+      });
+    };
+    await page.route(BANNER_MODULE_ROUTE, rejectBannerModule);
+    await page.route(BANNER_RETRY_MODULE_ROUTE, rejectBannerModule);
+    await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expect.poll(() => rejectedModules).toBe(2);
+      await page.getByRole("alert").waitFor();
+      await page.getByText("Panel failed to load", { exact: true }).waitFor();
+      await page.getByText("Limited access", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Retry" }).waitFor();
+      await captureProof(page, "scope-upgrade-load-failed.png");
+    } finally {
+      await page.unroute(BANNER_MODULE_ROUTE, rejectBannerModule);
+      await page.unroute(BANNER_RETRY_MODULE_ROUTE, rejectBannerModule);
       await page.close({ runBeforeUnload: false });
     }
   });
