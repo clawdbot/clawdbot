@@ -1,13 +1,18 @@
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { selectDeliverableSessionsReply } from "../../tools/sessions-send-tokens.js";
-import type {
-  SubagentCompletionState,
-  SubagentRunRecord,
-} from "../registry/subagent-registry.types.js";
 
 /** Selects the canonical operator-visible result from captured completion state. */
 export function resolveSubagentCompletionResultText(entry: {
-  completion?: Pick<SubagentCompletionState, "resultText" | "fallbackResultText" | "terminalReply">;
-  execution: Pick<SubagentRunRecord["execution"], "outcome">;
+  completion?: {
+    required?: boolean;
+    resultText?: string | null;
+    fallbackResultText?: string | null;
+    terminalReply?: AgentRunTerminalReplySnapshot;
+  };
+  execution: {
+    status?: "queued" | "running" | "interrupted" | "terminal";
+    outcome?: { status: "ok" | "error" | "timeout" | "unknown" };
+  };
 }): string | undefined {
   const terminalReply = entry.completion?.terminalReply;
   // Producer-owned terminal evidence outranks retained transcript fallback text.

@@ -15,7 +15,6 @@ import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
-import type { SubagentCompletionState } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
@@ -440,7 +439,7 @@ type ChildCompletionRow = {
   label?: string;
   createdAt: number;
   execution: ChildCompletionExecution;
-  completion?: Pick<SubagentCompletionState, "resultText" | "fallbackResultText" | "terminalReply">;
+  completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
 };
 
 type ChildCompletionSection = {
