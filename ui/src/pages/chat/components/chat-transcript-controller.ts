@@ -28,10 +28,7 @@ import {
   resolveChatTranscriptInteractionRow,
 } from "./chat-transcript-interaction-anchor.ts";
 import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
-import {
-  initialChatTranscriptScrollMargin,
-  syncChatTranscriptScrollMargin,
-} from "./chat-transcript-scroll-margin.ts";
+import { initialScrollMargin, syncScrollMargin } from "./chat-transcript-scroll-margin.ts";
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
@@ -240,7 +237,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
-      scrollMargin: initialChatTranscriptScrollMargin(host),
+      scrollMargin: initialScrollMargin(host),
       anchorTo: "end",
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
@@ -265,7 +262,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
               CHAT_TRANSCRIPT_END_THRESHOLD_PX;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
-          syncChatTranscriptScrollMargin(instance.scrollElement, instance);
+          syncScrollMargin(instance.scrollElement, instance);
           callback(rect);
           if (wasAtEndBeforeResize) {
             instance.scrollToEnd({ behavior: "auto" });

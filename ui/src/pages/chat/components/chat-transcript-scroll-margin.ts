@@ -9,13 +9,13 @@ function transcriptScrollMargin(element: Element | null): number {
   return Number.isFinite(margin) ? margin : 0;
 }
 
-export function initialChatTranscriptScrollMargin(host: ReactiveControllerHost): number {
+export function initialScrollMargin(host: ReactiveControllerHost): number {
   return host instanceof HTMLElement
     ? transcriptScrollMargin(host.querySelector(".chat-thread"))
     : 0;
 }
 
-export function syncChatTranscriptScrollMargin(
+export function syncScrollMargin(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): void {
