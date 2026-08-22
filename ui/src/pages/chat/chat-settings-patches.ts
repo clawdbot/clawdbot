@@ -112,7 +112,10 @@ function trackPendingChatSettingsPatch(
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode" | "toolOverrides">,
+  patch: Pick<
+    SessionPatch,
+    "model" | "contextWindow" | "thinkingLevel" | "fastMode" | "toolOverrides"
+  >,
   options: {
     agentId?: string;
     deferModelOverride?: boolean;

@@ -74,6 +74,7 @@ export function inheritSessionSelection(
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
+    ...(parentEntry.contextWindow ? { contextWindow: parentEntry.contextWindow } : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.toolOverrides ? { toolOverrides: parentEntry.toolOverrides } : {}),

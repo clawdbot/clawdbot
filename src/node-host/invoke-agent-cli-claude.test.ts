@@ -37,7 +37,7 @@ async function executableScript(source: string): Promise<string> {
   // plan canonicalizes argv[0]; raw mkdtemp paths pass on Linux but fail here.
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-")));
   tempDirs.push(dir);
-  const file = path.join(dir, "claude-test");
+  const file = path.join(dir, "claude-test.cjs");
   await fs.writeFile(file, `#!/usr/bin/env node\n${source}\n`, { mode: 0o700 });
   return file;
 }
@@ -102,8 +102,16 @@ describe("Claude CLI node command", () => {
           stdin: "hello",
           systemPrompt: "private prompt",
           cwd,
-          env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+          env: {
+            NO_COLOR: "1",
+            CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+            CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+          },
+          clearEnv: [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+          ],
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
         }),
@@ -112,8 +120,12 @@ describe("Claude CLI node command", () => {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
-      env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+      env: {
+        NO_COLOR: "1",
+        CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+      },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_DISABLE_1M_CONTEXT", "CLAUDE_CODE_OAUTH_TOKEN"],
     });
   });
 

@@ -9283,6 +9283,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let category: String?
     public let model: String?
+    public let contextwindow: String?
     public let thinkinglevel: String?
     public let permissionmode: SessionPermissionMode?
     public let incognito: Bool?
@@ -9310,6 +9311,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String? = nil,
         category: String? = nil,
         model: String? = nil,
+        contextwindow: String? = nil,
         thinkinglevel: String? = nil,
         permissionmode: SessionPermissionMode? = nil,
         incognito: Bool? = nil,
@@ -9336,6 +9338,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.category = category
         self.model = model
+        self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.permissionmode = permissionmode
         self.incognito = incognito
@@ -9364,6 +9367,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case category
         case model
+        case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case permissionmode = "permissionMode"
         case incognito
@@ -9628,6 +9632,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let archived: Bool?
     public let pinned: Bool?
     public let unread: Bool?
+    public let contextwindow: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let tooloverrides: AnyCodable?
@@ -9664,6 +9669,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         archived: Bool? = nil,
         pinned: Bool? = nil,
         unread: Bool? = nil,
+        contextwindow: AnyCodable? = nil,
         thinkinglevel: AnyCodable? = nil,
         fastmode: AnyCodable? = nil,
         tooloverrides: AnyCodable? = nil,
@@ -9699,6 +9705,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.archived = archived
         self.pinned = pinned
         self.unread = unread
+        self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.tooloverrides = tooloverrides
@@ -9736,6 +9743,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case archived
         case pinned
         case unread
+        case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case tooloverrides = "toolOverrides"
@@ -9770,6 +9778,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let archived: Bool?
     public let pinned: Bool?
     public let unread: Bool?
+    public let contextwindow: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let tooloverrides: AnyCodable?
@@ -9802,6 +9811,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         archived: Bool? = nil,
         pinned: Bool? = nil,
         unread: Bool? = nil,
+        contextwindow: AnyCodable? = nil,
         thinkinglevel: AnyCodable? = nil,
         fastmode: AnyCodable? = nil,
         tooloverrides: AnyCodable? = nil,
@@ -9833,6 +9843,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.archived = archived
         self.pinned = pinned
         self.unread = unread
+        self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.tooloverrides = tooloverrides
@@ -9866,6 +9877,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case archived
         case pinned
         case unread
+        case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case tooloverrides = "toolOverrides"
@@ -14727,6 +14739,8 @@ public struct ModelChoice: Codable, Sendable {
     public let tags: [String]?
     public let available: Bool?
     public let contextwindow: Int?
+    public let contextwindows: [[String: AnyCodable]]?
+    public let contextwindowdefault: String?
     public let reasoning: Bool?
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
@@ -14743,6 +14757,8 @@ public struct ModelChoice: Codable, Sendable {
         tags: [String]? = nil,
         available: Bool? = nil,
         contextwindow: Int? = nil,
+        contextwindows: [[String: AnyCodable]]? = nil,
+        contextwindowdefault: String? = nil,
         reasoning: Bool? = nil,
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
@@ -14758,6 +14774,8 @@ public struct ModelChoice: Codable, Sendable {
         self.tags = tags
         self.available = available
         self.contextwindow = contextwindow
+        self.contextwindows = contextwindows
+        self.contextwindowdefault = contextwindowdefault
         self.reasoning = reasoning
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
@@ -14775,6 +14793,8 @@ public struct ModelChoice: Codable, Sendable {
         case tags
         case available
         case contextwindow = "contextWindow"
+        case contextwindows = "contextWindows"
+        case contextwindowdefault = "contextWindowDefault"
         case reasoning
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"

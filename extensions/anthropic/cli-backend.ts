@@ -11,6 +11,7 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
 import { parseClaudeCliJsonlEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -251,6 +252,8 @@ export function buildAnthropicCliBackend(
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveModelId: ({ modelId, contextWindow }) =>
+      resolveClaudeCliContextWindowModelId(modelId, contextWindow),
     authEpochMode: "profile-only",
     prepareExecution: (context) => {
       const prepare = () => {
@@ -263,6 +266,7 @@ export function buildAnthropicCliBackend(
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
         const env = {
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };

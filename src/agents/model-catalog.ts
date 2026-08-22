@@ -179,6 +179,8 @@ function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry
 function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogEntry {
   const {
     contextWindow: _contextWindow,
+    contextWindows: _contextWindows,
+    contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
     reasoning: _reasoning,
     input: _input,
@@ -205,8 +207,36 @@ function overlayCatalogMetadata(
   const routeChanged = catalogRouteChanges(base, overlay);
   const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogParams(routeBase.params, overlay.params);
+  // Options + default are one normalized unit (default ∈ options): an overlay
+  // that replaces the options list must also own the default, or a base default
+  // absent from the new list would leak through the field-by-field merge.
+  const {
+    contextWindows: _baseContextWindows,
+    contextWindowDefault: _baseContextWindowDefault,
+    ...selectionNeutralBase
+  } = routeBase;
+  const contextWindowSelection =
+    overlay.contextWindows !== undefined
+      ? {
+          contextWindows: overlay.contextWindows,
+          ...(overlay.contextWindowDefault !== undefined
+            ? { contextWindowDefault: overlay.contextWindowDefault }
+            : {}),
+        }
+      : {
+          ...(routeBase.contextWindows !== undefined
+            ? { contextWindows: routeBase.contextWindows }
+            : {}),
+          ...((overlay.contextWindowDefault ?? routeBase.contextWindowDefault)
+            ? {
+                contextWindowDefault:
+                  overlay.contextWindowDefault ?? routeBase.contextWindowDefault,
+              }
+            : {}),
+        };
   return {
-    ...routeBase,
+    ...selectionNeutralBase,
+    ...contextWindowSelection,
     ...(routeChanged && !options?.preserveBaseName ? { name: overlay.name } : {}),
     ...(overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
@@ -411,6 +441,12 @@ export function loadManifestModelCatalog(params: {
     const contextWindow = row.contextWindow ?? row.contextTokens;
     if (contextWindow) {
       entry.contextWindow = contextWindow;
+    }
+    if (row.contextWindows?.length) {
+      entry.contextWindows = row.contextWindows.map((option) => ({ ...option }));
+    }
+    if (row.contextWindowDefault) {
+      entry.contextWindowDefault = row.contextWindowDefault;
     }
     if (row.contextTokens) {
       entry.contextTokens = row.contextTokens;

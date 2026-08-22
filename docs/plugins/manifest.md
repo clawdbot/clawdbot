@@ -1033,28 +1033,30 @@ Provider fields:
 
 Model fields:
 
-| Field              | Type                                                           | What it means                                                                        |
-| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
-| `name`             | `string`                                                       | Optional display name.                                                               |
-| `api`              | `ModelApi`                                                     | Optional per-model API override.                                                     |
-| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                                |
-| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
-| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
-| `contextWindow`    | `number`                                                       | Native provider context window.                                                      |
-| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
-| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                                    |
-| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
-| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
-| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
-| `upstreamModel`    | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
-| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                            |
-| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
-| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                                     |
-| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
-| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
-| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
+| Field                  | Type                                                           | What it means                                                                        |
+| ---------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `id`                   | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
+| `name`                 | `string`                                                       | Optional display name.                                                               |
+| `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
+| `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
+| `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
+| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
+| `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
+| `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
+| `contextWindowDefault` | `string`                                                       | Default selectable-window id; must name an entry in `contextWindows`.                |
+| `contextTokens`        | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
+| `maxTokens`            | `number`                                                       | Maximum output tokens when known.                                                    |
+| `thinkingLevelMap`     | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
+| `cost`                 | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
+| `compat`               | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
+| `upstreamModel`        | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `mediaInput`           | `object`                                                       | Optional per-modality input config, currently image-only.                            |
+| `status`               | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
+| `statusReason`         | `string`                                                       | Optional reason shown with non-available status.                                     |
+| `replaces`             | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
+| `replacedBy`           | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
+| `tags`                 | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
 
 Suppression fields:
 

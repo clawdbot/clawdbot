@@ -390,6 +390,11 @@ describe("prepared model runtime snapshots", () => {
       input: ["text" as const, "image" as const],
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       contextWindow: 1_050_000,
+      contextWindows: [
+        { id: "250k", label: "250K", contextWindow: 250_000 },
+        { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+      ],
+      contextWindowDefault: "1050k",
       maxTokens: 128_000,
     };
     mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
@@ -444,6 +449,11 @@ describe("prepared model runtime snapshots", () => {
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 1_050_000,
+        contextWindows: [
+          { id: "250k", label: "250K", contextWindow: 250_000 },
+          { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+        ],
+        contextWindowDefault: "1050k",
         reasoning: true,
         input: ["text", "image"],
       },

@@ -231,6 +231,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
         ...senderContext,
         ...runBaseParams,
+        contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         provider: embeddedRunProvider,
         agentHarnessId: embeddedRunHarnessOverride,
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,

@@ -213,6 +213,7 @@ describe("lazy protocol validators", () => {
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,

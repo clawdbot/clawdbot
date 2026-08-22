@@ -49,6 +49,7 @@ type ChatModelControlsProps = {
   thinkingDefaults?: SessionsListResult["defaults"];
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
+  onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
   onModelSetup?: () => void;
   onModelPickerOpen?: () => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
@@ -366,6 +367,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !managedCatalog.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
   const showFastMode = props.showFastMode !== false;
+  // One owner supplies the whole tuple: mixing an override session's fields with
+  // the defaults row can render the default model's options for a session whose
+  // model declares none, then patch an invalid option id.
+  const contextWindowOwner = activeSession ?? props.sessionsResult?.defaults;
+  const contextWindows = contextWindowOwner?.contextWindows ?? [];
+  const selectedContextWindow =
+    contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
+  const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
   const effortDisabled =
     commonDisabled ||
     effortMutationDisabled ||
@@ -373,6 +382,18 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        contextWindow:
+          contextWindows.length > 1
+            ? {
+                options: contextWindows,
+                selected: selectedContextWindow,
+                ...(defaultContextWindow ? { defaultId: defaultContextWindow } : {}),
+                disabled: commonDisabled || effortMutationDisabled,
+                onSelect: async (next, targetSessionKey) => {
+                  await props.onContextWindowSelect?.(next, targetSessionKey);
+                },
+              }
+            : undefined,
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,

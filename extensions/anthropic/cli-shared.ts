@@ -36,6 +36,9 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CONFIG_DIR",
   // Re-injected per run from OpenClaw's canonical context budget.
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  // Re-injected only for 200K runs. Claude's user settings `env` block has
+  // higher precedence than the spawned process environment by design.
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
   "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
   // Re-injected per run from OpenClaw's effective thinking level.
   "MAX_THINKING_TOKENS",
