@@ -1057,6 +1057,19 @@ describe("config schema", () => {
     );
   });
 
+  it("accepts the credential transcript opt-out in the runtime zod schema", () => {
+    // The prompt contract is unreachable unless this key survives validation:
+    // a strictObject rejection here invalidates the operator's whole config.
+    const parsed = OpenClawSchema.parse({
+      security: { allowCredentialsInTranscript: true },
+    });
+
+    expect(parsed.security?.allowCredentialsInTranscript).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({ security: { allowCredentialsInTranscript: "yes" } }).success,
+    ).toBe(false);
+  });
+
   it("accepts Code Mode config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ codeMode: true })?.codeMode).toBe(true);
     expect(

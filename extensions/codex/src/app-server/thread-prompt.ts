@@ -4,7 +4,7 @@ import {
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+  transcriptCredentialSafetyPrompt,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
@@ -109,7 +109,7 @@ export function buildDeveloperInstructions(
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       messageToolAvailable,
     }),
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    transcriptCredentialSafetyPrompt(params.config),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];

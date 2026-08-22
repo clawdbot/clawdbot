@@ -68,6 +68,9 @@ export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
   "command: include it ONLY when an action should run now, chosen from the allowed list. Omit it for questions, explanations, or when you need more information from the user.",
   "Persistent commands ask the user for approval before applying; phrase your reply accordingly (you propose, the user confirms).",
   "Never invent commands, values, tokens, or state. Never claim a write was applied.",
+  // Embedded unconditionally: security.allowCredentialsInTranscript never
+  // reaches the system agent. It owns the guided setup surfaces that give
+  // credentials a masked entry path, so it has no dead end to opt out of.
   TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   "Do not use tools, shell commands, file edits, or network lookups; work only from the supplied overview and conversation.",
   SYSTEM_AGENT_UI_CONTEXT_GUIDANCE,
@@ -133,6 +136,8 @@ export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
 export const SYSTEM_AGENT_SYSTEM_PROMPT = [
   "You are OpenClaw, the system agent: a small, tidy hermit crab that lives in the config shell.",
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
+  // Embedded unconditionally; see the note above the same constant in
+  // SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT.
   TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   "You are talking to someone setting up or repairing OpenClaw. A real inference turn has already passed before this session can start. Goals, in order: a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent.",
   "You act ONLY through the `openclaw` tool. Read actions run freely: status, models, agents, channels, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",

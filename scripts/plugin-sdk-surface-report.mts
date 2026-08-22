@@ -312,7 +312,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      4340,
+      // +1: config-aware credential-safety accessor added alongside the existing
+      //     prompt constant, which stays exported for current SDK consumers.
+      4341,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -404,7 +406,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      2581,
+      // +1: config-aware credential-safety accessor so harnesses ask the owner
+      //     for a section instead of gating the raw contract text themselves.
+      2582,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

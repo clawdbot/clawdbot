@@ -1734,6 +1734,43 @@ deprecated. New configuration should use the `Attachment*` variables.
 
 ---
 
+## Security
+
+### Credential transcript safety
+
+Agents carry a prompt contract that keeps credentials out of conversations:
+never solicit or echo a credential in chat, never place one in a command, URL,
+log, or shell variable, and route credential entry to a host-owned masked or
+structured setup instead.
+
+- `security.allowCredentialsInTranscript`: opt out of that contract. Default
+  `false`, which keeps it applied.
+
+Set it to `true` only when you accept that a credential sent in chat is
+persisted well beyond the message. Transcripts are indexed into memory search
+and are eligible for promotion into long-term memory, so a credential pasted
+into a conversation can resurface in later sessions. It also lands in Gateway
+logs and the prompt cache.
+
+The opt-out is intended for operator-owned hosts where no masked entry surface
+is reachable — for example a phone-only operator with no way to open the
+Control UI secrets page. Prefer a real entry path when you have one:
+
+```json5
+// ~/.openclaw/openclaw.json
+{
+  security: {
+    allowCredentialsInTranscript: true,
+  },
+}
+```
+
+The system agent ignores this setting and always applies the contract. It owns
+the guided setup flows (`open_setup` and the masked terminal wizard), so
+credentials always have a masked path there.
+
+---
+
 ## Config includes (`$include`)
 
 Split config into multiple files:

@@ -866,6 +866,12 @@ export function buildAgentSystemPrompt(params: {
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
   fsWorkspaceOnly?: boolean;
+  /**
+   * Credential-safety contract section. Omit to keep the contract (callers that
+   * do not resolve config must not silently drop it); null is the resolved
+   * opt-out from security.allowCredentialsInTranscript.
+   */
+  credentialSafetyPrompt?: string | null;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -1131,6 +1137,12 @@ export function buildAgentSystemPrompt(params: {
     params.fsWorkspaceOnly === true
       ? "tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in workspace, preferably `.openclaw/tmp/`. If file tools need it later, never exec-write `/tmp`; use workspace path."
       : "";
+  // Callers that never resolve config must not silently drop the contract, so
+  // only an explicit null (the resolved opt-out) removes it.
+  const credentialSafetySection =
+    params.credentialSafetyPrompt === undefined
+      ? TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT
+      : params.credentialSafetyPrompt;
   const safetySection = [
     "## Safety",
     "No independent goals, self-preservation, replication, resource acquisition, power-seeking, or plans beyond user request.",
@@ -1138,7 +1150,7 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    ...(credentialSafetySection ? [credentialSafetySection] : []),
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.
@@ -1225,6 +1237,7 @@ export function buildAgentSystemPrompt(params: {
     displayWorkspaceDir,
     workspaceGuidance,
     workspaceOnlyGuidance,
+    credentialSafetySection,
     workspaceNotes,
     bootstrapMode: params.bootstrapMode,
     bootstrapSystemPromptSections,
