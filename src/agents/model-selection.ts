@@ -44,12 +44,33 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "./model-selection-shared.js";
+import {
+  classifyModelFailure,
+  failureCooldownMs,
+  rankSmartModels,
+  selectSmartModel,
+  type ModelFailureReason,
+  type ModelRoutingPolicy,
+  type ModelTask,
+  type RankedModel,
+  type SmartModelCandidate,
+  type SmartModelRouterOptions,
+} from "./smart-model-router.js";
 export {
   resolveThinkingDefault,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "./model-thinking-default.js";
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
+export type {
+  ModelFailureReason,
+  ModelRoutingPolicy,
+  ModelTask,
+  RankedModel,
+  SmartModelCandidate,
+  SmartModelRouterOptions,
+};
+export { classifyModelFailure, failureCooldownMs, rankSmartModels, selectSmartModel };
 
 export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
@@ -156,6 +177,8 @@ export function resolvePersistedSelectedModelRef(params: {
     defaultProvider: params.defaultProvider,
     runtimeProvider: params.runtimeProvider,
     runtimeModel: params.runtimeModel,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
@@ -231,12 +254,9 @@ function appendAuthProfileSuffix(modelRef: string, profile: string | undefined):
  * or not a known alias, returns it unchanged.
  */
 function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
-  // Already a provider/model ref — no alias resolution needed.
   if (value.includes("/")) {
     return value;
   }
-  // Check if the value is a known alias; if so, resolve to provider/model.
-  // Unknown bare strings are returned as-is (don't guess the provider).
   const aliasKey = normalizeLowercaseStringOrEmpty(value);
   const aliasMatch = aliasIndex.byAlias.get(aliasKey);
   if (aliasMatch) {
@@ -350,7 +370,6 @@ export function resolveAllowedModelRef(
   return resolveAllowedModelRefInternal(params);
 }
 
-/** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
 export function resolveReasoningDefault(params: {
   provider: string;
   model: string;
