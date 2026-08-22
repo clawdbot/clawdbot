@@ -63,10 +63,10 @@ describe("sqlite WAL maintenance", () => {
 
       expect(statfs).toHaveBeenCalledWith(fs.realpathSync(tempDir));
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-      expect(db["exec"]).not.toHaveBeenCalled();
+      expect(db["exec"]).toHaveBeenCalledExactlyOnceWith("PRAGMA mmap_size = 0;");
       expect(maintenance.checkpoint()).toBe(true);
       expect(maintenance.close()).toBe(true);
-      expect(db["exec"]).not.toHaveBeenCalled();
+      expect(db["exec"]).toHaveBeenCalledExactlyOnceWith("PRAGMA mmap_size = 0;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -109,7 +109,7 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-    expect(db["exec"]).not.toHaveBeenCalled();
+    expect(db["exec"]).toHaveBeenCalledExactlyOnceWith("PRAGMA mmap_size = 0;");
   });
 
   it("uses rollback journaling for mapped Windows network drives", () => {
@@ -127,7 +127,7 @@ describe("sqlite WAL maintenance", () => {
 
     expect(realpath).toHaveBeenCalledWith(databasePath);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-    expect(db["exec"]).not.toHaveBeenCalled();
+    expect(db["exec"]).toHaveBeenCalledExactlyOnceWith("PRAGMA mmap_size = 0;");
   });
 
   it("does not treat namespaced Windows local drives as UNC paths", () => {
@@ -160,7 +160,7 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-    expect(db["exec"]).not.toHaveBeenCalled();
+    expect(db["exec"]).toHaveBeenCalledExactlyOnceWith("PRAGMA mmap_size = 0;");
   });
 
   it("refuses network-backed databases when SQLite keeps WAL active", () => {
@@ -367,6 +367,42 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
+  it("never memory-maps a symlinked local mount whose canonical target is unrecognized", () => {
+    // The lexical path can sit on an allowlisted local mount while its
+    // realpath target lands on a different, unrecognized mount (e.g. a
+    // symlink into a 9p share) - both representations describe the same
+    // underlying file, so a positive match on the lexical alias must not
+    // outvote the canonical target's unverified result.
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-alias-"));
+    const localMountDir = path.join(tempDir, "local-mount");
+    const remoteTargetDir = path.join(tempDir, "remote-target");
+    try {
+      fs.mkdirSync(remoteTargetDir);
+      fs.symlinkSync(remoteTargetDir, localMountDir);
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${localMountDir} rw,relatime - ext4 /dev/sda1 rw\n` +
+          `43 12 0:42 / ${remoteTargetDir} rw,relatime - 9p host rw\n`,
+      );
+      const db = createMockDb();
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(localMountDir, "openclaw.sqlite"),
+      });
+
+      expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+      const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+      expect(sql).toContain("PRAGMA mmap_size = 0;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses mount command filesystem names on platforms without proc mountinfo", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
     try {
@@ -414,7 +450,7 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-    expect(db["exec"]).not.toHaveBeenCalled();
+    expect(db["exec"]).toHaveBeenCalledExactlyOnceWith("PRAGMA mmap_size = 0;");
   });
 
   it("preserves WAL policy when mount classification fails without timing out", () => {
@@ -494,7 +530,11 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
-  it("keeps WAL enabled for non-remote macFUSE mounts", () => {
+  it("keeps WAL enabled but never memory-maps non-remote macFUSE mounts", () => {
+    // A non-SSHFS MacFUSE/OSXFUSE report is not the network-coordination
+    // hazard SSHFS is, so WAL stays enabled. But it is still a FUSE
+    // passthrough that can front an arbitrary, possibly network-backed,
+    // filesystem, so it must never be treated as verified-local for mmap.
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-macfuse-"));
     try {
       const db = createMockDb();
@@ -513,6 +553,63 @@ describe("sqlite WAL maintenance", () => {
       });
 
       expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+      const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+      expect(sql).toContain("PRAGMA mmap_size = 0;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps WAL enabled but never memory-maps generic FUSE mounts", () => {
+    // A non-SSHFS fuse.* mount (e.g. fuse.rclone) is not specifically named
+    // like macFUSE/OSXFUSE, but it is the same passthrough hazard: it can
+    // front an arbitrary, possibly network-backed filesystem, so it must
+    // never be treated as verified-local for mmap.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-fuse-generic-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - fuse.rclone rclone:remote rw\n`,
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+      const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+      expect(sql).toContain("PRAGMA mmap_size = 0;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps WAL enabled but never memory-maps an unrecognized mount type", () => {
+    // A matched mount type that is not on the network/FUSE blocklist is not
+    // proof of mmap safety - it may be a remote or virtual filesystem this
+    // classifier does not recognize (9p backs VM host-shared folders, e.g.
+    // WSL2/Lima virtiofs, which can point at a remote host path). Only a
+    // positive match against the local-disk allowlist is mmap-eligible.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-unrecognized-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - 9p host rw\n`,
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+      const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+      expect(sql).toContain("PRAGMA mmap_size = 0;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -548,20 +645,22 @@ describe("sqlite WAL maintenance", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
-    // journal_mode=WAL, wal_autocheckpoint, journal_size_limit.
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+    // journal_mode=WAL, wal_autocheckpoint, journal_size_limit, mmap_size = 0.
+    // No databasePath is supplied, so the filesystem was never verified and
+    // mmap_size is explicitly disabled rather than left at the build default.
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenNthCalledWith(5, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledTimes(5);
 
     expect(maintenance.close()).toBe(true);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenCalledTimes(5);
 
     vi.advanceTimersByTime(200);
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenCalledTimes(5);
   });
 
   it("clamps oversized checkpoint intervals before arming timers", () => {
@@ -590,7 +689,7 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenNthCalledWith(5, "PRAGMA incremental_vacuum(512);");
 
     expect(maintenance.close()).toBe(true);
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
@@ -768,7 +867,162 @@ describe("sqlite WAL maintenance", () => {
 
       expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 5000;");
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-      expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA synchronous = NORMAL;");
+      expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA mmap_size = 0;");
+      expect(db["exec"]).toHaveBeenNthCalledWith(3, "PRAGMA synchronous = NORMAL;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("enables memory-mapped reads on the local-filesystem WAL path", () => {
+    const tempDir = tempDirs.make("openclaw-sqlite-mmap-local-");
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+
+    configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: 0,
+      databasePath: path.join(tempDir, "openclaw.sqlite"),
+    });
+
+    const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+    expect(sql).toContain("PRAGMA mmap_size = 67108864;");
+    // Strictly after the journal-mode sequence: reordering that is what the
+    // surrounding lock-retry logic exists to prevent.
+    expect(sql.indexOf("PRAGMA mmap_size = 67108864;")).toBeGreaterThan(
+      sql.indexOf("PRAGMA journal_mode = WAL;"),
+    );
+  });
+
+  it("enables memory-mapped reads on a local ZFS mount", () => {
+    // Confirmed in production (openclaw/openclaw#115138): on Linux, OpenZFS
+    // reads bypass the kernel page cache but mmap reads populate it, so ZFS
+    // is a case where this pragma matters even though zfs was already on
+    // LOCAL_DISK_FILESYSTEM_TYPES without dedicated coverage.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-zfs-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - zfs tank/openclaw rw\n`,
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+      expect(sql).toContain("PRAGMA mmap_size = 67108864;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never memory-maps a verified local Windows drive", () => {
+    // SQLite cannot truncate a memory-mapped database file on Windows, which
+    // conflicts with the incremental auto_vacuum/incremental_vacuum
+    // maintenance this helper runs. A verified local drive still reaches the
+    // WAL branch (see "does not treat namespaced Windows local drives as UNC
+    // paths" above), but must not reach the mmap pragma.
+    const db = createMockDb();
+    const databasePath = String.raw`\\?\C:\state\openclaw.sqlite`;
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs.realpathSync, "native").mockReturnValue(databasePath);
+
+    configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: 0,
+      databasePath,
+    });
+
+    const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+    expect(sql).toContain("PRAGMA journal_mode = WAL;");
+    expect(sql).toContain("PRAGMA mmap_size = 0;");
+  });
+
+  it("never memory-maps a database when no path was supplied to verify the filesystem", () => {
+    // A caller that omits databasePath never had its filesystem checked against
+    // the NFS/SMB/CIFS/SMB2 rollback boundary above. Treating that as "local" for
+    // mmap would let an unverified network-backed connection reach the pragma
+    // that produced the #60349 SIGBUS crashes.
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+
+    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
+
+    const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+    expect(sql).toContain("PRAGMA mmap_size = 0;");
+  });
+
+  it("explicitly disables mmap on an ineligible path rather than omitting the pragma", () => {
+    // Omitting the pragma is not equivalent to disabling mmap: SQLite's
+    // default mmap_size is a build-time constant (SQLITE_DEFAULT_MMAP_SIZE)
+    // and some builds compile it nonzero. Skipping the pragma would leave
+    // that build default in effect instead of fail-closing to 0.
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+
+    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
+
+    expect(db["exec"]).toHaveBeenCalledWith("PRAGMA mmap_size = 0;");
+  });
+
+  it("never memory-maps a supplied path whose filesystem cannot be classified", () => {
+    // A supplied databasePath that resolvePathJournalPolicy could not match to
+    // any mount entry still uses WAL (compatibility default), but that is not
+    // proof of a local filesystem - the mount table simply had no entry to
+    // check against. Treating "no match" as "local" would enable mmap on a
+    // filesystem that was never actually verified.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-mmap-unclassified-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockImplementation(() => {
+        throw new Error("statfs unavailable");
+      });
+      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+        throw new Error("no proc mountinfo");
+      });
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(Buffer.from(""));
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+      const sql = vi.mocked(db["exec"]).mock.calls.map(([statement]) => statement);
+      expect(sql).toContain("PRAGMA mmap_size = 0;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["NFS", 0x6969],
+    ["SMB", 0x517b],
+    ["CIFS", 0xff534d42],
+    ["SMB2", 0xfe534d42],
+  ])("never memory-maps a database on a %s volume", (_label, fsType) => {
+    // mmap over a network filesystem is what produced the SIGBUS crashes in
+    // #60349: an I/O error on a mapped page raises a signal SQLite cannot
+    // catch. These volumes take the rollback branch and must explicitly zero
+    // the pragma rather than merely omit it, since some SQLite builds compile
+    // a nonzero SQLITE_DEFAULT_MMAP_SIZE.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-mmap-net-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(fsType));
+
+      configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: 5000,
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+        synchronous: "NORMAL",
+      });
+
+      expect(db["exec"]).toHaveBeenCalledWith("PRAGMA mmap_size = 0;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

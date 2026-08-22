@@ -108,9 +108,18 @@ export function openNodeSqliteDatabase(
   // Callers may pass file: URIs or already-namespaced paths from specialized
   // resolvers; location normalization must remain idempotent for those forms.
   const resolvedLocation = resolveNodeSqliteLocation(location);
-  return options === undefined
-    ? new sqlite.DatabaseSync(resolvedLocation)
-    : new sqlite.DatabaseSync(resolvedLocation, options);
+  const database =
+    options === undefined
+      ? new sqlite.DatabaseSync(resolvedLocation)
+      : new sqlite.DatabaseSync(resolvedLocation, options);
+  // SQLite's default mmap_size is a build-time constant that can be nonzero.
+  // Callers run busy-timeout, schema-version, and integrity statements before
+  // WAL maintenance ever classifies the filesystem, so zero here, at the
+  // physical open, before any statement can map a page on a network-backed
+  // volume (#60349). configureSqliteWalMaintenance only ever raises this
+  // ceiling back up, and only for a positively verified local path.
+  database.exec("PRAGMA mmap_size = 0;");
+  return database;
 }
 
 /** Hold a raw exclusive transaction until release for cross-process coordination. */

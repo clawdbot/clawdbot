@@ -18,6 +18,20 @@ const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
+// Memory-mapped reads are enabled only on the WAL path below, i.e. only for
+// databases on local filesystems. Network-backed databases take the rollback
+// branch and never reach it: mmap over NFS/SMB is what produced the SIGBUS
+// crashes behind #60349, and an I/O error on a mapped page raises a signal
+// SQLite cannot catch.
+//
+// 64 MiB is a deliberate bound rather than a generous one. mmap_size is a
+// ceiling, not an allocation - SQLite maps only the pages it touches - so
+// resident memory tracks the working set and is identical at 64, 128 and
+// 256 MiB. The ceiling only binds for databases larger than itself, so
+// keeping it low bounds per-connection mapping across the
+// OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP handles without costing throughput:
+// measured read latency is the same at 64 MiB as at 256 MiB.
+const DEFAULT_SQLITE_MMAP_SIZE_BYTES = 64 * 1024 * 1024;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
@@ -26,6 +40,34 @@ const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
 const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
+// mmap eligibility requires a positive match against this list rather than
+// merely avoiding the network/FUSE blocklist below: an unrecognized mount
+// type (a remote or virtual filesystem this classifier does not know about,
+// e.g. 9p, ceph, glusterfs, davfs) must fail closed instead of silently
+// reaching PRAGMA mmap_size.
+const LOCAL_DISK_FILESYSTEM_TYPES = new Set([
+  "ext2",
+  "ext3",
+  "ext4",
+  "xfs",
+  "btrfs",
+  "jfs",
+  "reiserfs",
+  "reiser4",
+  "f2fs",
+  "zfs",
+  "ufs",
+  "ntfs",
+  "ntfs3",
+  "vfat",
+  "msdos",
+  "exfat",
+  "iso9660",
+  "udf",
+  "hfs",
+  "hfsplus",
+  "apfs",
+]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
@@ -34,7 +76,25 @@ type IntervalHandle = ReturnType<typeof setInterval> & {
 };
 
 type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
-type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
+// "wal" means the filesystem was positively classified as safe for mmap: a
+// matched mount entry or statfs type on LOCAL_DISK_FILESYSTEM_TYPES's
+// allowlist. Not being NFS/SMB/CIFS/SMB2/FUSE is not enough - an unrecognized
+// mount type must fail closed rather than default to mmap-eligible.
+// "wal-unverified" means WAL is still fine to use, but classification was
+// inconclusive (no matching mount entry, no resolvable parent, a matched
+// mount entry whose filesystem type is not on the local-disk allowlist,
+// etc.) - it must never be treated as a positive local result for mmap
+// purposes.
+// "wal-mmap-ineligible" means WAL is still fine (a non-SSHFS MacFUSE/OSXFUSE
+// mount is not the network-coordination hazard SSHFS is), but the mount is a
+// FUSE passthrough that can sit in front of an arbitrary, possibly
+// network-backed, filesystem, so it must never reach the mmap pragma either.
+type SqliteFilesystemJournalPolicy =
+  | "rollback"
+  | "unsupported"
+  | "wal"
+  | "wal-unverified"
+  | "wal-mmap-ineligible";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
 export type SqliteWalMaintenance = {
@@ -229,10 +289,24 @@ function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJourn
   if (normalized === "fuse.sshfs") {
     return "unsupported";
   }
-  if ((normalized === "macfuse" || normalized === "osxfuse") && isSshfsMountSource(entry.source)) {
-    return "unsupported";
+  if (normalized === "macfuse" || normalized === "osxfuse") {
+    // SSHFS reported under these names is refused above via source sniffing.
+    // A non-SSHFS report is still just a FUSE passthrough: it can front an
+    // arbitrary backing store, so WAL is safe but mmap eligibility is not.
+    return isSshfsMountSource(entry.source) ? "unsupported" : "wal-mmap-ineligible";
   }
-  return "wal";
+  if (normalized === "fuse" || normalized.startsWith("fuse.")) {
+    // Any other FUSE type (e.g. fuse.rclone) is the same passthrough hazard
+    // as macFUSE/OSXFUSE above: it can front an arbitrary, possibly
+    // network-backed store that this classifier cannot positively verify.
+    return "wal-mmap-ineligible";
+  }
+  // A matched mount that is not on the network/FUSE blocklist above is not
+  // proof of mmap safety - it may be a remote or virtual filesystem this
+  // classifier does not recognize (9p, ceph, glusterfs, davfs, autofs, ...).
+  // Only a positive match against known local disk filesystem types is
+  // mmap-eligible; everything else keeps WAL but falls back to unverified.
+  return LOCAL_DISK_FILESYSTEM_TYPES.has(normalized) ? "wal" : "wal-unverified";
 }
 
 function resolveMountEntryJournalPolicy(
@@ -242,7 +316,7 @@ function resolveMountEntryJournalPolicy(
   const mountEntry = mountEntries
     .filter((entry) => isPathWithinMount(targetPath, entry.mountPoint))
     .toSorted((a, b) => b.mountPoint.length - a.mountPoint.length)[0];
-  return mountEntry ? resolveMountTypeJournalPolicy(mountEntry) : "wal";
+  return mountEntry ? resolveMountTypeJournalPolicy(mountEntry) : "wal-unverified";
 }
 
 function combineMountEntryJournalPolicies(
@@ -258,7 +332,24 @@ function combineMountEntryJournalPolicies(
   if (policies.has("unsupported")) {
     return "unsupported";
   }
-  return policies.has("rollback") ? "rollback" : "wal";
+  if (policies.has("rollback")) {
+    return "rollback";
+  }
+  // A FUSE passthrough identified via either path representation is enough to
+  // distrust mmap eligibility, even if the other representation resolved to a
+  // plain "wal" - both describe the same mount, so the more conservative
+  // result wins rather than the more permissive one.
+  if (policies.has("wal-mmap-ineligible")) {
+    return "wal-mmap-ineligible";
+  }
+  // Require every path representation to positively match a local-disk mount
+  // before trusting "wal": a symlinked lexical path can resolve on an
+  // allowlisted local mount while its realpath target lands on an
+  // unrecognized or unverified mount (or vice versa) - since both describe
+  // the same underlying file, trusting whichever representation says "wal"
+  // would let that alias enable mmap on a target that was never actually
+  // verified as local disk.
+  return policies.size === 1 && policies.has("wal") ? "wal" : "wal-unverified";
 }
 
 function isWindowsUncPath(targetPath: string): boolean {
@@ -292,7 +383,7 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
   }
   const checkedPaths = findExistingVolumePaths(targetPath);
   if (!checkedPaths) {
-    return "wal";
+    return "wal-unverified";
   }
   const mountLookupPaths = [checkedPaths.originalPath, checkedPaths.canonicalPath];
   if (typeof fs.statfsSync !== "function") {
@@ -446,12 +537,27 @@ export function configureSqliteWalMaintenance(
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
   const journalPolicy = options.databasePath
     ? resolvePathJournalPolicy(options.databasePath)
-    : "wal";
+    : "wal-unverified";
+  // Only a positively classified local filesystem ("wal") is safe for mmap.
+  // "wal-unverified" also runs WAL journaling, but classification could not
+  // rule out a network mount, so it must not reach the mmap pragma below.
+  // "wal-mmap-ineligible" (non-SSHFS MacFUSE/OSXFUSE) runs WAL too, but a FUSE
+  // passthrough can front an arbitrary backing store, so it is excluded the
+  // same way.
+  // Windows is excluded even on a verified local drive: SQLite cannot
+  // truncate a memory-mapped database file there, which conflicts with the
+  // incremental auto_vacuum this helper enables and periodically runs below.
+  const hasVerifiedLocalPath = journalPolicy === "wal" && process.platform !== "win32";
   if (journalPolicy === "unsupported") {
     refuseUnsupportedFilesystem(options);
   }
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
+    // SQLite's default mmap_size is a build-time constant
+    // (SQLITE_DEFAULT_MMAP_SIZE) that can be nonzero; omitting this pragma
+    // would leave that default in effect on a network-backed connection,
+    // which is exactly the mmap-over-network exposure #60349 reports.
+    db.exec("PRAGMA mmap_size = 0;");
     return {
       checkpoint: () => true,
       close: () => true,
@@ -466,6 +572,20 @@ export function configureSqliteWalMaintenance(
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
   db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
+  // journalPolicy === "wal" means resolvePathJournalPolicy positively matched
+  // a mount entry or statfs type on LOCAL_DISK_FILESYSTEM_TYPES's allowlist -
+  // the rollback and WAL-refused branches above already returned for network
+  // and unsupported mounts. node:sqlite is synchronous, so each page the OS
+  // must serve from disk is event-loop block time, which memory-mapped reads
+  // cut directly. An inconclusive classification ("wal-unverified": no
+  // databasePath, no resolvable parent, no matching mount entry, or a matched
+  // mount type not on the local-disk allowlist) keeps mmap off. This pragma
+  // is issued either way rather than merely skipped: some SQLite builds
+  // compile a nonzero SQLITE_DEFAULT_MMAP_SIZE, and omitting the pragma would
+  // leave that build default in effect instead of disabling mmap - an
+  // unmapped I/O error is recoverable, but a mapped one raises a signal
+  // SQLite cannot catch (#60349).
+  db.exec(`PRAGMA mmap_size = ${hasVerifiedLocalPath ? DEFAULT_SQLITE_MMAP_SIZE_BYTES : 0};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {

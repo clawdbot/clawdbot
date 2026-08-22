@@ -85,6 +85,18 @@ describe("node SQLite locations", () => {
     }
   });
 
+  it("zeroes mmap_size at the physical open, before any caller statement", () => {
+    const execSpy = vi.spyOn(DatabaseSync.prototype, "exec");
+    const database = openNodeSqliteDatabase(":memory:");
+    try {
+      expect(execSpy.mock.calls[0]?.[0]).toBe("PRAGMA mmap_size = 0;");
+      database.exec("PRAGMA busy_timeout = 100;");
+      expect(execSpy.mock.calls[1]?.[0]).toBe("PRAGMA busy_timeout = 100;");
+    } finally {
+      database.close();
+    }
+  });
+
   it("normalizes ordinary filesystem paths through the Windows VFS boundary", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolveSpy = vi.spyOn(path, "resolve").mockReturnValue("resolved-openclaw.sqlite");
