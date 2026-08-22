@@ -8,7 +8,7 @@ read_when:
 
 ## Status
 
-Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): Crabbox provisions a node-backed `worker-turn` lease with current reconnect-scoped v6 supervisor proof, the worker child dials the Gateway's authenticated public worker route, and workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path have been removed. SSH remains a separate `remote-exec` workspace transport and desktop carrier.
+Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): one Crabbox profile provisions enrolled outbound-node leases for OpenClaw `worker-turn` or Codex `remote-exec`. OpenClaw launches a restricted worker child through the Gateway's authenticated public worker route; Codex uses the explicitly authorized node exec-server while its app-server and authentication remain on the Gateway. Workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path remain removed. SSH is retained only for existing SSH-backed `remote-exec` providers and separately owned desktop carriers.
 
 The sections below preserve the pre-convergence design record and are not the current runtime contract.
 
@@ -97,7 +97,7 @@ Worker mode (`openclaw worker`) is an entry point, not a fork: connection handli
 
 ### 3. Historical transport proposal: everything over SSH
 
-This section describes the superseded carrier. Current `worker-turn` environments use authenticated node connectivity; only `remote-exec` workspace operations retain pinned SSH.
+This section describes the superseded carrier. Current node-backed `worker-turn` and `remote-exec` environments use authenticated node connectivity; existing SSH-backed `remote-exec` providers retain pinned SSH.
 
 The original proposal had the gateway own connectivity while the worker required nothing but sshd:
 
