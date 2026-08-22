@@ -37,7 +37,7 @@ describe("runtime-only background wake production path", () => {
     let submittedPrompt: string | undefined;
     let submittedMessages: unknown[] | undefined;
     let submittedSession: { messages: unknown[] } | undefined;
-    const result = await createContextEngineAttemptRunner({
+    await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
