@@ -676,6 +676,17 @@ export class CodexAppServerClient {
     return () => this.closeHandlers.delete(handler);
   }
 
+  /** Registers a handler for physical transport exit and returns its disposer. */
+  addTransportExitHandler(handler: (client: CodexAppServerClient) => void): () => void {
+    if (this.transportExited) {
+      handler(this);
+      return () => undefined;
+    }
+    const onExit = () => handler(this);
+    this.child.once("exit", onExit);
+    return () => this.child.off?.("exit", onExit);
+  }
+
   /** Closes the transport without waiting for process/socket shutdown. */
   close(): void {
     if (!this.markClosed(new Error("codex app-server client is closed"))) {

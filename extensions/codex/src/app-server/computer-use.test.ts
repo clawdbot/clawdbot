@@ -15,6 +15,7 @@ const sharedClientMocks = vi.hoisted(() => ({
   readCodexAppServerClientDesktopGeneration: vi.fn(),
   readCodexAppServerClientProcessIdentity: vi.fn(),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  waitForCodexAppServerClientDesktopGenerationDrain: vi.fn(),
 }));
 const managedProvisioningMocks = vi.hoisted(() => ({
   ensureCodexComputerUseSharedPluginCache: vi.fn(async () => ({
@@ -133,6 +134,10 @@ describe("Codex Computer Use setup", () => {
     sharedClientMocks.readCodexAppServerClientDesktopGeneration.mockReset();
     sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
+    sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain.mockReset();
+    sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain.mockResolvedValue(
+      undefined,
+    );
     managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockReset();
     managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockReset();
     managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockReset();
@@ -1096,6 +1101,10 @@ describe("Codex Computer Use setup", () => {
         commandSource,
         argsFingerprint: "args",
       });
+      const desktopGeneration = { epoch: 1, fingerprint: "desktop-current" };
+      sharedClientMocks.readCodexAppServerClientDesktopGeneration.mockReturnValue(
+        desktopGeneration,
+      );
       managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockResolvedValue(
         managedMarketplacePath,
       );
@@ -1103,6 +1112,17 @@ describe("Codex Computer Use setup", () => {
         status: "already_current",
         changed: false,
       });
+      let drainedBeforeFence = false;
+      sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain.mockImplementationOnce(
+        async () => {
+          const release = await acquireCodexNativeConfigFence(
+            `codex-home:${path.resolve(codexHome)}`,
+            { timeoutMs: 50 },
+          );
+          drainedBeforeFence = true;
+          release();
+        },
+      );
       const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath);
 
       const status = await installCodexComputerUse({
@@ -1113,6 +1133,7 @@ describe("Codex Computer Use setup", () => {
       });
 
       expect(status.ready).toBe(true);
+      expect(drainedBeforeFence).toBe(true);
       expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
         expect.objectContaining({
           codexHome,
@@ -1128,14 +1149,55 @@ describe("Codex Computer Use setup", () => {
         }),
       );
       expect(sharedClientMocks.assertCodexAppServerClientStartSelectionCurrent).toHaveBeenCalled();
+      expect(
+        sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain,
+      ).toHaveBeenCalledWith({ client: harness.client, timeoutMs: expect.any(Number) });
+      expect(
+        sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain.mock
+          .invocationCallOrder[0],
+      ).toBeLessThan(
+        managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mock.invocationCallOrder[0] ??
+          Number.POSITIVE_INFINITY,
+      );
       expect(sharedClientMocks.readCodexAppServerClientDesktopGeneration).toHaveReturnedWith(
-        undefined,
+        desktopGeneration,
       );
       expect(managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache).toHaveBeenCalledWith(
         expect.objectContaining({ forceRefresh: true }),
       );
     },
   );
+
+  it("rejects explicit managed provisioning from a desktop client without a generation", async () => {
+    const root = tempDirs.make("openclaw-codex-explicit-install-unbound-");
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    fs.mkdirSync(codexHome, { recursive: true });
+    const harness = createClientHarness();
+    vi.spyOn(harness.client, "getRuntimeIdentity").mockReturnValue({
+      serverVersion: "0.148.0",
+      codexHome,
+    });
+    sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReturnValue({
+      clientId: "client-explicit-install-unbound",
+      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      commandSource: "config",
+      argsFingerprint: "args",
+    });
+
+    await expect(
+      installCodexComputerUse({
+        agentDir,
+        client: harness.client,
+        request: vi.fn(),
+        pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+      }),
+    ).rejects.toThrow("requires a desktop-generation-bound client");
+    expect(
+      sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain,
+    ).not.toHaveBeenCalled();
+    expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
+  });
 
   it("rejects explicit provisioning from a stale desktop client", async () => {
     const root = tempDirs.make("openclaw-codex-explicit-install-stale-");

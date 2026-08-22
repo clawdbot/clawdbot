@@ -43,6 +43,7 @@ import {
   readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexNativeConfigFenceKey,
+  waitForCodexAppServerClientDesktopGenerationDrain,
 } from "./shared-client.js";
 
 /** Minimal app-server request function needed by Computer Use setup. */
@@ -165,6 +166,15 @@ type CodexComputerUseInspectionParams = {
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
   releaseNativeConfigFence?: () => void;
+  explicitManagedInstall?: ExplicitManagedComputerUseInstallContext;
+};
+
+type ExplicitManagedComputerUseInstallContext = {
+  client: CodexAppServerClient;
+  agentDir: string;
+  codexHome: string;
+  command: string;
+  desktopGeneration: NonNullable<ReturnType<typeof readCodexAppServerClientDesktopGeneration>>;
 };
 
 type MarketplaceRef =
@@ -301,77 +311,90 @@ async function inspectCodexComputerUse(
   if (!params.installPlugin) {
     return await inspectCodexComputerUseWithoutFence(params);
   }
-  const runtime = params.client
-    ? undefined
-    : resolveCodexAppServerRuntimeOptions({
-        pluginConfig: params.pluginConfig,
-        managedCommandOrder: "desktop-first",
-      });
-  const fenceKey = resolveCodexNativeConfigFenceKey({
-    client: params.client,
-    startOptions: runtime?.start,
-    agentDir: params.agentDir,
-    config: params.config,
+  const resolvedRuntime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+    managedCommandOrder: "desktop-first",
   });
-  if (!fenceKey) {
-    return await inspectCodexComputerUseWithoutFence(params);
-  }
-  const release = await acquireCodexNativeConfigFence(fenceKey, {
-    signal: params.signal,
-    timeoutMs: params.timeoutMs ?? runtime?.requestTimeoutMs,
-    timeoutMessage: "Codex Computer Use install timed out waiting for native config",
-    abortMessage: "Codex Computer Use install aborted waiting for native config",
-  });
-  let releaseFenceOnReturn = true;
+  const operationTimeoutMs = params.timeoutMs ?? resolvedRuntime.requestTimeoutMs;
+  const deadline = operationTimeoutMs > 0 ? Date.now() + operationTimeoutMs : undefined;
+  const remainingTimeoutMs = () =>
+    deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - Date.now());
   let leasedClient: CodexAppServerClient | undefined;
   try {
     let client = params.client;
     if (!client && !params.request) {
-      if (!runtime) {
-        throw new Error("Computer Use install could not resolve its app-server runtime");
-      }
       client = await getLeasedSharedCodexAppServerClient({
-        startOptions: runtime.start,
+        startOptions: resolvedRuntime.start,
         pluginConfig: params.pluginConfig,
-        timeoutMs: params.timeoutMs ?? runtime.requestTimeoutMs,
+        timeoutMs: remainingTimeoutMs(),
         config: params.config,
         agentDir: params.agentDir,
         abandonSignal: params.signal,
       });
       leasedClient = client;
     }
-    try {
-      return await inspectCodexComputerUseWithoutFence({
-        ...params,
-        releaseNativeConfigFence: release,
-        ...(client
-          ? {
-              client,
-              timeoutMs: params.timeoutMs ?? runtime?.requestTimeoutMs,
-            }
-          : {}),
+    const explicitManagedInstall =
+      client && !resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall
+        ? await resolveExplicitManagedComputerUseInstallContext({ ...params, client })
+        : undefined;
+    if (explicitManagedInstall) {
+      await waitForCodexAppServerClientDesktopGenerationDrain({
+        client: explicitManagedInstall.client,
+        timeoutMs: remainingTimeoutMs(),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
-    } catch (error) {
-      if (
-        client &&
-        (isCodexAppServerIndeterminateRequestCancellationError(error) ||
-          isCodexAppServerIndeterminateTransportError(error) ||
-          isCodexAppServerConnectionClosedError(error))
-      ) {
-        // Codex may still commit a config mutation after local cancellation.
-        // Transfer fence ownership to physical process exit before surfacing it.
-        releaseFenceOnReturn = false;
-        await client.closeAndRunAfterExit(release, "Computer Use config mutation");
+      assertCodexAppServerClientStartSelectionCurrent({ client: explicitManagedInstall.client });
+    }
+    const inspectionParams: CodexComputerUseInspectionParams = {
+      ...params,
+      ...(client ? { client } : {}),
+      timeoutMs: remainingTimeoutMs(),
+      ...(explicitManagedInstall ? { explicitManagedInstall } : {}),
+    };
+    const fenceKey = resolveCodexNativeConfigFenceKey({
+      client,
+      startOptions: resolvedRuntime.start,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    if (!fenceKey) {
+      return await inspectCodexComputerUseWithoutFence(inspectionParams);
+    }
+    const release = await acquireCodexNativeConfigFence(fenceKey, {
+      signal: params.signal,
+      timeoutMs: remainingTimeoutMs(),
+      timeoutMessage: "Codex Computer Use install timed out waiting for native config",
+      abortMessage: "Codex Computer Use install aborted waiting for native config",
+    });
+    let releaseFenceOnReturn = true;
+    try {
+      try {
+        return await inspectCodexComputerUseWithoutFence({
+          ...inspectionParams,
+          releaseNativeConfigFence: release,
+        });
+      } catch (error) {
+        if (
+          client &&
+          (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+            isCodexAppServerIndeterminateTransportError(error) ||
+            isCodexAppServerConnectionClosedError(error))
+        ) {
+          // Codex may still commit a config mutation after local cancellation.
+          // Transfer fence ownership to physical process exit before surfacing it.
+          releaseFenceOnReturn = false;
+          await client.closeAndRunAfterExit(release, "Computer Use config mutation");
+        }
+        throw error;
       }
-      throw error;
     } finally {
-      if (leasedClient) {
-        releaseLeasedSharedCodexAppServerClient(leasedClient);
+      if (releaseFenceOnReturn) {
+        release();
       }
     }
   } finally {
-    if (releaseFenceOnReturn) {
-      release();
+    if (leasedClient) {
+      releaseLeasedSharedCodexAppServerClient(leasedClient);
     }
   }
 }
@@ -438,51 +461,71 @@ async function inspectCodexComputerUseWithoutFence(
 async function prepareExplicitManagedComputerUseInstall(
   params: CodexComputerUseInspectionParams,
 ): Promise<void> {
+  const context = params.explicitManagedInstall;
+  if (!context) {
+    return;
+  }
+  await reconcileCodexComputerUseStartArtifacts({
+    startOptions: {
+      transport: "stdio",
+      command: context.command,
+      commandSource: "resolved-managed",
+      args: ["app-server"],
+      headers: {},
+      env: { CODEX_HOME: context.codexHome },
+    },
+    agentDir: context.agentDir,
+    pluginConfig: { computerUse: { ...params.computerUseConfig, autoInstall: true } },
+    ownsIsolatedCodexHome: true,
+    desktopGeneration: context.desktopGeneration,
+    forceCacheRefresh: true,
+    assertCurrent: () =>
+      assertCodexAppServerClientStartSelectionCurrent({ client: context.client }),
+  });
+}
+
+async function resolveExplicitManagedComputerUseInstallContext(
+  params: CodexComputerUseInspectionParams & { client: CodexAppServerClient },
+): Promise<ExplicitManagedComputerUseInstallContext | undefined> {
   if (
-    !params.client ||
     !params.agentDir ||
     params.computerUseConfig.marketplaceSource ||
     params.computerUseConfig.marketplacePath ||
     params.computerUseConfig.marketplaceName
   ) {
-    return;
+    return undefined;
   }
-  const client = params.client;
-  const codexHome = client.getRuntimeIdentity()?.codexHome;
-  const processIdentity = readCodexAppServerClientProcessIdentity(client);
+  const codexHome = params.client.getRuntimeIdentity()?.codexHome;
+  const processIdentity = readCodexAppServerClientProcessIdentity(params.client);
   const command =
     processIdentity?.nativeCommand ??
     (processIdentity && isManagedCodexDesktopCommand(processIdentity.command, "darwin")
       ? processIdentity.command
       : undefined);
   if (!codexHome || !command) {
-    return;
+    return undefined;
   }
-  const desktopGeneration = readCodexAppServerClientDesktopGeneration(client);
+  const desktopGeneration = readCodexAppServerClientDesktopGeneration(params.client);
+  if (!desktopGeneration) {
+    throw new Error(
+      "Codex Computer Use install requires a desktop-generation-bound client; reconnect and retry.",
+    );
+  }
   const expectedHome = resolveCodexAppServerHomeDir(params.agentDir);
   const [actualRealHome, expectedRealHome] = await Promise.all([
     fs.realpath(codexHome).catch(() => undefined),
     fs.realpath(expectedHome).catch(() => undefined),
   ]);
   if (!actualRealHome || actualRealHome !== expectedRealHome) {
-    return;
+    return undefined;
   }
-  await reconcileCodexComputerUseStartArtifacts({
-    startOptions: {
-      transport: "stdio",
-      command,
-      commandSource: "resolved-managed",
-      args: ["app-server"],
-      headers: {},
-      env: { CODEX_HOME: codexHome },
-    },
+  return {
+    client: params.client,
     agentDir: params.agentDir,
-    pluginConfig: { computerUse: { ...params.computerUseConfig, autoInstall: true } },
-    ownsIsolatedCodexHome: true,
-    ...(desktopGeneration ? { desktopGeneration } : {}),
-    forceCacheRefresh: true,
-    assertCurrent: () => assertCodexAppServerClientStartSelectionCurrent({ client }),
-  });
+    codexHome,
+    command,
+    desktopGeneration,
+  };
 }
 
 async function resolveClientManagedBundledMarketplacePath(

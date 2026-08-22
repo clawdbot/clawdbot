@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import type { FSWatcher } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexDesktopGenerationService } from "./desktop-generation.js";
+import {
+  createCodexDesktopGenerationService,
+  waitForCodexDesktopGeneration,
+} from "./desktop-generation.js";
 
 class FakeWatcher extends EventEmitter {
   close = vi.fn();
@@ -140,6 +143,54 @@ describe("Codex desktop generation service", () => {
     expect(harness.registrations).toHaveLength(4);
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(harness.clearFailure).toHaveBeenCalledTimes(2));
+  });
+
+  it("settles the current generation while persistent watcher registration retries", async () => {
+    vi.useFakeTimers();
+    let fingerprint = "desktop-stable";
+    const readFingerprint = vi.fn(async () => fingerprint);
+    const onGenerationChange = vi.fn();
+    const clearFailure = vi.fn();
+    const reportFailure = vi.fn();
+    const warn = vi.fn();
+    const watchPath = vi.fn((): FSWatcher => {
+      throw new Error("watch unavailable");
+    });
+    service = createCodexDesktopGenerationService(
+      { onGenerationChange },
+      {
+        platform: "darwin",
+        readFingerprint,
+        resolveWatchPaths: () => ["/Applications"],
+        pathExists: () => true,
+        watchPath,
+      },
+    );
+    await service.start?.({
+      logger: { warn },
+      serviceHealth: { clearFailure, reportFailure },
+    } as never);
+    let settled = false;
+    void waitForCodexDesktopGeneration().then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(settled).toBe(true);
+    fingerprint = "desktop-updated";
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(watchPath.mock.calls.length).toBeGreaterThan(2);
+    expect(watchPath.mock.calls.length).toBeLessThan(20);
+    expect(readFingerprint.mock.calls.length).toBeGreaterThan(2);
+    expect(onGenerationChange).toHaveBeenCalledWith({
+      epoch: expect.any(Number),
+      fingerprint: "desktop-updated",
+    });
+    expect(reportFailure).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(clearFailure).not.toHaveBeenCalled();
   });
 
   it("does not publish a generation after service stop during settling", async () => {

@@ -16,7 +16,8 @@ import {
 } from "./desktop-generation-owner.js";
 
 const APPLICATIONS_PATH = "/Applications";
-const REARM_DELAY_MS = 100;
+const REARM_INITIAL_DELAY_MS = 100;
+const REARM_MAX_DELAY_MS = 30_000;
 const DESKTOP_GENERATION_STATE = Symbol.for("openclaw.codexDesktopGenerationState");
 
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
@@ -35,8 +36,10 @@ type DesktopGenerationState = {
   owner?: GenerationOwner;
   lastGeneration?: CodexDesktopGeneration;
   watchers?: Set<FSWatcher>;
+  watchHealthy?: boolean;
   armEpoch?: number;
   rearmTimer?: NodeJS.Timeout;
+  rearmDelayMs?: number;
   context?: OpenClawPluginServiceContext;
   readFingerprint?: () => Promise<string>;
   resolveWatchPaths?: () => string[];
@@ -105,6 +108,8 @@ export function createCodexDesktopGenerationService(
       current.resolveWatchPaths = undefined;
       current.pathExists = undefined;
       current.watchPath = undefined;
+      current.watchHealthy = undefined;
+      current.rearmDelayMs = undefined;
       if (current.rearmTimer) {
         clearTimeout(current.rearmTimer);
         current.rearmTimer = undefined;
@@ -114,10 +119,10 @@ export function createCodexDesktopGenerationService(
   };
 }
 
-function armWatchers(current: DesktopGenerationState): void {
+function armWatchers(current: DesktopGenerationState): boolean {
   const owner = current.owner;
   if (!owner || current.watchers) {
-    return;
+    return false;
   }
   const armEpoch = (current.armEpoch ?? 0) + 1;
   current.armEpoch = armEpoch;
@@ -126,6 +131,7 @@ function armWatchers(current: DesktopGenerationState): void {
   const candidateNames = new Set<string>(
     resolveMacOSDesktopCodexAppPathCandidates("darwin").map((candidate) => candidate.appName),
   );
+  let complete = true;
   for (const watchedPath of current.resolveWatchPaths?.() ?? []) {
     if (!current.pathExists?.(watchedPath)) {
       continue;
@@ -146,6 +152,9 @@ function armWatchers(current: DesktopGenerationState): void {
         scheduleRearm(current, owner);
       });
       if (!watcher) {
+        complete = false;
+        reportWatcherFailure(current, owner, new Error(`Could not watch ${watchedPath}`));
+        scheduleRearm(current, owner);
         continue;
       }
       watchers.add(watcher);
@@ -153,18 +162,34 @@ function armWatchers(current: DesktopGenerationState): void {
         if (!isCurrentArm(current, owner, watchers, armEpoch)) {
           return;
         }
-        current.context?.serviceHealth?.reportFailure(error);
-        current.context?.logger.warn(`codex desktop generation watcher failed: ${String(error)}`);
-        owner.markDirty();
+        reportWatcherFailure(current, owner, error);
         scheduleRearm(current, owner);
       });
     } catch (error) {
-      current.context?.serviceHealth?.reportFailure(error);
-      current.context?.logger.warn(`codex desktop generation watcher failed: ${String(error)}`);
-      owner.markDirty();
+      complete = false;
+      reportWatcherFailure(current, owner, error);
       scheduleRearm(current, owner);
     }
   }
+  current.watchHealthy = complete;
+  if (complete) {
+    current.rearmDelayMs = REARM_INITIAL_DELAY_MS;
+  }
+  return complete;
+}
+
+function reportWatcherFailure(
+  current: DesktopGenerationState,
+  owner: GenerationOwner,
+  error: unknown,
+): void {
+  if (current.watchHealthy === false) {
+    return;
+  }
+  current.watchHealthy = false;
+  owner.markDirty();
+  current.context?.serviceHealth?.reportFailure(error);
+  current.context?.logger.warn(`codex desktop generation watcher failed: ${String(error)}`);
 }
 
 function isCurrentArm(
@@ -178,18 +203,30 @@ function isCurrentArm(
 
 function scheduleRearm(current: DesktopGenerationState, owner: GenerationOwner): void {
   if (current.rearmTimer) {
+    if (current.watchHealthy === false) {
+      return;
+    }
     clearTimeout(current.rearmTimer);
+  }
+  const delayMs =
+    current.watchHealthy === false
+      ? (current.rearmDelayMs ?? REARM_INITIAL_DELAY_MS)
+      : REARM_INITIAL_DELAY_MS;
+  if (current.watchHealthy === false) {
+    current.rearmDelayMs = Math.min(delayMs * 2, REARM_MAX_DELAY_MS);
   }
   current.rearmTimer = setTimeout(() => {
     current.rearmTimer = undefined;
     if (current.owner !== owner) {
       return;
     }
+    const wasUnhealthy = current.watchHealthy === false;
     closeWatchers(current);
-    armWatchers(current);
-    owner.markDirty();
+    if (!armWatchers(current) || wasUnhealthy) {
+      owner.markDirty();
+    }
     refreshGeneration(current, owner, owner.wait());
-  }, REARM_DELAY_MS);
+  }, delayMs);
   current.rearmTimer.unref();
 }
 
@@ -210,7 +247,7 @@ function refreshGeneration(
 ): void {
   void refresh
     .then(() => {
-      if (current.owner === owner) {
+      if (current.owner === owner && current.watchHealthy) {
         current.context?.serviceHealth?.clearFailure();
       }
     })
