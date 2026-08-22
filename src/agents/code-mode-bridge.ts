@@ -12,7 +12,11 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
+import {
+  resolveCodeModeConfig,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
+} from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -439,7 +443,24 @@ export async function runBridgeRequest(params: {
         if (!binding) {
           throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
         }
-        const called = await params.runtime.callExactId(binding.id, values[1] ?? {}, {
+        let input = values[1] ?? {};
+        if (
+          binding.source === "openclaw" &&
+          binding.name === "exec" &&
+          binding.input?.includes("yieldMs") === true &&
+          isRecord(input) &&
+          input.background !== true &&
+          input.yieldMs === undefined
+        ) {
+          const timeoutMs = resolveCodeModeConfig(
+            params.ctx.runtimeConfig ?? params.ctx.config,
+            params.ctx.agentId,
+          ).timeoutMs;
+          // The shell's 10s default equals Code Mode's default budget. Yield
+          // earlier so the guest can receive the process handle inline.
+          input = { ...input, yieldMs: Math.max(10, Math.min(1_000, Math.floor(timeoutMs / 4))) };
+        }
+        const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,

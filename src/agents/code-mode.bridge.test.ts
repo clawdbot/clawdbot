@@ -155,6 +155,61 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("yields nested exec before the Code Mode deadline when continuation args are omitted", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 10_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const shell = pluginToolWithExecute("exec", "Run shell", async (_toolCallId, input) =>
+      jsonResult(input),
+    );
+    shell.parameters = Type.Object({
+      command: Type.String(),
+      yieldMs: Type.Optional(Type.Number()),
+      background: Type.Optional(Type.Boolean()),
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, shell],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-shell-yield",
+        {
+          code: `return [
+            await exec({ command: "default" }),
+            await exec({ command: "explicit", yieldMs: 4_000 }),
+            await exec({ command: "background", background: true }),
+          ];`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: [
+        { command: "default", yieldMs: 1_000 },
+        { command: "explicit", yieldMs: 4_000 },
+        { command: "background", background: true },
+      ],
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it("supports a guest timer between an action and its observation", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
