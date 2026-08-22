@@ -7,11 +7,11 @@ import {
 } from "./session-state-notices.js";
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: vi.fn(),
+  requestHeartbeatRaw: vi.fn(),
 }));
 
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventRaw: vi.fn(),
 }));
 
 beforeEach(() => {

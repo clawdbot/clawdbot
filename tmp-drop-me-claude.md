@@ -460,19 +460,19 @@ upstream-only `873`; the workorder's behind/ahead prose is label-inverted.
 
 ### Agent core, runtime, and delivery resolution ledger
 
-| Owner family | Pure-continuation behavior retained | Frozen-upstream behavior retained | Canonical resolution |
-| --- | --- | --- | --- |
-| Agent attempt/tool construction | Continuation tool registration, `continue_work` and compaction options, delegated-queue draining, terminal handoff semantics, and trace propagation. | Current tool-surface/options construction, runtime policy, prompt sanitation, stream preparation, and CLI session handling. | Current upstream construction remains the owner; continuation facts are explicit fields on that single path. The missed CLI branch now sets `allowEmptyAssistantReplyAsSilent` for every subagent lane, matching upstream's embedded and CLI contracts. |
-| Embedded stream/subscription | Continuation terminal accounting, completion ownership, and extracted message handling. | Commentary stream state, partial-flush lifecycle, current compaction hooks, and subscription cleanup. | One merged stream state and lifecycle; the embedded subscription logger is extracted without a second execution path. |
-| Subagent restore/launch | Sticky accepted-launch ownership, accepted-steer exclusion, deterministic continuation identities, and durable requester completion. | Restore remains dormant until Gateway lifecycle activation and uses only the instance-bound recovery runtime. | Deferred activation owns restore. Continuation FIFO semantics run after activation. Abort confirmation is now assigned from the authoritative termination result rather than inferred from the attempt. |
-| Inline attachment staging | Shared strict snapshot validation, bounded byte accounting, continuation-safe error redaction, and exact child paths. | Prompt-unsafe control rejection, untrusted prompt wrapping, wrapped-path budget, and current portable filename limits. | Shared inline validation remains canonical. Native staging rejects characters the prompt sanitizer would strip, renders the bounded path block during validation, and prepares each attachment once. Unsafe filename errors do not echo control-bearing input. |
-| Auto-reply execution | Continuation trace, accounting, terminal completion, durable return ownership, and split message-tool outcome owner. | Current queue/session conflict handling, generated-media evidence, and provider dispatcher lifecycle. | One execution/accounting path. Message-tool outcome classification is extracted from the oversized owner; no consumer-only fallback was added. |
-| Restart sentinel | Managed delegate receipt/projection revalidation, durable queue acknowledgement metadata, trusted system events, and system-agent ownership. | Adopted agent-turn lifecycle, safe busy retry, generated-media reconciliation, and instance resolver. | `server-restart-sentinel-delivery.ts` is the sole delivery owner. The duplicate sentinel implementation was deleted; its canonical function receives the resolver and preserves system-event ownership and durable ack facts. |
-| Session delivery queue | Continuation codec/storage split, exact/filtered drains, managed adoption acknowledgement, and post-compaction delivery. | Expected-media attachments, prepared media blocks, settlement lifecycle, and SQLite queue updates. | One canonical codec/storage/recovery pipeline; no legacy reader or parallel queue path. |
-| Audit/runtime services | Continuation admission facts and runtime-service ownership. | Process-owned bounded audit queue and current Gateway service/subscription lifecycle. | Upstream in-process writer remains; obsolete worker path stays deleted. Runtime and subscription test support is split only to keep the production owners bounded. |
-| Process/task queues | Continuation lane-idle waiter and task-terminal subscription semantics. | Ring-buffer command queue, current task registry maintenance, and restart-safe terminal handling. | Ring buffer remains the storage owner; dead active-task waiter APIs were removed. Task-terminal test support is extracted without a production seam. |
-| UI tool cards | Continuation tool-card completion and display behavior. | Current running-state and rendered card details. | Argument-redacted tools never reveal their details through the card projection; other cards retain upstream rendering. |
-| Signal/Codex/Copilot | Continuation reply-session ownership and dynamic continuation callbacks. | Signal's current event handling, Codex host capability construction, and Copilot prepared tool policy. | Signal retries only at the outer flush boundary. Codex and Copilot use their current host surfaces with continuation facts forwarded explicitly. |
+| Owner family                    | Pure-continuation behavior retained                                                                                                                  | Frozen-upstream behavior retained                                                                                           | Canonical resolution                                                                                                                                                                                                                                           |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent attempt/tool construction | Continuation tool registration, `continue_work` and compaction options, delegated-queue draining, terminal handoff semantics, and trace propagation. | Current tool-surface/options construction, runtime policy, prompt sanitation, stream preparation, and CLI session handling. | Current upstream construction remains the owner; continuation facts are explicit fields on that single path. The missed CLI branch now sets `allowEmptyAssistantReplyAsSilent` for every subagent lane, matching upstream's embedded and CLI contracts.        |
+| Embedded stream/subscription    | Continuation terminal accounting, completion ownership, and extracted message handling.                                                              | Commentary stream state, partial-flush lifecycle, current compaction hooks, and subscription cleanup.                       | One merged stream state and lifecycle; the embedded subscription logger is extracted without a second execution path.                                                                                                                                          |
+| Subagent restore/launch         | Sticky accepted-launch ownership, accepted-steer exclusion, deterministic continuation identities, and durable requester completion.                 | Restore remains dormant until Gateway lifecycle activation and uses only the instance-bound recovery runtime.               | Deferred activation owns restore. Continuation FIFO semantics run after activation. Abort confirmation is now assigned from the authoritative termination result rather than inferred from the attempt.                                                        |
+| Inline attachment staging       | Shared strict snapshot validation, bounded byte accounting, continuation-safe error redaction, and exact child paths.                                | Prompt-unsafe control rejection, untrusted prompt wrapping, wrapped-path budget, and current portable filename limits.      | Shared inline validation remains canonical. Native staging rejects characters the prompt sanitizer would strip, renders the bounded path block during validation, and prepares each attachment once. Unsafe filename errors do not echo control-bearing input. |
+| Auto-reply execution            | Continuation trace, accounting, terminal completion, durable return ownership, and split message-tool outcome owner.                                 | Current queue/session conflict handling, generated-media evidence, and provider dispatcher lifecycle.                       | One execution/accounting path. Message-tool outcome classification is extracted from the oversized owner; no consumer-only fallback was added.                                                                                                                 |
+| Restart sentinel                | Managed delegate receipt/projection revalidation, durable queue acknowledgement metadata, trusted system events, and system-agent ownership.         | Adopted agent-turn lifecycle, safe busy retry, generated-media reconciliation, and instance resolver.                       | `server-restart-sentinel-delivery.ts` is the sole delivery owner. The duplicate sentinel implementation was deleted; its canonical function receives the resolver and preserves system-event ownership and durable ack facts.                                  |
+| Session delivery queue          | Continuation codec/storage split, exact/filtered drains, managed adoption acknowledgement, and post-compaction delivery.                             | Expected-media attachments, prepared media blocks, settlement lifecycle, and SQLite queue updates.                          | One canonical codec/storage/recovery pipeline; no legacy reader or parallel queue path.                                                                                                                                                                        |
+| Audit/runtime services          | Continuation admission facts and runtime-service ownership.                                                                                          | Process-owned bounded audit queue and current Gateway service/subscription lifecycle.                                       | Upstream in-process writer remains; obsolete worker path stays deleted. Runtime and subscription test support is split only to keep the production owners bounded.                                                                                             |
+| Process/task queues             | Continuation lane-idle waiter and task-terminal subscription semantics.                                                                              | Ring-buffer command queue, current task registry maintenance, and restart-safe terminal handling.                           | Ring buffer remains the storage owner; dead active-task waiter APIs were removed. Task-terminal test support is extracted without a production seam.                                                                                                           |
+| UI tool cards                   | Continuation tool-card completion and display behavior.                                                                                              | Current running-state and rendered card details.                                                                            | Argument-redacted tools never reveal their details through the card projection; other cards retain upstream rendering.                                                                                                                                         |
+| Signal/Codex/Copilot            | Continuation reply-session ownership and dynamic continuation callbacks.                                                                             | Signal's current event handling, Codex host capability construction, and Copilot prepared tool policy.                      | Signal retries only at the outer flush boundary. Codex and Copilot use their current host surfaces with continuation facts forwarded explicitly.                                                                                                               |
 
 ### Silent-overlap repairs and generated surfaces
 
@@ -550,3 +550,104 @@ release contract change is authorized.
   P0 findings, overall patch-correct probability 0.87.
 - Review artifacts:
   `/home/figs/.copilot/session-state/5c4fe97e-8fa2-4146-9b5e-5e1fb9953983/files/autoreview-resolution.{txt,json}`.
+
+## 2026-08-22T03:50:19Z - Gate 2.5 focused continuation repair blocked by inherited test routing
+
+### Frozen state and preserved repair
+
+- Candidate remained `b5f1960fd4de5dd7a1c527e52f261c80a4b10f9e`.
+- Exact parents remained root
+  `fec23d77520e8881f1e61b3a9ecbb3f53ecac1c2` and frozen upstream
+  `3376c29800166a3151cbca6b8ab204964e97ac39`.
+- The existing uncommitted test-only repair in
+  `src/sessions/session-state-notices.test.ts` remains unchanged: its heartbeat
+  and system-event mocks expose the merged raw exports. The existing five
+  behavior tests fail before that mock correction and pass after it without a
+  production seam or new test.
+- No production or additional test edit was made during this continuation.
+
+### Exact-parent classification
+
+All seven remaining failure records belong to one inherited frozen-upstream
+test-routing defect, not a merged production contract regression:
+
+| Failure surface                                  | Canonical owner result            | Exact-parent evidence                                                                                                                                                                                                                                                       | Classification           |
+| ------------------------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `tool-resolution.test.ts` `beforeAll`            | `gateway-core`: 15/15 passed      | Root has no isolated Gateway project. Frozen upstream added `gateway-server-isolated`; candidate and upstream config blobs are both `47e2f1fdb3b3145689b9892c5ae70188dc549a2e`.                                                                                             | Inherited parent failure |
+| `server-cron.test.ts` script failure detail      | `gateway-server`: 77/77 passed    | The test is absent from root and present in frozen upstream. The normal server owner passes; only the inherited isolated duplicate times out.                                                                                                                               | Inherited parent failure |
+| Three `agent.test.ts` registry/abort assertions  | `gateway-methods`: 290/290 passed | `agent.test.ts`, `agent.ts`, the abort helper, and `chat-abort-handler.ts` are byte-identical across both parents and candidate where present; the mixed-delivery helper is byte-identical to frozen upstream. The duplicate isolated copy alone loses registry visibility. | Inherited parent failure |
+| Two `server-methods.test.ts` approval assertions | `gateway-methods`: 214/214 passed | `exec-approval.ts`, `exec-approvals.ts`, approval request delivery, and approval wait response are byte-identical across both parents and candidate. The duplicate isolated copy alone times out or misses the accepted response.                                           | Inherited parent failure |
+
+The routing cause is exact and deterministic. The frozen-upstream isolated
+config reads the process-wide `OPENCLAW_VITEST_INCLUDE_FILE` and selects it
+before intersecting with `gatewayServerIsolatedTestFiles`. An exact source
+snapshot of frozen upstream and the candidate both projected all four unrelated
+failure files into `gateway-server-isolated`; the root snapshot has no isolated
+project. Candidate narrow runs therefore executed every file twice: the
+canonical owner copy passed, then the wrongly admitted isolated copy reproduced
+the same timeout or shared-registry assertion. Raising timeouts, weakening
+assertions, or changing continuation/approval production code would conceal the
+inherited harness defect and is not authorized by this work order.
+
+### Required reruns
+
+- Serial canonical owners:
+  - `gateway-core` tool resolution: 1 file, 15 tests passed;
+  - `gateway-server` cron: 1 file, 77 tests passed;
+  - `gateway-methods` agent plus server methods: 2 files, 504 tests passed.
+- Uninterrupted exact 103-file Gate 2.5 set:
+  - 30 gateway files passed;
+  - 2,747 tests passed;
+  - 15 tests skipped;
+  - six tests and one suite failed across the same four wrongly admitted
+    `gateway-server-isolated` files;
+  - final exit 1 after 478.07 seconds.
+- Focused and full artifacts:
+  `/home/figs/.copilot/session-state/15b894b2-9164-4158-999f-41088235e0a3/files/gate25-{candidate-narrow,owner-serial,full-103.log}`.
+
+Gate 2.5 cannot turn green without repairing an inherited frozen-upstream test
+harness defect, while the focused work order permits edits only for
+merged-contract regressions. This is the exact blocker; Gate 2.7 and later gates
+were not started. Production LOC delta is zero. The preserved test repair is
+two added and two removed mock-export lines. No commit or push was made because
+the work order conditions those actions on a green Gate 2.5.
+
+Hard stops remain intact: the forbidden composite and the #121204 branch are
+not ancestors of the candidate; frozen upstream is an ancestor; protected refs,
+deployment, PR #1398, #124337, rebase, squash, amend, and force-push were not
+touched.
+
+## 2026-08-22T04:02:00Z - Gate 2.5 scribe disposition accepted
+
+The final-gates work order records the scribe disposition that the six remaining
+assertion failures and one suite timeout are controlled inherited
+test-routing debt, not candidate production regressions. Gate 2.5 therefore
+closes on canonical once-per-owner execution while preserving the complete red
+umbrella receipt. No production or harness change is authorized merely to make
+the duplicate execution green.
+
+Independent verification confirmed:
+
+- `src/sessions/session-state-notices.ts` imports the merged raw boundaries
+  `requestHeartbeatRaw` and `enqueueSystemEventRaw`. The preserved test-only
+  repair makes the two `vi.mock` factories expose those exact keys; the focused
+  owner command `node scripts/run-vitest.mjs
+src/sessions/session-state-notices.test.ts` passed all 5 tests.
+- The candidate and frozen-upstream
+  `test/vitest/vitest.gateway-server-isolated.config.ts` blobs are both
+  `47e2f1fdb3b3145689b9892c5ae70188dc549a2e`; the pure-continuation parent has
+  no such file. That config gives `OPENCLAW_VITEST_INCLUDE_FILE` precedence over
+  its one-file `gatewayServerIsolatedTestFiles` ownership list, admitting
+  unrelated Gate 2.5 files into a second isolated execution.
+- Canonical owner receipts remain exact:
+  `gateway-core` passed 15/15 tool-resolution assertions,
+  `gateway-server` passed 77/77 cron assertions, and `gateway-methods` passed
+  504/504 agent plus server-method assertions.
+- The uninterrupted 103-file umbrella receipt remains preserved at 2,747
+  passed, 15 skipped, 6 failed, and one failed suite. Every failure is in the
+  wrongly admitted `gateway-server-isolated` duplicate; canonical copies pass.
+
+The accepted Gate 2.5 semantic evidence is therefore 596/596 assertions across
+the four canonical owner files, plus the repaired 5/5 session-state notice
+owner assertions. Production LOC delta remains zero. The only candidate code
+change is the two-line mock-key correction; the journal is append-only.
