@@ -12,6 +12,7 @@ import {
 } from "./session-message-cache.ts";
 import {
   CHAT_SNAPSHOT_DB_NAME,
+  CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
   clearStoredChatSnapshots,
 } from "./session-snapshot-invalidation.ts";
@@ -43,9 +44,17 @@ async function putRawRecord(record: unknown): Promise<void> {
       reject(request.error ?? new Error("database open failed")),
     );
   });
-  const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
+  const transaction = database.transaction(
+    [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
+    "readwrite",
+  );
   const completed = transactionDone(transaction);
   transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put(record);
+  transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).put({
+    savedAt: Date.now(),
+    sessionKey: (record as { sessionKey: string }).sessionKey,
+    weight: 0,
+  });
   await completed;
   database.close();
 }
@@ -64,6 +73,29 @@ async function readRawRecord(sessionKey: string): Promise<{ savedAt: number } | 
     get.addEventListener("success", () => resolve(get.result));
     get.addEventListener("error", () => reject(get.error ?? new Error("record read failed")));
   });
+  await transactionDone(transaction);
+  database.close();
+  return result;
+}
+
+async function readRawMetadata(
+  sessionKey: string,
+): Promise<{ savedAt: number; weight: number } | undefined> {
+  const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    request.addEventListener("success", () => resolve(request.result));
+    request.addEventListener("error", () =>
+      reject(request.error ?? new Error("database open failed")),
+    );
+  });
+  const transaction = database.transaction(CHAT_SNAPSHOT_METADATA_STORE_NAME, "readonly");
+  const result = await new Promise<{ savedAt: number; weight: number } | undefined>(
+    (resolve, reject) => {
+      const get = transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).get(sessionKey);
+      get.addEventListener("success", () => resolve(get.result));
+      get.addEventListener("error", () => reject(get.error ?? new Error("metadata read failed")));
+    },
+  );
   await transactionDone(transaction);
   database.close();
   return result;
@@ -93,6 +125,21 @@ describe("persistent chat session snapshots", () => {
     await reader.loadSavedAtIndex();
     expect(await reader.read("agent:main:shared")).toEqual(snapshot({ text: "cached" }));
     expect(reader.readSavedAt("agent:main:shared")).toBe(savedAt);
+  });
+
+  it("keeps lightweight eviction metadata alongside each snapshot", async () => {
+    const sessionKey = "agent:main:metadata";
+    const writer = new SessionSnapshotStore();
+    writer.write(sessionKey, snapshot("cached"));
+    await writer.flush();
+
+    const record = await readRawRecord(sessionKey);
+    const metadata = await readRawMetadata(sessionKey);
+    expect(metadata?.savedAt).toBe(record?.savedAt);
+    expect(metadata?.weight).toBeGreaterThan(0);
+
+    await writer.delete(sessionKey);
+    expect(await readRawMetadata(sessionKey)).toBeUndefined();
   });
 
   it("round-trips the optional history delta cursor", async () => {

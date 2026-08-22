@@ -1,9 +1,10 @@
 import {
   CHAT_SNAPSHOT_DB_NAME,
+  CHAT_SNAPSHOT_METADATA_STORE_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
 } from "./session-snapshot-invalidation.ts";
 
-const CHAT_SNAPSHOT_DB_VERSION = 1;
+const CHAT_SNAPSHOT_DB_VERSION = 2;
 
 function debugSnapshotDatabase(message: string, error?: unknown): void {
   if (error === undefined) {
@@ -31,6 +32,7 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
         database.deleteObjectStore(name);
       }
       database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
+      database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
     });
     request.addEventListener("success", () => resolve(request.result));
     request.addEventListener("error", () =>
@@ -75,8 +77,9 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   }
   database.addEventListener("versionchange", () => database.close());
   if (
-    database.objectStoreNames.length === 1 &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME)
+    database.objectStoreNames.length === 2 &&
+    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) &&
+    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME)
   ) {
     return database;
   }

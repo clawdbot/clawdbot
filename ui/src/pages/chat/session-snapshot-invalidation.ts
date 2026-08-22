@@ -13,6 +13,7 @@ import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-eve
 
 export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
+export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 
 type ChatSnapshotKeyHost = Pick<UiSessionDefaultsHost, "assistantAgentId" | "agentsList" | "hello">;
 
@@ -69,12 +70,18 @@ export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void
       request.addEventListener("blocked", () => resolve());
       request.addEventListener("success", () => {
         const database = request.result;
-        if (!database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME)) {
+        if (
+          !database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) ||
+          !database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME)
+        ) {
           database.close();
           resolve();
           return;
         }
-        const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readwrite");
+        const transaction = database.transaction(
+          [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
+          "readwrite",
+        );
         transaction.addEventListener("complete", () => {
           database.close();
           resolve();
@@ -86,6 +93,7 @@ export async function deleteStoredChatSnapshot(sessionKey: string): Promise<void
         transaction.addEventListener("error", settleFailure);
         transaction.addEventListener("abort", settleFailure);
         transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).delete(sessionKey);
+        transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).delete(sessionKey);
       });
     });
   } catch {}
