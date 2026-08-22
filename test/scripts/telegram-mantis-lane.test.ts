@@ -807,6 +807,55 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
+  it("exposes provider content facts through requests and terminal lane facts", async () => {
+    const harness = await setupHarness({ userOnlyEvents: true });
+    const contentFacts = [
+      {
+        type: "input_file",
+        filename: "proof.pdf",
+        mimeType: "application/pdf",
+        byteLength: 17,
+      },
+    ];
+    fs.writeFileSync(
+      harness.requestLog,
+      `${JSON.stringify({
+        body: "credential=123456:secret-sut-token",
+        contentFacts,
+        path: "/v1/responses",
+      })}\n`,
+    );
+    try {
+      const requests = JSON.parse(
+        (await runLane(harness.env, ["requests", "--lane", "candidate"])).stdout,
+      );
+      expect(requests).toEqual({
+        count: 1,
+        requests: [
+          {
+            index: 1,
+            body: "credential=[redacted]",
+            contentFacts,
+            path: "/v1/responses",
+          },
+        ],
+      });
+
+      await runLane(harness.env, ["send", "--lane", "candidate", "--text", "persist facts"]);
+      await runLane(harness.env, ["finish", "--lane", "candidate"]);
+      const facts = JSON.parse(
+        fs.readFileSync(
+          path.join(harness.outputRoot, "candidate", "mantis-lane-facts.json"),
+          "utf8",
+        ),
+      );
+      expect(facts.providerRequests).toEqual(requests.requests);
+      expect(JSON.stringify(facts.providerRequests)).not.toContain("secret-sut-token");
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("finishes an expected-silence proof on the triggering user message", async () => {
     const harness = await setupHarness({ userOnlyEvents: true });
     try {

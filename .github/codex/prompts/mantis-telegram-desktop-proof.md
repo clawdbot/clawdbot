@@ -80,7 +80,8 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 [--until-provider-requests N]` (returns early when all supplied conditions hold;
   event/text conditions count only events after the cursor, provider count is
   cumulative for the lane)
-- `requests` (redacted provider requests; zero is a valid recorded fact)
+- `requests` (redacted provider requests; media/file items appear as structured
+  `contentFacts`; zero is a valid recorded fact)
 - `press --message-id ID --button INDEX`
 - `delete --message-id ID` (only user messages sent in this session)
 - `desktop --actions-file <public-json> [--timeout-seconds N]` (run an
