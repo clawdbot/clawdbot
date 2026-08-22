@@ -79,3 +79,33 @@ Focused shutdown, registry, and persistent-state tests passed 73/73, formatting
 passed, and the full OpenClaw build passed. The disposable proof directory was
 moved to Trash after the run. No production profile, credential, session,
 connector, model call, message, or non-loopback endpoint was used.
+
+## Active-generation authority proof
+
+ClawSweeper's exact-head review identified a staged-replacement window that the
+earlier Gateway trace did not exercise. The correction binds every retained
+session-state closure to the exact active registry object and passes the same
+assertion to the SQLite accessor's synchronous final-commit hook.
+
+The regression fixture uses two registries containing the same plugin ID. The
+original closure begins a write while its registry is active. Its projection
+callback then stages the replacement registry after the initial authorization
+check but before the SQLite transaction's final write. The final-commit fence
+rejects the original closure, and direct store inspection confirms that neither
+the plugin extension nor its promoted slot was written.
+
+```text
+[registry] original owner active: PASS
+[session] retained original closure begins write: PASS
+[registry] same-ID replacement staged before commit: PASS
+[authority] retained closure rejected at final commit: PASS
+[sqlite] plugin extension absent after rejection: PASS
+[sqlite] promoted slot absent after rejection: PASS
+[authority] subsequent retained-closure read rejected: PASS
+```
+
+The fixture is
+`src/plugins/contracts/plugin-session-state-api.contract.test.ts` and runs
+against a disposable session store. Combined with the real Gateway lifecycle
+trace above, it covers both durable restart behavior and the replacement-stage
+authority boundary without using production data.
